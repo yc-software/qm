@@ -16,8 +16,8 @@ it in place. If the repository has not been initialized, collect:
 
 - hosting target: a cloud provider, Fly.io or AWS. Recommend Fly.io when the
   operator has no preference. The docker target runs everything on the local
-  machine and is for a quick local test drive only; never present it as the
-  recommended path for a real deployment;
+  machine, is for a quick local test drive only, and is outside this
+  workflow; never present it as the recommended path for a real deployment;
 - the first administrator's verified work email;
 - model provider: Anthropic, OpenAI, or OpenRouter (one key that routes to
   many models). The key is entered later on the Admin page, so "decide later"
@@ -28,10 +28,12 @@ it in place. If the repository has not been initialized, collect:
 - connectors to enable, including whether to add Slack now.
 
 The deployment slug is a local name for this deployment — it appears in the
-package name, resource names, and Slack branding. It is not registered
-anywhere and need not be globally unique. Derive it from the organization's
-name (a lowercase DNS label) and confirm it in passing; do not make the
-operator decide it as a standalone question.
+package name, resource names, and Slack branding. Derive it from the
+organization's name (a lowercase DNS label) and confirm it in passing; do not
+make the operator decide it as a standalone question. On Fly.io the slug is
+the default `appPrefix`, and app names like `<prefix>-core` must be free on
+fly.dev; on a collision set a distinctive `appPrefix` rather than renaming
+the organization.
 
 Explain the selected provider's billable resources and confirm the provider
 identity, region, resource list, and expected billing.
