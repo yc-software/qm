@@ -49,6 +49,7 @@ test(
       const awsDeployment = join(dir, "aws-deployment");
       const tarballBytes = readFileSync(tarball);
       const packageManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")) as Record<string, unknown>;
+      const version = packageManifest["version"] as string;
       registry = createServer((request, response) => {
         const origin = `http://${request.headers.host}`;
         if (request.url && decodeURIComponent(request.url) === "/@yc-software/qm") {
@@ -56,12 +57,12 @@ test(
           response.end(
             JSON.stringify({
               name: "@yc-software/qm",
-              "dist-tags": { latest: "0.1.0" },
+              "dist-tags": { latest: version },
               versions: {
-                "0.1.0": {
+                [version]: {
                   ...packageManifest,
                   dist: {
-                    tarball: `${origin}/@yc-software/qm/-/qm-0.1.0.tgz`,
+                    tarball: `${origin}/@yc-software/qm/-/qm-${version}.tgz`,
                     shasum: createHash("sha1").update(tarballBytes).digest("hex"),
                     integrity: `sha512-${createHash("sha512").update(tarballBytes).digest("base64")}`,
                   },
@@ -71,7 +72,7 @@ test(
           );
           return;
         }
-        if (request.url === "/@yc-software/qm/-/qm-0.1.0.tgz") {
+        if (request.url === `/@yc-software/qm/-/qm-${version}.tgz`) {
           response.setHeader("content-type", "application/octet-stream");
           response.end(tarballBytes);
           return;
@@ -93,7 +94,7 @@ test(
           [
             "exec",
             "--yes",
-            "--package=@yc-software/qm@0.1.0",
+            `--package=@yc-software/qm@${version}`,
             "--",
             "qm",
             "init",
@@ -134,7 +135,7 @@ test(
         };
         assert.equal(consumerPackage.private, true);
         assert.equal(consumerPackage.scripts?.deploy, "qm up");
-        assert.equal(consumerPackage.dependencies?.["@yc-software/qm"], "0.1.0");
+        assert.equal(consumerPackage.dependencies?.["@yc-software/qm"], version);
       }
       await new Promise<void>((resolve, reject) => registry!.close((error) => (error ? reject(error) : resolve())));
       registry = undefined;

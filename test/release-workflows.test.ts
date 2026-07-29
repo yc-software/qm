@@ -73,3 +73,27 @@ test("publishing the CLI is a separate, attested, main-only operation", () => {
   assert.match(workflow, /NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/);
   assert.doesNotMatch(workflow, /packages: write/);
 });
+
+test("the published package pins real image digests, never the checked-in sentinel", () => {
+  const workflow = readFileSync(".github/workflows/publish-cli.yml", "utf8");
+
+  assert.ok(
+    workflow.indexOf("Pin published image digests") < workflow.indexOf("npm publish"),
+    "digests are resolved before the package is published",
+  );
+  assert.match(workflow, /for service in core web-ui admin portal auth sandbox-base; do/);
+  assert.match(workflow, /printf '%s\\n' "\$out" > cli\/manifest\.json/);
+  assert.match(workflow, /no published image for \$repo at \$IMAGES_REF/);
+  assert.match(workflow, /\{63\}\$"\) \| not\)/);
+
+  const sentinel = JSON.parse(readFileSync("cli/manifest.json", "utf8")) as {
+    sandboxBase: string;
+    services: Record<string, string>;
+  };
+  const refs = [sentinel.sandboxBase, ...Object.values(sentinel.services)];
+  assert.equal(refs.length, 6);
+  assert.ok(
+    refs.every((ref) => ref.startsWith("registry.invalid/")),
+    "the checked-in manifest stays a sentinel so a source checkout never pulls a stale digest",
+  );
+});

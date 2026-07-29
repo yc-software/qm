@@ -2,6 +2,10 @@ name: Publish the QM CLI
 
 on:
   workflow_dispatch:
+    inputs:
+      images_ref:
+        description: Commit SHA whose published images the package should pin
+        required: false
 
 permissions:
   contents: read
@@ -27,6 +31,36 @@ jobs:
           npm ci
           npm run typecheck
           npm run test:pack
+      - name: Pin published image digests
+        env:
+          IMAGES_REF: ${{ inputs.images_ref || github.sha }}
+        run: |
+          set -euo pipefail
+          out=$(jq -n '{sandboxBase: "", services: {}}')
+          for service in core web-ui admin portal auth sandbox-base; do
+            repo="yc-software/qm/$service"
+            token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull&service=ghcr.io" | jq -r .token)
+            digest=$(curl -fsS -o /dev/null -D - -H "Authorization: Bearer $token" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/$repo/manifests/$IMAGES_REF" \
+              | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2 }')
+            if [ -z "$digest" ]; then
+              echo "no published image for $repo at $IMAGES_REF" >&2
+              exit 1
+            fi
+            ref="ghcr.io/$repo@$digest"
+            if [ "$service" = sandbox-base ]; then
+              out=$(printf '%s' "$out" | jq --arg r "$ref" '.sandboxBase = $r')
+            else
+              out=$(printf '%s' "$out" | jq --arg k "$service" --arg r "$ref" '.services[$k] = $r')
+            fi
+          done
+          printf '%s\n' "$out" > cli/manifest.json
+          cat cli/manifest.json
+          jq -e '[.sandboxBase] + [.services[]]
+                 | length == 6
+                 and all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$"))
+                 and all(test("@sha256:(.)\\1{63}$") | not)' cli/manifest.json > /dev/null
       - name: Publish
         working-directory: cli
         run: npm publish --provenance --access public
