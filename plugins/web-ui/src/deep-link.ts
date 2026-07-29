@@ -8,33 +8,39 @@ export function deepLinkPath(
   view: string,
   sessionId: string | null,
   contextScope?: string | null,
+  itemId?: string | null,
 ): string {
   const b = base.replace(/\/$/, "");
-  if (view === "contexts" && contextScope) return `${b}/contexts?scope=${encodeURIComponent(contextScope)}`;
-  if (view !== "chats") return `${b}/${encodeURIComponent(view)}`;
+  if (view === "contexts" && contextScope) {
+    if (itemId) throw new Error("the contexts view is addressed by scope, not by item id");
+    return `${b}/contexts?scope=${encodeURIComponent(contextScope)}`;
+  }
+  if (view !== "chats") return `${b}/${encodeURIComponent(view)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
+  if (itemId) throw new Error("the chats view is addressed by session, not by item id");
   return `${b}/${sessionId ? `?session=${encodeURIComponent(sessionId)}` : ""}`;
+}
+
+function decodeSegment(seg: string): string | null {
+  if (!seg) return null;
+  try {
+    return decodeURIComponent(seg);
+  } catch {
+    return null;
+  }
 }
 
 export function parseDeepLink(
   base: string,
   pathname: string,
   search: string,
-): { view: string | null; session: string | null } {
+): { view: string | null; session: string | null; item: string | null } {
   const params = new URLSearchParams(search);
   const b = base.replace(/\/$/, "");
   const rel = pathname.startsWith(b) ? pathname.slice(b.length) : pathname;
-  const seg = rel.replace(/^\/+/, "").split("/")[0] ?? "";
-  let fromPath: string | null = null;
-  if (seg) {
-    try {
-      fromPath = decodeURIComponent(seg);
-    } catch {
-      fromPath = null;
-    }
-  }
-  const requestedView = params.get("view") ?? fromPath;
+  const segments = rel.replace(/^\/+/, "").split("/");
+  const requestedView = params.get("view") ?? decodeSegment(segments[0] ?? "");
   const view = requestedView === "connectors" ? "keychain" : requestedView;
-  return { view, session: params.get("session") };
+  return { view, session: params.get("session"), item: decodeSegment(segments[1] ?? "") };
 }
 
 export function sessionLink(origin: string, base: string, sessionId: string): string {

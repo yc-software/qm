@@ -624,7 +624,7 @@ function headerHarness(
     webUiPublicUrl: "https://claw.acme.dev",
     ids: { botUserId: "U0BOT" },
   });
-  const scope = kind === "dm" ? "personal:josh@acme.dev" : "channel:C1";
+  const scope = kind === "dm" ? "personal:user.one@acme.dev" : "channel:C1";
   const ensure = (c: unknown, channel: string) => raw(c as never, channel, scope, kind);
   const flush = async (): Promise<void> => {
     for (let i = 0; i < 12; i++) await Promise.resolve();
@@ -639,7 +639,7 @@ test("surface header ensurer writes the header once, then goes quiet", async () 
   assert.equal(h.calls.set, 1);
   assert.equal(
     h.read()?.value,
-    "Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=personal%3Ajosh%40acme.dev",
+    "Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=personal%3Auser.one%40acme.dev",
   );
   h.ensure(h.client, "D1");
   await h.flush();
@@ -668,7 +668,7 @@ test("surface header ensurer collapses a burst on one channel into a single writ
     webUiPublicUrl: "https://claw.acme.dev",
     ids: { botUserId: "U0BOT" },
   });
-  for (let i = 0; i < 5; i++) ensure(client as any, "D1", "personal:josh@acme.dev", "dm");
+  for (let i = 0; i < 5; i++) ensure(client as any, "D1", "personal:user.one@acme.dev", "dm");
   await new Promise((r) => setTimeout(r, 60));
   assert.equal(infos, 1, "the in-flight guard spares the concurrent probes");
   assert.equal(sets, 1);
@@ -685,7 +685,7 @@ test("surface header ensurer caps its per-channel memo", async () => {
     maxTracked: 3,
   });
   for (let i = 0; i < 10; i++) {
-    ensure(client as any, `D${i}`, "personal:josh@acme.dev", "dm");
+    ensure(client as any, `D${i}`, "personal:user.one@acme.dev", "dm");
     await new Promise((r) => setTimeout(r, 2));
   }
   let reprobed = 0;
@@ -698,7 +698,7 @@ test("surface header ensurer caps its per-channel memo", async () => {
       setTopic: async () => ({}),
     },
   };
-  ensure(spy as any, "D0", "personal:josh@acme.dev", "dm");
+  ensure(spy as any, "D0", "personal:user.one@acme.dev", "dm");
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(reprobed, 1, "an evicted channel is re-probed, so the map cannot grow forever");
 });
@@ -729,8 +729,8 @@ test("scopeSurfaceUrl deep-links each context to its own project page", () => {
     "https://claw.acme.dev/contexts?scope=channel%3AC1",
   );
   assert.equal(
-    scopeSurfaceUrl("https://claw.acme.dev", "personal:josh@acme.dev"),
-    "https://claw.acme.dev/contexts?scope=personal%3Ajosh%40acme.dev",
+    scopeSurfaceUrl("https://claw.acme.dev", "personal:user.one@acme.dev"),
+    "https://claw.acme.dev/contexts?scope=personal%3Auser.one%40acme.dev",
   );
   assert.equal(scopeSurfaceUrl(undefined, "channel:C1"), undefined);
   assert.equal(scopeSurfaceUrl("https://claw.acme.dev", ""), undefined);
@@ -752,6 +752,6 @@ test("surface header ensurer swallows a Slack failure instead of surfacing it to
     webUiPublicUrl: "https://claw.acme.dev",
     ids: { botUserId: "U0BOT" },
   });
-  assert.doesNotThrow(() => ensure({} as any, "D1", "personal:josh@acme.dev", "dm"));
+  assert.doesNotThrow(() => ensure({} as any, "D1", "personal:user.one@acme.dev", "dm"));
   for (let i = 0; i < 12; i++) await Promise.resolve();
 });

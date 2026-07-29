@@ -63,7 +63,7 @@ import {
   sessionsState,
   toggleWebOnly,
 } from "./sessions";
-import { renderCronsPage, resetActiveCron } from "./crons";
+import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderFiles } from "./files";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { renderDeploys } from "./deploys";
@@ -772,6 +772,13 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
   replaceChildrenPreservingFocus(appState.mainEl, host);
 }
 
+window.addEventListener("popstate", () => {
+  if (embedMode || appState.currentView !== "crons") return;
+  const { view, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
+  if (view !== "crons") return;
+  routeCronsHistory(item);
+});
+
 window.addEventListener("focus", () => {
   if (!appState.me || embedMode) return;
   if (appState.currentView === "contexts") void renderContexts();
@@ -843,7 +850,11 @@ export async function boot(): Promise<void> {
   loadPersistedSplit();
 
   const params = new URLSearchParams(location.search);
-  const { view: wanted, session: wantedSession } = parseDeepLink(UI_BASE, location.pathname, location.search);
+  const {
+    view: wanted,
+    session: wantedSession,
+    item: wantedItem,
+  } = parseDeepLink(UI_BASE, location.pathname, location.search);
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);
   const viewIntent = isView(wanted) && wanted !== "chats";
@@ -885,6 +896,7 @@ export async function boot(): Promise<void> {
       const scope = params.get("scope");
       if (scope) contextsState.selected = scope;
     }
+    if (wanted === "crons" && wantedItem) openCronById(wantedItem);
     switchView(wanted as View);
   } else if (wantedSession) {
     const match = sessionsState.list.find((s) => s.id === wantedSession);

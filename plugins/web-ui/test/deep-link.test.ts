@@ -30,26 +30,46 @@ test("session ids are URI-encoded", () => {
 });
 
 test("parseDeepLink reads the view from the path", () => {
-  assert.deepEqual(parseDeepLink("", "/crons", ""), { view: "crons", session: null });
-  assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/crons", ""), { view: "crons", session: null });
-  assert.deepEqual(parseDeepLink("", "/", "?session=s1"), { view: null, session: "s1" });
+  assert.deepEqual(parseDeepLink("", "/crons", ""), { view: "crons", session: null, item: null });
+  assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/crons", ""), { view: "crons", session: null, item: null });
+  assert.deepEqual(parseDeepLink("", "/", "?session=s1"), { view: null, session: "s1", item: null });
 });
 
 test("parseDeepLink degrades a malformed percent-escape to no view instead of throwing", () => {
-  assert.deepEqual(parseDeepLink("", "/%E0%A4%A", ""), { view: null, session: null });
+  assert.deepEqual(parseDeepLink("", "/%E0%A4%A", ""), { view: null, session: null, item: null });
 });
 
 test("parseDeepLink still honors legacy ?view= links", () => {
-  assert.deepEqual(parseDeepLink("", "/", "?view=crons"), { view: "crons", session: null });
+  assert.deepEqual(parseDeepLink("", "/", "?view=crons"), { view: "crons", session: null, item: null });
   assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/", "?view=contexts&scope=channel:C1"), {
     view: "contexts",
     session: null,
+    item: null,
   });
 });
 
 test("legacy connectors links resolve to the keychain view", () => {
-  assert.deepEqual(parseDeepLink("", "/connectors", ""), { view: "keychain", session: null });
-  assert.deepEqual(parseDeepLink("", "/", "?view=connectors"), { view: "keychain", session: null });
+  assert.deepEqual(parseDeepLink("", "/connectors", ""), { view: "keychain", session: null, item: null });
+  assert.deepEqual(parseDeepLink("", "/", "?view=connectors"), { view: "keychain", session: null, item: null });
+});
+
+test("a cron is addressed by /crons/<id>", () => {
+  assert.equal(deepLinkPath("", "crons", null, null, "abc 1"), "/crons/abc%201");
+  assert.deepEqual(parseDeepLink("", "/crons/abc%201", ""), { view: "crons", session: null, item: "abc 1" });
+  assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/crons/c1", ""), {
+    view: "crons",
+    session: null,
+    item: "c1",
+  });
+});
+
+test("an item id is rejected for views that are not addressed that way", () => {
+  assert.throws(() => deepLinkPath("", "chats", "s1", null, "x"));
+  assert.throws(() => deepLinkPath("", "contexts", null, "channel:C1", "x"));
+});
+
+test("only the first two path segments are addressed", () => {
+  assert.deepEqual(parseDeepLink("", "/crons/a/b", ""), { view: "crons", session: null, item: "a" });
 });
 
 test("sessionLink builds an absolute link under the serving base", () => {

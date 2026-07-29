@@ -7,6 +7,7 @@ import { listBackLink, listPageTpl } from "./list-page";
 import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
 import { chatState, newChat } from "./chat";
+import { deepLinkPath, UI_BASE } from "./deep-link";
 import {
   cronNextFire,
   cronRunSummary,
@@ -67,9 +68,31 @@ const cronRuns = new Map<string, CronRunView[]>();
 const cronRunsLoading = new Set<string>();
 let cronDialog: { kind: "rename" | "delete"; cron: CronView } | null = null;
 let activeCronId: string | null = null;
+let pendingCronId: string | null = null;
 
 export function resetActiveCron(): void {
   cronsScope = null;
+}
+
+export function openCronById(id: string): void {
+  pendingCronId = id;
+}
+
+function syncCronUrl(cronId: string | null, push = false): void {
+  if (appState.currentView !== "crons") return;
+  const next = deepLinkPath(UI_BASE, "crons", null, null, cronId);
+  if (`${location.pathname}${location.search}` === next) return;
+  if (push) history.pushState(null, "", next);
+  else history.replaceState(null, "", next);
+}
+
+export function routeCronsHistory(cronId: string | null): void {
+  if (appState.currentView !== "crons") return;
+  const cron = cronId
+    ? (cronList.find((c) => c.id === cronId) ?? visibleCronList.find((c) => c.id === cronId))
+    : undefined;
+  if (cron) openCron(cron);
+  else drawCronsPage();
 }
 
 async function refreshCrons(opts: { showLoading?: boolean } = {}): Promise<boolean> {
@@ -165,13 +188,25 @@ export async function renderCronsPage(): Promise<void> {
   if (appState.currentView !== "crons") return;
   await ensureContexts();
   drawCronsPage();
-  await refreshCrons({ showLoading: cronList.length === 0 && visibleCronList.length === 0 });
-  if (appState.currentView === "crons") drawCronsPage();
+  const loaded = await refreshCrons({ showLoading: cronList.length === 0 && visibleCronList.length === 0 });
+  const wanted = pendingCronId;
+  pendingCronId = null;
+  if (appState.currentView !== "crons") return;
+  if (!loaded) return drawCronsPage();
+  const cron = wanted
+    ? (cronList.find((c) => c.id === wanted) ?? visibleCronList.find((c) => c.id === wanted))
+    : undefined;
+  if (wanted && !cron) {
+    cronActionNotice = "That cron wasn't found, or you don't have access to it.";
+  }
+  if (cron) openCron(cron);
+  else drawCronsPage();
 }
 
 function drawCronsPage(): void {
   if (appState.currentView !== "crons" || !appState.mainEl) return;
   activeCronId = null;
+  syncCronUrl(null);
   if (!cronsPageHost || cronsPageHost.parentElement !== appState.mainEl) {
     cronsPageHost = document.createElement("div");
     cronsPageHost.className = "pane crons-page";
@@ -194,6 +229,10 @@ function drawCronsPage(): void {
   const counts: Record<CronTab, number> = { yours: yours.length, shared: shared.length, archived: archived.length };
 
   const rows: TemplateResult[] = [];
+  if (cronActionNotice) {
+    rows.push(html`<div class="action-notice">${cronActionNotice}</div>`);
+    cronActionNotice = "";
+  }
   if (all.length) rows.push(cronTabs(counts));
   if (cronTab === "yours") {
     rows.push(...yoursEnabled.map(({ c }) => cronPageRow(c, true)));
@@ -297,14 +336,22 @@ function cronPageRow(c: CronView, mine: boolean): TemplateResult {
   const meta = `${cronScheduleSummary(c)} · ${cronRunSummary(c)}`;
   return html`
     <div class="list-row cron-row cron-${status}">
-      <button class="cron-row-main" type="button" @click=${() => openCron(c)}>
+      <a
+        class="cron-row-main"
+        href=${deepLinkPath(UI_BASE, "crons", null, null, c.id)}
+        @click=${(event: MouseEvent) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+          event.preventDefault();
+          openCron(c, { push: true });
+        }}
+      >
         <span class="list-row-title cron-title-line"><span>${cronTitle(c)}</span></span>
         ${preview ? html`<span class="cron-preview">${preview}</span>` : nothing}
         <span class="list-row-meta">
           ${isPersonalScope(c) ? nothing : scopeChip(c.ownerScopeId, c.scopeName ?? null)}
           <span class="cron-meta-line" title=${cronRunSummaryTitle(c)}>${meta}</span>
         </span>
-      </button>
+      </a>
       ${canManageCron(c, mine) ? cronRowActions(c) : nothing}
     </div>
   `;
@@ -381,9 +428,10 @@ function cronRowActions(c: CronView): TemplateResult {
   `;
 }
 
-function openCron(c: CronView): void {
+function openCron(c: CronView, opts: { push?: boolean } = {}): void {
   if (!appState.mainEl) return;
   activeCronId = c.id;
+  syncCronUrl(c.id, opts.push);
   const mine = cronList.some((x) => x.id === c.id);
   const manageable = canManageCron(c, mine);
   const notice = cronActionNotice;
@@ -516,18 +564,21 @@ function cronRunHistory(c: CronView): TemplateResult {
   return html` <div class="field">
     ${heading}
     <div class="cron-run-list">
-      ${[...runs].reverse().map(
-        (run) =>
-          html` <div class="cron-run-row">
-            <div>
-              <span class="badge">${run.status ?? "completed"}</span>
-              <span>${new Date(run.firedAt).toLocaleString()}</span>
-            </div>
-            ${run.note ? html`<div class="cron-run-error">${run.note}</div>` : nothing}
-            ${run.reply ? html`<div class="cron-run-reply">${clipWords(run.reply, 180)}</div>` : nothing}
-            ${run.sessionId ? html`<a href=${`${location.pathname}?session=${encodeURIComponent(run.sessionId)}`}>Open worklog</a>` : nothing}
-          </div>`,
-      )}
+      ${[...runs].reverse().map((run) => {
+        const detail = run.note ?? (run.reply ? clipWords(run.reply, 120) : "");
+        return html` <div class="cron-run-row">
+          <span class="badge">${run.status ?? "completed"}</span>
+          <span class="cron-run-time">${new Date(run.firedAt).toLocaleString()}</span>
+          <span class=${run.note ? "cron-run-detail cron-run-error" : "cron-run-detail"} title=${detail}>
+            ${detail}
+          </span>
+          ${
+            run.sessionId
+              ? html`<a class="cron-run-link" href=${deepLinkPath(UI_BASE, "chats", run.sessionId)}>Worklog</a>`
+              : nothing
+          }
+        </div>`;
+      })}
     </div>
   </div>`;
 }

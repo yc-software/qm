@@ -4242,7 +4242,7 @@ body.resizing-sidebar {
 
 .cron-run-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
 }
 
 .cron-run-heading {
@@ -4258,20 +4258,38 @@ body.resizing-sidebar {
 }
 
 .cron-run-row {
-  display: grid;
-  gap: 5px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.cron-run-row:last-child {
+  border-bottom: 0;
+}
+
+.cron-run-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+
+.cron-run-detail {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted-foreground);
+}
+
+.cron-run-link {
+  margin-left: auto;
 }
 
 .cron-run-error {
   color: var(--destructive, #b42318);
-}
-
-.cron-run-reply {
-  color: var(--muted-foreground);
 }
 
 .action-notice {
@@ -5737,6 +5755,7 @@ body.resizing-sidebar {
   cursor: default;
 }
 .cron-row-main {
+  text-decoration: none;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
