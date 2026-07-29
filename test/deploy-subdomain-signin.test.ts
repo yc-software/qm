@@ -73,6 +73,22 @@ function httpGet(
   });
 }
 
+function httpPost(
+  port: number,
+  path: string,
+  headers: Record<string, string>,
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: "localhost", port, path, method: "POST", headers }, (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 test("subdomain ingress: portal sign-in admits the owner, denies strangers, bounces the signed-out", async () => {
   let upstreamCookie: string | undefined = "unset";
   let upstreamUrl = "";
@@ -114,6 +130,10 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     files: [],
     name: "mysite",
   });
+  const deliveries: { destination: unknown; text: string; idempotencyKey: string }[] = [];
+  (app as unknown as Record<string, unknown>).enqueueDelivery = async (input: (typeof deliveries)[number]) => {
+    deliveries.push(input);
+  };
   const server = createInsecureTestServer(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
@@ -183,6 +203,31 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
     });
     assert.equal(strangerXhr.status, 403, "non-HTML denial stays JSON");
+
+    assert.match(stranger.body, /Request access/, "the denial page offers a request-access button");
+    const asked = await httpPost(port, "/__claw__/request-access", {
+      Host: host,
+      Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
+    });
+    assert.equal(asked.status, 200, "a denied visitor can ask the owner for access");
+    const again = await httpPost(port, "/__claw__/request-access", {
+      Host: host,
+      Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
+    });
+    assert.equal(again.status, 200, "asking twice is idempotent, not an error");
+    assert.equal(deliveries.length, 2, "both posts enqueue (the outbox dedupes by idempotency key)");
+    assert.equal(deliveries[0]!.idempotencyKey, deliveries[1]!.idempotencyKey, "same visitor+app+day dedupes");
+    assert.match(deliveries[0]!.text, /mallory@example\.com is asking for access/);
+    assert.match(deliveries[0]!.text, /mysite/);
+    assert.deepEqual(deliveries[0]!.destination, {
+      type: "principal",
+      target: "alice@example.com",
+      audienceScopeId: "personal:alice@example.com",
+      onBehalfOf: "mallory@example.com",
+    });
+
+    const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });
+    assert.equal(signedOutAsk.status, 401, "a signed-out visitor cannot send access requests");
 
     const forged = await httpGet(port, "/consultants", {
       Host: host,
