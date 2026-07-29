@@ -38,7 +38,7 @@ test("the release signs private images without requiring anonymous registry acce
   assert.match(workflow, /platforms: linux\/amd64\s+provenance: false/);
   assert.match(
     workflow,
-    /image='ghcr\.io\/yc-software\/qm-\$\{\{ matrix\.name \}\}@\$\{\{ steps\.build\.outputs\.digest \}\}'\s+cosign sign --yes "\$image"\s+cosign verify "\$image"/,
+    /image='ghcr\.io\/yc-software\/qm\/\$\{\{ matrix\.name \}\}@\$\{\{ steps\.build\.outputs\.digest \}\}'\s+cosign sign --yes "\$image"\s+cosign verify "\$image"/,
   );
   assert.ok(workflow.indexOf("docker/login-action") < workflow.indexOf("docker/build-push-action"));
   assert.ok(workflow.indexOf("docker/build-push-action") < workflow.indexOf("Sign exact image"));

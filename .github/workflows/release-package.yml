@@ -47,12 +47,12 @@ jobs:
           provenance: false
           push: true
           build-args: ${{ matrix.build-args }}
-          tags: ghcr.io/yc-software/qm-${{ matrix.name }}:${{ github.sha }}
+          tags: ghcr.io/yc-software/qm/${{ matrix.name }}:${{ github.sha }}
           cache-from: type=gha,scope=qm-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=qm-${{ matrix.name }}
       - name: Sign exact image
         run: |
-          image='ghcr.io/yc-software/qm-${{ matrix.name }}@${{ steps.build.outputs.digest }}'
+          image='ghcr.io/yc-software/qm/${{ matrix.name }}@${{ steps.build.outputs.digest }}'
           cosign sign --yes "$image"
           cosign verify "$image" \
             --certificate-identity='https://github.com/${{ github.repository }}/.github/workflows/release-package.yml@refs/heads/main' \
