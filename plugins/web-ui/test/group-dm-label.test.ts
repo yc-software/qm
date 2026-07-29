@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { groupDmLabel, groupDmText } from "../src/group-dm-label.ts";
 
 test("groupDmLabel parses Slack's raw mpdm channel names into people lists", () => {
-  assert.deepEqual(groupDmLabel("mpdm-alice--gm--katie--carol-1"), {
-    names: ["alice", "gm", "katie", "carol"],
-    text: "alice, gm, katie, carol",
+  assert.deepEqual(groupDmLabel("mpdm-alice--gm--jordan--carol-1"), {
+    names: ["alice", "gm", "jordan", "carol"],
+    text: "alice, gm, jordan, carol",
     count: 4,
   });
   assert.equal(groupDmText("#mpdm-eric--eve--katherine--lucas--sean-1"), "eric, eve, katherine, lucas, sean");

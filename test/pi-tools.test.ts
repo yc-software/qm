@@ -221,7 +221,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         verb: "share",
         type: "file",
         id: "F1",
-        target: { scope: "channel:C1", label: "#pete-katie" },
+        target: { scope: "channel:C1", label: "#avery-jordan" },
         permission: "read",
       };
     },

@@ -57,7 +57,7 @@ test("addressed envelope: trigger rides the instruction block, not the overheard
     channel: "C1",
     at: AT,
     why: "ada addressed you directly; they expect a response.",
-    recentMessages: [{ ts: "1.0", authorName: "pete", text: "earlier chatter" }],
+    recentMessages: [{ ts: "1.0", authorName: "avery", text: "earlier chatter" }],
     addressedMessages: [{ ts: "2.0", authorName: "ada", authorId: "U1", text: "can you help?" }],
     instructions: "Act on it.",
   });

@@ -313,7 +313,7 @@ test("a message that @mentions ANOTHER person (not the bot) is judged normally, 
     const container = "C-other";
     await built.app.setChannelPolicy(container, "", "U-admin", undefined, undefined, true);
     await built.app.ingestSurfaceEvents(
-      [{ container, ts: "1.0", authorId: "U1", text: "@katie can you send those emails?", createdAt: 1 }],
+      [{ container, ts: "1.0", authorId: "U1", text: "@jordan can you send those emails?", createdAt: 1 }],
       "slack",
       { name: "bot", mentionId: "UBOT" },
     );

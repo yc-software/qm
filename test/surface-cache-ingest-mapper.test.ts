@@ -7,7 +7,7 @@ test("toEvent passes through mentions, bot, mentionsSelf, and handled", () => {
     container: "C1",
     ts: "1.0",
     text: "@bot help",
-    mentions: { U1: "katie" },
+    mentions: { U1: "jordan" },
     bot: true,
     mentionsSelf: true,
     handled: true,
@@ -15,7 +15,7 @@ test("toEvent passes through mentions, bot, mentionsSelf, and handled", () => {
     kind: "channel",
   });
   assert.ok(e);
-  assert.deepEqual(e.mentions, { U1: "katie" });
+  assert.deepEqual(e.mentions, { U1: "jordan" });
   assert.equal(e.bot, true);
   assert.equal(e.mentionsSelf, true);
   assert.equal(e.handled, true, "the direct-path ownership flag reaches the mirror (not dropped at the route)");
@@ -37,13 +37,13 @@ test("toEvent omits the flags when absent or false, and keeps only string mentio
     bot: false,
     mentionsSelf: false,
     handled: false,
-    mentions: { U1: "katie", U2: 5 },
+    mentions: { U1: "jordan", U2: 5 },
   });
   assert.ok(e);
   assert.equal(e.bot, undefined);
   assert.equal(e.mentionsSelf, undefined);
   assert.equal(e.handled, undefined);
-  assert.deepEqual(e.mentions, { U1: "katie" }, "non-string mention values are dropped");
+  assert.deepEqual(e.mentions, { U1: "jordan" }, "non-string mention values are dropped");
 });
 
 test("toEvent rejects a payload with no container/ts", () => {
