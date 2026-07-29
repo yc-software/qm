@@ -251,6 +251,20 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
+    name: "PORTAL_IDENTITY_SECRET",
+    service: "web-ui",
+    required: true,
+    description: "Signing key shared with core for portal-bound user identity.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "PORTAL_IDENTITY_SECRET",
+    service: "admin",
+    required: true,
+    description: "Signing key shared with core for portal-bound user identity.",
+    generate: MINT_LOCALLY,
+  },
+  {
     name: "CORE_SIGNING_SECRET",
     service: "auth",
     required: true,
