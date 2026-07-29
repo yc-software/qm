@@ -1,8 +1,9 @@
 # Email transport for sign-in links
 
 Sign-in uses the built-in `auth` broker, which emails a one-time link. It needs
-one transport. Pick Resend when the operator has DNS control over a domain they
-are happy to send from; pick SMTP when they already have a relay.
+one transport. SMTP is the default recommendation: any existing mail account or
+relay works and there is no DNS wait. Pick Resend only when the operator
+prefers it and has DNS control over a domain they are happy to send from.
 
 Set `env.auth.AUTH_EMAIL_TRANSPORT` to `resend` or `smtp` before collecting
 secrets, then run `npm exec qm -- setup`, which prompts for exactly the

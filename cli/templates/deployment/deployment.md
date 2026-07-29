@@ -83,11 +83,15 @@ identity provider to register: the CLI generates the broker's signing key and
 the portal's client credentials and derives every `OIDC_*` value from
 `publicUrl`. Setting any of them by hand is refused.
 
-What the operator supplies is an email transport. Choose it and set
-`env.auth.AUTH_EMAIL_TRANSPORT` to `resend` or `smtp`, optionally set
+What the operator supplies is a way to send those emails. Do not ask them to
+pick a transport by name; ask what they already use for email. An existing
+mail account or relay (Google Workspace, Postmark, SES, Fastmail) means SMTP —
+recommend it, since it needs no DNS work — and only an operator who prefers
+Resend and controls DNS for a sending domain should pick `resend`. Set
+`env.auth.AUTH_EMAIL_TRANSPORT` accordingly, optionally set
 `env.auth.AUTH_ALLOWED_EMAIL_DOMAIN` to admit a whole domain, then read
-`.codex/skills/deploy-qm/references/email.md` before collecting secrets — one
-of its steps needs DNS control you will not have, so raise it with the operator
+`.codex/skills/deploy-qm/references/email.md` before collecting secrets — the
+Resend path needs DNS control you will not have, so raise it with the operator
 early. Configure services, model, and the final public origin in the same pass.
 
 To use an external work-email OIDC provider instead, drop `"auth"` from
