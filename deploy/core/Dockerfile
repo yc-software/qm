@@ -5,7 +5,8 @@ RUN apk add --no-cache ca-certificates curl git git-daemon
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm audit --omit=dev --audit-level=moderate
+RUN npm ci --omit=dev && npm audit --omit=dev --audit-level=moderate \
+  && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY src ./src
 COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json

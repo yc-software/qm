@@ -12,7 +12,8 @@ RUN npm run build
 FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd
 WORKDIR /app
 COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./
-RUN npm ci --omit=dev && rm package-lock.json
+RUN npm ci --omit=dev && rm package-lock.json \
+  && rm -rf /root/.npm /tmp/node-compile-cache
 COPY plugins/web-ui/server ./server
 COPY plugins/chassis/src /chassis/src
 COPY --from=build /app/dist-web ./dist-web

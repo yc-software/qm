@@ -5,7 +5,7 @@ RUN npm install -g --allow-scripts=@anthropic-ai/claude-code \
 
 FROM debian:12-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils findutils grep sed gawk \
@@ -29,7 +29,8 @@ RUN case "$TARGETARCH" in \
   && tar xzf /tmp/gh.tgz -C /tmp \
   && install "/tmp/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /usr/local/bin/gh \
   && rm -rf /tmp/gh* \
-  && gh --version
+  && gh --version \
+  && rm -rf /root/.local/state/gh
 
 RUN claude --version \
   && codex --version
@@ -67,7 +68,12 @@ RUN if [ "$INSTALL_BROWSER_ENGINE" = "1" ]; then \
       /opt/browser-engine/venv/bin/pip install --no-cache-dir "browser-use==${BROWSER_USE_VERSION}"; \
       /opt/browser-engine/venv/bin/python -c "import browser_use; print('browser-use ok')"; \
       /usr/bin/chromium --version; \
+      : > /etc/machine-id; \
+      : > /var/lib/dbus/machine-id; \
     fi
+
+ENV ANONYMIZED_TELEMETRY=false
+ENV BROWSER_USE_CLOUD_SYNC=false
 
 WORKDIR /workspace
 
