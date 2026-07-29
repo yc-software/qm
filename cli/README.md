@@ -18,10 +18,11 @@ npm exec qm -- up --yes
 npm exec qm -- check --live
 ```
 
-This package is private and is never published to a registry. First-party image
-publication is a release operation outside this repository change. The checked-in
-image manifest is a sentinel that a deployment overrides with real digests. The
-packed-artifact test exercises the consumer path locally.
+This package is published to npm as `@yc-software/qm`, with npm provenance attesting the
+building workflow. First-party image publication is a separate release operation run by
+`.github/workflows/release-package.yml`. The checked-in image manifest is a sentinel that
+a deployment overrides with real digests. The packed-artifact test exercises the consumer
+path locally.
 
 The CLI deploys long-running QM services; it is not the runtime. Docker runs
 them locally, Fly runs them as Fly apps with Fly Machines for agent computers, and AWS

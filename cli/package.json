@@ -1,10 +1,20 @@
 {
   "name": "@yc-software/qm",
   "version": "0.1.0",
-  "private": true,
   "license": "MIT",
   "description": "Control-plane CLI for portable QM deployments on Docker, Fly, and AWS.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yc-software/qm.git",
+    "directory": "cli"
+  },
+  "homepage": "https://github.com/yc-software/qm/tree/main/cli#readme",
+  "bugs": "https://github.com/yc-software/qm/issues",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "bin": {
     "qm": "dist/bin/qm.js"
   },

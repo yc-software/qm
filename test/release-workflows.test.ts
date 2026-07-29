@@ -44,17 +44,32 @@ test("the release signs private images without requiring anonymous registry acce
   assert.ok(workflow.indexOf("docker/build-push-action") < workflow.indexOf("Sign exact image"));
 });
 
-test("the CLI package cannot be published to a registry", () => {
+test("the CLI package publishes publicly with provenance", () => {
   const manifest = JSON.parse(readFileSync("cli/package.json", "utf8")) as {
     private?: boolean;
-    publishConfig?: unknown;
+    repository?: { url?: string; directory?: string };
+    publishConfig?: { access?: string; provenance?: boolean };
     scripts?: Record<string, string>;
   };
 
-  assert.equal(manifest.private, true);
-  assert.equal(manifest.publishConfig, undefined);
-  assert.equal(manifest.scripts?.prepublishOnly, undefined);
+  assert.equal(manifest.private, undefined);
+  assert.equal(manifest.publishConfig?.access, "public");
+  assert.equal(manifest.publishConfig?.provenance, true);
+  assert.equal(manifest.repository?.url, "git+https://github.com/yc-software/qm.git");
+  assert.equal(manifest.repository?.directory, "cli");
   assert.equal(manifest.scripts?.["verify:release"], undefined);
   assert.equal(existsSync("cli/scripts/verify-release-manifest.mjs"), false);
   assert.equal(existsSync("scripts/prepare-release-manifest.mjs"), false);
+});
+
+test("publishing the CLI is a separate, attested, main-only operation", () => {
+  const workflow = readFileSync(".github/workflows/publish-cli.yml", "utf8");
+
+  assert.match(workflow, /^on:\n {2}workflow_dispatch:$/m);
+  assert.match(workflow, /if: github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /permissions:\s+contents: read\s+id-token: write/);
+  assert.match(workflow, /registry-url: https:\/\/registry\.npmjs\.org/);
+  assert.match(workflow, /npm publish --provenance --access public/);
+  assert.match(workflow, /NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/);
+  assert.doesNotMatch(workflow, /packages: write/);
 });
