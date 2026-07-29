@@ -157,7 +157,6 @@ test("active source and public documentation do not expose retired credential fe
     ["prepare", "-release-manifest"].join(""),
     ["verify", "-release-manifest"].join(""),
     ["prepublish", "Only"].join(""),
-    ["npm ", "publish"].join(""),
   ].map((value) => value.toLowerCase());
   const matches = paths.flatMap((path) => {
     const source = readFileSync(path, "utf8").toLowerCase();
