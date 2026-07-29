@@ -48,6 +48,9 @@ interface DirectoryPush {
   channelMembers?: Array<{ channelId: string; principalId: string }>;
   groupMembers?: Array<{ groupId: string; principalId: string }>;
   workspaceUrl?: string;
+  membersSyncedAt?: number;
+  channelsSyncedAt?: number;
+  groupsSyncedAt?: number;
 }
 
 export interface SlackCoreClient {
@@ -275,9 +278,9 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async pushDirectory(body) {
       if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(body.workspaceUrl);
-      if (body.members) await deps.app.upsertDirectory(body.members);
-      if (body.channels) await deps.app.upsertChannels(body.channels, body.channelMembers);
-      if (body.groupMembers) await deps.app.upsertGroups(body.groupMembers);
+      if (body.members) await deps.app.upsertDirectory(body.members, body.membersSyncedAt);
+      if (body.channels) await deps.app.upsertChannels(body.channels, body.channelMembers, body.channelsSyncedAt);
+      if (body.groupMembers) await deps.app.upsertGroups(body.groupMembers, body.groupsSyncedAt);
     },
 
     claimDeliveries(type, claimMs) {

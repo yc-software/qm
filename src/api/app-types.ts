@@ -349,9 +349,9 @@ export interface App {
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
-  upsertDirectory(members: DirectoryMember[]): Promise<void>;
-  upsertChannels(channels: DirectoryChannel[], channelMembers?: ChannelMembership[]): Promise<void>;
-  upsertGroups(groupMembers: GroupMembership[]): Promise<void>;
+  upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<void>;
+  upsertChannels(channels: DirectoryChannel[], channelMembers?: ChannelMembership[], syncedAt?: number): Promise<void>;
+  upsertGroups(groupMembers: GroupMembership[], syncedAt?: number): Promise<void>;
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;

@@ -80,6 +80,7 @@ export interface Directory {
     kind: RosterKind,
   ): Promise<Map<string, string[]>>;
   knownPublicChannels: { has(channel: string): boolean; add(channel: string): void; delete(channel: string): void };
+  syncForUnseenGroup(client: any, groupId: string): void;
   resolveAutoIdentityMode(client: any): Promise<SlackIdentityMode>;
   maxClassifyMembers: number;
 }
@@ -274,14 +275,18 @@ export function createDirectory(deps: {
         channelMembers: ChannelMembershipRow[];
         groupMembers?: GroupMembershipRow[];
         fetchedAt: number;
+        groupsFetchedAt?: number;
       }
     | undefined;
   let knownPublicChannelSet = new Set<string>();
+  const seenGroupIds = new Set<string>();
 
   async function fetchChannels(client: any): Promise<{
     channels: ChannelRow[];
     channelMembers: ChannelMembershipRow[];
     groupMembers?: GroupMembershipRow[];
+    fetchedAt: number;
+    groupsFetchedAt?: number;
   } | null> {
     let listed: { publicChannels: ChannelRow[]; privateChannels: PrivateChannelRef[] };
     try {
@@ -295,19 +300,25 @@ export function createDirectory(deps: {
     if (!fresh) {
       const computed = await computePrivateChannelMembership(client, listed.privateChannels);
       let groupMembers: GroupMembershipRow[] | undefined;
+      let groupsFetchedAt: number | undefined;
       try {
-        groupMembers = await computeGroupMembership(client, await listBotGroupDms(client));
+        const groupIds = await listBotGroupDms(client);
+        for (const id of groupIds) seenGroupIds.add(id);
+        groupMembers = await computeGroupMembership(client, groupIds);
+        groupsFetchedAt = Date.now();
       } catch (err) {
         console.error("[slack-plugin] group-DM list failed:", (err as Error).message);
         groupMembers = privateChannelsCache?.groupMembers;
+        groupsFetchedAt = privateChannelsCache?.groupsFetchedAt;
       }
-      privateChannelsCache = { ...computed, groupMembers, fetchedAt: Date.now() };
+      privateChannelsCache = { ...computed, groupMembers, groupsFetchedAt, fetchedAt: Date.now() };
     }
     const priv = privateChannelsCache ?? { channels: [], channelMembers: [], fetchedAt: 0 };
     return {
       channels: [...listed.publicChannels, ...priv.channels],
       channelMembers: priv.channelMembers,
-      ...(priv.groupMembers ? { groupMembers: priv.groupMembers } : {}),
+      fetchedAt: priv.fetchedAt,
+      ...(priv.groupMembers ? { groupMembers: priv.groupMembers, groupsFetchedAt: priv.groupsFetchedAt } : {}),
     };
   }
 
@@ -328,11 +339,15 @@ export function createDirectory(deps: {
     try {
       await core.pushDirectory({
         members,
+        membersSyncedAt: snap.fetchedAt,
         ...(fetched
           ? {
               channels: fetched.channels,
               channelMembers: fetched.channelMembers,
-              ...(fetched.groupMembers ? { groupMembers: fetched.groupMembers } : {}),
+              channelsSyncedAt: fetched.fetchedAt,
+              ...(fetched.groupMembers
+                ? { groupMembers: fetched.groupMembers, groupsSyncedAt: fetched.groupsFetchedAt }
+                : {}),
             }
           : {}),
         ...(ids.ownWorkspaceUrl ? { workspaceUrl: ids.ownWorkspaceUrl } : {}),
@@ -376,6 +391,12 @@ export function createDirectory(deps: {
   function forceDirectorySync(client: any): Promise<void> {
     directorySyncClient = client;
     return coalescedDirectorySync();
+  }
+
+  function syncForUnseenGroup(client: any, groupId: string): void {
+    if (seenGroupIds.has(groupId)) return;
+    seenGroupIds.add(groupId);
+    void forceDirectorySync(client).catch(swallowAs("slack: unseen group-DM directory sync", undefined));
   }
 
   async function classifyUserCached(client: any, userId: string): Promise<CachedUser & { ok: boolean }> {
@@ -471,6 +492,7 @@ export function createDirectory(deps: {
       add: (channel: string) => void knownPublicChannelSet.add(channel),
       delete: (channel: string) => void knownPublicChannelSet.delete(channel),
     },
+    syncForUnseenGroup,
     resolveAutoIdentityMode,
     maxClassifyMembers: MAX_CLASSIFY_MEMBERS,
   };

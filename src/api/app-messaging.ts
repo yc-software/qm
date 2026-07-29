@@ -302,9 +302,9 @@ export function createMessagingMethods(
       return found;
     },
 
-    async upsertDirectory(members) {
+    async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
-      await deps.directory.replace(members);
+      if (!(await deps.directory.replace(members, syncedAt))) return;
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
@@ -329,11 +329,11 @@ export function createMessagingMethods(
         });
       }
     },
-    async upsertChannels(channels, channelMembers) {
-      await deps.directory.replaceChannels(channels, channelMembers);
+    async upsertChannels(channels, channelMembers, syncedAt) {
+      await deps.directory.replaceChannels(channels, channelMembers, syncedAt);
     },
-    async upsertGroups(groupMembers) {
-      await deps.directory.replaceGroups(groupMembers);
+    async upsertGroups(groupMembers, syncedAt) {
+      await deps.directory.replaceGroups(groupMembers, syncedAt);
     },
     async setDirectoryWorkspaceUrl(url) {
       await deps.directory.setWorkspaceUrl(url);
