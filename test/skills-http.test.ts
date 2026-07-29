@@ -97,7 +97,9 @@ test("GET /v1/skills marks a private-channel skill editable for a member and not
     );
     await publish(srv.skills, scopeId("channel", "C9"), "team-thing", "shared in the channel");
 
-    const forJordan = (await (await fetch(`${srv.base}/v1/skills?principalId=jordan`)).json()) as { skills: SkillView[] };
+    const forJordan = (await (await fetch(`${srv.base}/v1/skills?principalId=jordan`)).json()) as {
+      skills: SkillView[];
+    };
     const k = forJordan.skills.find((s) => s.name === "team-thing");
     assert.ok(k, "the channel skill is visible to a member");
     assert.equal(k!.scope, "channel");
