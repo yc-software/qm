@@ -43,6 +43,22 @@ isn't tied to any single vendor.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  DB[("Postgres<br/>sessions · memory · queue")]
+
+  subgraph CORE["Headless core"]
+    API["API · identity · policy · scheduler"]
+    LOOP["Agent loop<br/>(Pi, OpenCode, Claude Code)"]
+    API <--> LOOP
+  end
+
+  SBX["Per-scope sandbox<br/>files · tools · logged-in services"]
+
+  DB <--> API
+  LOOP <--> SBX
+```
+
 Every turn runs through a central core, which can use a variety of models and harnesses
 to generate the response. A Postgres persistence layer holds user data, session history,
 and other durable state. The agent has a small, fixed tool surface; one of those tools is

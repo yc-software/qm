@@ -200,6 +200,8 @@ export function sandboxCoreEnv(
     if (violation) throw new CliError(violation.message, { clause: violation.clause });
     env.FLY_SANDBOX_APP_NAME = sb.app;
     env.FLY_BASE_IMAGE = sb.image;
+    const backend = sb.backend ?? (config.target === "fly" ? "sprites" : undefined);
+    if (backend) env.SANDBOX_BACKEND = backend;
   }
   for (const [k, v] of Object.entries(sb.env ?? {})) env[`FLY_RESIDENT_ENV_${k}`] = v;
   for (const name of sb.secretEnv ?? []) {

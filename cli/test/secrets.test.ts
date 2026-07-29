@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { QmConfig } from "../src/config.ts";
+import { sandboxCoreEnv, type QmConfig } from "../src/config.ts";
 import {
   FLY_TEMPLATE_ENV_DEFAULTS,
   computedSecrets,
@@ -287,4 +287,48 @@ test("secretEnv merges onto an existing computed secret instead of duplicating i
 test("secretEnv for a service the config does not enable is ignored", () => {
   const config = makeConfig({ secretEnv: { portal: { EXTRA_TOKEN: "EXTRA_TOKEN" } } });
   assert.ok(!computedSecrets(config).some((s) => s.name === "EXTRA_TOKEN"));
+});
+
+test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a portal identity", () => {
+  const config = makeConfig({ services: ["core", "web-ui", "admin", "portal"] });
+  const secret = secretByName(config, "PORTAL_IDENTITY_SECRET");
+  assert.deepEqual(
+    [...secretDestinations(secret).keys()].sort(),
+    ["admin", "core", "portal", "web-ui"],
+    "core verifies with PORTAL_IDENTITY_SECRET, so a surface left without it signs with a different key and every request it makes is rejected",
+  );
+});
+
+test("a fly deployment tells core which sandbox substrate to boot", () => {
+  const config = makeConfig({
+    target: "fly",
+    sandbox: {
+      app: "acme-sb",
+      image: "registry.fly.io/acme-sb@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+    },
+  });
+  assert.equal(
+    sandboxCoreEnv(config).env.SANDBOX_BACKEND,
+    "sprites",
+    "core refuses to boot in production unless SANDBOX_BACKEND is set explicitly",
+  );
+});
+
+test("an explicit sandbox.backend wins, and non-fly targets keep their own default", () => {
+  const pinned = makeConfig({
+    target: "fly",
+    sandbox: {
+      app: "acme-sb",
+      backend: "sprites",
+      image: "registry.fly.io/acme-sb@sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+    },
+  });
+  assert.equal(sandboxCoreEnv(pinned).env.SANDBOX_BACKEND, "sprites");
+  const docker = makeConfig({
+    sandbox: {
+      app: "acme-sb",
+      image: "registry.fly.io/acme-sb@sha256:3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+    },
+  });
+  assert.equal(sandboxCoreEnv(docker).env.SANDBOX_BACKEND, undefined);
 });

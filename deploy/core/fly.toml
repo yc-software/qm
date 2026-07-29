@@ -22,6 +22,7 @@ primary_region = "sjc"
   FLY_ORG = "personal"
   FLY_DEPLOY_BASE_IMAGE = "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
   FLY_DEPLOY_APP_PREFIX = "qm-d"
+  SANDBOX_BACKEND = "sprites"
 [deploy]
   strategy = "bluegreen"
 
