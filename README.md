@@ -172,8 +172,6 @@ messages, and screenshots for organization identifiers before it pushes. Nothing
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`plugins/`](./plugins) — the surfaces (Slack, web UI, admin, portal)
-- [`docs/session-tape-spec.md`](./docs/session-tape-spec.md) — the session tape format and its invariants
-- [`docs/design/byte-movement.md`](./docs/design/byte-movement.md) — ADR 0004: core brokers byte references, never moves bytes
 
 ## License
 
