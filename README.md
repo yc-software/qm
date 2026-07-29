@@ -41,39 +41,6 @@ isn't tied to any single vendor.
 - Work in an existing repository: run tests, open PRs, monitor CI, check system logs
 - Track a project in a shared channel and post updates and follow-ups
 
-## Run it
-
-Requires Node 24.15+ and npm 11.10+.
-
-```bash
-npm install
-cp .env.example .env
-node -e '
-  const fs = require("node:fs"), { randomBytes } = require("node:crypto");
-  let env = fs.readFileSync(".env", "utf8");
-  env = env.replace(/^(\w+(?:_SECRET|_KEY))=$/gm, (_, k) => `${k}=${randomBytes(32).toString("hex")}`);
-  fs.writeFileSync(".env", env);
-'
-
-npm start
-npm test
-```
-
-The one-liner fills every empty secret in `.env` (`CORE_SIGNING_SECRET`,
-`CAPABILITY_SECRET`, `PORTAL_IDENTITY_SECRET`, `CONNECTOR_SECRET_KEY`,
-`SKILL_SIGNING_SECRET`) with a locally minted random value.
-
-With a real model (needs one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`):
-
-```bash
-HARNESS=pi npm start
-```
-
-For durability, set `DATABASE_URL` and `SESSION_STORE=postgres` — without it, sessions
-live in process memory and vanish on restart. To exercise a branch end to end — core,
-Slack, web, admin, portal, against a real model and real Postgres — run
-`npm run dev-instance`.
-
 ## Architecture
 
 Every turn runs through a central core, which can use a variety of models and harnesses
