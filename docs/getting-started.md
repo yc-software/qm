@@ -8,7 +8,8 @@ directory, `deploy/layers/<org>/`: its config, sandbox customizations, provider
 coordinates, and generated Slack manifests. The rest of the tree stays identical to
 upstream. See [`../deploy/layers/README.md`](../deploy/layers/README.md).
 
-For a new layer, the agent first asks the operator for Fly.io or AWS, then runs:
+For a new layer, the agent first asks the operator for Fly.io or AWS (the slug
+is a local name derived from the organization, not globally unique), then runs:
 
 ```bash
 node cli/bin/qm.ts init deploy/layers/<org> --org <slug> --target <fly-or-aws>

@@ -14,12 +14,24 @@ Before cloud mutation, read `qm.config.jsonc` when it exists. Its `target` is
 the selected provider; confirm it with the operator and do not offer to change
 it in place. If the repository has not been initialized, collect:
 
-- Fly.io or AWS;
-- deployment slug and first administrator's verified work email;
-- model provider and model;
+- hosting target: a cloud provider, Fly.io or AWS. Recommend Fly.io when the
+  operator has no preference. The docker target runs everything on the local
+  machine and is for a quick local test drive only; never present it as the
+  recommended path for a real deployment;
+- the first administrator's verified work email;
+- model provider: Anthropic, OpenAI, or OpenRouter (one key that routes to
+  many models). The key is entered later on the Admin page, so "decide later"
+  is acceptable;
+- model;
 - region and provider account or organization;
 - whether the provider hostname is acceptable;
 - connectors to enable, including whether to add Slack now.
+
+The deployment slug is a local name for this deployment — it appears in the
+package name, resource names, and Slack branding. It is not registered
+anywhere and need not be globally unique. Derive it from the organization's
+name (a lowercase DNS label) and confirm it in passing; do not make the
+operator decide it as a standalone question.
 
 Explain the selected provider's billable resources and confirm the provider
 identity, region, resource list, and expected billing.
@@ -32,8 +44,8 @@ contracts are scaffolded as one unit.
 
 Require Node 24+, npm, Git, Docker with Buildx, and `openssl`.
 
-For a repository without `qm.config.jsonc`, first ask for the provider and
-organization slug, install an exact CLI version, and initialize its root:
+For a repository without `qm.config.jsonc`, first confirm the hosting target
+and the derived slug, install an exact CLI version, and initialize its root:
 
 ```bash
 npm exec --yes --package=@yc-software/qm@<exact-version> -- \
