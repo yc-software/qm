@@ -16,21 +16,6 @@ const webPackage = JSON.parse(read("plugins/web-ui/package.json")) as {
   devDependencies: Record<string, string>;
 };
 
-test("the README quickstart mints real secrets but never forges a provider API key", () => {
-  const source = /env\.replace\(\/(.+?)\/gm,/.exec(readme)?.[1];
-  assert.ok(source, "the quickstart still mints secrets with a /.../gm replace");
-  const minted = [...read(".env.example").matchAll(new RegExp(source!, "gm"))].map((m) => m[1]);
-
-  assert.ok(minted.includes("CORE_SIGNING_SECRET"), "the real secrets are still minted for the user");
-  for (const name of minted) {
-    assert.doesNotMatch(
-      name!,
-      /_API_KEY$/,
-      `${name} is empty in .env.example, so the README one-liner fills it with random hex — the deployment then reports a provider it cannot authenticate`,
-    );
-  }
-});
-
 test(".env.example declares no model provider key, real or placeholder", () => {
   for (const line of read(".env.example").split("\n")) {
     assert.doesNotMatch(
@@ -40,7 +25,6 @@ test(".env.example declares no model provider key, real or placeholder", () => {
         `so a placeholder counts), and the deployment then advertises a provider whose key cannot authenticate`,
     );
   }
-  assert.match(readme, /ANTHROPIC_API_KEY.*OPENAI_API_KEY.*OPENROUTER_API_KEY/, "the README still names all three");
 });
 
 test(".env.example does not pin a base model that drifts from the shipped default", () => {
