@@ -17,6 +17,7 @@ import { runSetup } from "./commands/setup.ts";
 import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "./commands/infra.ts";
 import { runSandboxBuild } from "./commands/sandbox.ts";
 import { runChecks, runCheckCommand } from "./commands/check.ts";
+import { assertNodeEngine } from "./preflight.ts";
 import { devCiDown, devCiUp } from "./backends/dev-ci.ts";
 import { hostingProvider, hostingProviderUpFlags, type DeployContext } from "./backends/registry.ts";
 import { runConformance } from "./commands/conformance.ts";
@@ -110,7 +111,8 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
      --build-from[=<qm-repo>]              build from local Dockerfiles instead of pulling
      --dry-run                             resolve the config + report the plan, change nothing
   plan                                     an alias for up --dry-run
-  check                                    validate config + sandbox/ (skills & tools); no build, no network
+  check                                    validate config + sandbox/ (skills & tools); no build; verifies
+                                           provider credentials whose values are present locally
     --json                                 machine-readable results keyed by contract clause
     --live                                 verify running identity, rendered config, and health
   doctor                                   verify deployment prerequisites read-only
@@ -300,6 +302,7 @@ async function dispatch(argv: string[]): Promise<void> {
           rejectUnknownFlags(flags, ["json", "live", "config", "env-file", "sandbox-dir", "target"]);
           rejectExtraPositionals(positionals, 0);
           const ctx = deployContext(flags);
+          assertNodeEngine(ctx.configDir);
           const result = runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
           if (boolFlag(flags, "live")) {
             const checkLive = deploymentBackend(ctx).checkLive;
@@ -360,11 +363,11 @@ async function dispatch(argv: string[]): Promise<void> {
         const checkLive = deploymentBackend(ctx).checkLive;
         if (!checkLive)
           throw new CliError(`check --live is not implemented for target ${ctx.target}`, { clause: "cli.invocation" });
-        runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir);
+        await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile);
         await checkLive();
         return;
       }
-      runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir);
+      await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile);
       return;
     }
 

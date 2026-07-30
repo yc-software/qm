@@ -12,6 +12,7 @@ import {
   type QmConfig,
 } from "../config.ts";
 import { die, note, ok, warn } from "../log.ts";
+import { assertNodeEngine } from "../preflight.ts";
 import { cliPackageName, cliVersion } from "../manifest.ts";
 import { computedSecrets, renderEnvExample } from "../secrets.ts";
 import { renderSlackManifests, usesSlackOidc } from "../slack-manifests.ts";
@@ -65,8 +66,9 @@ Copy its shape, then replace or delete it.
 Run every command from this directory.
 
 1. \`npm exec qm -- check\` validates the config and the sandbox layer and prints the
-   secret names the config currently requires. It builds nothing and touches no
-   network, so run it after every edit.
+   secret names the config currently requires. It builds nothing, and when
+   credential values are already present in \`.env\` it also verifies them
+   against their providers, so run it after every edit.
 2. \`npm exec qm -- plan\` reports what deployment would do
    without changing anything.
 3. After the target prerequisites are complete, \`npm exec qm -- up\` brings the
@@ -255,6 +257,7 @@ function scaffoldDeploymentSkill(dir: string): void {
 }
 
 export function runInit(opts: { org?: string; target?: Target; modelProvider?: ModelProvider; dir?: string }): void {
+  assertNodeEngine();
   const orgId = opts.org ?? "default-org";
   if (!validOrgId(orgId)) die(`--org must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
   const dir = opts.dir ?? process.cwd();

@@ -1,5 +1,7 @@
 import { existsSync, statSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
+import { assertNodeEngine, emailTransportPreflight, flySandboxTokenPreflight } from "../preflight.ts";
+import { readEnvFile } from "../util.ts";
 import { CliError, errMessage, header, note, ok, step, warn } from "../log.ts";
 import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
@@ -165,9 +167,18 @@ export function runChecks(
   return { layer, plugins, secrets };
 }
 
-export function runCheckCommand(config: QmConfig, configDir: string, sandboxDir: string): void {
+export async function runCheckCommand(
+  config: QmConfig,
+  configDir: string,
+  sandboxDir: string,
+  envFile?: string,
+): Promise<void> {
   header(`qm check — ${config.orgId}`);
+  assertNodeEngine(configDir);
   runChecks(config, configDir, sandboxDir, { report: true });
+  const secrets = readEnvFile(envFile ?? join(configDir, ".env"));
+  await flySandboxTokenPreflight(config, secrets);
+  await emailTransportPreflight(config, secrets);
   note("");
   ok("check passed — config, sandbox layer, and plugins are valid.");
 }
