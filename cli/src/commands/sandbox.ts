@@ -414,7 +414,7 @@ export function pinnedByDigest(ref: string): string {
   return `${ref}@${digest}`;
 }
 
-export function pinnedByPull(ref: string): string {
+function pinnedByPull(ref: string): string {
   runDocker(
     ["pull", "--platform", SANDBOX_RUNTIME_PLATFORM, ref],
     `could not pull ${ref} to resolve its immutable digest — pin the base by digest (${imageRepository(ref)}@sha256:<digest>, via --from or the sandbox/Dockerfile FROM) to skip resolution`,
