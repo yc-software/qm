@@ -104,20 +104,25 @@ export function awsWorkloadArchitecture(config: QmConfig, workload: string): "ar
   return service.architecture ?? "arm64";
 }
 
-/**
- * The vendor supplying the deployment's base model. Selecting one makes that vendor's
- * API key a required deployment secret, so `qm setup` collects it and `qm up` refuses
- * to deploy a stack that cannot run a single agent turn. Leaving it unset preserves the
- * older flow, where an administrator supplies the key from the Admin page after deploy.
- */
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
-/** The API key each provider's base model is billed against. */
 export const MODEL_PROVIDER_KEYS: Readonly<Record<ModelProvider, string>> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
+};
+
+export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly string[]>> = {
+  anthropic: ["pi", "opencode", "claude", "mock"],
+  openai: ["pi", "opencode", "codex", "mock"],
+  openrouter: ["pi", "mock"],
+};
+
+export const MODEL_PROVIDER_BASE_MODELS: Readonly<Record<ModelProvider, string>> = {
+  anthropic: "claude-opus-5",
+  openai: "gpt-5.6-sol",
+  openrouter: "openrouter/auto",
 };
 
 export const isModelProvider = (value: unknown): value is ModelProvider =>
@@ -674,6 +679,7 @@ function validate(raw: unknown, path: string): QmConfig {
     out.aws = validateAws(o["aws"], path, runnableServices(services), configuredSecretNames);
   }
   if (target === "aws" && !out.aws) throw new CliError(`${path}: target "aws" requires an "aws" block`);
+  validateModelProvider(out, path);
   validatePortalTrust(out, path);
   if (target === "aws") {
     validateAwsFrontDoor(out, path);
@@ -702,6 +708,21 @@ function validate(raw: unknown, path: string): QmConfig {
     });
   }
   return out;
+}
+
+function configuredHarness(config: QmConfig): string {
+  return config.env.core?.HARNESS?.trim() || (config.target === "fly" ? "pi" : "mock");
+}
+
+function validateModelProvider(config: QmConfig, path: string): void {
+  const provider = config.modelProvider;
+  if (!provider) return;
+  const harness = configuredHarness(config);
+  if (!MODEL_PROVIDER_HARNESSES[provider].includes(harness)) {
+    throw new CliError(
+      `${path}: modelProvider "${provider}" cannot serve a base model on env.core.HARNESS "${harness}" — that harness runs no ${provider} model, so every agent turn would be refused. Use ${MODEL_PROVIDER_HARNESSES[provider].join(", ")}, or pick a provider that harness can bill.`,
+    );
+  }
 }
 
 const validEmailDomain = (value: string): boolean => {

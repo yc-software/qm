@@ -1,21 +1,23 @@
 import { isStrongSigningSecret } from "../auth/source-auth.ts";
 
+type SecretGate =
+  | "production"
+  | "codex"
+  | "postgres"
+  | "sprites"
+  | "fly-sandbox"
+  | "fly-deploy"
+  | "aws-deploy-gate"
+  | "google-oauth"
+  | "dropbox-oauth"
+  | "linear-oauth"
+  | "model-anthropic"
+  | "model-openai"
+  | "model-openrouter";
+
 export interface RuntimeSecretSpec {
   name: string;
-  requiredWhen:
-    | "production"
-    | "codex"
-    | "postgres"
-    | "sprites"
-    | "fly-sandbox"
-    | "fly-deploy"
-    | "aws-deploy-gate"
-    | "google-oauth"
-    | "dropbox-oauth"
-    | "linear-oauth"
-    | "model-anthropic"
-    | "model-openai"
-    | "model-openrouter";
+  requiredWhen: SecretGate | readonly SecretGate[];
 }
 
 export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
@@ -24,12 +26,8 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "CORE_SIGNING_SECRET", requiredWhen: "production" },
   { name: "PORTAL_IDENTITY_SECRET", requiredWhen: "production" },
   { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
-  { name: "OPENAI_API_KEY", requiredWhen: "codex" },
-  // MODEL_PROVIDER names the vendor supplying the base model. The deployment CLI sets it
-  // from `modelProvider` in qm.config.jsonc, so a stack that declares a provider refuses
-  // to boot without that provider's key rather than accepting turns it cannot serve.
+  { name: "OPENAI_API_KEY", requiredWhen: ["codex", "model-openai"] },
   { name: "ANTHROPIC_API_KEY", requiredWhen: "model-anthropic" },
-  { name: "OPENAI_API_KEY", requiredWhen: "model-openai" },
   { name: "OPENROUTER_API_KEY", requiredWhen: "model-openrouter" },
   { name: "DATABASE_URL", requiredWhen: "postgres" },
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
@@ -41,32 +39,30 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "LINEAR_OAUTH_CLIENT_SECRET", requiredWhen: "linear-oauth" },
 ];
 
+const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
+  production: (env) => env.NODE_ENV === "production",
+  codex: (env) => env.HARNESS?.trim() === "codex",
+  postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
+  sprites: (env) => env.SANDBOX_BACKEND === "sprites" || env.SANDBOX_SECONDARY_BACKEND === "sprites",
+  "fly-sandbox": (env) => env.SANDBOX_BACKEND === "fly",
+  "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
+  "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN),
+  "google-oauth": (env) => Boolean(env.GOOGLE_OAUTH_CLIENT_ID),
+  "dropbox-oauth": (env) => Boolean(env.DROPBOX_OAUTH_CLIENT_ID),
+  "linear-oauth": (env) => Boolean(env.LINEAR_OAUTH_CLIENT_ID),
+  "model-anthropic": (env) => env.MODEL_PROVIDER?.trim() === "anthropic",
+  "model-openai": (env) => env.MODEL_PROVIDER?.trim() === "openai",
+  "model-openrouter": (env) => env.MODEL_PROVIDER?.trim() === "openrouter",
+};
+
 export function validateCoreSecretEnv(env: NodeJS.ProcessEnv): string[] {
   const enabled = (spec: RuntimeSecretSpec): boolean => {
-    if (spec.requiredWhen === "production") return env.NODE_ENV === "production";
-    if (spec.requiredWhen === "codex") return env.HARNESS?.trim() === "codex";
-    if (spec.requiredWhen === "postgres") return env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres";
-    if (spec.requiredWhen === "sprites")
-      return env.SANDBOX_BACKEND === "sprites" || env.SANDBOX_SECONDARY_BACKEND === "sprites";
-    if (spec.requiredWhen === "fly-sandbox") return env.SANDBOX_BACKEND === "fly";
-    if (spec.requiredWhen === "fly-deploy") return env.DEPLOY_PROVIDER === "fly";
-    if (spec.requiredWhen === "aws-deploy-gate") return Boolean(env.AWS_DEPLOY_APPS_DOMAIN);
-    if (spec.requiredWhen === "google-oauth") return Boolean(env.GOOGLE_OAUTH_CLIENT_ID);
-    if (spec.requiredWhen === "dropbox-oauth") return Boolean(env.DROPBOX_OAUTH_CLIENT_ID);
-    if (spec.requiredWhen === "model-anthropic") return env.MODEL_PROVIDER?.trim() === "anthropic";
-    if (spec.requiredWhen === "model-openai") return env.MODEL_PROVIDER?.trim() === "openai";
-    if (spec.requiredWhen === "model-openrouter") return env.MODEL_PROVIDER?.trim() === "openrouter";
-    return Boolean(env.LINEAR_OAUTH_CLIENT_ID);
+    const gates = typeof spec.requiredWhen === "string" ? [spec.requiredWhen] : spec.requiredWhen;
+    return gates.some((gate) => GATE_PREDICATES[gate](env));
   };
-  // OPENAI_API_KEY carries two specs (the Codex harness and an OpenAI base model), so
-  // deduplicate before reporting — a name should be named once however many rules want it.
-  return [
-    ...new Set(
-      CORE_SECRET_SPECS.filter((spec) => enabled(spec) && isInvalidSecret(spec.name, env[spec.name])).map(
-        (spec) => spec.name,
-      ),
-    ),
-  ];
+  return CORE_SECRET_SPECS.filter((spec) => enabled(spec) && isInvalidSecret(spec.name, env[spec.name])).map(
+    (spec) => spec.name,
+  );
 }
 
 function isInvalidSecret(name: string, value: string | undefined): boolean {

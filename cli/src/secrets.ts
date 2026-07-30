@@ -10,6 +10,7 @@ type SecretCondition =
   | { kind: "service-enabled"; service: DeclaredServiceName }
   | { kind: "service-absent"; service: DeclaredServiceName }
   | { kind: "all"; conditions: SecretCondition[] }
+  | { kind: "any"; conditions: SecretCondition[] }
   | { kind: "target"; target: QmConfig["target"] }
   | { kind: "model-provider"; provider: ModelProvider };
 
@@ -17,7 +18,7 @@ export interface SecretSpec {
   name: string;
   service: DeclaredServiceName;
   envName?: string;
-  required: boolean | { when: SecretCondition };
+  required: boolean | { when: SecretCondition; optionalOtherwise?: true };
   description: string;
   generate?: string;
   managedBy?: "operator" | "terraform";
@@ -38,52 +39,34 @@ export const MINT_JWK =
   "node -e \"const {generateKeyPairSync}=require('node:crypto');process.stdout.write(JSON.stringify(generateKeyPairSync('ec',{namedCurve:'P-256'}).privateKey.export({format:'jwk'})))\"";
 
 export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
-  // The base-model key is required whenever the deployment names its provider, so that
-  // `qm setup` collects it and `qm up` cannot produce a stack that fails its first agent
-  // turn. Anthropic and OpenRouter keep an unconditional twin further down: omitting
-  // `modelProvider` leaves the key an optional fallback an administrator supplies from the
-  // Admin page, which is how deployments predating `modelProvider` behave. Those two stay
-  // ahead of their twins — `computedSecrets` describes a secret from the first spec whose
-  // condition matches, and the base-model wording is the accurate one once it applies.
   {
     name: "ANTHROPIC_API_KEY",
     service: "core",
-    required: { when: { kind: "model-provider", provider: "anthropic" } },
-    description: 'Anthropic API key for the deployment base model (modelProvider "anthropic").',
-  },
-  {
-    name: "OPENROUTER_API_KEY",
-    service: "core",
-    required: { when: { kind: "model-provider", provider: "openrouter" } },
-    description: 'OpenRouter API key for the deployment base model (modelProvider "openrouter").',
-  },
-  {
-    name: "ANTHROPIC_API_KEY",
-    service: "core",
-    required: false,
-    description: "Optional deployment fallback for Pi; admins can configure the base model key after deploy.",
-  },
-  // OPENAI_API_KEY keeps the Codex rule ahead of the base-model rule: it is the more
-  // descriptive of the two, and `.env.example` documents a dormant secret from its first
-  // spec. Whichever rule fires, `computedSecrets` collapses them to one required secret.
-  {
-    name: "OPENAI_API_KEY",
-    service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" } },
+    required: { when: { kind: "model-provider", provider: "anthropic" }, optionalOtherwise: true },
     description:
-      "OpenAI API key used by the Codex harness (its CLI cannot do browser OAuth in a container); an optional deployment fallback for Pi otherwise.",
-  },
-  {
-    name: "OPENAI_API_KEY",
-    service: "core",
-    required: { when: { kind: "model-provider", provider: "openai" } },
-    description: 'OpenAI API key for the deployment base model (modelProvider "openai").',
+      'Anthropic API key: bills the base model when modelProvider is "anthropic", an optional deployment fallback otherwise.',
   },
   {
     name: "OPENROUTER_API_KEY",
     service: "core",
-    required: false,
-    description: "Optional deployment fallback for Pi; admins can configure the base model key after deploy.",
+    required: { when: { kind: "model-provider", provider: "openrouter" }, optionalOtherwise: true },
+    description:
+      'OpenRouter API key: bills the base model when modelProvider is "openrouter", an optional deployment fallback otherwise.',
+  },
+  {
+    name: "OPENAI_API_KEY",
+    service: "core",
+    required: {
+      when: {
+        kind: "any",
+        conditions: [
+          { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
+          { kind: "model-provider", provider: "openai" },
+        ],
+      },
+    },
+    description:
+      'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), and it bills the base model when modelProvider is "openai".',
   },
   {
     name: "PUBLIC_API_URL",
@@ -387,6 +370,7 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   if (condition.kind === "service-enabled") return config.services.includes(condition.service);
   if (condition.kind === "service-absent") return !config.services.includes(condition.service);
   if (condition.kind === "all") return condition.conditions.every((nested) => conditionMatches(config, nested));
+  if (condition.kind === "any") return condition.conditions.some((nested) => conditionMatches(config, nested));
   if (condition.kind === "target") return config.target === condition.target;
   if (condition.kind === "model-provider") return config.modelProvider === condition.provider;
   if (condition.kind === "env-all-absent") {
@@ -418,12 +402,18 @@ function targetEnvDefault(config: QmConfig, service: string, name: string): stri
   return rendered;
 }
 
+function requirementFor(config: QmConfig, spec: SecretSpec): boolean | null {
+  if (typeof spec.required === "boolean") return spec.required;
+  if (conditionMatches(config, spec.required.when)) return true;
+  return spec.required.optionalOtherwise ? false : null;
+}
+
 export function computedSecrets(config: QmConfig): ComputedSecret[] {
   const byName = new Map<string, ComputedSecret>();
   for (const spec of FIRST_PARTY_SECRET_SPECS) {
     if (!config.services.includes(spec.service)) continue;
-    if (typeof spec.required !== "boolean" && !conditionMatches(config, spec.required.when)) continue;
-    const required = spec.required !== false;
+    const required = requirementFor(config, spec);
+    if (required === null) continue;
     const current = byName.get(spec.name);
     if (current) {
       if (spec.envName) {
@@ -558,6 +548,7 @@ function conditionClause(condition: SecretCondition): string {
   if (condition.kind === "service-enabled") return `the ${condition.service} service is enabled`;
   if (condition.kind === "service-absent") return `the ${condition.service} service is not enabled`;
   if (condition.kind === "all") return condition.conditions.map(conditionClause).join(" and ");
+  if (condition.kind === "any") return condition.conditions.map(conditionClause).join(" or ");
   if (condition.kind === "target") return `the target is ${condition.target}`;
   if (condition.kind === "env-all-absent")
     return `none of env.${condition.service}.{${condition.names.join(", ")}} are set`;
@@ -594,22 +585,15 @@ export function renderEnvExample(config: QmConfig): string {
   }
   const activeNames = new Set(active.map((secret) => secret.name));
   const inactive = FIRST_PARTY_SECRET_SPECS.filter(
-    (spec, i, all) => !activeNames.has(spec.name) && all.findIndex((s) => s.name === spec.name) === i,
+    (spec, i, all) => !activeNames.has(spec.name) && all.findIndex((other) => other.name === spec.name) === i,
   );
-  const clauseFor = (spec: SecretSpec): string =>
-    [
+  for (const spec of inactive) {
+    const clauses = [
       ...(config.services.includes(spec.service) ? [] : [`the ${spec.service} service is enabled`]),
       ...(typeof spec.required === "boolean" ? [] : [conditionClause(spec.required.when)]),
-    ].join(" and ");
-  for (const spec of inactive) {
-    // One secret can answer to several independent rules — an OpenAI base model or the
-    // Codex harness, say. List them as alternatives so the catalog does not imply the
-    // first rule is the only way the secret becomes required.
-    const rules = FIRST_PARTY_SECRET_SPECS.filter((other) => other.name === spec.name);
-    const clauses = [...new Set(rules.map(clauseFor).filter(Boolean))];
-    const optionalEvenThen = rules.every((rule) => rule.required === false);
+    ];
     lines.push(`# ${spec.description} (${spec.service})`);
-    lines.push(`# Needed when ${clauses.join(" or ")}${optionalEvenThen ? " (optional even then)" : ""}.`);
+    lines.push(`# Needed when ${clauses.join(" and ")}${spec.required === false ? " (optional even then)" : ""}.`);
     if (spec.generate) lines.push(`# Generate with: ${generate(spec.generate)}`);
     lines.push(spec.managedBy === "terraform" ? `# ${spec.name}=  # populated by Terraform` : `# ${spec.name}=`);
     lines.push("");

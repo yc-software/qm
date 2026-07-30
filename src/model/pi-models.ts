@@ -9,6 +9,13 @@ export const THINKING_LEVELS = ["auto", "low", "medium", "high", "xhigh", "max",
 export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
+export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
+export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
+
+export function isModelProvider(value: unknown): value is ModelProvider {
+  return typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
+}
+
 export function isHarnessId(value: unknown): value is HarnessId {
   return typeof value === "string" && (HARNESS_IDS as readonly string[]).includes(value);
 }
@@ -96,10 +103,8 @@ export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }>
   (m) => m.base,
 ).map((m) => ({ id: m.id, name: m.name }));
 
-const KNOWN_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
-
 function builtinModel(id: string): PiModel | undefined {
-  for (const provider of KNOWN_PROVIDERS) {
+  for (const provider of MODEL_PROVIDERS) {
     const m = getModel(provider, id);
     if (m) return m;
   }
@@ -170,9 +175,18 @@ export function modelSupportedByHarness(id: string | undefined, harness: string)
   return false;
 }
 
-export function defaultModelForHarness(harness: string, configured?: string): string {
+export function defaultModelForHarness(
+  harness: string,
+  configured?: string,
+  providers?: ModelProviderAvailability,
+): string {
   if (configured && modelSupportedByHarness(configured, harness)) return configured;
-  return harness === "codex" ? DEFAULT_CODEX_MODEL_ID : DEFAULT_AGENT_MODEL_ID;
+  const preferred = harness === "codex" ? DEFAULT_CODEX_MODEL_ID : DEFAULT_AGENT_MODEL_ID;
+  if (!providers || modelServiceable(preferred, providers)) return preferred;
+  const servable = SELECTABLE_BASE_MODELS.find(
+    (model) => modelSupportedByHarness(model.id, harness) && modelServiceable(model.id, providers),
+  );
+  return servable?.id ?? preferred;
 }
 
 export interface ModelProviderAvailability {
@@ -205,6 +219,17 @@ export function modelProviderAvailabilityFor(
   if (harness === "opencode") return { ...configKeys, openrouter: false };
   if (harness === "codex") return configKeys;
   return ALL_PROVIDERS_AVAILABLE;
+}
+
+export function onlyProvider(provider: ModelProvider): ModelProviderAvailability {
+  return { anthropic: false, openai: false, openrouter: false, [provider]: true };
+}
+
+export function defaultModelForProvider(harness: string, provider: ModelProvider): string | undefined {
+  const only = onlyProvider(provider);
+  if (!modelProviderAvailabilityFor(harness, only)[provider]) return undefined;
+  const model = defaultModelForHarness(harness, undefined, only);
+  return modelSupportedByHarness(model, harness) && modelServiceable(model, only) ? model : undefined;
 }
 
 export function getRequiredModel(id: string): PiModel {

@@ -13,7 +13,7 @@ import {
   secretsForService,
   type ComputedSecret,
 } from "../src/secrets.ts";
-import { isReservedContainerName, pluginNameError } from "../src/services.ts";
+import { isReservedContainerName, pluginNameError, SERVICE_NAMES } from "../src/services.ts";
 
 function makeConfig(overrides: Partial<QmConfig> = {}): QmConfig {
   return {
@@ -367,4 +367,16 @@ test("an explicit sandbox.backend wins, and non-fly targets keep their own defau
     },
   });
   assert.equal(sandboxCoreEnv(docker).env.SANDBOX_BACKEND, undefined);
+});
+
+test("the .env.example catalog names every secret exactly once", () => {
+  for (const services of [["core"], ["core", "portal"], ["core", "portal", "auth"], SERVICE_NAMES] as const) {
+    const rendered = renderEnvExample(makeConfig({ services: [...services] as QmConfig["services"] }));
+    const declared = rendered
+      .split("\n")
+      .map((line) => /^#?\s*([A-Z0-9_]+)=/.exec(line)?.[1])
+      .filter((name): name is string => Boolean(name));
+    const duplicated = declared.filter((name, i) => declared.indexOf(name) !== i);
+    assert.deepEqual(duplicated, [], `services=${services.join("+")} lists a secret twice`);
+  }
 });

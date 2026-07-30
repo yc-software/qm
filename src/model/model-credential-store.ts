@@ -1,9 +1,6 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { ModelProviderAvailability } from "./pi-models.ts";
-
-const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
-export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
+import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
 
 export interface StoredModelCredential {
   provider: ModelProvider;
@@ -27,10 +24,6 @@ export interface ModelCredentialStore {
   delete(provider: ModelProvider, updatedBy: string): Promise<void>;
   statuses(): Promise<ModelCredentialStatus[]>;
   availability(): Promise<ModelProviderAvailability>;
-}
-
-export function isModelProvider(value: unknown): value is ModelProvider {
-  return typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
 }
 
 export function createModelCredentialStore(input: {

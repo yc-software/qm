@@ -11,6 +11,16 @@ import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import { parseSecurityPosture, type SecurityPosture } from "./security/security-posture.ts";
 import { slackPluginConfigFromEnv, type SlackPluginConfig } from "./slack/config.ts";
+import {
+  MODEL_PROVIDERS,
+  defaultModelForProvider,
+  isModelProvider,
+  modelProviderAvailabilityFor,
+  onlyProvider,
+  resolveModel,
+  type ModelProvider,
+  type ModelProviderAvailability,
+} from "./model/pi-models.ts";
 
 export interface Config {
   production: boolean;
@@ -41,6 +51,7 @@ export interface Config {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  modelProvider?: ModelProvider;
   piCaptureRequests: boolean;
   piSystemCacheSplit: boolean;
   sessionTapeMode: "shadow" | "serve";
@@ -139,6 +150,24 @@ export function configuredModelForHarness(config: Config, harness: string): stri
   if (harness === "claude") return config.claudeModel;
   if (harness === "opencode") return config.opencodeModel;
   return config.modelId;
+}
+
+export function providerKeysPresent(config: Config): ModelProviderAvailability {
+  return {
+    anthropic: Boolean(config.anthropicApiKey),
+    openai: Boolean(config.openaiApiKey),
+    openrouter: Boolean(config.openrouterApiKey),
+  };
+}
+
+export function baseModelProviders(config: Config): ModelProviderAvailability {
+  const declared = config.modelProvider ? onlyProvider(config.modelProvider) : providerKeysPresent(config);
+  const routable = modelProviderAvailabilityFor(config.harness, declared);
+  return {
+    anthropic: declared.anthropic && routable.anthropic,
+    openai: declared.openai && routable.openai,
+    openrouter: declared.openrouter && routable.openrouter,
+  };
 }
 
 interface AwsSandboxEnv {
@@ -511,11 +540,44 @@ function defaultPluginSkillDirs(): string[] {
   }
 }
 
+function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefined {
+  const declared = env.MODEL_PROVIDER?.trim();
+  if (!declared) return undefined;
+  if (!isModelProvider(declared)) {
+    throw new Error(
+      `MODEL_PROVIDER=${JSON.stringify(declared)} is not recognized — use ${MODEL_PROVIDERS.join(", ")}.`,
+    );
+  }
+  const harness = harnessEnvStrict(env.HARNESS);
+  const base = defaultModelForProvider(harness, declared);
+  if (!base) {
+    throw new Error(
+      `MODEL_PROVIDER=${declared} cannot serve a base model on HARNESS=${harness} — that harness runs no ${declared} model, so every turn would be refused.`,
+    );
+  }
+  const [pinName, pinned] = harnessModelPin(env, harness);
+  const pinnedProvider = pinned ? resolveModel(pinned)?.provider : undefined;
+  if (pinned && pinnedProvider && pinnedProvider !== declared) {
+    throw new Error(
+      `${pinName}=${pinned} is a ${pinnedProvider} model but MODEL_PROVIDER=${declared} — the deployment holds no key that can bill it.`,
+    );
+  }
+  return declared;
+}
+
+function harnessModelPin(env: NodeJS.ProcessEnv, harness: Config["harness"]): [string, string | undefined] {
+  if (harness === "codex") return ["CODEX_MODEL", env.CODEX_MODEL?.trim()];
+  if (harness === "claude") return ["CLAUDE_MODEL", env.CLAUDE_MODEL?.trim()];
+  if (harness === "opencode" && env.OPENCODE_MODEL?.trim()) return ["OPENCODE_MODEL", env.OPENCODE_MODEL.trim()];
+  return ["PI_MODEL", env.PI_MODEL?.trim()];
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const missingSecrets = validateCoreSecretEnv(env);
   if (missingSecrets.length) {
     throw new Error(`missing or insecure required core secrets: ${missingSecrets.join(", ")}`);
   }
+  const modelProvider = modelProviderEnvStrict(env);
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
     if (env[key] === "sqlite") {
       throw new Error(
@@ -682,6 +744,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
     ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
+    ...(modelProvider ? { modelProvider } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     piCaptureRequests: boolEnvStrict("PI_CAPTURE_REQUESTS", env.PI_CAPTURE_REQUESTS) ?? true,
     piSystemCacheSplit: boolEnvStrict("PI_SYSTEM_CACHE_SPLIT", env.PI_SYSTEM_CACHE_SPLIT) ?? false,

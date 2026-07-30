@@ -1,4 +1,4 @@
-import { configuredModelForHarness, loadConfig } from "./config.ts";
+import { baseModelProviders, configuredModelForHarness, loadConfig, providerKeysPresent } from "./config.ts";
 import { buildApp, stopWithBackstop } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { errMessage } from "./util/errors.ts";
@@ -25,17 +25,13 @@ const server = createServer(built.app, {
   ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
   ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
   config: built.config,
-  baseModelDefault: defaultModelForHarness(config.harness, configuredModelForHarness(config, config.harness)),
-  modelProviders: modelProviderAvailabilityFor(config.harness, {
-    anthropic: Boolean(config.anthropicApiKey),
-    openai: Boolean(config.openaiApiKey),
-    openrouter: Boolean(config.openrouterApiKey),
-  }),
-  providerKeys: {
-    anthropic: Boolean(config.anthropicApiKey),
-    openai: Boolean(config.openaiApiKey),
-    openrouter: Boolean(config.openrouterApiKey),
-  },
+  baseModelDefault: defaultModelForHarness(
+    config.harness,
+    configuredModelForHarness(config, config.harness),
+    baseModelProviders(config),
+  ),
+  modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
+  providerKeys: providerKeysPresent(config),
   modelCredentials: built.modelCredentials,
   ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
   harnessId: config.harness,

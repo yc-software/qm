@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { FIRST_PARTY_SECRET_SPECS } from "../cli/src/secrets.ts";
+import { MODEL_PROVIDERS, MODEL_PROVIDER_BASE_MODELS, MODEL_PROVIDER_HARNESSES } from "../cli/src/config.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
+import { HARNESS_IDS, defaultModelForProvider } from "../src/model/pi-models.ts";
 
 test("the standalone CLI and core agree on runtime-enforced core secret names", () => {
   const cli = new Set(
@@ -60,6 +62,37 @@ test("an OpenAI base model on the Codex harness reports its one missing key once
     ["OPENAI_API_KEY"],
     "two rules wanting the same key must not name it twice",
   );
+});
+
+test("each core secret is named by exactly one spec, so boot failures never repeat a name", () => {
+  const names = CORE_SECRET_SPECS.map((spec) => spec.name);
+  assert.deepEqual(
+    names.filter((name, i) => names.indexOf(name) !== i),
+    [],
+    "give a secret answering to several rules one spec with a requiredWhen list",
+  );
+});
+
+test("the CLI's provider/harness table matches what the core model registry can actually serve", () => {
+  for (const provider of MODEL_PROVIDERS) {
+    assert.deepEqual(
+      HARNESS_IDS.filter((harness) => defaultModelForProvider(harness, provider) !== undefined).sort(),
+      [...MODEL_PROVIDER_HARNESSES[provider]].sort(),
+      `MODEL_PROVIDER_HARNESSES.${provider} has drifted from the registry`,
+    );
+  }
+});
+
+test("the CLI names the same base model the runtime will pick for each provider", () => {
+  for (const provider of MODEL_PROVIDERS) {
+    for (const harness of MODEL_PROVIDER_HARNESSES[provider]) {
+      assert.equal(
+        defaultModelForProvider(harness, provider),
+        MODEL_PROVIDER_BASE_MODELS[provider],
+        `MODEL_PROVIDER_BASE_MODELS.${provider} has drifted for HARNESS=${harness}`,
+      );
+    }
+  }
 });
 
 test("production rejects weak encryption key material for managed credentials", () => {

@@ -1135,3 +1135,28 @@ test("aws.services logGroup and stopTimeout adopt live task-def values and valid
     );
   }
 });
+
+test("modelProvider must name a vendor the configured harness can bill", () => {
+  withConfig({ modelProvider: "openrouter", env: { core: { HARNESS: "pi" } } }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.modelProvider, "openrouter");
+  });
+  withConfig({ modelProvider: "openrouter", env: { core: { HARNESS: "codex" } } }, ({ path }) => {
+    assert.throws(
+      () => loadConfigAt(path),
+      /modelProvider "openrouter" cannot serve a base model on env.core.HARNESS "codex"/,
+    );
+  });
+  withConfig({ modelProvider: "anthropic", env: { core: { HARNESS: "codex" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /cannot serve a base model/);
+  });
+  withConfig({ modelProvider: "openai", env: { core: { HARNESS: "codex" } } }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.modelProvider, "openai");
+  });
+  withConfig({ modelProvider: "openrouter" }, ({ path }) => {
+    assert.equal(
+      loadConfigAt(path).config.modelProvider,
+      "openrouter",
+      "an unset harness is mock, which bills anything",
+    );
+  });
+});

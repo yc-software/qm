@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import { configuredModelForHarness, type Config } from "./config.ts";
+import { baseModelProviders, configuredModelForHarness, providerKeysPresent, type Config } from "./config.ts";
 import { createIdentityService, type DeactivationRecord, type IdentityService } from "./identity/identity-service.ts";
 import {
   createMemoryConfigStore,
@@ -713,7 +713,11 @@ export function buildApp(
   const fallbackHarness = config.harness as HarnessId;
   const fallback = {
     harnessId: fallbackHarness,
-    modelId: defaultModelForHarness(fallbackHarness, configuredModelForHarness(config, fallbackHarness)),
+    modelId: defaultModelForHarness(
+      fallbackHarness,
+      configuredModelForHarness(config, fallbackHarness),
+      baseModelProviders(config),
+    ),
   };
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) =>
@@ -1029,11 +1033,7 @@ export function buildApp(
   const ackEmojiPicks: AckEmojiPickStore = config.databaseUrl
     ? createPostgresAckEmojiPickStore(config.databaseUrl)
     : createMemoryAckEmojiPickStore();
-  const providerKeys = {
-    anthropic: Boolean(config.anthropicApiKey),
-    openai: Boolean(config.openaiApiKey),
-    openrouter: Boolean(config.openrouterApiKey),
-  };
+  const providerKeys = providerKeysPresent(config);
   const app = createApp({
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),

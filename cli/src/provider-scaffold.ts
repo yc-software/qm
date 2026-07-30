@@ -47,14 +47,16 @@ function renderConfig(orgId: string, values: ConfigValues): string {
 
   // The vendor supplying the base model: "anthropic", "openai", or "openrouter"
   // (one key, many models). Naming one makes that vendor's API key a required
-  // deployment secret: \`qm setup\` collects it, \`qm doctor\` proves the provider
-  // accepts it, and \`qm up\` refuses a stack that cannot serve an agent turn.
-  // Delete this line to leave the base model unset and have an administrator add
-  // the key from the Admin page after deploy instead.
+  // deployment secret and points the base model at that vendor: \`qm setup\`
+  // collects the key, \`qm doctor\` proves the provider accepts it, and \`qm up\`
+  // refuses a stack that cannot serve an agent turn. Delete this line to leave
+  // the base model unset and have an administrator add the key from the Admin
+  // page after deploy instead.
   "modelProvider": ${JSON.stringify(values.modelProvider)},
 
   // Optional base model id, passed to the harness (e.g. "claude-opus-4-6").
-  // Omit it to use the harness default for the provider above.
+  // Omit it and the deployment uses the default model for the provider above.
+  // It must be a model that provider can bill.
   // "model": "",
 ${values.providerFields}
   // First-party services to run. The full set: "core" (the agent runtime and API,

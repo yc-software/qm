@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { MODEL_PROVIDER_KEYS, validatePortalTrust, type ModelProvider, type QmConfig } from "../config.ts";
+import {
+  MODEL_PROVIDER_BASE_MODELS,
+  MODEL_PROVIDER_KEYS,
+  validatePortalTrust,
+  type ModelProvider,
+  type QmConfig,
+} from "../config.ts";
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
 import { computedSecrets } from "../secrets.ts";
@@ -192,11 +198,6 @@ export async function doctorCommon(
   await baseModelCheck(config, secrets);
 }
 
-/**
- * Prove the base-model key is accepted before the deployment is called finished. The Admin
- * page validates a key on entry; a deployment that ships its key from `.env` gets no such
- * feedback, and an unusable key would otherwise surface as a failed first chat message.
- */
 async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): Promise<void> {
   const provider = config.modelProvider;
   if (!provider) {
@@ -210,7 +211,7 @@ async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): P
     return;
   }
   await modelProviderCheck(provider, key);
-  step(`base model provider ${provider}: ${name} accepted`);
+  step(`base model provider ${provider}: ${name} accepted, serving ${MODEL_PROVIDER_BASE_MODELS[provider]}`);
 }
 
 const MODEL_PROVIDER_PROBES: Readonly<

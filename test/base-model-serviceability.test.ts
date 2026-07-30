@@ -8,23 +8,34 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
+import { baseModelProviders, configuredModelForHarness, providerKeysPresent } from "../src/config.ts";
+import { defaultModelForHarness } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")) }));
+function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) {
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), harness: "pi", ...overrides });
+  const built = buildApp(config);
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
     acl: built.acl,
+    modelCredentials: built.modelCredentials,
     harnessId: "pi",
-    providerKeys: { anthropic: true, openai: false, openrouter: false },
+    baseModelDefault: defaultModelForHarness("pi", configuredModelForHarness(config, "pi"), baseModelProviders(config)),
+    providerKeys: providerKeysPresent(config),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
+}
+
+async function effectiveModel(base: string): Promise<string> {
+  const res = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+  assert.equal(res.status, 200);
+  return ((await res.json()) as { effective: { modelId: string } }).effective.modelId;
 }
 
 test("base-model set rejects a model whose provider key is absent (would fail provider-side)", async () => {
@@ -44,6 +55,56 @@ test("base-model set rejects a model whose provider key is absent (would fail pr
       body: JSON.stringify({ modelId: "claude-opus-4-8" }),
     });
     assert.equal(ok.status, 200, "an Anthropic model stays selectable when the Anthropic key is present");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a deployment that declares a provider runs that provider's base model", async () => {
+  for (const [modelProvider, key, expected] of [
+    ["anthropic", "anthropicApiKey", "claude-opus-5"],
+    ["openai", "openaiApiKey", "gpt-5.6-sol"],
+    ["openrouter", "openrouterApiKey", "openrouter/auto"],
+  ] as const) {
+    const srv = start({ modelProvider, [key]: `deployment-${modelProvider}-key` });
+    try {
+      assert.equal(
+        await effectiveModel(srv.base),
+        expected,
+        `modelProvider "${modelProvider}" must land on a model that provider can bill`,
+      );
+    } finally {
+      await srv.close();
+    }
+  }
+});
+
+test("a single provider key with no declaration still runs a base model it can bill", async () => {
+  const srv = start({ openrouterApiKey: "deployment-openrouter-key" });
+  try {
+    assert.equal(await effectiveModel(srv.base), "openrouter/auto");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("the declaration outranks a stray key from another vendor", async () => {
+  const srv = start({
+    modelProvider: "openrouter",
+    openrouterApiKey: "deployment-openrouter-key",
+    anthropicApiKey: "stray-anthropic-key",
+  });
+  try {
+    assert.equal(await effectiveModel(srv.base), "openrouter/auto");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a deployment with no provider key at all keeps the shipped default", async () => {
+  const srv = start({});
+  try {
+    assert.equal(await effectiveModel(srv.base), "claude-opus-5");
   } finally {
     await srv.close();
   }

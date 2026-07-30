@@ -155,6 +155,14 @@ has none. Treat a rejected key exactly like a rejected sign-in credential: stop
 and get a working one rather than deploying a stack that greets the
 administrator and then fails their first message.
 
+`modelProvider` also picks the model itself, so no model id has to be chosen at
+deploy time: Anthropic serves `claude-opus-5`, OpenAI `gpt-5.6-sol`, OpenRouter
+`openrouter/auto`. Set `model` in `qm.config.jsonc` only to override that, and
+only with a model the chosen provider can bill — a mismatch is refused at
+startup rather than at the first message. The same rule covers the harness:
+`HARNESS` `codex` runs OpenAI models alone, `claude` runs Anthropic models
+alone, and `openrouter` needs the default `pi` harness.
+
 An operator may still prefer to hold the key centrally and rotate it from the
 Admin page. That is a deliberate choice, not the default: drop `modelProvider`
 from `qm.config.jsonc`, note in the handoff that the deployment has no base model
@@ -178,12 +186,14 @@ npm exec qm -- outputs --json
 ```
 
 Open `adminOnboardingUrl` from the JSON output and confirm Model provider
-already reports the deployment's base model. It does when `modelProvider` is
-set: the key travelled with the rest of the deployment secrets, so there is
-nothing to paste here. Enter and validate a key on that page only when the
-operator chose to defer, or when they are replacing the deployment key with one
-they would rather rotate from Admin — the write-only surface stores it in
-durable encrypted storage and takes precedence over the deployment key.
+reports the chosen vendor as configured, sourced from the environment. It does
+when `modelProvider` is set: the key travelled with the rest of the deployment
+secrets, so there is nothing to paste here. Enter and validate a key on that
+page only when the operator chose to defer, or when they are replacing the
+deployment key with one they would rather rotate from Admin — the write-only
+surface stores it in durable encrypted storage and takes precedence over the
+deployment key. On the deferred route, set Base model on that same page after
+the key: a key alone leaves the deployment on a model it cannot bill.
 
 Never paste any provider key into chat or terminal output. `.env` is the one
 place a deployment key belongs, and `qm secrets push` moves it without printing

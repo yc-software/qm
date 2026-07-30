@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
+import { baseModelProviders, boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -350,4 +350,78 @@ test("maxClaims defaults from CONFIG_DEFAULTS and MAX_CLAIMS overrides", () => {
   assert.equal(loadConfig({}).maxClaims, CONFIG_DEFAULTS.maxClaims);
   assert.equal(loadConfig({ MAX_CLAIMS: "5" }).maxClaims, 5);
   assert.throws(() => loadConfig({ MAX_CLAIMS: "lots" }), /MAX_CLAIMS="lots" is not a number/);
+});
+
+test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
+  assert.equal(loadConfig({}).modelProvider, undefined);
+  assert.equal(loadConfig({ MODEL_PROVIDER: " openrouter ", OPENROUTER_API_KEY: "k" }).modelProvider, "openrouter");
+  assert.throws(() => loadConfig({ MODEL_PROVIDER: "bedrock" }), /MODEL_PROVIDER.*not recognized/);
+});
+
+test("MODEL_PROVIDER is refused when the harness can never run that vendor's models", () => {
+  assert.throws(
+    () => loadConfig({ MODEL_PROVIDER: "openrouter", HARNESS: "codex", OPENROUTER_API_KEY: "k", OPENAI_API_KEY: "k" }),
+    /cannot serve a base model on HARNESS=codex/,
+  );
+  assert.throws(
+    () => loadConfig({ MODEL_PROVIDER: "anthropic", HARNESS: "codex", ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "k" }),
+    /cannot serve a base model on HARNESS=codex/,
+  );
+  assert.equal(
+    loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "codex", OPENAI_API_KEY: "k" }).modelProvider,
+    "openai",
+    "the one combination Codex can bill is accepted",
+  );
+});
+
+test("a pinned model from another vendor is refused rather than silently swapped", () => {
+  assert.throws(
+    () => loadConfig({ MODEL_PROVIDER: "openrouter", PI_MODEL: "claude-opus-5", OPENROUTER_API_KEY: "k" }),
+    /PI_MODEL=claude-opus-5 is a anthropic model but MODEL_PROVIDER=openrouter/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        MODEL_PROVIDER: "openai",
+        HARNESS: "opencode",
+        OPENCODE_MODEL: "claude-sonnet-5",
+        OPENAI_API_KEY: "k",
+      }),
+    /OPENCODE_MODEL=claude-sonnet-5 is a anthropic model but MODEL_PROVIDER=openai/,
+    "the guard reads whichever model field the harness actually uses",
+  );
+  assert.throws(
+    () => loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "codex", CODEX_MODEL: "claude-opus-5", OPENAI_API_KEY: "k" }),
+    /CODEX_MODEL=claude-opus-5 is a anthropic model but MODEL_PROVIDER=openai/,
+  );
+  assert.equal(
+    loadConfig({ MODEL_PROVIDER: "openrouter", PI_MODEL: "openrouter/auto", OPENROUTER_API_KEY: "k" }).modelId,
+    "openrouter/auto",
+  );
+  assert.equal(
+    loadConfig({ MODEL_PROVIDER: "openrouter", PI_MODEL: "not-a-real-model", OPENROUTER_API_KEY: "k" }).modelId,
+    "not-a-real-model",
+    "an unresolvable pin is left to the harness rather than blocking boot",
+  );
+});
+
+test("baseModelProviders follows the declaration, and the keys present when there is none", () => {
+  assert.deepEqual(
+    baseModelProviders(loadConfig({ MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "k", ANTHROPIC_API_KEY: "k" })),
+    {
+      anthropic: false,
+      openai: false,
+      openrouter: true,
+    },
+  );
+  assert.deepEqual(baseModelProviders(loadConfig({ ANTHROPIC_API_KEY: "k" })), {
+    anthropic: true,
+    openai: false,
+    openrouter: false,
+  });
+  assert.deepEqual(
+    baseModelProviders(loadConfig({ HARNESS: "opencode", OPENROUTER_API_KEY: "k" })),
+    { anthropic: false, openai: false, openrouter: false },
+    "opencode has no OpenRouter route, so an OpenRouter key does not choose its base model",
+  );
 });
