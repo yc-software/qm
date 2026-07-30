@@ -429,9 +429,7 @@ export function pinnedByPull(ref: string): string {
     throw new CliError(`could not read the pulled image ${ref}: ${errMessage(error)}`);
   }
   const repository = imageRepository(ref);
-  const digest = (JSON.parse(output) as string[])
-    .find((entry) => entry.split("@")[0] === repository)
-    ?.split("@")[1];
+  const digest = (JSON.parse(output) as string[]).find((entry) => entry.split("@")[0] === repository)?.split("@")[1];
   if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest))
     throw new CliError(`docker did not record an immutable digest for ${ref}`);
   return `${ref}@${digest}`;
