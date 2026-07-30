@@ -1,6 +1,16 @@
 name: Publish the QM CLI
 
 on:
+  workflow_call:
+    inputs:
+      images_ref:
+        description: Commit SHA whose published images the package should pin
+        required: false
+        type: string
+    outputs:
+      manifest:
+        description: The image manifest the published package pins
+        value: ${{ jobs.package.outputs.manifest }}
   workflow_dispatch:
     inputs:
       images_ref:
@@ -15,6 +25,8 @@ jobs:
   package:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      manifest: ${{ steps.pin.outputs.manifest }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -32,6 +44,7 @@ jobs:
           npm run typecheck
           npm run test:pack
       - name: Pin published image digests
+        id: pin
         env:
           IMAGES_REF: ${{ inputs.images_ref || github.sha }}
         run: |
@@ -61,8 +74,16 @@ jobs:
                  | length == 6
                  and all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$"))
                  and all(test("@sha256:(.)\\1{63}$") | not)' cli/manifest.json > /dev/null
+          printf 'manifest=%s\n' "$(jq -c . cli/manifest.json)" >> "$GITHUB_OUTPUT"
       - name: Publish
         working-directory: cli
-        run: npm publish --provenance --access public
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version package.json)
+          if npm view "@yc-software/qm@$version" version > /dev/null 2>&1; then
+            echo "@yc-software/qm@$version is already on npm; keeping the published artifact"
+            exit 0
+          fi
+          npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

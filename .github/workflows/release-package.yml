@@ -1,6 +1,7 @@
 name: Build signed QM images
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 permissions:

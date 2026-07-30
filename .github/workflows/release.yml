@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - id: version
+        name: Resolve the release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v$(jq -r .version cli/package.json)"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > /dev/null 2>&1; then
+            echo "$tag is already released; bump cli/package.json before releasing again" >&2
+            exit 1
+          fi
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: Images
+    needs: preflight
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/release-package.yml
+
+  cli:
+    name: CLI
+    needs: images
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/publish-cli.yml
+
+  release:
+    name: Tag and publish the release
+    needs:
+      - preflight
+      - cli
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          MANIFEST: ${{ needs.cli.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MANIFEST" | jq . > images.json
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            "images.json#Pinned image digests"
