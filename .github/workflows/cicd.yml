@@ -106,15 +106,21 @@ jobs:
           set -euo pipefail
           base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           changed=$(git diff --name-only "$base" "$HEAD_SHA" -- \
-            cli/bin cli/src cli/templates cli/manifest.json cli/package.json cli/README.md)
+            cli/bin cli/src cli/templates cli/manifest.json cli/package.json \
+            cli/package-lock.json cli/README.md cli/LICENSE cli/tsconfig.json cli/tsconfig.build.json)
           [ -n "$changed" ] || exit 0
           base_version=$(git show "${base}:cli/package.json" | jq -r .version)
           head_version=$(git show "${HEAD_SHA}:cli/package.json" | jq -r .version)
-          if [ "$base_version" = "$head_version" ]; then
+          highest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
+          if [ "$base_version" = "$head_version" ] || [ "$highest" != "$head_version" ]; then
             printf '%s\n' "$changed" >&2
             echo "these files ship in @yc-software/qm; bump cli/package.json past $base_version" >&2
             exit 1
           fi
+          case "$head_version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "cli/package.json version must be semver, got $head_version" >&2; exit 1 ;;
+          esac
 
   lint:
     name: Lint

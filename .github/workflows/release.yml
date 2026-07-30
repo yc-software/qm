@@ -10,7 +10,6 @@ concurrency:
 jobs:
   preflight:
     name: Preflight
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,6 +25,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "releases are cut from main; this run is on $GITHUB_REF" >&2
+            exit 1
+          fi
           tag="v$(jq -r .version cli/package.json)"
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > /dev/null 2>&1; then
             echo "$tag is already released; bump cli/package.json before releasing again" >&2
@@ -68,9 +71,11 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$MANIFEST" | jq . > images.json
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" > /dev/null
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
+            --verify-tag \
             --title "$TAG" \
             --generate-notes \
             "images.json#Pinned image digests"

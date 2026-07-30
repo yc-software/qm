@@ -81,7 +81,14 @@ jobs:
           set -euo pipefail
           version=$(jq -r .version package.json)
           if npm view "@yc-software/qm@$version" version > /dev/null 2>&1; then
-            echo "@yc-software/qm@$version is already on npm; keeping the published artifact"
+            published=$(mktemp -d)
+            tarball=$(npm pack "@yc-software/qm@$version" --pack-destination "$published" --silent | tail -1)
+            tar -xzf "$published/$tarball" -C "$published" package/manifest.json
+            if [ "$(jq -Sc . "$published/package/manifest.json")" != "$(jq -Sc . manifest.json)" ]; then
+              echo "@yc-software/qm@$version is on npm pinning different image digests; bump the version" >&2
+              exit 1
+            fi
+            echo "@yc-software/qm@$version is already on npm pinning these digests; keeping it"
             exit 0
           fi
           npm publish --provenance --access public
