@@ -239,9 +239,14 @@ function conversationForScope(
   return { kind, channelRef: ref, threadRef, ...(channelName ? { channelName } : {}) };
 }
 
-function resolveIdentity(
-  req: IncomingMessage,
-): { user: string; name: string | null; impersonator: string | null } | null {
+interface Identity {
+  user: string;
+  name: string | null;
+  impersonator: string | null;
+}
+type Denial = "unauthenticated" | "not_allowed";
+
+function authenticate(req: IncomingMessage): { identity: Identity } | { denied: Denial } {
   let user: string | null | undefined;
   let name: string | null | undefined;
   let impersonator: string | null | undefined;
@@ -254,18 +259,29 @@ function resolveIdentity(
     name = claims.n ?? null;
     impersonator = claims.imp ?? null;
   } else {
-    if (!COOKIE_AUTH) return null;
+    if (!COOKIE_AUTH) return { denied: "unauthenticated" };
     user = cookie(req, "webuiuser");
     name = cookie(req, "webuiuser_name");
     impersonator = cookie(req, "webui_impersonator");
   }
-  if (!user) return null;
-  if (ALLOW.length > 0 && !ALLOW.includes(user)) return null;
-  return { user, name: name?.trim() || null, impersonator: impersonator ?? null };
+  if (!user) return { denied: "unauthenticated" };
+  if (ALLOW.length > 0 && !ALLOW.includes(user)) return { denied: "not_allowed" };
+  return { identity: { user, name: name?.trim() || null, impersonator: impersonator ?? null } };
+}
+
+function resolveIdentity(req: IncomingMessage): Identity | null {
+  const outcome = authenticate(req);
+  return "identity" in outcome ? outcome.identity : null;
 }
 
 function cookieUser(req: IncomingMessage): string | null {
   return resolveIdentity(req)?.user ?? null;
+}
+
+function unauthorized(res: ServerResponse, req: IncomingMessage): void {
+  const outcome = authenticate(req);
+  const denied = "denied" in outcome ? outcome.denied : "unauthenticated";
+  return json(res, 401, { error: "sign in", mode: AUTH_MODE, reason: denied });
 }
 
 const SESSION_TTL_S = 90 * 24 * 60 * 60;
@@ -749,7 +765,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
-    if (!user) return json(res, 401, { error: "sign in", mode: AUTH_MODE });
+    if (!user) return unauthorized(res, req);
 
     if (path === "/me") {
       res.setHeader("set-cookie", sessionCookie(user));
@@ -1833,7 +1849,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (method === "GET" && path.startsWith("/deployments/")) {
     const user = cookieUser(req);
-    if (!user) return json(res, 401, { error: "sign in", mode: AUTH_MODE });
+    if (!user) return unauthorized(res, req);
     const rest = path.slice("/deployments/".length);
     const slash = rest.indexOf("/");
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));

@@ -1,7 +1,6 @@
 import "dockview-core/dist/styles/dockview.css";
 import "./shell.css";
-import { swallow } from "../../chassis/src/errors";
-import { appState, boot, renderAuthGate } from "./shell";
+import { bootSafely } from "./shell";
 import { closeFormMenus } from "./ui";
 import { drawActiveChat } from "./chat";
 import { composerState, slashQuery } from "./composer";
@@ -45,7 +44,4 @@ document.addEventListener("keydown", (e) => {
   if (changed) drawActiveChat();
 });
 
-void boot().catch((e: unknown) => {
-  if (appState.me) swallow("web-ui: boot", e);
-  else renderAuthGate({ kind: "unreachable" });
-});
+void bootSafely();

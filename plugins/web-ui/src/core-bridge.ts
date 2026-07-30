@@ -344,7 +344,10 @@ async function toCoreAttachment(a: PiAttachment): Promise<CoreAttachment> {
     headers: { "content-type": "application/octet-stream" },
     body: bytes as unknown as BodyInit,
   });
-  if (!r.ok) throw new ApiError(`attachment upload failed: HTTP ${r.status}`, r.status);
+  if (!r.ok) {
+    if (r.status === 401) reportSigninRequired(await r.json().catch(() => ({})));
+    throw new ApiError(`attachment upload failed: HTTP ${r.status}`, r.status);
+  }
   const { blobId, sizeBytes } = (await r.json()) as { blobId: string; sizeBytes: number };
   return { name: a.fileName, mimetype: a.mimeType, sizeBytes: sizeBytes ?? a.size, blobId };
 }
@@ -358,6 +361,21 @@ export class ApiError extends Error {
   }
 }
 
+export interface SigninRequired {
+  mode?: "portal" | "dev";
+  reason?: "unauthenticated" | "not_allowed";
+}
+
+let onSigninRequired: ((detail: SigninRequired) => void) | null = null;
+
+export function setSigninRequiredHandler(fn: (detail: SigninRequired) => void): void {
+  onSigninRequired = fn;
+}
+
+export function reportSigninRequired(detail: SigninRequired): void {
+  onSigninRequired?.(detail);
+}
+
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(withBase(path), { headers: { "content-type": "application/json" }, ...init });
   const text = await r.text();
@@ -368,6 +386,7 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     swallow("web-ui: parse api response body", e);
   }
   if (!r.ok) {
+    if (r.status === 401 && path !== "/signin") reportSigninRequired(body as SigninRequired);
     const msg =
       (body as { error?: string; message?: string })?.message ??
       (body as { error?: string })?.error ??

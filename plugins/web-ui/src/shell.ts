@@ -17,9 +17,17 @@ import {
   type IconNode,
 } from "lucide";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
-import { api, fetchRuntimeConfig, fetchTranscript, TAIL_TURNS, withBase } from "./core-bridge";
+import {
+  api,
+  fetchRuntimeConfig,
+  fetchTranscript,
+  setSigninRequiredHandler,
+  type SigninRequired,
+  TAIL_TURNS,
+  withBase,
+} from "./core-bridge";
 import { applyRuntimeOptions } from "./model-options";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage, swallow } from "../../chassis/src/errors";
 import { brandMark, brandName, icon, initials } from "./ui";
 import {
   chatState,
@@ -67,6 +75,12 @@ import { trapDialogFocus } from "./dialog-focus";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let authMode: AuthMode = "portal";
+let shellMounted = false;
+
+setSigninRequiredHandler((detail) => {
+  authMode = detail.mode ?? authMode;
+  renderAuthGate(gateFor(authMode, detail.reason));
+});
 
 export const ADMIN_BASE = (() => {
   const base = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
@@ -180,10 +194,13 @@ const ICON = {
 };
 
 export async function signOut(): Promise<void> {
-  try {
-    await api("/signout", { method: "POST" });
-  } catch {
-    void 0;
+  const portal = authMode === "portal";
+  if (!portal) {
+    try {
+      await api("/signout", { method: "POST" });
+    } catch {
+      void 0;
+    }
   }
   appState.me = null;
   clearAllDrafts();
@@ -195,16 +212,23 @@ export async function signOut(): Promise<void> {
   resetContextsState();
   resetKeychainState();
   resetComposer();
-  if (authMode === "portal") {
-    try {
-      await fetch("/auth/logout", { method: "POST", headers: { accept: "application/json" } });
-    } catch {
-      void 0;
-    }
-    location.href = "/";
+  if (!portal) {
+    renderAuthGate({ kind: "dev" });
     return;
   }
-  renderAuthGate({ kind: "dev" });
+  let endedSession: boolean;
+  try {
+    const r = await fetch("/auth/logout", { method: "POST", headers: { accept: "application/json" } });
+    endedSession = r.ok;
+  } catch {
+    endedSession = false;
+  }
+  if (!endedSession) {
+    renderAuthGate({ kind: "portal" });
+    return;
+  }
+  clearPortalAttempt();
+  location.href = "/";
 }
 
 export async function exitImpersonation(): Promise<void> {
@@ -248,12 +272,48 @@ function gateShell(body: unknown) {
   `;
 }
 
+const PORTAL_ATTEMPT_KEY = "qm.portal.signin.attempt";
+const PORTAL_ATTEMPT_WINDOW_MS = 20_000;
+
+function portalAttemptedRecently(): boolean {
+  try {
+    const at = Number(sessionStorage.getItem(PORTAL_ATTEMPT_KEY) ?? "");
+    return Number.isFinite(at) && Date.now() - at < PORTAL_ATTEMPT_WINDOW_MS;
+  } catch {
+    return false;
+  }
+}
+
 function signInWithPortal(): void {
+  try {
+    sessionStorage.setItem(PORTAL_ATTEMPT_KEY, String(Date.now()));
+  } catch {
+    void 0;
+  }
   const returnTo = `${location.pathname}${location.search}`;
   location.href = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
 }
 
+function clearPortalAttempt(): void {
+  try {
+    sessionStorage.removeItem(PORTAL_ATTEMPT_KEY);
+  } catch {
+    void 0;
+  }
+}
+
 function portalGate() {
+  if (portalAttemptedRecently())
+    return gateShell(html`
+      <h1>Sign in through the portal</h1>
+      <p class="signin-body">
+        This surface is reached through the portal, and signing in there didn't produce a session for it. Open the
+        portal address directly rather than this one.
+      </p>
+      <div class="hint">
+        If you opened this surface's own address, that's the cause — it can't authenticate anyone on its own.
+      </div>
+    `);
   return gateShell(html`
     <h1>Your session ended</h1>
     <p class="signin-body">You've been signed out. Sign in again and you'll come back to this page.</p>
@@ -261,31 +321,54 @@ function portalGate() {
   `);
 }
 
+function deniedGate() {
+  return gateShell(html`
+    <h1>You don't have access</h1>
+    <p class="signin-body">
+      Your account is signed in and verified — it just isn't allowed on this instance. Ask an administrator to add you.
+    </p>
+    <button class="btn" type="button" @click=${signOut}>Sign out</button>
+    ${
+      authMode === "dev"
+        ? html`<div class="hint">This instance lists its principals in <b>WEB_UI_PRINCIPALS</b>.</div>`
+        : nothing
+    }
+  `);
+}
+
+function retryBoot(): void {
+  void bootSafely();
+}
+
 function unreachableGate() {
   return gateShell(html`
     <h1>We couldn't reach the assistant</h1>
     <p class="signin-body">The service didn't respond. This is usually temporary.</p>
-    <button class="btn primary" type="button" @click=${() => void boot()}>Try again</button>
+    <button class="btn primary" type="button" @click=${retryBoot}>Try again</button>
     <div class="hint">If this keeps happening, the core service may be down.</div>
   `);
 }
 
-function devGate(errorText: string) {
+async function submitDevSignin(user: string): Promise<void> {
+  renderAuthGate({ kind: "dev", value: user, pending: true });
+  try {
+    await api("/signin", { method: "POST", body: JSON.stringify({ user }) });
+  } catch (err) {
+    renderAuthGate({ kind: "dev", value: user, error: errMessage(err, "Sign-in failed.") });
+    return;
+  }
+  await bootSafely();
+}
+
+function devGate(gate: { value?: string; error?: string; pending?: boolean }) {
   return gateShell(html`
     <form
-      @submit=${async (e: Event) => {
+      @submit=${(e: Event) => {
         e.preventDefault();
-        const form = e.target as HTMLFormElement;
-        const input = form.querySelector("input") as HTMLInputElement | null;
+        if (gate.pending) return;
+        const input = (e.target as HTMLFormElement).querySelector("input") as HTMLInputElement | null;
         const user = input?.value.trim();
-        if (!user || form.dataset.pending === "1") return;
-        form.dataset.pending = "1";
-        try {
-          await api("/signin", { method: "POST", body: JSON.stringify({ user }) });
-          await boot();
-        } catch (err) {
-          renderAuthGate({ kind: "dev", error: errMessage(err, "Sign-in failed.") });
-        }
+        if (user) void submitDevSignin(user);
       }}
     >
       <h1>Dev sign-in</h1>
@@ -293,29 +376,54 @@ function devGate(errorText: string) {
         No identity provider is configured, so this instance trusts a local cookie. Set
         <b>CORE_SIGNING_SECRET</b> and run the portal to use real sign-in.
       </p>
-      <label for="dev-principal">Work email</label>
-      <input id="dev-principal" name="principal" type="email" autocomplete="username" autofocus spellcheck="false" />
-      <button class="btn primary" type="submit">Continue</button>
-      ${errorText ? html`<div class="hint error" role="alert">${errorText}</div>` : nothing}
+      <label for="dev-principal">Principal</label>
+      <input
+        id="dev-principal"
+        name="principal"
+        type="text"
+        inputmode="email"
+        autocomplete="username"
+        spellcheck="false"
+        required
+        autofocus
+        placeholder="you@org.com"
+        .value=${gate.value ?? ""}
+        ?disabled=${gate.pending === true}
+      />
+      <button class="btn primary" type="submit" ?disabled=${gate.pending === true}>
+        ${gate.pending ? "Signing in…" : "Continue"}
+      </button>
+      ${gate.error ? html`<div class="hint error" role="alert">${gate.error}</div>` : nothing}
     </form>
   `);
 }
 
-export type AuthGate = { kind: "portal" } | { kind: "unreachable" } | { kind: "dev"; error?: string };
+export type AuthGate =
+  | { kind: "portal" }
+  | { kind: "denied" }
+  | { kind: "unreachable" }
+  | { kind: "dev"; value?: string; error?: string; pending?: boolean };
 
 export function renderAuthGate(gate: AuthGate): void {
-  if (gate.kind === "dev") authMode = "dev";
+  shellMounted = false;
   const body = (() => {
     switch (gate.kind) {
       case "portal":
         return portalGate();
+      case "denied":
+        return deniedGate();
       case "unreachable":
         return unreachableGate();
       default:
-        return devGate(gate.error ?? "");
+        return devGate(gate);
     }
   })();
   render(body, appEl as HTMLElement);
+}
+
+function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | undefined): AuthGate {
+  if (reason === "not_allowed") return { kind: "denied" };
+  return mode === "dev" ? { kind: "dev" } : { kind: "portal" };
 }
 
 export function mountShell(): void {
@@ -329,6 +437,7 @@ export function mountShell(): void {
     appState.topEl = null;
     appState.listEl = null;
     appState.mainEl = (appEl as HTMLElement).querySelector("#main");
+    shellMounted = true;
     return;
   }
   applySavedSidebarWidth();
@@ -392,6 +501,7 @@ export function mountShell(): void {
   renderSidebarTop();
   updateSidebarToggleLabels();
   syncSidebarAccessibility(false);
+  shellMounted = true;
 }
 
 export function renderSidebarTop(): void {
@@ -688,6 +798,15 @@ function openAppEditChat(slug: string): void {
   renderList();
 }
 
+export async function bootSafely(): Promise<void> {
+  try {
+    await boot();
+  } catch (e) {
+    if (shellMounted) swallow("web-ui: boot", e);
+    else renderAuthGate({ kind: "unreachable" });
+  }
+}
+
 export async function boot(): Promise<void> {
   let r: Response;
   try {
@@ -697,12 +816,9 @@ export async function boot(): Promise<void> {
     return;
   }
   if (r.status === 401) {
-    const mode = await r
-      .json()
-      .then((b: { mode?: AuthMode }) => b.mode)
-      .catch(() => undefined);
-    authMode = mode ?? "portal";
-    renderAuthGate(authMode === "dev" ? { kind: "dev" } : { kind: "portal" });
+    const body = (await r.json().catch(() => ({}))) as SigninRequired;
+    authMode = body.mode ?? "portal";
+    renderAuthGate(gateFor(authMode, body.reason));
     return;
   }
   if (!r.ok) {
@@ -712,6 +828,7 @@ export async function boot(): Promise<void> {
   resetKeychainState();
   appState.me = (await r.json()) as Me;
   authMode = appState.me.mode ?? "portal";
+  clearPortalAttempt();
   const runtimeConfig = await fetchRuntimeConfig(`personal:${appState.me.user}`);
   if (runtimeConfig)
     applyRuntimeOptions(

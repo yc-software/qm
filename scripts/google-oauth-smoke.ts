@@ -12,6 +12,7 @@ import { createServer } from "../src/api/server.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";
 import { scopeId } from "../src/types.ts";
 import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 
 type Json = Record<string, unknown>;
 
@@ -218,21 +219,15 @@ try {
   });
   await waitFor(`${webBase}/healthz`, 10_000);
 
-  const signin = await fetch(`${webBase}/signin`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ user: actor }),
-  });
-  const signinBody = await readJson(signin);
-  assertOk(signin, signinBody, "web signin");
-  const cookie = signin.headers.get("set-cookie")?.split(";")[0] ?? "";
-  if (!cookie) throw new Error("web signin did not return a session cookie");
+  const identity = {
+    [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: actor, exp: Date.now() + 10 * 60_000 }, secret),
+  };
 
-  const statusBefore = await fetch(`${webBase}/api/connectors`, { headers: { cookie } });
+  const statusBefore = await fetch(`${webBase}/api/connectors`, { headers: identity });
   const statusBeforeBody = await readJson(statusBefore);
   assertOk(statusBefore, statusBeforeBody, "web connector status");
 
-  const start = await fetch(`${webBase}/api/connectors/google/start`, { method: "POST", headers: { cookie } });
+  const start = await fetch(`${webBase}/api/connectors/google/start`, { method: "POST", headers: identity });
   const startBody = await readJson(start);
   assertOk(start, startBody, "web connector start");
   const authorize = new URL(String(startBody.authorizeUrl ?? ""));
@@ -274,7 +269,7 @@ try {
     const deadline = Date.now() + timeoutMs;
     let connected = false;
     while (Date.now() < deadline) {
-      const status = await fetch(`${webBase}/api/connectors`, { headers: { cookie } });
+      const status = await fetch(`${webBase}/api/connectors`, { headers: identity });
       const statusBody = await readJson(status);
       assertOk(status, statusBody, "web connector status during interactive wait");
       connected = providerStatus(statusBody).connected;
