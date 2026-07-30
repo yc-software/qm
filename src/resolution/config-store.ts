@@ -168,6 +168,9 @@ export interface ScopedConfigStore {
   getOrgAmbient(): boolean;
   setOrgAmbient(on: boolean): void;
   getOrgAmbientDurable(): Promise<boolean>;
+  getInteractiveFastMode(): boolean;
+  setInteractiveFastMode(on: boolean): void;
+  getInteractiveFastModeDurable(): Promise<boolean>;
   getBaseModelOwnDurable(id: ScopeId): Promise<string | null>;
   getWebuiModels(id: ScopeId): string[] | null;
   setWebuiModels(id: ScopeId, ids: string[] | null): void;
@@ -209,6 +212,7 @@ export function createMemoryConfigStore(
     baseModels?: DurableMap<PersistedBaseModel>;
     approvedHarnesses?: DurableMap<PersistedApprovedHarnesses>;
     orgAmbient?: DurableMap<PersistedScopedFlag>;
+    interactiveFastMode?: DurableMap<PersistedScopedFlag>;
     webuiModels?: DurableMap<PersistedWebuiModels>;
     peopleDirectoryUrls?: DurableMap<PersistedPeopleDirectoryUrl>;
     branding?: DurableMap<PersistedBranding>;
@@ -232,6 +236,7 @@ export function createMemoryConfigStore(
   const baseModels = new Map<ScopeId, PersistedBaseModel>();
   let approvedHarnesses: string[] | null = null;
   let orgAmbient = true;
+  let interactiveFastMode = false;
   const webuiModels = new Map<ScopeId, string[]>();
   const peopleDirectoryUrls = new Map<ScopeId, string>();
   const branding = new Map<ScopeId, OrgBranding>();
@@ -249,6 +254,7 @@ export function createMemoryConfigStore(
   const baseModelStore = opts.baseModels ?? createMemoryMap<PersistedBaseModel>();
   const approvedHarnessStore = opts.approvedHarnesses ?? createMemoryMap<PersistedApprovedHarnesses>();
   const orgAmbientStore = opts.orgAmbient ?? createMemoryMap<PersistedScopedFlag>();
+  const interactiveFastModeStore = opts.interactiveFastMode ?? createMemoryMap<PersistedScopedFlag>();
   const webuiModelStore = opts.webuiModels ?? createMemoryMap<PersistedWebuiModels>();
   const peopleDirectoryUrlStore = opts.peopleDirectoryUrls ?? createMemoryMap<PersistedPeopleDirectoryUrl>();
   const brandingStore = opts.branding ?? createMemoryMap<PersistedBranding>();
@@ -377,6 +383,7 @@ export function createMemoryConfigStore(
           for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
           approvedHarnesses = (await approvedHarnessStore.get(org))?.ids ?? null;
           orgAmbient = (await orgAmbientStore.get(org))?.on ?? true;
+          interactiveFastMode = (await interactiveFastModeStore.get(org))?.on ?? false;
           for (const r of await webuiModelStore.all()) webuiModels.set(r.scopeId, r.ids);
           for (const r of await peopleDirectoryUrlStore.all()) peopleDirectoryUrls.set(r.scopeId, r.url);
           for (const r of await brandingStore.all()) branding.set(r.scopeId, r.branding);
@@ -712,6 +719,14 @@ export function createMemoryConfigStore(
       persist(`orgAmbient:${org}`, "org ambient switch", () => orgAmbientStore.put(org, { scopeId: org, on }));
     },
     getOrgAmbientDurable: async () => (await orgAmbientStore.get(org))?.on ?? true,
+    getInteractiveFastMode: () => interactiveFastMode,
+    setInteractiveFastMode(on) {
+      interactiveFastMode = on;
+      persist(`interactiveFastMode:${org}`, "interactive fast mode switch", () =>
+        interactiveFastModeStore.put(org, { scopeId: org, on }),
+      );
+    },
+    getInteractiveFastModeDurable: async () => (await interactiveFastModeStore.get(org))?.on ?? false,
     getBaseModelOwnDurable: async (id) => (await baseModelStore.get(id))?.modelId ?? null,
     getBaseModelDurable: async (id) =>
       (await baseModelStore.get(id))?.modelId ??
@@ -859,6 +874,7 @@ export function createMemoryConfigStore(
         approved,
         brandingRow,
         orgAmbientRow,
+        interactiveFastModeRow,
       ] = await Promise.all([
         soulStore.get(id),
         commandPolicyStore.get(id),
@@ -871,6 +887,7 @@ export function createMemoryConfigStore(
         id === org ? approvedHarnessStore.get(org) : null,
         brandingStore.get(id),
         id === org ? orgAmbientStore.get(org) : null,
+        id === org ? interactiveFastModeStore.get(org) : null,
       ]);
       let refreshedSoul = soul;
       const legacyHistory = legacySoulHistory.get(id) ?? [];
@@ -908,6 +925,7 @@ export function createMemoryConfigStore(
       else baseModels.delete(id);
       if (id === org) approvedHarnesses = approved?.ids ?? null;
       if (id === org) orgAmbient = orgAmbientRow?.on ?? true;
+      if (id === org) interactiveFastMode = interactiveFastModeRow?.on ?? false;
       if (brandingRow) branding.set(id, brandingRow.branding);
       else branding.delete(id);
     },
@@ -922,7 +940,7 @@ export function createMemoryConfigStore(
         `model:${id}`,
         `turnWallClock:${id}`,
         `branding:${id}`,
-        ...(id === org ? [`approvedHarnesses:${org}`, `orgAmbient:${org}`] : []),
+        ...(id === org ? [`approvedHarnesses:${org}`, `orgAmbient:${org}`, `interactiveFastMode:${org}`] : []),
       ];
       await Promise.all(
         keys.map(async (key) => {

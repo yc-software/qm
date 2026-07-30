@@ -4246,6 +4246,32 @@
                   <h2>Models &amp; browsing</h2>
                   <p>The models, browser runtime, and organization context available on future turns.</p>
                 </div>
+                <section class="card setting-row hidden" id="card-interactive-fast-mode">
+                  <div class="head">
+                    <h2>Fast mode for interactive turns</h2>
+                    <p>
+                      Org-wide, default off. When on, human turns run in fast mode on fast-capable models unless the
+                      turn asks otherwise. Requires fast-mode quota with the provider.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <label class="setting-toggle">
+                      <input type="checkbox" id="interactive-fast-mode" />
+                      <span class="setting-switch" aria-hidden="true"></span>
+                      <span class="setting-copy"
+                        ><strong>Default interactive turns to fast mode</strong
+                        ><small
+                          >A turn that picks its own fast-mode setting (for example the web UI toggle) still
+                          wins.</small
+                        ></span
+                      >
+                    </label>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="interactive-fast-mode">Apply</button
+                    ><span class="status" id="st-interactive-fast-mode"></span>
+                  </div>
+                </section>
                 <section class="card setting-row hidden" id="card-base-model">
                   <div class="head">
                     <h2>Default harness and model</h2>
@@ -6212,6 +6238,9 @@
         const showOrgAmbient = scope.startsWith("org:") && "orgAmbient" in r.data;
         $("card-org-ambient").classList.toggle("hidden", !showOrgAmbient);
         if (showOrgAmbient) $("org-ambient").checked = r.data.orgAmbient !== false;
+        const showInteractiveFastMode = scope.startsWith("org:") && "interactiveFastMode" in r.data;
+        $("card-interactive-fast-mode").classList.toggle("hidden", !showInteractiveFastMode);
+        if (showInteractiveFastMode) $("interactive-fast-mode").checked = r.data.interactiveFastMode === true;
 
         const opts = r.data.baseModelOptions || [];
         const dflt = r.data.baseModelDefault || "";
@@ -7694,6 +7723,7 @@
         egress: () => collectEgress(),
         "external-slack-participants": () => ({ on: $("external-slack-participants").checked }),
         "org-ambient": () => ({ on: $("org-ambient").checked }),
+        "interactive-fast-mode": () => ({ on: $("interactive-fast-mode").checked }),
         runtime: () => ({ harnessId: $("base-harness").value, modelId: $("base-model").value }),
         "approved-harnesses": () => ({
           ids: Array.from(document.querySelectorAll("#approved-harnesses-list input[type=checkbox]:checked")).map(
@@ -7727,6 +7757,7 @@
         egress: "st-egress",
         "external-slack-participants": "st-external-slack-participants",
         "org-ambient": "st-org-ambient",
+        "interactive-fast-mode": "st-interactive-fast-mode",
         runtime: "st-runtime",
         "approved-harnesses": "st-approved-harnesses",
         "webui-models": "st-webui-models",

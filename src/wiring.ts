@@ -424,6 +424,7 @@ export function buildApp(
     baseModels: artifactMap<PersistedBaseModel>("base_model_configs"),
     approvedHarnesses: artifactMap<PersistedApprovedHarnesses>("approved_harness_configs"),
     orgAmbient: artifactMap<PersistedScopedFlag>("org_ambient_flag"),
+    interactiveFastMode: artifactMap<PersistedScopedFlag>("interactive_fast_mode_flag"),
     webuiModels: artifactMap<PersistedWebuiModels>("webui_model_configs"),
     peopleDirectoryUrls: artifactMap<PersistedPeopleDirectoryUrl>("people_directory_urls"),
     branding: artifactMap<PersistedBranding>("branding_configs"),

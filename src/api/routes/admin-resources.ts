@@ -327,6 +327,23 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
+    id: "interactive-fast-mode",
+    kind: "boolean",
+    target: "org",
+    label:
+      "Fast mode for interactive turns org-wide: on means human turns run in fast mode on fast-capable models unless the turn asks otherwise. Requires fast-mode quota with the provider.",
+    readKey: "interactiveFastMode",
+    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getInteractiveFastMode() : undefined),
+    apply: generic<boolean>(
+      (body, { scope }) => {
+        const bad = orgOnly(scope, "the interactive fast-mode switch is org-wide");
+        if (bad) return bad;
+        return boolBody(body);
+      },
+      (deps, _scope, on) => deps.config!.setInteractiveFastMode(on),
+    ),
+  },
+  {
     id: "base-model",
     kind: "enum",
     target: "any",

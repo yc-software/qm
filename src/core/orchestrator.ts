@@ -2032,6 +2032,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? Math.min(requestedTurnWallClockMs, configuredTurnWallClockMs)
               : requestedTurnWallClockMs;
         }
+        let effectiveFastMode = input.fastMode;
+        if (typeof effectiveFastMode !== "boolean" && humanTurn && (await deps.config?.getInteractiveFastModeDurable()))
+          effectiveFastMode = true;
         const runHarnessTurn = (
           harnessInput: string,
           extras: {
@@ -2069,7 +2072,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.harness ? { harness: input.harness } : {}),
             ...(input.model ? { model: input.model } : {}),
             ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
-            ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
+            ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             ...(input.surfaceTools && surfaceToolDeps
               ? {
