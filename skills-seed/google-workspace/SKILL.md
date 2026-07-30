@@ -63,6 +63,13 @@ bulk`) below personal mail, but never suppress transactional notices (DocuSign,
   rebuild To/CC by hand. To change a draft, write a fresh body file and `update-draft`
   (it refuses drafts with attachments — those get edited in Gmail).
 - Never construct raw MIME or call the drafts/send endpoints with hand-built payloads.
+- Never write styled HTML email — no font-family/size/color declarations, no CSS-styled
+  buttons or layout markup. Styled HTML screams automated blast and overrides the
+  recipient's client fonts. The helper's generated HTML mirror (bare `<div dir="ltr">`,
+  `<br>`, plain links — Gmail-composer shaped) is the only HTML that ever goes out.
+- Write body files as UTF-8. After creating or updating a draft, read it back
+  (`gmail.py thread`/draft read) and confirm em dashes, quotes, and any emoji came
+  through intact — mojibake (`â€¦`-style garble) in a sent mail is unrecoverable.
 
 ## Calendar reads
 

@@ -23,6 +23,8 @@ memory or from this conversation's tone. The profile's **Hard rules** and
    never draft from a snippet or excerpt; a question below the fold would go silently
    unanswered. Match the register the profile prescribes for this audience.
 2. Write the body to a file — plain text, one line per paragraph, blank line between.
+   Plain text only — never styled HTML (fonts, colors, buttons); the gmail helper
+   adds the correct unstyled HTML mirror itself.
 3. Self-check against the profile before showing anything: opener and sign-off drawn
    from their real ones, sentence rhythm right, no anti-pattern present. If a sentence
    could appear in anyone's email, rewrite it or cut it.
