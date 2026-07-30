@@ -155,3 +155,18 @@ test("boot's fallback never replaces a chat the user mounted during the wait", (
   assert.match(reconcile, /void maximizePane\(params\);/, "a lone survivor with a session is maximized");
   assert.match(fn(split, "exitSplitIfActive"), /splitState\.active = false;/);
 });
+
+test("a pane gives the conversation the same height chain the full-screen .main does", () => {
+  // .custom-chat sizes itself with flex: 1 / min-height: 0, so every container it
+  // mounts into must be a flex column of definite height — .main is; the pane
+  // wrapper must be too, or the transcript never scroll-contains and the composer
+  // trails the content instead of pinning to the pane's bottom edge.
+  const main = css.match(/^\.main \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(main, /display: flex;/);
+  assert.match(main, /flex-direction: column;/);
+  const pane = css.match(/^\.split-pane-chat \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(pane, /display: flex;/, "the pane wrapper must be a flex container");
+  assert.match(pane, /flex-direction: column;/, "…a column, like .main");
+  assert.match(pane, /height: 100%;/, "…of definite height");
+  assert.match(pane, /overflow: hidden;/, "…that clips instead of growing the pane");
+});
