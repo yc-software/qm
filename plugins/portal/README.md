@@ -67,6 +67,34 @@ surfaces, and it does **not** import the core.
   session before `exp`; the core's `canAdminister` (re-read per request) remains the live admin
   revocation path. Slack has no RP-initiated end-session, so SSO re-login is silent.
 
+## Playground mode
+
+`PORTAL_PLAYGROUND=1` turns the deployment into a public try-it instance: an
+unauthenticated browser navigation (a `GET` that accepts HTML) mints an anonymous
+principal (`playground-<random>`), seals it into the ordinary `portal_session`
+cookie, and continues — so each visitor's sessions, files, memory, and sandbox are
+pinned to their browser through the same scoping that isolates real teammates.
+Non-HTML requests without a session still get `401`, so the SPA's API calls ride
+the cookie from the first page load and bare `curl` never mints.
+
+What playground mode does **not** change: `/auth/login` still runs the full OIDC
+flow (that's how the one admin signs in — production still demands the usual OIDC
+config), `/admin` refuses anonymous sessions outright, and admin identity remains
+the core's `ADMIN_GRANTS`. Signing out of an anonymous session just clears the
+cookie; the next visit starts a fresh playground identity.
+
+Minting is rate-limited per client IP through the core's Postgres-backed
+single-use claim store (the same one the sign-in broker uses), so restarts and
+blue-green deploys can't reset it; if the core can't record the claim the portal
+fails closed and answers 429. `PORTAL_PLAYGROUND_MINTS_PER_IP` (default 30) per
+`PORTAL_PLAYGROUND_MINT_WINDOW_S` (default 3600) tunes it. A cleared cookie mints
+a fresh principal, so pair this with the core's real brakes:
+`BUDGET_USD_PER_WINDOW`, `ORG_BUDGET_USD_PER_WINDOW`, `RATE_LIMIT_PER_WINDOW`,
+and a single pinned model via the admin `base-model` / `webui-models` resources.
+Run a playground as its own deployment — anonymous visitors share the `org:`
+scope's published resources, and nothing garbage-collects an abandoned visitor's
+scope yet.
+
 ## Env
 
 Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CORE_API_URL`,

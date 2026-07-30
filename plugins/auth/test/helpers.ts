@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { readConfig, type AuthConfig } from "../src/config.ts";
-import type { ClaimStore } from "../src/claims.ts";
+import type { ClaimStore } from "../../chassis/src/claims.ts";
 import type { Mailer, OutgoingEmail } from "../src/email.ts";
 import { loadSigningKey } from "../src/keys.ts";
 import { TokenSigner } from "../src/tokens.ts";

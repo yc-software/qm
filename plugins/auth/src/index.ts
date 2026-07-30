@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { json } from "../../chassis/src/http.ts";
 import { portFromEnv } from "../../chassis/src/env.ts";
 import { bootProblems, readConfig } from "./config.ts";
-import { coreClaimStore } from "./claims.ts";
+import { coreClaimStore } from "../../chassis/src/claims.ts";
 import { mailerFor } from "./email.ts";
 import { loadSigningKey } from "./keys.ts";
 import { TokenSigner } from "./tokens.ts";
@@ -27,7 +27,7 @@ export async function startServer(): Promise<void> {
     cfg: CFG,
     signingKey,
     signer: new TokenSigner(CFG.tokenSecret, CFG.issuer),
-    claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret),
+    claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
     mailer: mailerFor(CFG),
   });
   const server = createServer((req, res) => {

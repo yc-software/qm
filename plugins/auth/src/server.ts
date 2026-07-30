@@ -3,7 +3,7 @@ import { readBody, PayloadTooLargeError, serveEmojiFavicon } from "../../chassis
 import { errMessage } from "../../chassis/src/errors.ts";
 import type { AuthConfig } from "./config.ts";
 import { validEmail } from "./config.ts";
-import { claimOnce, withinRateLimit, type ClaimStore } from "./claims.ts";
+import { claimOnce, withinRateLimit, type ClaimStore } from "../../chassis/src/claims.ts";
 import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type AuthRequest } from "./tokens.ts";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 import { renderSignInEmail, type Mailer } from "./email.ts";

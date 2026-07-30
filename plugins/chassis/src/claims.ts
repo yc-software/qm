@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { signedHeaders, withSourceAuthNonce } from "./core-client.ts";
+import { errMessage } from "./errors.ts";
 
 export interface ClaimStore {
   claimFirst(ids: readonly string[], expiresAtMs: number): Promise<string | null>;
@@ -9,7 +9,7 @@ export interface ClaimStore {
 const CLAIM_PATH = "/v1/auth/broker/claim";
 const CLAIM_TIMEOUT_MS = 4_000;
 
-export function coreClaimStore(coreApiUrl: string, signingSecret: string | undefined): ClaimStore {
+export function coreClaimStore(coreApiUrl: string, signingSecret: string | undefined, label = "chassis"): ClaimStore {
   return {
     async claimFirst(ids, expiresAtMs) {
       const path = withSourceAuthNonce(CLAIM_PATH, signingSecret);
@@ -22,13 +22,13 @@ export function coreClaimStore(coreApiUrl: string, signingSecret: string | undef
           signal: AbortSignal.timeout(CLAIM_TIMEOUT_MS),
         });
         if (!r.ok) {
-          console.error(`[auth] core refused a single-use claim: HTTP ${r.status}`);
+          console.error(`[${label}] core refused a single-use claim: HTTP ${r.status}`);
           return null;
         }
         const parsed = (await r.json()) as { claimed?: unknown };
         return typeof parsed.claimed === "string" ? parsed.claimed : null;
       } catch (e) {
-        console.error(`[auth] core single-use claim failed: ${errMessage(e)}`);
+        console.error(`[${label}] core single-use claim failed: ${errMessage(e)}`);
         return null;
       }
     },
