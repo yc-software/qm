@@ -1,3 +1,5 @@
+import { httpDeploymentLayerTransport, type DeploymentLayerTransport } from "../deployment-layer.ts";
+
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +34,11 @@ import { dockerBasePort, sandboxCoreEnv, securityScreenEnv, type QmConfig } from
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../secrets.ts";
 import { readDeploymentState, withDeploymentLock, writeDeploymentState, type DeploymentState } from "../state.ts";
+
+/** Deployment-layer transport for docker: signed HTTP to the locally published core port. */
+export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
+  urlOf: (config) => new URL(`http://127.0.0.1:${dockerBasePort(config)}/v1/deployment-layer`),
+});
 
 const safe = (s: string): string => s.replace(/[^A-Za-z0-9_.-]/g, "-");
 const ORG_LABEL_KEY = "qm.org";
