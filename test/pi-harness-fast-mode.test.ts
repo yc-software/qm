@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyFastSpeed, modelSupportsFastMode, TURN_PROVIDER_EFFORT_ALIASES } from "../src/harness/pi-harness.ts";
+import {
+  applyFastSpeed,
+  modelSupportsFastMode,
+  wantsFastMode,
+  TURN_PROVIDER_EFFORT_ALIASES,
+} from "../src/harness/pi-harness.ts";
 import { defaultInteractiveThinkingLevel } from "../src/model/pi-models.ts";
 
 test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
@@ -49,4 +54,19 @@ test("TURN_PROVIDER_EFFORT_ALIASES maps web-ui aliases to Anthropic effort value
 test("defaultInteractiveThinkingLevel keeps human turns light by provider", () => {
   assert.equal(defaultInteractiveThinkingLevel({ provider: "anthropic", api: "anthropic-messages" }), "low");
   assert.equal(defaultInteractiveThinkingLevel({ provider: "openai", api: "openai-responses" }), "auto");
+});
+
+test("fast mode is opt-in: only an explicit true selects it", () => {
+  // A turn that never mentions fastMode has expressed no preference. Reading that as "yes"
+  // bills it against a tier nobody asked for, and on an organization with no fast-mode
+  // quota the provider rejects every such turn outright.
+  assert.equal(wantsFastMode(undefined, "claude-opus-5"), false, "unset must not select fast mode");
+  assert.equal(wantsFastMode(false, "claude-opus-5"), false);
+  assert.equal(wantsFastMode(true, "claude-opus-5"), true, "an explicit opt-in is honoured");
+});
+
+test("an explicit opt-in still cannot select fast mode on a model that lacks it", () => {
+  assert.equal(wantsFastMode(true, "claude-sonnet-5"), false);
+  assert.equal(wantsFastMode(true, undefined), false);
+  assert.equal(wantsFastMode(true, ""), false);
 });
