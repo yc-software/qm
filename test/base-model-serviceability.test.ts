@@ -79,12 +79,18 @@ test("a deployment that declares a provider runs that provider's base model", as
   }
 });
 
-test("a single provider key with no declaration still runs a base model it can bill", async () => {
-  const srv = start({ openrouterApiKey: "deployment-openrouter-key" });
-  try {
-    assert.equal(await effectiveModel(srv.base), "openrouter/auto");
-  } finally {
-    await srv.close();
+test("an undeclared deployment keeps the shipped default, whatever keys it holds", async () => {
+  for (const overrides of [{}, { openrouterApiKey: "k" }, { openaiApiKey: "k" }] as const) {
+    const srv = start(overrides);
+    try {
+      assert.equal(
+        await effectiveModel(srv.base),
+        "claude-opus-5",
+        "upgrading must not move an existing deployment's model or its billing",
+      );
+    } finally {
+      await srv.close();
+    }
   }
 });
 
@@ -96,15 +102,6 @@ test("the declaration outranks a stray key from another vendor", async () => {
   });
   try {
     assert.equal(await effectiveModel(srv.base), "openrouter/auto");
-  } finally {
-    await srv.close();
-  }
-});
-
-test("a deployment with no provider key at all keeps the shipped default", async () => {
-  const srv = start({});
-  try {
-    assert.equal(await effectiveModel(srv.base), "claude-opus-5");
   } finally {
     await srv.close();
   }

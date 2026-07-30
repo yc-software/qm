@@ -15,9 +15,7 @@ import {
   MODEL_PROVIDERS,
   defaultModelForProvider,
   isModelProvider,
-  modelProviderAvailabilityFor,
   onlyProvider,
-  resolveModel,
   type ModelProvider,
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
@@ -160,14 +158,8 @@ export function providerKeysPresent(config: Config): ModelProviderAvailability {
   };
 }
 
-export function baseModelProviders(config: Config): ModelProviderAvailability {
-  const declared = config.modelProvider ? onlyProvider(config.modelProvider) : providerKeysPresent(config);
-  const routable = modelProviderAvailabilityFor(config.harness, declared);
-  return {
-    anthropic: declared.anthropic && routable.anthropic,
-    openai: declared.openai && routable.openai,
-    openrouter: declared.openrouter && routable.openrouter,
-  };
+export function baseModelProviders(config: Config): ModelProviderAvailability | undefined {
+  return config.modelProvider ? onlyProvider(config.modelProvider) : undefined;
 }
 
 interface AwsSandboxEnv {
@@ -555,21 +547,7 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
       `MODEL_PROVIDER=${declared} cannot serve a base model on HARNESS=${harness} — that harness runs no ${declared} model, so every turn would be refused.`,
     );
   }
-  const [pinName, pinned] = harnessModelPin(env, harness);
-  const pinnedProvider = pinned ? resolveModel(pinned)?.provider : undefined;
-  if (pinned && pinnedProvider && pinnedProvider !== declared) {
-    throw new Error(
-      `${pinName}=${pinned} is a ${pinnedProvider} model but MODEL_PROVIDER=${declared} — the deployment holds no key that can bill it.`,
-    );
-  }
   return declared;
-}
-
-function harnessModelPin(env: NodeJS.ProcessEnv, harness: Config["harness"]): [string, string | undefined] {
-  if (harness === "codex") return ["CODEX_MODEL", env.CODEX_MODEL?.trim()];
-  if (harness === "claude") return ["CLAUDE_MODEL", env.CLAUDE_MODEL?.trim()];
-  if (harness === "opencode" && env.OPENCODE_MODEL?.trim()) return ["OPENCODE_MODEL", env.OPENCODE_MODEL.trim()];
-  return ["PI_MODEL", env.PI_MODEL?.trim()];
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
