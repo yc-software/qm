@@ -182,7 +182,9 @@ export async function doctorCommon(
       step("Slack setup: deferred to the admin connector page");
     } else {
       warn(
-        "SLACK_BOT_TOKEN/SLACK_APP_TOKEN values are not available locally — skipping the live Slack check (secret names were verified on the Fly apps)",
+        config.target === "aws"
+          ? "SLACK_BOT_TOKEN/SLACK_APP_TOKEN are not in the AWS secret store yet — skipping the live Slack check"
+          : "SLACK_BOT_TOKEN/SLACK_APP_TOKEN values are not available locally — skipping the live Slack check (secret names were verified on the Fly apps)",
       );
     }
   }

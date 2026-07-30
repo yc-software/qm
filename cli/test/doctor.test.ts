@@ -177,6 +177,46 @@ if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SEC
   }
 });
 
+test("Fly doctor reports apps that are not created yet as pending, not missing secrets", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-predeploy-"));
+  const bin = join(dir, "fake-fly.cjs");
+  const prior = process.env.FLY_BIN;
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "secrets" && args[1] === "list") {
+  process.stderr.write("Error: app not found");
+  process.exit(1);
+}
+process.exit(0);
+`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.FLY_BIN = bin;
+  const log = console.log;
+  const lines: string[] = [];
+  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
+  try {
+    await assert.doesNotReject(
+      flyDoctor({ ...config, target: "fly", appPrefix: "acme", region: "sjc", flyOrg: "personal" }, dir),
+    );
+    assert.ok(
+      lines.some((line) => line.includes("acme-core: not created yet")),
+      `printed: ${lines.join(" | ")}`,
+    );
+    assert.ok(
+      !lines.some((line) => line.includes("missing")),
+      `printed: ${lines.join(" | ")}`,
+    );
+  } finally {
+    console.log = log;
+    if (prior === undefined) delete process.env.FLY_BIN;
+    else process.env.FLY_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("doctor reads the deployment's slack-app-manifest.yml scopes, falling back to the template", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-doctor-manifest-"));
   try {

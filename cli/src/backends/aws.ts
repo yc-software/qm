@@ -2694,6 +2694,39 @@ export function assertAwsDeploymentStorage(config: QmConfig): void {
   ]);
 }
 
+export function probeAwsSecretStore(
+  secrets: ComputedSecret[],
+  read: (name: string) => string,
+  checkPublicApiUrl: () => void,
+): { values: Map<string, string>; pending: string[]; failures: string[] } {
+  const values = new Map<string, string>();
+  const pending: string[] = [];
+  const failures: string[] = [];
+  for (const secret of secrets) {
+    const label = secret.required ? `secret ${secret.name}` : `optional secret ${secret.name}`;
+    try {
+      const value = read(secret.name);
+      if (isInvalidSecret(secret.name, value)) throw new Error("missing, placeholder, or insecure value");
+      values.set(secret.name, value);
+      if (secret.required && secret.name === "PUBLIC_API_URL") checkPublicApiUrl();
+      step(secret.required ? `${label}: ok` : `${label}: configured`);
+    } catch (error) {
+      if (/ResourceNotFoundException/.test(errMessage(error))) {
+        if (secret.required) {
+          pending.push(secret.name);
+          step(`${label}: not pushed yet — run \`qm secrets push\` before the first deploy`);
+        } else {
+          warn(`${label}: not configured`);
+        }
+      } else {
+        failures.push(`${label}: ${errMessage(error)}`);
+        warn(`${label}: failed`);
+      }
+    }
+  }
+  return { values, pending, failures };
+}
+
 export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {
   const { aws } = awsTopology(config, configDir);
   header(`qm doctor — ${config.orgId} (aws)`);
@@ -2903,32 +2936,21 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
   });
   check("ALB routing", () => assertAwsPublicRouting(config, ecsServices));
   await checkAsync("public URL DNS and TLS", () => assertAwsPublicNetwork(config));
-  const runtimeSecrets = new Map<string, string>();
-  for (const secret of computedSecrets(config)) {
-    const inspect = (): void => {
-      const id = `${aws.secretsPrefix}${secret.name}`;
-      const value = awsText(aws, ["secretsmanager", "get-secret-value", "--secret-id", id, "--query", "SecretString"]);
-      if (isInvalidSecret(secret.name, value)) throw new Error("missing, placeholder, or insecure value");
-      runtimeSecrets.set(secret.name, value);
-    };
-    if (secret.required)
-      check(`secret ${secret.name}`, () => {
-        inspect();
-        if (secret.name === "PUBLIC_API_URL") assertAwsPublicApiUrl(config);
-      });
-    else {
-      try {
-        inspect();
-        step(`optional secret ${secret.name}: configured`);
-      } catch (error) {
-        if (/ResourceNotFoundException/.test(errMessage(error))) warn(`optional secret ${secret.name}: not configured`);
-        else {
-          failures.push(`optional secret ${secret.name}: ${errMessage(error)}`);
-          warn(`optional secret ${secret.name}: failed`);
-        }
-      }
-    }
-  }
+  const probe = probeAwsSecretStore(
+    computedSecrets(config),
+    (name) =>
+      awsText(aws, [
+        "secretsmanager",
+        "get-secret-value",
+        "--secret-id",
+        `${aws.secretsPrefix}${name}`,
+        "--query",
+        "SecretString",
+      ]),
+    () => assertAwsPublicApiUrl(config),
+  );
+  failures.push(...probe.failures);
+  const runtimeSecrets = probe.values;
   if (failures.length) throw new CliError(`doctor failed:\n${failures.map((failure) => `  - ${failure}`).join("\n")}`);
   const runtimeNames = ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"] as const;
   const priorRuntime = new Map(runtimeNames.map((name) => [name, process.env[name]]));
@@ -2938,7 +2960,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     else delete process.env[name];
   }
   try {
-    await doctorCommon(config, runtimeSecrets, { configDir, requiredSecretValues: true });
+    await doctorCommon(config, runtimeSecrets, { configDir, requiredSecretValues: probe.pending.length === 0 });
   } finally {
     for (const name of runtimeNames) {
       const prior = priorRuntime.get(name);

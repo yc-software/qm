@@ -313,8 +313,11 @@ function writeDerived(ctx: FlyCtx, service: ServiceName): string {
   return path;
 }
 
-function secretNames(app: string): Set<string> {
-  const out = fly(["secrets", "list", "-a", app], { allow: /app not found|Could not find App/i });
+const FLY_APP_NOT_FOUND = /app not found|Could not find App/i;
+
+function secretNames(app: string): Set<string> | undefined {
+  const out = fly(["secrets", "list", "-a", app], { allow: FLY_APP_NOT_FOUND });
+  if (FLY_APP_NOT_FOUND.test(out)) return undefined;
   return new Set(
     [...out.matchAll(/^\s*\*?\s*([A-Z0-9_]+)\s/gm)].map((m) => m[1]).filter((s): s is string => s !== undefined),
   );
@@ -331,7 +334,7 @@ function ensureObjectStorage(ctx: FlyCtx): void {
   const required = flyProviderSecrets(ctx.config, "core");
   if (!required.length) return;
   const app = `${ctx.appPrefix}-core`;
-  if (required.every((name) => secretNames(app).has(name))) {
+  if (required.every((name) => secretNames(app)?.has(name))) {
     note(`object storage: credentials already set on ${app}`);
     return;
   }
@@ -339,7 +342,7 @@ function ensureObjectStorage(ctx: FlyCtx): void {
   if (!bucket) throw new CliError("Fly S3 storage requires env.core.S3_BUCKET");
   note(`object storage: creating private Tigris bucket ${bucket}…`);
   fly(["storage", "create", "--name", bucket, "--app", app, "--org", ctx.flyOrg, "--yes"]);
-  const missing = required.filter((name) => !secretNames(app).has(name));
+  const missing = required.filter((name) => !secretNames(app)?.has(name));
   if (missing.length) throw new CliError(`Fly storage create did not attach ${missing.join(", ")} to ${app}`);
   note(`object storage: credentials staged on ${app}`);
 }
@@ -430,7 +433,7 @@ function ensureApp(app: string, flyOrg: string, orgId: string, appPrefix: string
     if (!flyOrgApps(flyOrg).has(app)) {
       throw new CliError(`app ${app} exists outside configured Fly organization ${flyOrg}; choose another appPrefix`);
     }
-    if (!secretNames(app).has(marker)) {
+    if (!secretNames(app)?.has(marker)) {
       throw new CliError(
         `app ${app} already exists but is not marked as owned by this deployment; ` +
           `choose another appPrefix or explicitly remove the conflicting app`,
@@ -448,14 +451,14 @@ function assertOwnedApp(app: string, flyOrg: string, orgId: string, appPrefix: s
     throw new CliError(`app ${app} is not present in configured Fly organization ${flyOrg}`);
   }
   const marker = flyOwnershipMarker(flyOrg, orgId, appPrefix);
-  if (!secretNames(app).has(marker)) {
+  if (!secretNames(app)?.has(marker)) {
     throw new CliError(`app ${app} is not marked as owned by deployment ${flyDeploymentId(flyOrg, orgId, appPrefix)}`);
   }
 }
 
 function ensurePostgres(ctx: FlyCtx): void {
   const app = `${ctx.appPrefix}-core`;
-  const hasDatabaseUrl = secretNames(app).has("DATABASE_URL");
+  const hasDatabaseUrl = secretNames(app)?.has("DATABASE_URL");
   if (hasDatabaseUrl) {
     note(`postgres: DATABASE_URL already set on ${app}`);
     return;
@@ -945,7 +948,7 @@ function runFlyDeploy(args: string[], cwd: string): Promise<void> {
 function unsetDisabledSecurityScreenToken(config: QmConfig, appPrefix: string): void {
   if (config.securityScreen) return;
   const app = `${appPrefix}-core`;
-  if (!secretNames(app).has("SECURITY_SCREEN_PROXY_TOKEN")) return;
+  if (!secretNames(app)?.has("SECURITY_SCREEN_PROXY_TOKEN")) return;
   fly(["secrets", "unset", "--stage", "-a", app, "SECURITY_SCREEN_PROXY_TOKEN"]);
   note(`removed the disabled security screen token from ${app}`);
 }
@@ -953,7 +956,7 @@ function unsetDisabledSecurityScreenToken(config: QmConfig, appPrefix: string): 
 function unsetDisabledFlyPublisherToken(config: QmConfig, appPrefix: string): void {
   if (config.env.core?.DEPLOY_PROVIDER === "fly") return;
   const app = `${appPrefix}-core`;
-  if (!secretNames(app).has("FLY_DEPLOY_API_TOKEN")) return;
+  if (!secretNames(app)?.has("FLY_DEPLOY_API_TOKEN")) return;
   fly(["secrets", "unset", "--stage", "-a", app, "FLY_DEPLOY_API_TOKEN"]);
   note(`removed the disabled Fly app publisher token from ${app}`);
 }
@@ -1052,7 +1055,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
     }
 
     const gateSecrets = (app: string, header: string, path: string, required: string[], timingKey: string): boolean => {
-      const existing = timing.time(timingKey, "secret checks", () => secretNames(app));
+      const existing = timing.time(timingKey, "secret checks", () => secretNames(app)) ?? new Set<string>();
       const missing = required.filter((sec) => !existing.has(sec));
       note(`\n=== ${header} ===`);
       note(`config: ${path}`);
@@ -1133,7 +1136,7 @@ function listRunningApps(
   const inspect = (name: string): { owned: boolean; reason?: string } => {
     let markerFailure = "";
     try {
-      if (secretNames(name).has(marker)) return { owned: true };
+      if (secretNames(name)?.has(marker)) return { owned: true };
     } catch (error) {
       markerFailure = errMessage(error);
     }
@@ -1328,7 +1331,7 @@ export function flyPinSandbox(config: QmConfig, image: string, configDir = proce
   }
   const pinned: QmConfig = { ...config, sandbox: { ...config.sandbox, image } };
   const cfgPath = writeDerived(buildCtx(pinned, configDir, {}), "core");
-  if (secretNames(app).has("FLY_BASE_IMAGE")) {
+  if (secretNames(app)?.has("FLY_BASE_IMAGE")) {
     fly(["secrets", "unset", "--stage", "-a", app, "FLY_BASE_IMAGE"]);
     note(`removed the stale FLY_BASE_IMAGE secret on ${app}; the derived [env] pin is authoritative`);
   }
@@ -1380,6 +1383,10 @@ export async function flyDoctor(config: QmConfig, configDir: string, envFile?: s
   for (const workload of [...runnableServices(config.services), ...pluginNames]) {
     const app = `${prefix}-${workload}`;
     const existing = secretNames(app);
+    if (!existing) {
+      step(`${app}: not created yet — secret checks run after the first \`qm up\``);
+      continue;
+    }
     const declared = secretsForService(config, workload, pluginNames);
     const required = new Set([
       ...declared
