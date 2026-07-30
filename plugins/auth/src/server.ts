@@ -123,12 +123,24 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   const problem = (res: ServerResponse, status: number, heading: string, msg: string, detail?: string): void =>
     sendHtml(res, status, problemPage({ brandName: cfg.brandName, heading, msg, ...(detail ? { detail } : {}) }));
 
+  const signInUrl = ((): string | undefined => {
+    try {
+      return new URL("/auth/login", cfg.redirectUri).toString();
+    } catch {
+      return undefined;
+    }
+  })();
+
   const staleLink = (res: ServerResponse): void =>
-    problem(
+    sendHtml(
       res,
       400,
-      "This sign-in link no longer works",
-      "Sign-in links work once and expire quickly. Request a fresh one and open it right away.",
+      problemPage({
+        brandName: cfg.brandName,
+        heading: "This sign-in link no longer works",
+        msg: "Sign-in links work once and expire quickly. Request a fresh one and open it right away.",
+        ...(signInUrl ? { retryUrl: signInUrl } : {}),
+      }),
     );
 
   async function authorizeForm(res: ServerResponse, params: URLSearchParams): Promise<void> {

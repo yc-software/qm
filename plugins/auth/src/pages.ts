@@ -166,7 +166,16 @@ export function confirmSignInPage(o: { brandName: string; action: string }): str
   });
 }
 
-export function problemPage(o: { brandName: string; heading: string; msg: string; detail?: string }): string {
+export function problemPage(o: {
+  brandName: string;
+  heading: string;
+  msg: string;
+  detail?: string;
+  retryUrl?: string;
+}): string {
+  const detail = o.detail ? `<p class="reason"><strong>Details</strong>${escapeHtml(o.detail)}</p>` : "";
+  const retry = o.retryUrl ? `<a class="btn" href="${escapeHtml(o.retryUrl)}">Request a new sign-in link</a>` : "";
+  const body = `${detail}${retry}`;
   return page({
     title: "Sign-in problem",
     brandName: o.brandName,
@@ -174,7 +183,7 @@ export function problemPage(o: { brandName: string; heading: string; msg: string
     warn: true,
     heading: o.heading,
     msg: o.msg,
-    ...(o.detail ? { body: `<p class="reason"><strong>Details</strong>${escapeHtml(o.detail)}</p>` } : {}),
+    ...(body ? { body } : {}),
     help: "If this keeps happening, contact your administrator.",
   });
 }

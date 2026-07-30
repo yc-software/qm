@@ -147,7 +147,9 @@ test("a replayed magic link is refused", async (t) => {
   assert.equal((await openLink(h, link)).status, 302);
   const replay = await openLink(h, link);
   assert.equal(replay.status, 400);
-  assert.match(await replay.text(), /no longer works/);
+  const stale = await replay.text();
+  assert.match(stale, /no longer works/);
+  assert.match(stale, /href="https:\/\/agent\.example\.test\/auth\/login"/);
 });
 
 test("a replayed authorization code is refused", async (t) => {
@@ -169,6 +171,7 @@ test("an expired magic link is refused", async (t) => {
   h.now.ms += (h.cfg.linkTtlS + 60) * 1000;
   const late = await openLink(h, link);
   assert.equal(late.status, 400);
+  assert.match(await late.text(), /href="https:\/\/agent\.example\.test\/auth\/login"/);
   assert.equal(
     h.claims.calls.some((ids) => ids[0]?.startsWith("link:")),
     false,
