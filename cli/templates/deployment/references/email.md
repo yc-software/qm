@@ -57,6 +57,46 @@ optional settings live in `env.auth`:
 `qm doctor` proves the relay is reachable and answers. It does not authenticate;
 wrong credentials surface on the first real send.
 
+### Gmail / Google Workspace app password
+
+The fastest SMTP path when the operator already has a Google account: no new
+account, no DNS wait.
+
+1. The account must have 2-Step Verification enabled — Google only offers app
+   passwords with it on.
+2. Operator visits <https://myaccount.google.com/apppasswords>, creates an app
+   password, and hands you the 16-character value.
+3. `qm setup` values: `SMTP_HOST` is `smtp.gmail.com`, `SMTP_USERNAME` is the
+   full address of the account that minted the app password, `SMTP_PASSWORD` is
+   the app password (spaces optional).
+4. Set `AUTH_EMAIL_FROM` to that same address — Gmail rewrites the From header
+   to the authenticated account, so any other sender silently becomes wrong.
+
+Two limits to raise with the operator: Gmail caps sending at roughly 2,000
+messages a day (a few hundred for free accounts), fine for sign-in links but
+not bulk mail; and a Workspace admin can disable app passwords org-wide, in
+which case the page in step 2 refuses to create one and you need a different
+relay.
+
+### Amazon SES when there is no domain
+
+SES works without owning a domain: verify a single email address instead.
+
+1. In the SES console, under **Identities**, create an email-address identity
+   and click the verification link SES sends to it.
+2. Under **SMTP settings**, create SMTP credentials (an IAM user with a
+   generated SMTP password — not the AWS access key itself).
+3. `qm setup` values: `SMTP_HOST` is the region endpoint (for example
+   `email-smtp.us-east-1.amazonaws.com`), `SMTP_USERNAME` and `SMTP_PASSWORD`
+   are the generated SMTP credentials, and `AUTH_EMAIL_FROM` is the verified
+   address.
+
+New SES accounts start in the sandbox, which only delivers to verified
+addresses. That is enough for a single administrator signing in with the
+verified address; for a whole team, the operator requests production access
+from the SES console (usually granted within a day) or verifies each
+recipient.
+
 ## Who may sign in
 
 Set one of these, or the broker refuses to start:
