@@ -7,7 +7,7 @@ text.  This can be quite informal — just run your idea by us in the same way y
 friend, say, over Slack. If we're aligned on the change, we're happy to burn our tokens
 on the underlying implementation.
 
-Please do not have AI artificially expand or formalize what you'd like to do into a formal proposal.
+Please do not have AI artificially expand what you'd like to do into a formal proposal.
 
 Submit changes as `.txt` or `.md` files to the [`adrs/`](./adrs/) folder.
 
