@@ -116,10 +116,11 @@ and this repository has no production deployment workflow. See
 
 ## Contributing
 
-Issues and pull requests are welcome. `npm run typecheck`, `npm run lint`, and `npm test`
-are the checks to run locally — CI adds the Postgres suites, the CLI and plugin builds,
-and the deployment contracts. Report vulnerabilities privately —
-see [`SECURITY.md`](./SECURITY.md), not a public issue.
+We take contributions as _human-written_ text, not code — see
+[`CONTRIBUTING.md`](./CONTRIBUTING.md). Describe the change you'd like informally in a
+`.txt` or `.md` file in [`adrs/`](./adrs/), and if we're aligned we'll handle the
+implementation. Report vulnerabilities privately — see [`SECURITY.md`](./SECURITY.md),
+not a public issue.
 
 ## Customize your instance
 
