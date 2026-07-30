@@ -102,7 +102,7 @@ export async function flySandboxTokenPreflight(
   step(`Fly sandbox app ${app}: FLY_SANDBOX_API_TOKEN ok`);
 }
 
-export type SmtpTlsMode = "starttls" | "implicit" | "none";
+type SmtpTlsMode = "starttls" | "implicit" | "none";
 
 export interface SmtpVerifyOptions {
   host: string;
