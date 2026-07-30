@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalJson, flyBin, isInvalidSecret, readEnvFile } from "../src/util.ts";
+import { canonicalJson, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
 
 test("managed credential encryption keys require strong material", () => {
   assert.equal(isInvalidSecret("CONNECTOR_SECRET_KEY", "short"), true);
@@ -53,6 +53,55 @@ test("readEnvFile preserves hashes in unquoted values", (t) => {
       ["URL", "https://host/path#fragment"],
     ],
   );
+});
+
+test("writeEnvValue appends a new key with 0600 on a fresh file", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, ".env");
+  writeEnvValue(file, "NEW_KEY", "value-1");
+  assert.equal(readFileSync(file, "utf8"), "NEW_KEY=value-1\n");
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  writeEnvValue(file, "SECOND", "two");
+  assert.equal(readFileSync(file, "utf8"), "NEW_KEY=value-1\nSECOND=two\n");
+});
+
+test("writeEnvValue replaces an existing key in place, preserving order and comments", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, ".env");
+  writeFileSync(file, "# comment\nA=1\nB=old\nC=3\n");
+  writeEnvValue(file, "B", "new#value");
+  assert.equal(readFileSync(file, "utf8"), "# comment\nA=1\nB=new#value\nC=3\n");
+  assert.equal(readEnvFile(file).get("B"), "new#value");
+});
+
+test("writeEnvValue collapses duplicate occurrences into the first", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, ".env");
+  writeFileSync(file, "A=1\nB=first\nC=3\nB=second\nB=third\n");
+  writeEnvValue(file, "B", "only");
+  assert.equal(readFileSync(file, "utf8"), "A=1\nB=only\nC=3\n");
+});
+
+test("writeEnvValue preserves the existing file mode", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, ".env");
+  writeFileSync(file, "A=1\n", { mode: 0o640 });
+  chmodSync(file, 0o640);
+  writeEnvValue(file, "A", "2");
+  assert.equal(statSync(file).mode & 0o777, 0o640);
+  assert.equal(readFileSync(file, "utf8"), "A=2\n");
+});
+
+test("writeEnvValue rejects invalid keys and multi-line values", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, ".env");
+  assert.throws(() => writeEnvValue(file, "BAD KEY", "x"));
+  assert.throws(() => writeEnvValue(file, "GOOD_KEY", "a\nb"));
 });
 
 async function withFakeStdin<T>(fn: (emit: (bytes: Buffer) => void) => Promise<T>): Promise<T> {

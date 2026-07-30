@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { CliError, bold, dim, errMessage, note, red } from "./log.ts";
+import { CliError, bold, dim, errMessage, note, ok, red } from "./log.ts";
 import {
   findConfigPath,
   isModelProvider,
@@ -23,7 +24,7 @@ import { runConformance } from "./commands/conformance.ts";
 import { renderSlackFiles, runOutputs } from "./commands/outputs.ts";
 import { cliVersion } from "./manifest.ts";
 import { renderTerraformVars } from "./terraform.ts";
-import { gitTopLevel } from "./util.ts";
+import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
 
 interface Parsed {
@@ -124,6 +125,9 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   infra delete-task-definitions --yes      delete the stack's AWS ECS task definition revisions
   conformance [dir] [--static]             run static gates and compare the live resolved layer
   secrets push [--from <env-file>]         upload the computed secret set to the target store
+  secrets set <KEY> [<value>]              write one .env value in place (dedupes the key, keeps
+     [--from-file <path>]                  order and file mode); reads stdin or prompts when no
+                                           value is given, so the secret never hits shell history
   status                                   show what's running
   logs [<service>] [-f] [--tail <n>]       tail service logs (omit <service> for all, interleaved)
   down [--purge]                           stop the deployment (--purge drops docker volumes)
@@ -549,7 +553,37 @@ async function dispatch(argv: string[]): Promise<void> {
     }
 
     case "secrets": {
-      if (positionals[0] !== "push") throw new CliError(`usage: ${CLI_NAME} secrets push [--from <env-file>]`);
+      if (positionals[0] === "set") {
+        rejectExtraPositionals(positionals, 3);
+        rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from-file"]);
+        const key = positionals[1];
+        if (!key) {
+          throw new CliError(`usage: ${CLI_NAME} secrets set <KEY> [<value>] [--from-file <path>]`, {
+            clause: "cli.invocation",
+          });
+        }
+        const fromFile = strFlag(flags, "from-file");
+        if (positionals[2] !== undefined && fromFile !== undefined) {
+          throw new CliError(`secrets set takes a value argument or --from-file, not both`, {
+            clause: "cli.invocation",
+          });
+        }
+        const ctx = deployContext(flags);
+        let value = positionals[2];
+        if (value === undefined && fromFile !== undefined) value = readFileSync(fromFile, "utf8");
+        if (value === undefined) value = process.stdin.isTTY ? await promptHidden(key) : await readStdin();
+        value = value.replace(/\r?\n$/, "");
+        if (!value) throw new CliError(`secrets set: no value provided for ${key}`, { clause: "cli.invocation" });
+        const envPath = ctx.envFile ?? join(ctx.configDir, ".env");
+        writeEnvValue(envPath, key, value);
+        ok(`set ${key} in ${envPath}`);
+        return;
+      }
+      if (positionals[0] !== "push") {
+        throw new CliError(
+          `usage: ${CLI_NAME} secrets push [--from <env-file>] | secrets set <KEY> [<value>] [--from-file <path>]`,
+        );
+      }
       rejectExtraPositionals(positionals, 1);
       rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from"]);
       const ctx = deployContext(flags);
@@ -560,6 +594,12 @@ async function dispatch(argv: string[]): Promise<void> {
     default:
       throw new CliError(`unknown command: ${cmd}\n\n${HELP}`);
   }
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 export async function main(argv: string[]): Promise<void> {

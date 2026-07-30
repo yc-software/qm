@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, openSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CliError, errMessage } from "./log.ts";
 
@@ -225,6 +225,35 @@ export function readEnvFile(path: string): Map<string, string> {
     if (isEnvVarName(key)) out.set(key, line.slice(eq + 1));
   }
   return out;
+}
+
+export function writeEnvValue(path: string, key: string, value: string): void {
+  if (!isEnvVarName(key)) throw new CliError(`${JSON.stringify(key)} is not a valid environment variable name`);
+  if (/[\r\n]/.test(value)) throw new CliError(`the value for ${key} must be a single line`);
+  const existing = existsSync(path);
+  const mode = existing ? statSync(path).mode & 0o777 : 0o600;
+  const lines = existing ? readFileSync(path, "utf8").split("\n") : [];
+  if (lines.at(-1) === "") lines.pop();
+  const matches = (line: string): boolean => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return false;
+    const eq = trimmed.indexOf("=");
+    return eq > 0 && trimmed.slice(0, eq).trim() === key;
+  };
+  const entry = `${key}=${value}`;
+  const next: string[] = [];
+  let placed = false;
+  for (const line of lines) {
+    if (!matches(line)) {
+      next.push(line);
+    } else if (!placed) {
+      next.push(entry);
+      placed = true;
+    }
+  }
+  if (!placed) next.push(entry);
+  writeFileSync(path, `${next.join("\n")}\n`, { mode });
+  chmodSync(path, mode);
 }
 
 export function deploymentSecretValue(name: string, fileValue: string | undefined): string | undefined {
