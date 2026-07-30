@@ -118,7 +118,7 @@ function modelOptionFor(value: ModelOptionValue): ModelOption {
   );
 }
 
-function loadStoredFastMode(): boolean {
+function loadStoredFastMode(): boolean | undefined {
   try {
     const stored = localStorage.getItem(FAST_MODE_STORAGE_KEY);
     if (stored === "0") return false;
@@ -126,7 +126,7 @@ function loadStoredFastMode(): boolean {
   } catch {
     void 0;
   }
-  return true;
+  return undefined;
 }
 
 function loadStoredEffort(fallback: EffortLevel): EffortLevel {
@@ -285,7 +285,7 @@ export function composerForm(agent: Agent): TemplateResult {
   const effortAvailable = harnessSupportsEffort(selectedModel.harnessId);
   const fastSupported = harnessSupportsFastMode(selectedModel.harnessId);
   const fastAvailable = fastSupported && modelSupportsFastMode(selectedModel.model.id);
-  const fastOn = fastAvailable && composerState.fastMode;
+  const fastOn = fastAvailable && composerState.fastMode === true;
   const fastCharging = fastModeCharging && fastOn;
   let fastTitle = "Fast mode is only available on Opus models";
   if (fastAvailable) fastTitle = fastOn ? "Fast mode active" : "Fast mode";
@@ -676,7 +676,7 @@ function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
 function settingsControl(agent: Agent, selected: ModelOption, disabled: boolean): TemplateResult {
   const open = composerState.openMenu === "settings";
   const fastAvailable = harnessSupportsFastMode(selected.harnessId) && modelSupportsFastMode(selected.model.id);
-  const fastOn = fastAvailable && composerState.fastMode;
+  const fastOn = fastAvailable && composerState.fastMode === true;
   const summary = `${selected.buttonLabel} · ${effortLabel(composerState.effortLevel)}${fastOn ? " · Fast" : ""}`;
   return html`
     <div class="menu-control settings-control ${open ? "open" : ""}" data-align="right">
@@ -1305,7 +1305,7 @@ function selectEffort(level: EffortLevel, agent: Agent): void {
 function toggleFastMode(agent: Agent): void {
   if (hasUnresolvedApproval() || chatState.resolvingApprovals.size > 0) return;
   if (!modelSupportsFastMode(currentModelOption().model.id)) return;
-  composerState.fastMode = !composerState.fastMode;
+  composerState.fastMode = composerState.fastMode !== true;
   persistPreference(FAST_MODE_STORAGE_KEY, composerState.fastMode ? "1" : "0");
   if (fastModeChargeTimer) {
     clearTimeout(fastModeChargeTimer);

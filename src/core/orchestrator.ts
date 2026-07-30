@@ -12,6 +12,7 @@ import type {
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { turnOriginRequestFields } from "./turn-origin.ts";
+import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { renderGatewayContext } from "./gateway-context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -2032,9 +2033,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? Math.min(requestedTurnWallClockMs, configuredTurnWallClockMs)
               : requestedTurnWallClockMs;
         }
-        let effectiveFastMode = input.fastMode;
-        if (typeof effectiveFastMode !== "boolean" && humanTurn && (await deps.config?.getInteractiveFastModeDurable()))
-          effectiveFastMode = true;
+        const effectiveFastMode = resolveTurnFastMode(
+          input.fastMode,
+          humanTurn,
+          (await deps.config?.getInteractiveFastModeDurable()) === true,
+        );
         const runHarnessTurn = (
           harnessInput: string,
           extras: {

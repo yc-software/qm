@@ -11,6 +11,15 @@ import {
 export const NON_INTERACTIVE_THINKING_LEVEL = "xhigh";
 export const NON_INTERACTIVE_FAST_MODE = false;
 
+export function resolveTurnFastMode(
+  requested: boolean | undefined,
+  humanTurn: boolean,
+  interactiveDefault: boolean,
+): boolean | undefined {
+  if (typeof requested === "boolean") return requested;
+  return humanTurn && interactiveDefault ? true : undefined;
+}
+
 export function turnModelOptions(input: { triggered?: boolean; thinkingLevel?: string; fastMode?: boolean }): {
   thinkingLevel?: string;
   fastMode?: boolean;

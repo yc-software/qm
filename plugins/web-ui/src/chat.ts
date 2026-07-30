@@ -346,7 +346,9 @@ function currentTurnOptions(): TurnOptions {
   const { harnessId: harness } = currentModelOption();
   return {
     ...(harnessSupportsEffort(harness) ? { effortLevel: composerState.effortLevel } : {}),
-    ...(harnessSupportsFastMode(harness) ? { fastMode: composerState.fastMode } : {}),
+    ...(harnessSupportsFastMode(harness) && typeof composerState.fastMode === "boolean"
+      ? { fastMode: composerState.fastMode }
+      : {}),
     harness,
     scopeId: chatState.scopeId,
     channelName: chatState.contextName,
