@@ -386,6 +386,21 @@ test("a rejected rotation preserves the prior key and disabling suppresses envir
   }
 });
 
+test("surface-config reports whether any model provider is configured", async () => {
+  const srv = start();
+  try {
+    const before = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(before.status, 200);
+    assert.equal(((await before.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, false);
+
+    await srv.built.modelCredentials.set("anthropic", "working-admin-key", "admin-alice@default-org");
+    const after = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(((await after.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("admin model credentials survive a second app instance on the same durable store", async () => {
   const backing = createMemoryMap<StoredModelCredential>();
   const first = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });

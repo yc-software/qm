@@ -71,10 +71,19 @@ const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USE
 const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED === "1";
 const NEUTRAL_ACCENT = "#4f46e5";
 let brandAccent = NEUTRAL_ACCENT;
-let brandAccentNextAt = 0;
-async function refreshBrandAccent(): Promise<void> {
-  if (Date.now() < brandAccentNextAt) return;
-  brandAccentNextAt = Date.now() + 5_000;
+let modelProviderConfigured: boolean | undefined;
+let surfaceConfigNextAt = 0;
+let surfaceConfigInflight: Promise<void> | null = null;
+function refreshSurfaceConfig(): Promise<void> {
+  if (Date.now() >= surfaceConfigNextAt) {
+    surfaceConfigNextAt = Date.now() + 5_000;
+    surfaceConfigInflight = fetchSurfaceConfig().finally(() => {
+      surfaceConfigInflight = null;
+    });
+  }
+  return surfaceConfigInflight ?? Promise.resolve();
+}
+async function fetchSurfaceConfig(): Promise<void> {
   try {
     const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
     const r = await fetch(`${CORE}${path}`, {
@@ -82,9 +91,11 @@ async function refreshBrandAccent(): Promise<void> {
       signal: AbortSignal.timeout(2_000),
     });
     if (r.ok) {
-      const b = ((await r.json()) as { branding?: { accent?: unknown } }).branding;
-      brandAccent = typeof b?.accent === "string" ? b.accent : NEUTRAL_ACCENT;
-      brandAccentNextAt = Date.now() + 30_000;
+      const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
+      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
+      modelProviderConfigured =
+        typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
+      surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
     }
   } catch {
     void 0;
@@ -447,6 +458,18 @@ export function nonAdminDeniedHtml(o: { sub: string; org: string }): string {
   });
 }
 
+export function notConfiguredHtml(): string {
+  return cardPage({
+    title: "Not set up yet",
+    heading: "This deployment isn't set up yet",
+    msg: "An admin still needs to finish setup by adding a model API key. Until then the assistant can't answer.",
+    icon: ALERT_ICON,
+    warn: true,
+    actions: `<a class="btn primary" href="/">Try again</a>`,
+    help: "Ask your admin to complete onboarding in the Admin area.",
+  });
+}
+
 export function adminUnavailableHtml(): string {
   return cardPage({
     title: "Admin temporarily unavailable",
@@ -730,7 +753,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
 
-  void refreshBrandAccent();
+  void refreshSurfaceConfig();
 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
 
@@ -934,6 +957,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return sendHtml(res, 403, page);
       }
       return json(res, 403, { error: "forbidden", message: "admin access required" });
+    }
+  }
+
+  if (key === "web-ui" && method === "GET" && wantsHtml(req)) {
+    await refreshSurfaceConfig();
+    if (modelProviderConfigured === false) {
+      if (await isAdmin(session.sub)) {
+        res.writeHead(302, { location: "/admin/onboarding", "cache-control": "no-store" });
+        return void res.end();
+      }
+      return sendHtml(res, 503, notConfiguredHtml());
     }
   }
 
