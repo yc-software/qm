@@ -179,6 +179,26 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     for (const line of ["# OIDC_CLIENT_ID=", "# OIDC_CLIENT_SECRET=", "# PORTAL_EXPECTED_TEAM_ID="]) {
       assert.ok(env.split("\n").includes(line), `external-IdP secret ${line} stays documented but unrequired`);
     }
+    assert.ok(!env.includes("SMTP_"), "the unselected smtp transport's keys stay out of .env.example");
+    assert.ok(!readFileSync(join(dir, ".env"), "utf8").includes("SMTP_"), "and out of .env");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("init --email-transport smtp scaffolds smtp keys only and a matching config", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-init-smtp-"));
+  try {
+    quiet(() => runInit({ dir, org: "acme", target: "fly", emailTransport: "smtp" }));
+    const { config } = loadConfigInDir(dir);
+    assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "smtp");
+    const env = readFileSync(join(dir, ".env.example"), "utf8");
+    assert.equal(env, renderEnvExample(config));
+    for (const line of ["SMTP_HOST=", "SMTP_USERNAME=", "SMTP_PASSWORD="]) {
+      assert.ok(env.split("\n").includes(line), `.env.example should require ${line}`);
+    }
+    assert.ok(!env.includes("RESEND_API_KEY"), "the unselected resend transport's key stays out of .env.example");
+    assert.ok(!readFileSync(join(dir, ".env"), "utf8").includes("RESEND_API_KEY"), "and out of .env");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

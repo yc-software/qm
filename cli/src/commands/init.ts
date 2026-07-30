@@ -7,6 +7,7 @@ import {
   configPathInDir,
   loadConfigAt,
   validOrgId,
+  type EmailTransport,
   type ModelProvider,
   type Target,
   type QmConfig,
@@ -256,7 +257,13 @@ function scaffoldDeploymentSkill(dir: string): void {
   }
 }
 
-export function runInit(opts: { org?: string; target?: Target; modelProvider?: ModelProvider; dir?: string }): void {
+export function runInit(opts: {
+  org?: string;
+  target?: Target;
+  modelProvider?: ModelProvider;
+  emailTransport?: EmailTransport;
+  dir?: string;
+}): void {
   assertNodeEngine();
   const orgId = opts.org ?? "default-org";
   if (!validOrgId(orgId)) die(`--org must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
@@ -273,8 +280,9 @@ export function runInit(opts: { org?: string; target?: Target; modelProvider?: M
 
   const target: Target = opts.target ?? "docker";
   const modelProvider: ModelProvider = opts.modelProvider ?? "anthropic";
+  const emailTransport: EmailTransport = opts.emailTransport ?? "resend";
   const provider = hostingProvider(target);
-  writeFileSync(configPath, provider.scaffold.renderConfig(orgId, modelProvider));
+  writeFileSync(configPath, provider.scaffold.renderConfig(orgId, modelProvider, emailTransport));
   ok(`wrote ${CONFIG_FILENAME} (orgId=${orgId}, target=${target}, modelProvider=${modelProvider})`);
 
   const config = loadConfigAt(configPath).config;

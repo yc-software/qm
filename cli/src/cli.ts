@@ -3,11 +3,14 @@ import { dirname, join, resolve } from "node:path";
 import { CliError, bold, dim, errMessage, note, red } from "./log.ts";
 import {
   findConfigPath,
+  isEmailTransport,
   isModelProvider,
   loadConfigAt,
   loadConfigInDir,
   readConfigOrgId,
+  EMAIL_TRANSPORTS,
   MODEL_PROVIDERS,
+  type EmailTransport,
   type ModelProvider,
 } from "./config.ts";
 import { HOSTING_PROVIDER_IDS, hostingProviderChoices, isTarget, type Target } from "./providers.ts";
@@ -87,6 +90,14 @@ function modelProviderFlag(flags: Flags): ModelProvider | undefined {
   return provider;
 }
 
+function emailTransportFlag(flags: Flags): EmailTransport | undefined {
+  const transport = strFlag(flags, "email-transport");
+  if (transport !== undefined && !isEmailTransport(transport)) {
+    throw new CliError(`--email-transport must be ${EMAIL_TRANSPORTS.join(" | ")}`, { clause: "cli.invocation" });
+  }
+  return transport;
+}
+
 function version(): string {
   return cliVersion();
 }
@@ -102,9 +113,11 @@ ${bold("USAGE")}
 ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   init [path] [--org <id>] [--target ${HOSTING_PROVIDER_IDS.join("|")}]
        [--model-provider ${MODEL_PROVIDERS.join("|")}]
+       [--email-transport ${EMAIL_TRANSPORTS.join("|")}]
                                            scaffold a deployment directory (the base model
                                            provider defaults to anthropic; its API key is a
-                                           required secret)
+                                           required secret; sign-in emails default to resend,
+                                           and only the chosen transport's keys are scaffolded)
   setup [path]                             interactive wizard: scaffold if needed, then walk the
                                            missing secrets with per-provider instructions
   up                                       build images and bring the deployment up
@@ -237,10 +250,11 @@ async function dispatch(argv: string[]): Promise<void> {
     }
 
     case "init": {
-      rejectUnknownFlags(flags, ["org", "target", "model-provider"]);
+      rejectUnknownFlags(flags, ["org", "target", "model-provider", "email-transport"]);
       rejectExtraPositionals(positionals, 1);
       const target = targetFlag(flags);
       const modelProvider = modelProviderFlag(flags);
+      const emailTransport = emailTransportFlag(flags);
       const org = strFlag(flags, "org");
       const dir = positionals[0] !== undefined ? resolve(positionals[0]) : resolve(process.cwd());
       runInit({
@@ -248,6 +262,7 @@ async function dispatch(argv: string[]): Promise<void> {
         ...(org ? { org } : {}),
         ...(target ? { target } : {}),
         ...(modelProvider ? { modelProvider } : {}),
+        ...(emailTransport ? { emailTransport } : {}),
       });
       return;
     }

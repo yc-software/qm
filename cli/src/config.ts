@@ -122,6 +122,12 @@ export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly s
 export const isModelProvider = (value: unknown): value is ModelProvider =>
   typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
 
+export const EMAIL_TRANSPORTS = ["resend", "smtp"] as const;
+export type EmailTransport = (typeof EMAIL_TRANSPORTS)[number];
+
+export const isEmailTransport = (value: unknown): value is EmailTransport =>
+  typeof value === "string" && (EMAIL_TRANSPORTS as readonly string[]).includes(value);
+
 export interface QmConfig {
   contract: typeof CONTRACT_VERSION;
   orgId: string;
@@ -761,8 +767,10 @@ function validateBrokerTrust(config: QmConfig, path: string, secrets?: ReadonlyM
     );
   }
   const transport = authEnv.AUTH_EMAIL_TRANSPORT?.trim();
-  if (transport !== "resend" && transport !== "smtp") {
-    throw new CliError(`${path}: env.auth.AUTH_EMAIL_TRANSPORT must be "resend" or "smtp"`);
+  if (!isEmailTransport(transport)) {
+    throw new CliError(
+      `${path}: env.auth.AUTH_EMAIL_TRANSPORT must be ${EMAIL_TRANSPORTS.map((t) => JSON.stringify(t)).join(" or ")}`,
+    );
   }
   const domain = authEnv.AUTH_ALLOWED_EMAIL_DOMAIN?.trim();
   if (

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import type { ModelProvider, QmConfig } from "./config.ts";
+import type { EmailTransport, ModelProvider, QmConfig } from "./config.ts";
 import type { Target } from "./providers.ts";
 import { declaredVariables, terraformVars } from "./terraform.ts";
 
@@ -10,7 +10,7 @@ interface ScaffoldFile {
 }
 
 export interface ProviderScaffold {
-  renderConfig(orgId: string, modelProvider: ModelProvider): string;
+  renderConfig(orgId: string, modelProvider: ModelProvider, emailTransport: EmailTransport): string;
   ignores: readonly string[];
   agentsAppendix: string;
   files(config: QmConfig): ScaffoldFile[];
@@ -170,7 +170,7 @@ export const dockerScaffold: ProviderScaffold = {
 };
 
 export const flyScaffold: ProviderScaffold = {
-  renderConfig: (orgId, modelProvider) =>
+  renderConfig: (orgId, modelProvider, emailTransport) =>
     renderConfig(orgId, {
       target: "fly",
       modelProvider,
@@ -184,7 +184,7 @@ export const flyScaffold: ProviderScaffold = {
   "flyOrg": "personal",
 `,
       services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
-      env: `{ "core": { "HARNESS": "pi", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
+      env: `{ "core": { "HARNESS": "pi", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
   // The initial admin seed is kept in the provider secret store, never in config.
@@ -204,7 +204,7 @@ export const flyScaffold: ProviderScaffold = {
 };
 
 export const awsScaffold: ProviderScaffold = {
-  renderConfig: (orgId, modelProvider) => {
+  renderConfig: (orgId, modelProvider, emailTransport) => {
     const cluster = clusterName(orgId);
     const services = Object.fromEntries(
       [
@@ -242,7 +242,7 @@ export const awsScaffold: ProviderScaffold = {
   },
 `,
       services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
-      env: `{ "core": { "HARNESS": "pi", "AWS_DEPLOY_IMAGE": ${JSON.stringify(`${cluster}-sandbox`)}, "AWS_PUBLIC_ORIGIN_URL": "http://replace-with-alb-hostname" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
+      env: `{ "core": { "HARNESS": "pi", "AWS_DEPLOY_IMAGE": ${JSON.stringify(`${cluster}-sandbox`)}, "AWS_PUBLIC_ORIGIN_URL": "http://replace-with-alb-hostname" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
   // The initial admin seed is kept in the provider secret store, never in config.

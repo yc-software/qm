@@ -544,6 +544,15 @@ export function secretsForService(
   return computedSecrets(config).filter((secret) => secretDestinations(secret, pluginNames).has(service));
 }
 
+function requiresOtherEmailTransport(config: QmConfig, condition: SecretCondition): boolean {
+  if (condition.kind === "all") return condition.conditions.some((nested) => requiresOtherEmailTransport(config, nested));
+  if (condition.kind === "any") return condition.conditions.every((nested) => requiresOtherEmailTransport(config, nested));
+  if (condition.kind !== "env-equals" || condition.service !== "auth" || condition.name !== "AUTH_EMAIL_TRANSPORT")
+    return false;
+  const configured = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim();
+  return configured !== undefined && configured !== "" && configured !== condition.value;
+}
+
 function conditionClause(condition: SecretCondition): string {
   if (condition.kind === "service-enabled") return `the ${condition.service} service is enabled`;
   if (condition.kind === "service-absent") return `the ${condition.service} service is not enabled`;
@@ -585,7 +594,10 @@ export function renderEnvExample(config: QmConfig): string {
   }
   const activeNames = new Set(active.map((secret) => secret.name));
   const inactive = FIRST_PARTY_SECRET_SPECS.filter(
-    (spec, i, all) => !activeNames.has(spec.name) && all.findIndex((other) => other.name === spec.name) === i,
+    (spec, i, all) =>
+      !activeNames.has(spec.name) &&
+      all.findIndex((other) => other.name === spec.name) === i &&
+      !(typeof spec.required === "object" && requiresOtherEmailTransport(config, spec.required.when)),
   );
   for (const spec of inactive) {
     const clauses = [
