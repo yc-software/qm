@@ -215,6 +215,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
     service === "core"
       ? {
           ...(config.model ? { PI_MODEL: config.model } : {}),
+          ...(config.modelProvider ? { MODEL_PROVIDER: config.modelProvider } : {}),
           ...virtualServiceEnv(config.services, config.env),
         }
       : {};

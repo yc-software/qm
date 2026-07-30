@@ -104,6 +104,25 @@ export function awsWorkloadArchitecture(config: QmConfig, workload: string): "ar
   return service.architecture ?? "arm64";
 }
 
+/**
+ * The vendor supplying the deployment's base model. Selecting one makes that vendor's
+ * API key a required deployment secret, so `qm setup` collects it and `qm up` refuses
+ * to deploy a stack that cannot run a single agent turn. Leaving it unset preserves the
+ * older flow, where an administrator supplies the key from the Admin page after deploy.
+ */
+export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
+export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
+
+/** The API key each provider's base model is billed against. */
+export const MODEL_PROVIDER_KEYS: Readonly<Record<ModelProvider, string>> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+};
+
+export const isModelProvider = (value: unknown): value is ModelProvider =>
+  typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
+
 export interface QmConfig {
   contract: typeof CONTRACT_VERSION;
   orgId: string;
@@ -111,6 +130,7 @@ export interface QmConfig {
   apiUrl?: string;
   target: Target;
   model?: string;
+  modelProvider?: ModelProvider;
   basePort?: number;
   services: DeclaredServiceName[];
   plugins: PluginEntry[];
@@ -625,6 +645,14 @@ function validate(raw: unknown, path: string): QmConfig {
   if (typeof apiUrl === "string") out.apiUrl = apiUrl.replace(/\/$/, "");
   if (sandbox) out.sandbox = sandbox;
   if (typeof o["model"] === "string") out.model = o["model"];
+  if (o["modelProvider"] !== undefined) {
+    if (!isModelProvider(o["modelProvider"])) {
+      throw new CliError(
+        `${path}: "modelProvider" must be one of ${MODEL_PROVIDERS.join(", ")} — it selects which provider key the deployment requires; omit it to supply the base model key from the Admin page instead`,
+      );
+    }
+    out.modelProvider = o["modelProvider"];
+  }
   if (o["basePort"] !== undefined) {
     const bp = o["basePort"];
     if (typeof bp !== "number" || !Number.isInteger(bp) || bp <= 0) {

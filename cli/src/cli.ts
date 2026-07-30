@@ -1,7 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { CliError, bold, dim, errMessage, note, red } from "./log.ts";
-import { findConfigPath, loadConfigAt, loadConfigInDir, readConfigOrgId } from "./config.ts";
+import {
+  findConfigPath,
+  isModelProvider,
+  loadConfigAt,
+  loadConfigInDir,
+  readConfigOrgId,
+  MODEL_PROVIDERS,
+  type ModelProvider,
+} from "./config.ts";
 import { HOSTING_PROVIDER_IDS, hostingProviderChoices, isTarget, type Target } from "./providers.ts";
 import { type LogOpts } from "./services.ts";
 import { runInit } from "./commands/init.ts";
@@ -70,6 +78,14 @@ function targetFlag(flags: Flags): Target | undefined {
   return target;
 }
 
+function modelProviderFlag(flags: Flags): ModelProvider | undefined {
+  const provider = strFlag(flags, "model-provider");
+  if (provider !== undefined && !isModelProvider(provider)) {
+    throw new CliError(`--model-provider must be ${MODEL_PROVIDERS.join(" | ")}`, { clause: "cli.invocation" });
+  }
+  return provider;
+}
+
 function version(): string {
   return cliVersion();
 }
@@ -84,7 +100,10 @@ ${bold("USAGE")}
 
 ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   init [path] [--org <id>] [--target ${HOSTING_PROVIDER_IDS.join("|")}]
-                                           scaffold a deployment directory
+       [--model-provider ${MODEL_PROVIDERS.join("|")}]
+                                           scaffold a deployment directory (the base model
+                                           provider defaults to anthropic; its API key is a
+                                           required secret)
   setup [path]                             interactive wizard: scaffold if needed, then walk the
                                            missing secrets with per-provider instructions
   up                                       build images and bring the deployment up
@@ -216,12 +235,18 @@ async function dispatch(argv: string[]): Promise<void> {
     }
 
     case "init": {
-      rejectUnknownFlags(flags, ["org", "target"]);
+      rejectUnknownFlags(flags, ["org", "target", "model-provider"]);
       rejectExtraPositionals(positionals, 1);
       const target = targetFlag(flags);
+      const modelProvider = modelProviderFlag(flags);
       const org = strFlag(flags, "org");
       const dir = positionals[0] !== undefined ? resolve(positionals[0]) : resolve(process.cwd());
-      runInit({ dir, ...(org ? { org } : {}), ...(target ? { target } : {}) });
+      runInit({
+        dir,
+        ...(org ? { org } : {}),
+        ...(target ? { target } : {}),
+        ...(modelProvider ? { modelProvider } : {}),
+      });
       return;
     }
 

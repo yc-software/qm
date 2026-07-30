@@ -39,6 +39,29 @@ test("AWS deployment app domains reject a missing or placeholder gate secret", (
   );
 });
 
+test("a declared base model provider is enforced at boot, not just at deploy time", () => {
+  for (const [provider, key] of [
+    ["anthropic", "ANTHROPIC_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["openrouter", "OPENROUTER_API_KEY"],
+  ] as const) {
+    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider } as NodeJS.ProcessEnv), [key]);
+    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider, [key]: "real-key" } as NodeJS.ProcessEnv), []);
+    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider, [key]: "replace-me" } as NodeJS.ProcessEnv), [
+      key,
+    ]);
+  }
+  assert.deepEqual(validateCoreSecretEnv({} as NodeJS.ProcessEnv), [], "no provider declared, nothing required");
+});
+
+test("an OpenAI base model on the Codex harness reports its one missing key once", () => {
+  assert.deepEqual(
+    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", HARNESS: "codex" } as NodeJS.ProcessEnv),
+    ["OPENAI_API_KEY"],
+    "two rules wanting the same key must not name it twice",
+  );
+});
+
 test("production rejects weak encryption key material for managed credentials", () => {
   const strong = "x".repeat(32);
   const env = {

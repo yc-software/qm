@@ -20,8 +20,12 @@ it in place. If the repository has not been initialized, collect:
   workflow; never present it as the recommended path for a real deployment;
 - the first administrator's verified work email;
 - model provider: Anthropic, OpenAI, or OpenRouter (one key that routes to
-  many models). The key is entered later on the Admin page, so "decide later"
-  is acceptable;
+  many models). This is a deployment choice, not a post-deploy one: it becomes
+  `modelProvider` in `qm.config.jsonc`, which makes that provider's API key a
+  required secret. Collect the key in the same pass as the other credentials —
+  a deployment that cannot answer one message is not finished. An operator who
+  genuinely wants to defer omits `modelProvider` and adds the key from the
+  Admin page later, but do not offer that as the default;
 - model;
 - region and provider account or organization;
 - whether the provider hostname is acceptable;
@@ -51,9 +55,13 @@ and the derived slug, install an exact CLI version, and initialize its root:
 
 ```bash
 npm exec --yes --package=@yc-software/qm@<exact-version> -- \
-  qm init . --org <slug> --target <fly-or-aws>
+  qm init . --org <slug> --target <fly-or-aws> --model-provider <provider>
 npm install
 ```
+
+`--model-provider` takes `anthropic`, `openai`, or `openrouter` and defaults to
+`anthropic`. It writes `modelProvider` into the scaffolded config, which is what
+promotes that provider's key from an optional fallback to a required secret.
 
 For an already-initialized clone, install reproducibly. Use `npm ci` when
 `package-lock.json` exists; otherwise use `npm install` to create it:
@@ -73,7 +81,7 @@ git check-ignore --quiet .env
 Never print, paste into chat, or commit `.env`. Never initialize over an
 existing deployment config.
 
-## 3. Configure the administrator and sign-in
+## 3. Configure the administrator, sign-in, and the base model
 
 Set the exact lowercased administrator email in `.env` as
 `ADMIN_GRANTS=<email>:org_admin`.
@@ -111,6 +119,21 @@ endpoints and the email gate in `env.portal`. For Google Workspace:
 }
 ```
 
+The base model needs a key in the same pass. `modelProvider` decides which one
+`qm setup` asks for — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
+`OPENROUTER_API_KEY` — and the wizard prints where to mint it. The operator owns
+the billing relationship, so they create the key; you only place it. It is a
+required secret, so `qm doctor` calls the provider to prove the key is accepted
+and `qm up` refuses a deployment that has none. Treat a rejected key exactly like
+a rejected email credential: stop and get a working one rather than deploying a
+stack that greets the administrator and then fails their first message.
+
+An operator may still prefer to hold the key centrally and rotate it from the
+Admin page. That is a deliberate choice, not the default: drop `modelProvider`
+from `qm.config.jsonc`, note in the handoff that the deployment has no base model
+yet, and finish by walking them through Model provider on the Admin page. Never
+leave a deployment modelless without saying so.
+
 Read exactly one provider reference now and follow its provider-specific
 preflight and setup order:
 
@@ -127,10 +150,17 @@ npm exec qm -- conformance
 npm exec qm -- outputs --json
 ```
 
-Open `adminOnboardingUrl` from the JSON output. In Model provider, enter and
-validate the selected provider key. The write-only Admin surface stores it in
-durable encrypted storage; do not put the key in `.env`, config, chat, or
-terminal output.
+Open `adminOnboardingUrl` from the JSON output and confirm Model provider
+already reports the deployment's base model. It does when `modelProvider` is
+set: the key travelled with the rest of the deployment secrets, so there is
+nothing to paste here. Enter and validate a key on that page only when the
+operator chose to defer, or when they are replacing the deployment key with one
+they would rather rotate from Admin — the write-only surface stores it in
+durable encrypted storage and takes precedence over the deployment key.
+
+Never paste any provider key into chat or terminal output. `.env` is the one
+place a deployment key belongs, and `qm secrets push` moves it without printing
+it.
 
 Open `webUiUrl`, sign in as the seeded administrator, send a message, and
 receive a real model response. Ask the agent to create a fresh UUID in
@@ -168,11 +198,14 @@ Return:
 - the web, Admin onboarding, Admin connectors, and user connections URLs;
 - Slack app and test-channel links when enabled;
 - provider, account or organization, and region;
+- the base model provider and where its key lives — the deployment `.env` or the
+  Admin page — so the operator knows what to rotate and where;
 - pass/fail for health, sign-in, web chat, agent-computer proof, connector
   visibility, user OAuth, Slack reply, live check, conformance, and an
   idempotent deployment rerun;
 - `npm exec qm -- status`, logs, rollback, and teardown commands;
-- recurring cost or manual work still owned by the operator.
+- recurring cost or manual work still owned by the operator, including model
+  usage billed directly by the provider.
 
 Do not claim completion with a missing test or placeholder. If blocked, leave
 the repository resumable and name the exact next human action without exposing

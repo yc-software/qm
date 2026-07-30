@@ -58,17 +58,25 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.equal(config.target, "docker");
     assert.equal(config.publicUrl, "http://localhost:8082");
     assert.equal(config.env.core?.HARNESS, "pi");
+    assert.equal(config.modelProvider, "anthropic", "init names a base model provider by default");
     assert.deepEqual(config.sandbox, { app: "acme-sandboxes" });
 
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     assert.equal(env, renderEnvExample(config), ".env.example is exactly renderEnvExample output");
-    for (const line of ["CORE_SIGNING_SECRET=", "SKILL_SIGNING_SECRET="]) {
+    // The scaffold names anthropic as the base model provider, so its key is required
+    // rather than deferred to Admin; the providers not selected stay optional.
+    for (const line of ["CORE_SIGNING_SECRET=", "SKILL_SIGNING_SECRET=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line}`);
     }
-    for (const line of ["# ANTHROPIC_API_KEY=  # optional", "# OPENROUTER_API_KEY=  # optional"]) {
+    for (const line of ["# OPENROUTER_API_KEY=  # optional"]) {
       assert.ok(env.split("\n").includes(line), `.env.example should offer ${line}`);
     }
-    for (const line of ['# Needed when env.core.HARNESS is "codex".', "# OPENAI_API_KEY="]) {
+    // OPENAI_API_KEY answers to two independent rules; the catalog lists both so neither
+    // route to requiring it is hidden behind the other.
+    for (const line of [
+      '# Needed when env.core.HARNESS is "codex" or modelProvider is "openai".',
+      "# OPENAI_API_KEY=",
+    ]) {
       assert.ok(env.split("\n").includes(line), `.env.example should defer ${line}`);
     }
     assert.ok(env.includes("# Generate with: openssl rand -hex 32"), "mintable secrets carry their generation command");
@@ -155,11 +163,11 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
       "AUTH_EMAIL_FROM=",
       "RESEND_API_KEY=",
       "PORTAL_SESSION_SECRET=",
+      "ANTHROPIC_API_KEY=",
     ]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line} for the fly scaffold`);
     }
     for (const line of [
-      "# ANTHROPIC_API_KEY=  # optional",
       "# OPENROUTER_API_KEY=  # optional",
       "# SLACK_APP_TOKEN=  # optional",
       "# SLACK_BOT_TOKEN=  # optional",
@@ -239,11 +247,11 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
       "AUTH_ALLOWED_EMAILS=",
       "AUTH_EMAIL_FROM=",
       "RESEND_API_KEY=",
+      "ANTHROPIC_API_KEY=",
     ]) {
       assert.ok(env.includes(name), `hosted AWS scaffold requires ${name}`);
     }
     for (const name of [
-      "# ANTHROPIC_API_KEY=  # optional",
       "# OPENROUTER_API_KEY=  # optional",
       "# SLACK_BOT_TOKEN=  # optional",
       "# SLACK_APP_TOKEN=  # optional",

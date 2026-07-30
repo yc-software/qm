@@ -180,7 +180,13 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
   const base = readFileSync(existsSync(nested) ? nested : join(ctx.templateRoot, `${service}.toml`), "utf8");
   const sandboxEnv = service === "core" ? sandboxCoreEnv(ctx.config).env : {};
   const virtualEnv = service === "core" ? virtualServiceEnv(ctx.config.services, ctx.config.env) : {};
-  const modelEnv: Record<string, string> = service === "core" && ctx.config.model ? { PI_MODEL: ctx.config.model } : {};
+  const modelEnv: Record<string, string> =
+    service === "core"
+      ? {
+          ...(ctx.config.model ? { PI_MODEL: ctx.config.model } : {}),
+          ...(ctx.config.modelProvider ? { MODEL_PROVIDER: ctx.config.modelProvider } : {}),
+        }
+      : {};
   const configuredEnv = { ...ctx.config.env[service] };
   if (service === "core") {
     delete configuredEnv.FLY_ORG;

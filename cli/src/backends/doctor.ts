@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { validatePortalTrust, type QmConfig } from "../config.ts";
+import { MODEL_PROVIDER_KEYS, validatePortalTrust, type ModelProvider, type QmConfig } from "../config.ts";
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
 import { computedSecrets } from "../secrets.ts";
@@ -189,6 +189,57 @@ export async function doctorCommon(
     );
   }
   if (config.services.includes("auth")) await authBrokerCheck(config, secrets, opts.requiredSecretValues === true);
+  await baseModelCheck(config, secrets);
+}
+
+/**
+ * Prove the base-model key is accepted before the deployment is called finished. The Admin
+ * page validates a key on entry; a deployment that ships its key from `.env` gets no such
+ * feedback, and an unusable key would otherwise surface as a failed first chat message.
+ */
+async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): Promise<void> {
+  const provider = config.modelProvider;
+  if (!provider) {
+    step("base model: no modelProvider set — an administrator supplies the key from the Admin page");
+    return;
+  }
+  const name = MODEL_PROVIDER_KEYS[provider];
+  const key = deploymentSecretValue(name, secrets.get(name));
+  if (!key) {
+    warn(`${name} is not available locally — skipping the live ${provider} check`);
+    return;
+  }
+  await modelProviderCheck(provider, key);
+  step(`base model provider ${provider}: ${name} accepted`);
+}
+
+const MODEL_PROVIDER_PROBES: Readonly<
+  Record<ModelProvider, { url: string; headers: (key: string) => Record<string, string> }>
+> = {
+  anthropic: {
+    url: "https://api.anthropic.com/v1/models?limit=1",
+    headers: (key) => ({ "x-api-key": key, "anthropic-version": "2023-06-01" }),
+  },
+  openai: { url: "https://api.openai.com/v1/models", headers: (key) => ({ authorization: `Bearer ${key}` }) },
+  openrouter: { url: "https://openrouter.ai/api/v1/key", headers: (key) => ({ authorization: `Bearer ${key}` }) },
+};
+
+async function modelProviderCheck(provider: ModelProvider, apiKey: string): Promise<void> {
+  const probe = MODEL_PROVIDER_PROBES[provider];
+  let res: Response;
+  try {
+    res = await fetch(probe.url, { headers: probe.headers(apiKey), signal: AbortSignal.timeout(10_000) });
+  } catch (e) {
+    throw new CliError(
+      `could not reach the ${provider} API: ${errMessage(e)} — check network access (and any proxy) and retry`,
+    );
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new CliError(
+      `${provider} rejected ${MODEL_PROVIDER_KEYS[provider]} — the deployment would start but could not serve a single agent turn`,
+    );
+  }
+  if (!res.ok) throw new CliError(`the ${provider} API returned HTTP ${res.status}; retry when it recovers`);
 }
 
 async function resendCheck(apiKey: string): Promise<void> {

@@ -2,7 +2,15 @@ import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { CONFIG_FILENAME, configPathInDir, loadConfigAt, validOrgId, type Target, type QmConfig } from "../config.ts";
+import {
+  CONFIG_FILENAME,
+  configPathInDir,
+  loadConfigAt,
+  validOrgId,
+  type ModelProvider,
+  type Target,
+  type QmConfig,
+} from "../config.ts";
 import { die, note, ok, warn } from "../log.ts";
 import { cliPackageName, cliVersion } from "../manifest.ts";
 import { computedSecrets, renderEnvExample } from "../secrets.ts";
@@ -246,7 +254,7 @@ function scaffoldDeploymentSkill(dir: string): void {
   }
 }
 
-export function runInit(opts: { org?: string; target?: Target; dir?: string }): void {
+export function runInit(opts: { org?: string; target?: Target; modelProvider?: ModelProvider; dir?: string }): void {
   const orgId = opts.org ?? "default-org";
   if (!validOrgId(orgId)) die(`--org must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
   const dir = opts.dir ?? process.cwd();
@@ -261,9 +269,10 @@ export function runInit(opts: { org?: string; target?: Target; dir?: string }): 
   }
 
   const target: Target = opts.target ?? "docker";
+  const modelProvider: ModelProvider = opts.modelProvider ?? "anthropic";
   const provider = hostingProvider(target);
-  writeFileSync(configPath, provider.scaffold.renderConfig(orgId));
-  ok(`wrote ${CONFIG_FILENAME} (orgId=${orgId}, target=${target})`);
+  writeFileSync(configPath, provider.scaffold.renderConfig(orgId, modelProvider));
+  ok(`wrote ${CONFIG_FILENAME} (orgId=${orgId}, target=${target}, modelProvider=${modelProvider})`);
 
   const config = loadConfigAt(configPath).config;
   writePackage(dir, preparedPackage);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import type { QmConfig } from "./config.ts";
+import type { ModelProvider, QmConfig } from "./config.ts";
 import type { Target } from "./providers.ts";
 import { declaredVariables, terraformVars } from "./terraform.ts";
 
@@ -10,7 +10,7 @@ interface ScaffoldFile {
 }
 
 export interface ProviderScaffold {
-  renderConfig(orgId: string): string;
+  renderConfig(orgId: string, modelProvider: ModelProvider): string;
   ignores: readonly string[];
   agentsAppendix: string;
   files(config: QmConfig): ScaffoldFile[];
@@ -21,6 +21,7 @@ export interface ProviderScaffold {
 
 interface ConfigValues {
   target: Target;
+  modelProvider: ModelProvider;
   publicUrl: string;
   providerFields: string;
   services: string[];
@@ -43,6 +44,18 @@ function renderConfig(orgId: string, values: ConfigValues): string {
   // Where to deploy: "docker" runs local containers, "fly" deploys Fly apps,
   // and "aws" runs the control plane on ECS and agent computers on Lambda MicroVMs.
   "target": ${JSON.stringify(values.target)},
+
+  // The vendor supplying the base model: "anthropic", "openai", or "openrouter"
+  // (one key, many models). Naming one makes that vendor's API key a required
+  // deployment secret: \`qm setup\` collects it, \`qm doctor\` proves the provider
+  // accepts it, and \`qm up\` refuses a stack that cannot serve an agent turn.
+  // Delete this line to leave the base model unset and have an administrator add
+  // the key from the Admin page after deploy instead.
+  "modelProvider": ${JSON.stringify(values.modelProvider)},
+
+  // Optional base model id, passed to the harness (e.g. "claude-opus-4-6").
+  // Omit it to use the harness default for the provider above.
+  // "model": "",
 ${values.providerFields}
   // First-party services to run. The full set: "core" (the agent runtime and API,
   // always required), "slack" (the Slack surface, runs inside the core process),
@@ -59,9 +72,9 @@ ${values.providerFields}
   // Extra directories of SKILL.md files, mounted into the agent.
   "skills": [],
 
-  // Non-secret env overrides, per service. HARNESS "pi" runs real agent turns;
-  // after deployment, an administrator adds its model provider key in Admin.
-  // "mock" runs the whole stack with fake turns and no model calls.
+  // Non-secret env overrides, per service. HARNESS "pi" runs real agent turns
+  // against the base model selected by "modelProvider" above. "mock" runs the
+  // whole stack with fake turns and no model calls.
   "env": ${values.env}${values.secretEnv}${values.sandbox}
 }
 `;
@@ -131,9 +144,10 @@ cannot deregister or delete task definitions.
 const noFiles = (): ScaffoldFile[] => [];
 
 export const dockerScaffold: ProviderScaffold = {
-  renderConfig: (orgId) =>
+  renderConfig: (orgId, modelProvider) =>
     renderConfig(orgId, {
       target: "docker",
+      modelProvider,
       publicUrl: "http://localhost:8082",
       providerFields: "",
       services: ["core", "web-ui"],
@@ -154,9 +168,10 @@ export const dockerScaffold: ProviderScaffold = {
 };
 
 export const flyScaffold: ProviderScaffold = {
-  renderConfig: (orgId) =>
+  renderConfig: (orgId, modelProvider) =>
     renderConfig(orgId, {
       target: "fly",
+      modelProvider,
       publicUrl: `https://${orgId}-portal.fly.dev`,
       providerFields: `
   // Globally unique prefix for every Fly app in this deployment.
@@ -187,7 +202,7 @@ export const flyScaffold: ProviderScaffold = {
 };
 
 export const awsScaffold: ProviderScaffold = {
-  renderConfig: (orgId) => {
+  renderConfig: (orgId, modelProvider) => {
     const cluster = clusterName(orgId);
     const services = Object.fromEntries(
       [
@@ -208,6 +223,7 @@ export const awsScaffold: ProviderScaffold = {
     );
     return renderConfig(orgId, {
       target: "aws",
+      modelProvider,
       publicUrl: `https://${orgId}.example.com`,
       providerFields: `
   // AWS coordinates. Replace the account id and public URL before applying infra/.

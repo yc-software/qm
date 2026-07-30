@@ -192,6 +192,42 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
   );
 });
 
+test("naming a base model provider makes that provider's key a required deployment secret", () => {
+  for (const [provider, key] of [
+    ["anthropic", "ANTHROPIC_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["openrouter", "OPENROUTER_API_KEY"],
+  ] as const) {
+    const config = makeConfig({ modelProvider: provider });
+    assert.equal(secretByName(config, key).required, true, `${provider} requires ${key}`);
+    assert.match(
+      renderEnvExample(config),
+      new RegExp(`^${key}=$`, "m"),
+      `${key} is uncommented in .env.example so setup collects it`,
+    );
+  }
+});
+
+test("the providers a deployment did not select stay optional", () => {
+  const anthropic = makeConfig({ modelProvider: "anthropic" });
+  assert.equal(secretByName(anthropic, "OPENROUTER_API_KEY").required, false);
+  // OPENAI_API_KEY keeps its own Codex rule, so it is absent rather than optional here.
+  assert.ok(!computedSecrets(anthropic).some((secret) => secret.name === "OPENAI_API_KEY"));
+});
+
+test("an OpenAI base model and the Codex harness agree on one required key", () => {
+  const both = makeConfig({ modelProvider: "openai", env: { core: { HARNESS: "codex" } } });
+  const matches = computedSecrets(both).filter((secret) => secret.name === "OPENAI_API_KEY");
+  assert.equal(matches.length, 1, "overlapping rules collapse to a single secret");
+  assert.equal(matches[0]!.required, true);
+});
+
+test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavior", () => {
+  const deferred = makeConfig();
+  assert.equal(secretByName(deferred, "ANTHROPIC_API_KEY").required, false);
+  assert.equal(secretByName(deferred, "OPENROUTER_API_KEY").required, false);
+});
+
 test("conditional secret values use the runtime's trimmed enum semantics", () => {
   const pi = makeConfig({ env: { core: { HARNESS: "  pi  " } } });
   assert.equal(secretByName(pi, "ANTHROPIC_API_KEY").required, false);
