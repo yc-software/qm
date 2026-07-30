@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { spawnSync } from "node:child_process";
+import { deriveKey, seal, openSession, type SessionClaims } from "../src/session.ts";
 
 const claimed = new Set<string>();
 let claimCalls = 0;
@@ -42,7 +44,7 @@ process.env.PORTAL_PLAYGROUND = "1";
 process.env.PORTAL_PLAYGROUND_MINTS_PER_IP = "3";
 delete process.env.PORTAL_LOCAL_AUTH_BYPASS;
 
-const { server } = await import("../src/index.ts");
+const { server, mintBucketOf } = await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
@@ -95,6 +97,88 @@ test("explicit sign-in still goes to the identity provider", async () => {
   const login = await fetch(`${base}/auth/login`, { redirect: "manual" });
   assert.equal(login.status, 302);
   assert.match(login.headers.get("location") ?? "", /^https:\/\/slack\.com\/openid\/connect\/authorize/);
+});
+
+test("sliding renewal preserves the anon flag", async () => {
+  const key = deriveKey("playground-test-portal-secret", "portal.session.v1");
+  const now = Math.floor(Date.now() / 1000);
+  const aged: SessionClaims = {
+    k: "session",
+    sub: "playground-deadbeef",
+    org: process.env.CORE_ORG_ID ?? "acme",
+    name: "Guest",
+    anon: true,
+    auth: now - 15000,
+    iat: now - 15000,
+    exp: now + 13800,
+  };
+  const res = await fetch(`${base}/`, {
+    headers: { ...HTML, cookie: `portal_session=${encodeURIComponent(seal(aged, key))}` },
+    redirect: "manual",
+  });
+  assert.equal(res.status, 200);
+  const renewed = openSession(decodeURIComponent(sessionCookieOf(res).split("=")[1]!), key, Date.now());
+  assert.ok(renewed, "expected a renewed session");
+  assert.equal(renewed.anon, true);
+  assert.equal(renewed.sub, "playground-deadbeef");
+  assert.ok(renewed.iat > aged.iat, "expected a re-stamped iat");
+});
+
+test("anonymous sessions are refused the connect and secret-drop flows", async () => {
+  const visit = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
+  const cookie = sessionCookieOf(visit);
+  for (const path of ["/connect/redeem/tok123", "/connect/google/self-connect", "/drop/tok123/form"]) {
+    const r = await fetch(`${base}${path}`, { headers: { ...HTML, cookie } });
+    assert.equal(r.status, 403, `${path} must refuse anon sessions`);
+  }
+  const drop = await fetch(`${base}/drop/tok123`, {
+    method: "POST",
+    headers: { cookie, origin: "http://localhost:18196" },
+  });
+  assert.equal(drop.status, 403);
+  assert.match(((await drop.json()) as { message: string }).message, /playground/);
+});
+
+test("mintBucketOf keys IPv4 per address and IPv6 per /64", () => {
+  assert.equal(mintBucketOf("203.0.113.9"), "203.0.113.9");
+  assert.equal(mintBucketOf("::ffff:203.0.113.9"), "203.0.113.9");
+  assert.equal(mintBucketOf("2001:db8:1:2:3:4:5:6"), "2001:db8:1:2::/64");
+  assert.equal(mintBucketOf("2001:db8:1:2:ffff::1"), mintBucketOf("2001:db8:1:2:3:4:5:6"));
+  assert.notEqual(mintBucketOf("2001:db8:1:3::1"), mintBucketOf("2001:db8:1:2::1"));
+  assert.equal(mintBucketOf("2001:db8::1"), "2001:db8:0:0::/64");
+  assert.equal(mintBucketOf("fe80::1%en0"), "fe80:0:0:0::/64");
+});
+
+test("boot refuses playground configurations that leak or brick", () => {
+  const command = "import('./src/index.ts').then(m => m.bootChecks())";
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "test",
+    PORTAL_PUBLIC_URL: "http://localhost:18196",
+    PORTAL_PLAYGROUND: "1",
+  };
+  delete baseEnv.PORTAL_COOKIE_DOMAIN;
+  delete baseEnv.PORTAL_APPS_DOMAIN;
+  delete baseEnv.PORTAL_DEPLOYMENTS_ENABLED;
+  delete baseEnv.PORTAL_PLAYGROUND_MINTS_PER_IP;
+  delete baseEnv.PORTAL_PLAYGROUND_MINT_WINDOW_S;
+  const boot = (env: NodeJS.ProcessEnv) =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", command], { cwd: process.cwd(), env, encoding: "utf8" });
+  assert.equal(boot(baseEnv).status, 0);
+  const bad: Array<[NodeJS.ProcessEnv, RegExp]> = [
+    [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "0" }, /between 1 and 64/],
+    [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "65" }, /between 1 and 64/],
+    [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "lots" }, /between 1 and 64/],
+    [{ PORTAL_PLAYGROUND_MINT_WINDOW_S: "30" }, /between 60 and 86400/],
+    [{ PORTAL_PLAYGROUND_MINT_WINDOW_S: "172800" }, /between 60 and 86400/],
+    [{ PORTAL_COOKIE_DOMAIN: "qm.example.com" }, /PORTAL_COOKIE_DOMAIN and PORTAL_APPS_DOMAIN unset/],
+    [{ PORTAL_DEPLOYMENTS_ENABLED: "1" }, /PORTAL_DEPLOYMENTS_ENABLED unset/],
+  ];
+  for (const [extra, pattern] of bad) {
+    const r = boot({ ...baseEnv, ...extra });
+    assert.notEqual(r.status, 0, `expected boot failure for ${JSON.stringify(extra)}`);
+    assert.match(r.stderr, pattern);
+  }
 });
 
 test("mints beyond the per-IP budget are refused, and refusal sets no cookie", async () => {
