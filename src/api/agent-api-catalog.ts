@@ -111,6 +111,25 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (m, p) =>
+      (m === "GET" && p === "/v1/run-signals/active") || (m === "POST" && /^\/v1\/run-signals\/[^/]+$/.test(p)),
+    guidance:
+      "Signals act only on runs the asking person could see in their own UI; a run outside their reach answers 404. Steer requires text.",
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/run-signals/active?threadRef=…",
+        summary: "find the active run in a thread the asking person can see — answers {runId} or {runId:null}",
+      },
+      {
+        method: "POST",
+        path: "/v1/run-signals/:runId",
+        summary:
+          'signal a running turn with {kind:"abort"} to stop it or {kind:"steer", text} to redirect it mid-flight — the same stop/steer the web UI\'s buttons send',
+      },
+    ],
+  },
+  {
+    match: (m, p) =>
       (m === "GET" && p === "/v1/conversations") || (m === "POST" && /^\/v1\/conversations\/[^/]+$/.test(p)),
     guidance:
       "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving.",

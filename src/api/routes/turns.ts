@@ -85,6 +85,37 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 409, outcome);
 }
 
+async function postAgentRunSignal(ctx: ApiCtx): Promise<void> {
+  const { res, app, body, actor, capability } = ctx;
+  const viewer = actor?.p ?? capability?.actorId;
+  if (!viewer)
+    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
+  const id = ctx.params.id!;
+  const kind = isObj(body) && typeof body.kind === "string" ? body.kind : "";
+  if (kind !== "abort" && kind !== "steer") {
+    return sendJson(res, 400, { error: "bad_request", message: "kind must be abort or steer" });
+  }
+  const text = isObj(body) && typeof body.text === "string" ? body.text : undefined;
+  const outcome = await app.signalRun(id, { kind, ...(text !== undefined ? { text } : {}) }, viewer);
+  if (outcome.accepted) return sendJson(res, 200, outcome);
+  if (outcome.reason === "not_found")
+    return sendJson(res, 404, { error: "not_found", message: "not a run you can see" });
+  if (outcome.reason === "text_required")
+    return sendJson(res, 400, { error: "bad_request", message: "text required", ...outcome });
+  return sendJson(res, 409, outcome);
+}
+
+async function getAgentActiveRunForThread(ctx: ApiCtx): Promise<void> {
+  const { res, app, url, actor, capability } = ctx;
+  const viewer = actor?.p ?? capability?.actorId;
+  if (!viewer)
+    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
+  const threadRef = url.searchParams.get("threadRef") ?? "";
+  if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
+  const active = await app.activeRunForThread(threadRef, viewer);
+  return sendJson(res, 200, { runId: active?.runId ?? null });
+}
+
 async function getRun(ctx: ApiCtx): Promise<void> {
   const { res, app, actor } = ctx;
   const id = ctx.params.id!;
@@ -157,6 +188,8 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/approvals/:id", auth: "source", handle: getApproval },
   { method: "POST", path: "/v1/runs/:id/delivery-state", auth: "source", handle: postRunDeliveryState },
   { method: "POST", path: "/v1/runs/:id/signal", auth: "source", handle: postRunSignal },
+  { method: "POST", path: "/v1/run-signals/:id", auth: "either", handle: postAgentRunSignal },
+  { method: "GET", path: "/v1/run-signals/active", auth: "either", handle: getAgentActiveRunForThread },
   { method: "GET", path: "/v1/runs/:id", auth: "source", handle: getRun },
   { method: "GET", path: "/v1/runs", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
