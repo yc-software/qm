@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { MODEL_PROVIDER_KEYS, validatePortalTrust, type ModelProvider, type QmConfig } from "../config.ts";
+import {
+  MODEL_PROVIDER_KEYS,
+  mockHarnessWarning,
+  validatePortalTrust,
+  type ModelProvider,
+  type QmConfig,
+} from "../config.ts";
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
 import { computedSecrets } from "../secrets.ts";
@@ -193,6 +199,8 @@ export async function doctorCommon(
 }
 
 async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): Promise<void> {
+  const mockHarness = mockHarnessWarning(config);
+  if (mockHarness) warn(mockHarness);
   const provider = config.modelProvider;
   if (!provider) {
     step("base model: no modelProvider set — an administrator supplies the key from the Admin page");

@@ -7,6 +7,7 @@ import {
   CONFIG_FILENAME,
   loadConfigAt,
   loadConfigInDir,
+  mockHarnessWarning,
   sandboxCoreEnv,
   sandboxImagePinErrors,
   sandboxPinPending,
@@ -1176,5 +1177,20 @@ test("env.core.MODEL_PROVIDER is validated as the provider core will actually us
   );
   withConfig({ env: { core: { HARNESS: "pi", MODEL_PROVIDER: "bedrock" } } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /env.core.MODEL_PROVIDER must be one of/);
+  });
+});
+
+test("a mock deployment is named as one, and a real harness draws no warning", () => {
+  withConfig({ env: { core: {} } }, ({ path }) => {
+    assert.match(mockHarnessWarning(loadConfigAt(path).config)!, /unset, which means "mock".*calls no model provider/s);
+  });
+  withConfig({ env: { core: { HARNESS: "mock" } } }, ({ path }) => {
+    assert.match(mockHarnessWarning(loadConfigAt(path).config)!, /set to "mock"/);
+  });
+  withConfig({ env: { core: { HARNESS: "pi" } } }, ({ path }) => {
+    assert.equal(mockHarnessWarning(loadConfigAt(path).config), undefined);
+  });
+  withConfig({ target: "fly", appPrefix: "acme", env: { core: {} } }, ({ path }) => {
+    assert.equal(mockHarnessWarning(loadConfigAt(path).config), undefined, "the fly template renders HARNESS=pi");
   });
 });

@@ -136,6 +136,24 @@ test("harness security posture defaults to auto and validates named modes", () =
   );
 });
 
+test("production names a mock harness rather than letting it pass as a real deployment", () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (msg: unknown) => void warnings.push(String(msg));
+  try {
+    loadConfig(productionEnv);
+    loadConfig({ ...productionEnv, HARNESS: "mock" });
+    loadConfig({ ...productionEnv, HARNESS: "pi" });
+    loadConfig({});
+  } finally {
+    console.warn = original;
+  }
+  const mock = warnings.filter((w) => w.includes("calls no model provider"));
+  assert.equal(mock.length, 2, "production + unset and production + mock each warn once");
+  assert.match(mock[0]!, /unset, which means mock/);
+  assert.match(mock[1]!, /HARNESS is "mock"/);
+});
+
 test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
   assert.throws(() => loadConfig({ SESSION_STORE: "sqlite" }), /SESSION_STORE=sqlite is no longer supported/);
   assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);
