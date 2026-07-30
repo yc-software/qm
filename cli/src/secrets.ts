@@ -545,8 +545,10 @@ export function secretsForService(
 }
 
 function requiresOtherEmailTransport(config: QmConfig, condition: SecretCondition): boolean {
-  if (condition.kind === "all") return condition.conditions.some((nested) => requiresOtherEmailTransport(config, nested));
-  if (condition.kind === "any") return condition.conditions.every((nested) => requiresOtherEmailTransport(config, nested));
+  if (condition.kind === "all")
+    return condition.conditions.some((nested) => requiresOtherEmailTransport(config, nested));
+  if (condition.kind === "any")
+    return condition.conditions.every((nested) => requiresOtherEmailTransport(config, nested));
   if (condition.kind !== "env-equals" || condition.service !== "auth" || condition.name !== "AUTH_EMAIL_TRANSPORT")
     return false;
   const configured = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim();
