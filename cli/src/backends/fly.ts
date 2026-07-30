@@ -408,6 +408,15 @@ function flyOrgApps(flyOrg: string): Set<string> {
   );
 }
 
+function appHasMachines(app: string): boolean {
+  try {
+    const parsed = JSON.parse(fly(["status", "-a", app, "--json"])) as { Machines?: unknown[] };
+    return (parsed.Machines?.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
 function ensureApp(app: string, flyOrg: string, orgId: string, appPrefix: string): void {
   const out = fly(["apps", "create", app, "--org", flyOrg], { allow: /already been taken/i });
   const marker = flyOwnershipMarker(flyOrg, orgId, appPrefix);
@@ -1620,6 +1629,7 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
   for (const plugin of pluginNames) ensureApp(`${prefix}-${plugin}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix);
   unsetDisabledSecurityScreenToken(config, prefix);
   unsetDisabledFlyPublisherToken(config, prefix);
+  const stagedApps = new Set<string>();
   for (const secret of operatorSecrets) {
     const supplied = deploymentSecretValue(secret.name, values.get(secret.name));
     if (!secret.required && !supplied) {
@@ -1635,6 +1645,7 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
       destinations.set(`${prefix}-${workload}`, names);
     }
     for (const [app, names] of destinations) {
+      stagedApps.add(app);
       for (const name of names) {
         stageSecret(app, name, value);
       }
@@ -1642,4 +1653,9 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
     step(`${secret.name}: staged on ${[...destinations].map(([app]) => app).join(", ")}`);
   }
   ok("operator secrets staged on Fly");
+  const running = [...stagedApps].filter(appHasMachines);
+  if (running.length) {
+    warn(`staged secrets are NOT live yet on ${running.join(", ")}: running machines keep their old values`);
+    warn("run `qm up` to apply them — a plain machine restart does not");
+  }
 }

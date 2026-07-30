@@ -306,6 +306,114 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
   }
 });
 
+test("fly secrets push warns that staged secrets are not live when machines are running", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-staged-warn-"));
+  const config: QmConfig = {
+    contract: 1,
+    orgId: "acme",
+    publicUrl: "https://acme.example.com",
+    target: "fly",
+    region: "sjc",
+    flyOrg: "personal",
+    services: ["core"],
+    plugins: [],
+    skills: [],
+    env: { core: { HARNESS: "mock" } },
+    imageOverrides: {},
+    sandbox: { app: "acme-sb" },
+  };
+  writeFileSync(
+    join(dir, ".env"),
+    [
+      "CAPABILITY_SECRET=capability-secret-that-is-long-enough",
+      `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
+      `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
+      "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
+      `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      "FLY_SANDBOX_API_TOKEN=fly",
+    ].join("\n"),
+  );
+  const fake = fakeFly(
+    dir,
+    `
+if (a.startsWith("status -a acme-core")) console.log(JSON.stringify({ Machines: [{ id: "m1", state: "started" }] }));
+else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
+`,
+  );
+  const log = console.log;
+  const warnLog = console.warn;
+  const warnings: string[] = [];
+  console.log = (): void => {};
+  console.warn = (msg: string): void => {
+    warnings.push(msg);
+  };
+  try {
+    await flySecretsPush(config, dir);
+    assert.ok(
+      warnings.some((line) => line.includes("staged secrets are NOT live yet on acme-core")),
+      warnings.join("\n"),
+    );
+    assert.ok(warnings.some((line) => line.includes("run `qm up`")));
+  } finally {
+    console.log = log;
+    console.warn = warnLog;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fly secrets push stays quiet about staging when no machines are running", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-staged-quiet-"));
+  const config: QmConfig = {
+    contract: 1,
+    orgId: "acme",
+    publicUrl: "https://acme.example.com",
+    target: "fly",
+    region: "sjc",
+    flyOrg: "personal",
+    services: ["core"],
+    plugins: [],
+    skills: [],
+    env: { core: { HARNESS: "mock" } },
+    imageOverrides: {},
+    sandbox: { app: "acme-sb" },
+  };
+  writeFileSync(
+    join(dir, ".env"),
+    [
+      "CAPABILITY_SECRET=capability-secret-that-is-long-enough",
+      `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
+      `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
+      "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
+      `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      "FLY_SANDBOX_API_TOKEN=fly",
+    ].join("\n"),
+  );
+  const fake = fakeFly(
+    dir,
+    `
+if (a.startsWith("status -a")) console.log(JSON.stringify({ Machines: [] }));
+else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
+`,
+  );
+  const log = console.log;
+  const warnLog = console.warn;
+  const warnings: string[] = [];
+  console.log = (): void => {};
+  console.warn = (msg: string): void => {
+    warnings.push(msg);
+  };
+  try {
+    await flySecretsPush(config, dir);
+    assert.ok(!warnings.some((line) => line.includes("staged secrets are NOT live")), warnings.join("\n"));
+  } finally {
+    console.log = log;
+    console.warn = warnLog;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("fly secrets push removes the disabled Fly app publisher token", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-publisher-off-"));
   const config: QmConfig = {
