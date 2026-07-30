@@ -2033,11 +2033,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? Math.min(requestedTurnWallClockMs, configuredTurnWallClockMs)
               : requestedTurnWallClockMs;
         }
-        const effectiveFastMode = resolveTurnFastMode(
-          input.fastMode,
-          humanTurn,
-          (await deps.config?.getInteractiveFastModeDurable()) === true,
-        );
+        const wantsOrgFastMode =
+          typeof input.fastMode !== "boolean" && humanTurn && (await deps.config?.getInteractiveFastModeDurable());
+        const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanTurn, wantsOrgFastMode === true);
         const runHarnessTurn = (
           harnessInput: string,
           extras: {

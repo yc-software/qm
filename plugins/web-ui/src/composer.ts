@@ -209,6 +209,11 @@ let dragDepth = 0;
 let skillsLoading = false;
 let slashActiveIndex = 0;
 let fastModeCharging = false;
+let orgFastModeDefault = false;
+
+function effectiveFastMode(): boolean {
+  return composerState.fastMode ?? orgFastModeDefault;
+}
 let fastModeChargeTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function resetComposer(): void {
@@ -242,6 +247,7 @@ export async function refreshRuntimeSelection(scopeId: string | null, agent?: Ag
   }
   activeRuntimeConfig = config;
   setFastModeModelIds(config.fastModeModelIds);
+  orgFastModeDefault = config.interactiveFastMode === true;
   applyRuntimeOptions(config.approvedHarnesses, config.modelsByHarness, config.effective, config.modelCatalog);
   if (agent && (!chatState.threadRef || !threadModelPicks.has(chatState.threadRef)))
     agent.state.model = currentModelOption().model;
@@ -260,6 +266,7 @@ async function changeScopeRuntime(
     if (request !== runtimeRequest || scopeId !== chatState.scopeId) return;
     activeRuntimeConfig = config;
     setFastModeModelIds(config.fastModeModelIds);
+    orgFastModeDefault = config.interactiveFastMode === true;
     applyRuntimeOptions(config.approvedHarnesses, config.modelsByHarness, config.effective, config.modelCatalog);
     if (!chatState.threadRef || !threadModelPicks.has(chatState.threadRef))
       agent.state.model = currentModelOption().model;
@@ -285,7 +292,7 @@ export function composerForm(agent: Agent): TemplateResult {
   const effortAvailable = harnessSupportsEffort(selectedModel.harnessId);
   const fastSupported = harnessSupportsFastMode(selectedModel.harnessId);
   const fastAvailable = fastSupported && modelSupportsFastMode(selectedModel.model.id);
-  const fastOn = fastAvailable && composerState.fastMode === true;
+  const fastOn = fastAvailable && effectiveFastMode();
   const fastCharging = fastModeCharging && fastOn;
   let fastTitle = "Fast mode is only available on Opus models";
   if (fastAvailable) fastTitle = fastOn ? "Fast mode active" : "Fast mode";
@@ -676,7 +683,7 @@ function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
 function settingsControl(agent: Agent, selected: ModelOption, disabled: boolean): TemplateResult {
   const open = composerState.openMenu === "settings";
   const fastAvailable = harnessSupportsFastMode(selected.harnessId) && modelSupportsFastMode(selected.model.id);
-  const fastOn = fastAvailable && composerState.fastMode === true;
+  const fastOn = fastAvailable && effectiveFastMode();
   const summary = `${selected.buttonLabel} · ${effortLabel(composerState.effortLevel)}${fastOn ? " · Fast" : ""}`;
   return html`
     <div class="menu-control settings-control ${open ? "open" : ""}" data-align="right">
@@ -1305,13 +1312,13 @@ function selectEffort(level: EffortLevel, agent: Agent): void {
 function toggleFastMode(agent: Agent): void {
   if (hasUnresolvedApproval() || chatState.resolvingApprovals.size > 0) return;
   if (!modelSupportsFastMode(currentModelOption().model.id)) return;
-  composerState.fastMode = composerState.fastMode !== true;
+  composerState.fastMode = !effectiveFastMode();
   persistPreference(FAST_MODE_STORAGE_KEY, composerState.fastMode ? "1" : "0");
   if (fastModeChargeTimer) {
     clearTimeout(fastModeChargeTimer);
     fastModeChargeTimer = null;
   }
-  fastModeCharging = composerState.fastMode;
+  fastModeCharging = composerState.fastMode === true;
   drawActiveChat(agent);
   if (fastModeCharging) {
     fastModeChargeTimer = setTimeout(() => {

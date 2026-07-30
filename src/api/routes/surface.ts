@@ -1004,6 +1004,7 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
     effective: { harnessId: effective.harnessId, modelId: effective.modelId },
     upgradeAvailable: Boolean(scopeOverride && scopeOverride.orgRevision !== orgDefault.revision),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
+    interactiveFastMode: await config.getInteractiveFastModeDurable(),
   };
 }
 

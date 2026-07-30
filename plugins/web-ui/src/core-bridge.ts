@@ -406,6 +406,7 @@ export interface RuntimeConfig {
   effective: { harnessId: string; modelId: string };
   upgradeAvailable: boolean;
   fastModeModelIds?: string[];
+  interactiveFastMode?: boolean;
 }
 
 export async function fetchRuntimeConfig(scopeId?: string | null): Promise<RuntimeConfig | null> {
