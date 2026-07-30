@@ -129,6 +129,14 @@ Use `npm run deploy:fly-image` rather than bare `fly deploy`: this sandbox app i
 exec-only, and bare deploy creates default launch machines that are not used by
 `FlySandbox`.
 
+Sandbox machines run `linux/amd64` only. `npm run deploy:fly-image` builds on Fly's
+remote amd64 builder, so it works unchanged from arm64 (Apple Silicon) hosts, where a
+local `docker build` produces an arm64 image the machines reject and
+`--platform linux/amd64` under qemu emulation is slow and unreliable.
+`scripts/local-sandbox-build.sh` follows the same rule: it uses the remote builder when
+`FLY_SANDBOX_APP_NAME` is set and otherwise builds locally with
+`--platform linux/amd64`.
+
 ## Configure the core
 
 ```bash

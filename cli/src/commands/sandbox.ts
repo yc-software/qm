@@ -405,12 +405,35 @@ export function pinnedByDigest(ref: string): string {
       return ref;
     }
     throw new CliError(
-      `could not resolve an immutable digest for ${ref} — the image may not exist or is not readable${detail ? ` (${detail})` : ""}`,
+      `could not resolve an immutable digest for ${ref} — the image may not exist, or the registry rejects reads with this token (Fly app-scoped deploy tokens cannot read the registry); pass ${imageRepository(ref)}@sha256:<digest> to skip the registry lookup${detail ? ` (${detail})` : ""}`,
     );
   }
   if (ref.includes("@sha256:")) return ref;
   const digest = output.match(/^Digest:\s*(sha256:[a-f0-9]{64})\s*$/m)?.[1];
   if (!digest) throw new CliError(`registry did not return an immutable digest for ${ref}`);
+  return `${ref}@${digest}`;
+}
+
+export function pinnedByPull(ref: string): string {
+  runDocker(
+    ["pull", "--platform", SANDBOX_RUNTIME_PLATFORM, ref],
+    `could not pull ${ref} to resolve its immutable digest — pin the base by digest (${imageRepository(ref)}@sha256:<digest>, via --from or the sandbox/Dockerfile FROM) to skip resolution`,
+  );
+  let output: string;
+  try {
+    output = execFileSync("docker", ["image", "inspect", "--format", "{{json .RepoDigests}}", ref], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    throw new CliError(`could not read the pulled image ${ref}: ${errMessage(error)}`);
+  }
+  const repository = imageRepository(ref);
+  const digest = (JSON.parse(output) as string[])
+    .find((entry) => entry.split("@")[0] === repository)
+    ?.split("@")[1];
+  if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest))
+    throw new CliError(`docker did not record an immutable digest for ${ref}`);
   return `${ref}@${digest}`;
 }
 
@@ -428,7 +451,7 @@ export function runSandboxPublish(opts: SandboxPublishOpts): { image: string } |
   const repository = publishedRepository(opts);
   if (!opts.dryRun) authenticateFlyRegistry(opts, [repository, prepared.base]);
   if (!opts.dryRun && prepared.base !== "scratch" && !prepared.base.includes("@sha256:")) {
-    const base = pinnedByDigest(prepared.base);
+    const base = pinnedByPull(prepared.base);
     if (prepared.hasCustom) {
       const dockerfileBody = replaceDockerfileBase(prepared.dockerfileBody, prepared.base, base);
       const dockerfilePath = join(mkdtempSync(join(tmpdir(), "qm-sandbox-")), "Dockerfile");

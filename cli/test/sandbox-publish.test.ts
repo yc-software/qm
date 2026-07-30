@@ -47,6 +47,18 @@ if (joined.startsWith("buildx imagetools inspect")) {
   console.log("Name: " + args[3] + "\\nMediaType: application/vnd.oci.image.index.v1+json\\nDigest: ${BASE_DIGEST}\\n");
   process.exit(0);
 }
+if (args[0] === "pull") {
+  process.exit(0);
+}
+if (joined.startsWith("image inspect")) {
+  const ref = args[args.length - 1];
+  const withoutDigest = ref.split("@")[0];
+  const slash = withoutDigest.lastIndexOf("/");
+  const colon = withoutDigest.lastIndexOf(":");
+  const repo = colon > slash ? withoutDigest.slice(0, colon) : withoutDigest;
+  console.log(JSON.stringify([repo + "@${BASE_DIGEST}"]));
+  process.exit(0);
+}
 if (joined.startsWith("buildx build")) {
   if (!fs.existsSync(${JSON.stringify(join(dir, "fly-authenticated"))})) process.exit(3);
   const metadata = args[args.indexOf("--metadata-file") + 1];
@@ -141,6 +153,67 @@ test("sandbox publish pins the base, reads the pushed digest, and records the pi
   }
 });
 
+test("sandbox publish --from a Fly registry tag pins by pull, never by registry inspect", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-publish-from-fly-"));
+  const priorPath = process.env.PATH;
+  const log = console.log,
+    warn = console.warn;
+  console.log = (): void => {};
+  console.warn = console.log;
+  try {
+    const configPath = join(dir, CONFIG_FILENAME);
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        contract: 1,
+        orgId: "acme",
+        publicUrl: "http://localhost:8080",
+        target: "docker",
+        services: ["core"],
+        sandbox: { app: "acme-sandboxes" },
+      }),
+    );
+    writeFileSync(join(dir, ".env"), "FLY_SANDBOX_API_TOKEN=FlyV1-scoped\n");
+    const toolDir = join(dir, "sandbox", "tools", "t");
+    mkdirSync(toolDir, { recursive: true });
+    writeFileSync(join(toolDir, "tool.json"), JSON.stringify({ id: "t" }));
+    writeFileSync(join(toolDir, "t"), "#!/usr/bin/env bash\necho hi\n");
+    chmodSync(join(toolDir, "t"), 0o755);
+    const dockerLog = fakeDocker(dir);
+    process.env.PATH = `${dir}:${priorPath}`;
+
+    runSandboxPublish({
+      sandboxDir: join(dir, "sandbox"),
+      config: loadConfigAt(configPath).config,
+      configPath,
+      from: "registry.fly.io/acme-sandboxes:base",
+    });
+
+    const calls = readFileSync(dockerLog, "utf8");
+    assert.doesNotMatch(calls, /imagetools inspect/, "app-scoped deploy tokens cannot read the registry");
+    assert.match(
+      calls,
+      /pull --platform linux\/amd64 registry\.fly\.io\/acme-sandboxes:base/,
+      "the base tag resolves through docker pull, which the deploy token allows",
+    );
+    assert.match(
+      calls,
+      new RegExp(`DOCKERFILE .*FROM registry\\.fly\\.io/acme-sandboxes:base@${BASE_DIGEST}`),
+      "the layer builds from the digest-pinned base",
+    );
+    assert.equal(
+      loadConfigAt(configPath).config.sandbox?.baseImage,
+      `registry.fly.io/acme-sandboxes:base@${BASE_DIGEST}`,
+      "the pull-resolved pin is recorded",
+    );
+  } finally {
+    console.log = log;
+    console.warn = warn;
+    process.env.PATH = priorPath;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("sandbox publish reuses the recorded base pin for a custom Dockerfile instead of re-resolving the tag", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-publish-"));
   const priorPath = process.env.PATH;
@@ -190,11 +263,9 @@ test("sandbox publish reuses the recorded base pin for a custom Dockerfile inste
 
     writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM ghcr.io/acme/base:v2 \\\n  AS final\nRUN echo hi\n");
     runSandboxPublish({ sandboxDir: join(dir, "sandbox"), config: loadConfigAt(configPath).config, configPath });
-    assert.match(
-      readFileSync(dockerLog, "utf8"),
-      /imagetools inspect ghcr\.io\/acme\/base:v2/,
-      "the bumped tag is resolved fresh",
-    );
+    const rebuild = readFileSync(dockerLog, "utf8");
+    assert.match(rebuild, /pull --platform linux\/amd64 ghcr\.io\/acme\/base:v2/, "the bumped tag is resolved fresh");
+    assert.doesNotMatch(rebuild, /imagetools inspect/, "publish never inspects the registry");
     assert.equal(
       loadConfigAt(configPath).config.sandbox?.baseImage,
       `ghcr.io/acme/base:v2@${BASE_DIGEST}`,
@@ -771,7 +842,7 @@ process.exit(1);
     );
     assert.throws(
       () => pinnedByDigest("repo.example/app:v9"),
-      /could not resolve an immutable digest for repo\.example\/app:v9 .*\(ERROR: manifest unknown\)/,
+      /could not resolve an immutable digest for repo\.example\/app:v9 .*pass repo\.example\/app@sha256:<digest> to skip the registry lookup \(ERROR: manifest unknown\)/,
       "tag-form refs still fail hard — the inspect is what resolves them",
     );
     process.env.PATH = emptyPath;
