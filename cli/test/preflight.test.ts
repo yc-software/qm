@@ -69,13 +69,9 @@ test("fly sandbox preflight passes a live token and skips when no token is prese
   );
   assert.ok(lines.some((line) => line.includes("FLY_SANDBOX_API_TOKEN ok")));
   const skipped = await quietAsync(() =>
-    flySandboxTokenPreflight(
-      CONFIG,
-      new Map(),
-      (async () => {
-        throw new Error("must not be called");
-      }) as typeof fetch,
-    ),
+    flySandboxTokenPreflight(CONFIG, new Map(), (async () => {
+      throw new Error("must not be called");
+    }) as typeof fetch),
   );
   assert.deepEqual(skipped, []);
 });
@@ -144,7 +140,10 @@ test("smtpVerify authenticates without sending mail and rejects bad credentials"
 
 test("email preflight fails check on rejected SMTP credentials and warns on stray transport vars", async () => {
   const smtp = await fakeSmtp("right");
-  const config = { ...CONFIG, env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: String(smtp.port), SMTP_TLS: "none" } } };
+  const config = {
+    ...CONFIG,
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: String(smtp.port), SMTP_TLS: "none" } },
+  };
   try {
     const okLines = await quietAsync(() =>
       emailTransportPreflight(
