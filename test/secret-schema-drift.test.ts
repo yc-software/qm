@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { FIRST_PARTY_SECRET_SPECS } from "../cli/src/secrets.ts";
-import { MODEL_PROVIDERS, MODEL_PROVIDER_BASE_MODELS, MODEL_PROVIDER_HARNESSES } from "../cli/src/config.ts";
+import { MODEL_PROVIDERS, MODEL_PROVIDER_HARNESSES } from "../cli/src/config.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
 import { HARNESS_IDS, defaultModelForProvider } from "../src/model/pi-models.ts";
 
@@ -80,18 +80,6 @@ test("the CLI's provider/harness table matches what the core model registry can 
       [...MODEL_PROVIDER_HARNESSES[provider]].sort(),
       `MODEL_PROVIDER_HARNESSES.${provider} has drifted from the registry`,
     );
-  }
-});
-
-test("the CLI names the same base model the runtime will pick for each provider", () => {
-  for (const provider of MODEL_PROVIDERS) {
-    for (const harness of MODEL_PROVIDER_HARNESSES[provider]) {
-      assert.equal(
-        defaultModelForProvider(harness, provider),
-        MODEL_PROVIDER_BASE_MODELS[provider],
-        `MODEL_PROVIDER_BASE_MODELS.${provider} has drifted for HARNESS=${harness}`,
-      );
-    }
   }
 });
 

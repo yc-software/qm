@@ -1,12 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  MODEL_PROVIDER_BASE_MODELS,
-  MODEL_PROVIDER_KEYS,
-  validatePortalTrust,
-  type ModelProvider,
-  type QmConfig,
-} from "../config.ts";
+import { MODEL_PROVIDER_KEYS, validatePortalTrust, type ModelProvider, type QmConfig } from "../config.ts";
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
 import { computedSecrets } from "../secrets.ts";
@@ -211,7 +205,7 @@ async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): P
     return;
   }
   await modelProviderCheck(provider, key);
-  step(`base model provider ${provider}: ${name} accepted, serving ${MODEL_PROVIDER_BASE_MODELS[provider]}`);
+  step(`base model provider ${provider}: ${name} accepted`);
 }
 
 const MODEL_PROVIDER_PROBES: Readonly<

@@ -119,12 +119,6 @@ export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly s
   openrouter: ["pi", "mock"],
 };
 
-export const MODEL_PROVIDER_BASE_MODELS: Readonly<Record<ModelProvider, string>> = {
-  anthropic: "claude-opus-5",
-  openai: "gpt-5.6-sol",
-  openrouter: "openrouter/auto",
-};
-
 export const isModelProvider = (value: unknown): value is ModelProvider =>
   typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
 
