@@ -205,10 +205,7 @@ process.exit(0);
       lines.some((line) => line.includes("acme-core: not created yet")),
       `printed: ${lines.join(" | ")}`,
     );
-    assert.ok(
-      !lines.some((line) => line.includes("missing")),
-      `printed: ${lines.join(" | ")}`,
-    );
+    assert.ok(!lines.some((line) => line.includes("missing")), `printed: ${lines.join(" | ")}`);
   } finally {
     console.log = log;
     if (prior === undefined) delete process.env.FLY_BIN;
