@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../src/commands/init.ts";
 import { CONFIG_FILENAME, loadConfigInDir } from "../src/config.ts";
+import { cliVersion } from "../src/manifest.ts";
 import { parseToolDescriptor, validateSandboxLayer } from "../src/sandbox-layer.ts";
 import { SERVICE_NAMES, VIRTUAL_SERVICE_NAMES } from "../src/services.ts";
 import { renderEnvExample } from "../src/secrets.ts";
@@ -427,7 +428,7 @@ test("init preflights package.json and completes an install-first package manife
     assert.equal(manifest.private, true);
     assert.equal(manifest.engines?.node, ">=24.0.0");
     assert.equal(manifest.scripts?.deploy, "qm up");
-    assert.equal(manifest.dependencies?.["@yc-software/qm"], "0.1.0");
+    assert.equal(manifest.dependencies?.["@yc-software/qm"], cliVersion());
     assert.equal(manifest.dependencies?.["qm-cli"], undefined);
     assert.equal(manifest.dependencies?.other, "1.0.0");
   } finally {
@@ -512,7 +513,7 @@ test("the scaffold is an npm-backed deployment repository with no CI coupling an
       scripts?: Record<string, string>;
     };
     assert.equal(packageJson.private, true);
-    assert.equal(packageJson.dependencies?.["@yc-software/qm"], "0.1.0");
+    assert.equal(packageJson.dependencies?.["@yc-software/qm"], cliVersion());
     assert.equal(packageJson.scripts?.check, "qm check");
     assert.ok(existsSync(join(dir, "deployment.md")));
     assert.ok(existsSync(join(dir, ".codex", "skills", "deploy-qm", "SKILL.md")));
