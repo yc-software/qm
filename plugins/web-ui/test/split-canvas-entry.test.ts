@@ -6,11 +6,14 @@ const read = (f: string): string => readFileSync(new URL(`../src/${f}`, import.m
 const split = read("split.ts");
 const sessions = read("sessions.ts");
 const shell = read("shell.ts");
+const chat = read("chat.ts");
 const layout = read("split-layout.ts");
 const css = read("shell.css");
 
 const fn = (src: string, name: string): string => {
-  const body = src.match(new RegExp(`^(?:export )?function ${name}\\([\\s\\S]*?\\n\\}`, "m"))?.[0] ?? "";
+  const top = src.match(new RegExp(`^(?:export )?(?:async )?function ${name}\\([\\s\\S]*?\\n\\}`, "m"))?.[0];
+  const nested = src.match(new RegExp(`^ {2}(?:async )?function ${name}\\([\\s\\S]*?\\n {2}\\}`, "m"))?.[0];
+  const body = top ?? nested ?? "";
   assert.ok(body, `${name} not found`);
   return body;
 };
@@ -22,12 +25,15 @@ test("no new-chat affordance can cost the user their canvas", () => {
   assert.match(add, /return true;\n\}$/, "having split, the canvas owns the click");
   assert.doesNotMatch(add.slice(add.indexOf("splitPane(")), /return false/, "a full canvas must not fall through");
 
-  assert.match(shell, /if \(!addBlankPane\(\)\) newChat\(\);/);
+  assert.match(shell, /if \(!addBlankPane\(\)\) mainConversation\(\)\.newChat\(\);/);
   const plus = fn(sessions, "startProjectChat");
   const claimed = plus.indexOf("addBlankPane(scopeId)");
   assert.ok(claimed > 0, "the project + must offer the click to the canvas");
   assert.match(plus.slice(claimed), /^addBlankPane\(scopeId\)\) return;/m, "and bail out when the canvas takes it");
-  assert.ok(plus.indexOf("addPendingSession(newChat(") > claimed, "only then may it mount a single chat");
+  assert.ok(
+    plus.indexOf("addPendingSession(mainConversation().newChat(") > claimed,
+    "only then may it mount a single chat",
+  );
 
   assert.match(fn(split, "exitSplitIfActive"), /splitState\.active = false;/);
   assert.doesNotMatch(fn(split, "exitSplitIfActive"), /removeItem|lastLayout = null/);
@@ -35,15 +41,29 @@ test("no new-chat affordance can cost the user their canvas", () => {
 
 test("a pane opened from a project's + starts its chat in that project", () => {
   assert.match(split, /scopeId\?: string;/, "PaneParams must carry the project");
-  const src = fn(split, "paneSrc");
-  assert.match(src, /scope=\$\{encodeURIComponent\(params\.scopeId\)\}/);
-  assert.match(src, /if \(sessionId\) return/, "an adopted session still wins over the seed scope");
+  const load = split.match(/private async load\(\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(load, "the pane loader not found");
+  const seeded = load.indexOf("contextsState.list.find((c) => c.scopeId === scopeId)");
+  assert.ok(seeded > 0, "the seed scope must resolve against contexts the viewer can actually use");
+  assert.ok(load.indexOf("if (!wanted)") < seeded, "an adopted session still wins over the seed scope");
+  assert.doesNotMatch(load, /newChat\(\{ scopeId: scopeId/, "an unchecked scope must not reach newChat");
+  assert.match(load, /newChat\(context \? \{ scopeId: context\.scopeId/);
+});
 
-  const embed = shell.match(/if \(embedMode\) \{[\s\S]*?\n {4}\}\n {4}return;/)?.[0] ?? "";
-  assert.ok(embed, "the embed boot branch not found");
-  assert.match(embed, /await ensureContexts\(\)\)\.find\(\(c\) => c\.scopeId === scope\)/);
-  assert.doesNotMatch(embed, /newChat\(\{ scopeId: scope/, "the URL's scope must not reach newChat unchecked");
-  assert.match(embed, /newChat\(context \? \{ scopeId: context\.scopeId/);
+test("a pane is an element in this document — never a second copy of the app", () => {
+  assert.doesNotMatch(split, /iframe/i, "panes must not reload the whole SPA per conversation");
+  assert.doesNotMatch(split, /postMessage/, "same-document panes talk by call, not by message");
+  assert.doesNotMatch(split, /defaultRenderer: "always"/, "a pane behind a tab must cost nothing until shown");
+  assert.match(split, /createConversation\(\{/, "each pane owns a conversation instance");
+  assert.match(split, /disposeConversation\(this\.conversation\)/, "and releases it when the pane closes");
+  const load = split.match(/private async load\(\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.match(
+    load,
+    /if \(this\.loaded \|\| this\.disposed\) return;/,
+    "a pane loads its transcript once, and never after it closes",
+  );
+  assert.match(load, /if \(this\.disposed\) return;/, "and drops the continuation if the pane closed mid-load");
+  assert.match(split, /onDidVisibilityChange\(\(e\) => \{\s*\n\s*if \(e\.isVisible\) void this\.load\(\);/);
 });
 
 test("a conversation dropped on a pane's tab strip joins that pane — and only there", () => {
@@ -93,4 +113,45 @@ test("the tile cap only judges dockview's own panel drags", () => {
   const bail = hold.indexOf("if (e.getData() === undefined) return;");
   assert.ok(bail > 0, "a foreign drag must be waved through");
   assert.ok(bail < hold.indexOf("dropAddsTile"), "before the tile arithmetic, not after");
+});
+
+test("boot mounts a restored canvas before it awaits the session list", () => {
+  const boot = shell.match(/export async function boot\(\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.ok(boot, "boot not found");
+  const early = boot.indexOf("if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();");
+  const listAwait = boot.indexOf("await refreshSessions({ showLoading: true });");
+  assert.ok(early > 0, "boot must offer the canvas its head start");
+  assert.ok(listAwait > 0, "boot still loads the session list");
+  assert.ok(early < listAwait, "the mount must come BEFORE the list fetch the panes never read");
+
+  assert.match(boot, /const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;/);
+
+  assert.match(
+    boot.slice(listAwait),
+    /\} else if \(!mountRestoredCanvas\(\) && !mainConversation\(\)\.state\.threadRef\) \{/,
+  );
+  const mount = fn(split, "mountRestoredCanvas");
+  assert.match(mount, /^ {2}if \(splitState\.active && \(dockApi\?\.panels\.length \?\? 0\) > 0\) return true;/m);
+});
+
+test("boot's fallback never replaces a chat the user mounted during the wait", () => {
+  const boot = shell.match(/export async function boot\(\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const listAwait = boot.indexOf("await refreshSessions({ showLoading: true });");
+  const tail = boot.slice(listAwait);
+  assert.match(tail, /\} else if \(!mountRestoredCanvas\(\) && !mainConversation\(\)\.state\.threadRef\) \{/);
+  const guard = tail.indexOf("!mainConversation().state.threadRef");
+  const mint = tail.indexOf("newChat();", guard);
+  assert.ok(guard > 0 && mint > guard, "the guard must gate the mint, not follow it");
+
+  assert.match(chat, /^ {2}function mountContinuable\(/m);
+  assert.match(fn(chat, "mountContinuable"), /chatState\.threadRef = threadRef;/);
+
+  const reconcile = fn(split, "reconcileAfterClose");
+  assert.match(
+    reconcile,
+    /exitSplitIfActive\(\);\s*\n\s*mainConversation\(\)\.newChat\(\);/,
+    "a blank lone survivor mounts a new chat",
+  );
+  assert.match(reconcile, /void maximizePane\(params\);/, "a lone survivor with a session is maximized");
+  assert.match(fn(split, "exitSplitIfActive"), /splitState\.active = false;/);
 });

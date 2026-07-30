@@ -6,7 +6,7 @@ import { icon } from "./ui";
 import { listBackLink, listPageTpl } from "./list-page";
 import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
-import { chatState, newChat } from "./chat";
+import { mainConversation } from "./conversations";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import {
   cronNextFire,
@@ -744,8 +744,9 @@ async function saveCronEdit(event: SubmitEvent, c: CronView): Promise<void> {
 
 function editCronWithAgent(c: CronView): void {
   cronDialog = null;
-  newChat();
-  void chatState.agent?.prompt(
+  const conv = mainConversation();
+  conv.newChat();
+  void conv.state.agent?.prompt(
     `Help me edit cron ${c.id} ("${cronTitle(c)}"). Its current schedule is ${cronScheduleSummary(c)}. Ask what I want changed, then update its task, schedule, timezone, destination, or run mode as requested.`,
   );
 }
@@ -831,8 +832,9 @@ function onCreateCron(e: Event): void {
     if (errSlot) errSlot.textContent = "Describe the cron you want.";
     return;
   }
-  newChat();
-  void chatState.agent?.prompt(
+  const conv = mainConversation();
+  conv.newChat();
+  void conv.state.agent?.prompt(
     `Set up a cron for me: ${text}\n\n(Sent from the web UI's New-cron pane — create it now with your scheduling API, use a calendar schedule with timezone for daily/weekly/monthly timing, give it a 2-5 word title naming what the cron is for and distinctive in a list, like "Gmail unread digest" or "GitLab CI watch" — not the command and not a generic word, and confirm what you created.)`,
   );
 }

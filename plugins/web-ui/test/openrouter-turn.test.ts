@@ -13,6 +13,7 @@ afterEach(() => {
 
 test("a web turn submits the fetched OpenRouter model selected by runtime config", async () => {
   applyRuntimeOptions(
+    null,
     ["pi"],
     { pi: ["anthropic/claude-sonnet-4.5"] },
     { harnessId: "pi", modelId: "anthropic/claude-sonnet-4.5" },

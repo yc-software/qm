@@ -159,9 +159,10 @@ export function backgroundLabel(jobs: number, watches: number): { count: number;
   return parts.length ? { count: jobs + watches, label: parts.join(" · ") } : null;
 }
 
-export function rowIndicators(s: CoreSession, liveThreadRef: string | null): RowIndicators {
+export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> | string | null): RowIndicators {
+  const live = typeof liveThreads === "string" ? new Set([liveThreads]) : (liveThreads ?? new Set<string>());
   return {
-    working: Boolean(s.working) || (Boolean(s.threadRef) && s.threadRef === liveThreadRef),
+    working: Boolean(s.working) || (Boolean(s.threadRef) && live.has(s.threadRef)),
     awaiting: Boolean(s.awaitingInput),
     background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0),
   };

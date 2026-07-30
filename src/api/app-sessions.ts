@@ -24,6 +24,7 @@ export function createSessionMethods(
   App,
   | "getSession"
   | "getSessionForViewer"
+  | "getSessionEntryForViewer"
   | "listFilesForViewer"
   | "uploadFileForViewer"
   | "openFileForViewer"
@@ -88,6 +89,15 @@ export function createSessionMethods(
         window,
       );
       return { session, entries: w.entries, ...(w.earlier > 0 ? { earlierEntries: w.earlier } : {}) };
+    },
+
+    async getSessionEntryForViewer(sessionId, principalId, seq) {
+      const session = (await sessionsForViewer(principalId)).find((s) => s.id === sessionId);
+      if (!session) return null;
+      const entry = transcriptEntries(await deps.sessions.visibleEntries(sessionId, principalId)).find(
+        (e) => e.seq === seq,
+      );
+      return entry ? { entry } : null;
     },
 
     listFilesForViewer(principalId, opts, inScope) {

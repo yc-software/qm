@@ -6,7 +6,7 @@ const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "u
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 
 test("resizeComposer skips the forced-reflow measure pass when the draft value is unchanged", () => {
-  const fn = composer.match(/export function resizeComposer\(\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const fn = composer.match(/function resizeComposer\(\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
   const skip = fn.indexOf("if (ta.value === autosizedValue) return;");
   const measure = fn.indexOf('ta.style.height = "auto"');
   assert.ok(skip >= 0, "the value memo must gate the measure pass");

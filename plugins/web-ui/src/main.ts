@@ -2,46 +2,39 @@ import "dockview-core/dist/styles/dockview.css";
 import "./shell.css";
 import { bootSafely } from "./shell";
 import { closeFormMenus } from "./ui";
-import { drawActiveChat } from "./chat";
-import { composerState, slashQuery } from "./composer";
+import { allConversations } from "./conversations";
 import { closeOpenSessionMenu, renderList, sessionsState } from "./sessions";
 import { closeDeployMenu } from "./deploys";
 
+function closeComposerMenus(keepOpenWithin: Element | null): boolean {
+  let changed = false;
+  for (const conv of allConversations()) {
+    if (keepOpenWithin && conv.state.host?.contains(keepOpenWithin)) continue;
+    if (!conv.composer.closeMenus()) continue;
+    changed = true;
+    conv.redraw();
+  }
+  return changed;
+}
+
 document.addEventListener("click", (e) => {
   const target = e.target as Element | null;
-  let redrawChat = false;
-  if (composerState.openMenu && !target?.closest(".menu-control")) {
-    composerState.openMenu = null;
-    redrawChat = true;
-  }
-  if (!composerState.slashDismissed && slashQuery(composerState.draft) !== null && !target?.closest(".composer-wrap")) {
-    composerState.slashDismissed = true;
-    redrawChat = true;
-  }
+  const inside = target?.closest(".menu-control, .composer-wrap") ?? null;
+  closeComposerMenus(inside);
   if (!target?.closest(".form-menu-control")) closeFormMenus();
   if (sessionsState.openMenuId && !target?.closest(".session-menu")) {
     sessionsState.openMenuId = null;
     renderList();
   }
   closeDeployMenu(target);
-  if (redrawChat) drawActiveChat();
 });
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  let changed = false;
-  if (composerState.openMenu) {
-    composerState.openMenu = null;
-    changed = true;
-  }
-  if (!composerState.slashDismissed && slashQuery(composerState.draft) !== null) {
-    composerState.slashDismissed = true;
-    changed = true;
-  }
+  closeComposerMenus(null);
   closeOpenSessionMenu();
-  changed = closeDeployMenu(null, true) || changed;
-  changed = closeFormMenus() || changed;
-  if (changed) drawActiveChat();
+  closeDeployMenu(null, true);
+  closeFormMenus();
 });
 
 void bootSafely();

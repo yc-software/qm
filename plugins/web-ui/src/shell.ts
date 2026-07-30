@@ -29,19 +29,11 @@ import {
 import { applyRuntimeOptions } from "./model-options";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { brandMark, brandName, icon, initials } from "./ui";
-import {
-  chatState,
-  markConnectorConnected,
-  mountContinuable,
-  newChat,
-  postCurrentPaneState,
-  resetChatState,
-  teardownActiveChat,
-} from "./chat";
-import { composerState, resetComposer, resyncModelSelection } from "./composer";
+import { markConnectorConnected } from "./chat";
+import { clearSkillsCache, resyncModelSelection, seedRuntimeConfig } from "./composer";
+import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, parseDeepLink, UI_BASE } from "./deep-link";
-import { embedMode } from "./embed";
 import {
   addBlankPane,
   canvasToast,
@@ -49,6 +41,7 @@ import {
   exitSplitIfActive,
   loadPersistedSplit,
   mountRestoredCanvas,
+  restoredCanvasNeedsSessionList,
   splitState,
 } from "./split";
 import { activityOf } from "./session-list";
@@ -69,7 +62,7 @@ import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeych
 import { renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderSkills } from "./skills";
-import { contextsState, ensureContexts, renderContexts, resetContextsState } from "./contexts";
+import { contextsState, renderContexts, resetContextsState } from "./contexts";
 import { appState, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 export { appState, can, type Me, type View } from "./shell-state";
@@ -81,6 +74,8 @@ setSigninRequiredHandler((detail) => {
   authMode = detail.mode ?? authMode;
   renderAuthGate(gateFor(authMode, detail.reason));
 });
+
+onExitCanvas(() => exitSplitIfActive());
 
 export const ADMIN_BASE = (() => {
   const base = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
@@ -94,14 +89,7 @@ export function adminSessionLogUrl(sessionId: string, scopeId: string): string {
 }
 
 export function syncUrlFromState(): void {
-  if (embedMode) {
-    postCurrentPaneState();
-    if (parseDeepLink(UI_BASE, location.pathname, location.search).view === "app-edit") return;
-    const sessionId = chatState.sessionId ?? chatState.rememberedSessionId;
-    const next = sessionId ? `${deepLinkPath(UI_BASE, "chats", sessionId)}&embed=1` : `${UI_BASE}/?embed=1`;
-    if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
-    return;
-  }
+  const chatState = mainConversation().state;
   const sessionId = splitState.active ? null : (chatState.sessionId ?? chatState.rememberedSessionId);
   const next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
@@ -204,14 +192,15 @@ export async function signOut(): Promise<void> {
   }
   appState.me = null;
   clearAllDrafts();
-  resetChatState();
+  exitSplitIfActive();
+  mainConversation().resetChatState();
   resetSessionsState();
   appState.currentView = "chats";
-  composerState.skillsCache = null;
+  clearSkillsCache();
   resetMemoryState();
   resetContextsState();
   resetKeychainState();
-  resetComposer();
+  mainConversation().composer.resetComposer();
   if (!portal) {
     renderAuthGate({ kind: "dev" });
     return;
@@ -427,19 +416,6 @@ function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | und
 }
 
 export function mountShell(): void {
-  if (embedMode) {
-    render(
-      html`<div class="layout embed-layout">
-        <section class="main" id="main"><div class="empty">Loading…</div></section>
-      </div>`,
-      appEl as HTMLElement,
-    );
-    appState.topEl = null;
-    appState.listEl = null;
-    appState.mainEl = (appEl as HTMLElement).querySelector("#main");
-    shellMounted = true;
-    return;
-  }
   applySavedSidebarWidth();
   const impersonatedBy = appState.me?.impersonatedBy ?? null;
   let banner: TemplateResult | null = null;
@@ -532,7 +508,7 @@ export function renderSidebarTop(): void {
         class="new-chat"
         @click=${() => {
           closeSidebarOnNarrowView();
-          if (!addBlankPane()) newChat();
+          if (!addBlankPane()) mainConversation().newChat();
         }}
       >
         ${icon(ICON.newChat, 17)}<span>${splitState.active ? "New session" : "New chat"}</span>
@@ -596,8 +572,8 @@ export function switchView(v: View): void {
   sessionsState.openMenuId = null;
   sessionsState.renamingId = null;
   if (v !== "chats") {
-    teardownActiveChat();
-    resetComposer();
+    mainConversation().teardown();
+    mainConversation().composer.resetComposer();
   }
   renderSidebarTop();
   syncUrlFromState();
@@ -666,7 +642,7 @@ function refreshActiveView(v: View): void {
 
 export function showMainEmpty(text: string): void {
   exitSplitIfActive();
-  chatState.host = null;
+  mainConversation().state.host = null;
   if (appState.mainEl)
     appState.mainEl.replaceChildren(
       Object.assign(document.createElement("div"), { className: "empty", textContent: text }),
@@ -773,14 +749,14 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
 }
 
 window.addEventListener("popstate", () => {
-  if (embedMode || appState.currentView !== "crons") return;
+  if (appState.currentView !== "crons") return;
   const { view, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
   if (view !== "crons") return;
   routeCronsHistory(item);
 });
 
 window.addEventListener("focus", () => {
-  if (!appState.me || embedMode) return;
+  if (!appState.me) return;
   if (appState.currentView === "contexts") void renderContexts();
   else if (appState.currentView === "chats") void refreshSessions({ silent: true, refreshContexts: true });
 });
@@ -801,7 +777,7 @@ function openAppEditChat(slug: string): void {
     return;
   }
   if (!storedDraft(threadRef)) saveDraft(threadRef, `Update my deployed app "${slug}": `);
-  mountContinuable(threadRef, null, null, []);
+  mainConversation().mountContinuable(threadRef, null, null, []);
   renderList();
 }
 
@@ -836,16 +812,21 @@ export async function boot(): Promise<void> {
   appState.me = (await r.json()) as Me;
   authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();
-  const runtimeConfig = await fetchRuntimeConfig(`personal:${appState.me.user}`);
-  if (runtimeConfig)
+  const personalScope = `personal:${appState.me.user}`;
+  const runtimeConfig = await fetchRuntimeConfig(personalScope);
+  if (runtimeConfig) {
     applyRuntimeOptions(
+      personalScope,
       runtimeConfig.approvedHarnesses,
       runtimeConfig.modelsByHarness,
       runtimeConfig.effective,
       runtimeConfig.modelCatalog,
     );
+    seedRuntimeConfig(personalScope, runtimeConfig);
+  }
   resyncModelSelection();
   mountShell();
+  ensureDeliveryStream();
   warmDeferredChunks();
   loadPersistedSplit();
 
@@ -861,6 +842,9 @@ export async function boot(): Promise<void> {
   const entriesPrefetch =
     wantedSession && !viewIntent ? fetchTranscript(wantedSession, { tailTurns: TAIL_TURNS }).catch(() => null) : null;
 
+  const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
+  if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();
+
   await refreshSessions({ showLoading: true });
 
   if (wanted === "app-edit") {
@@ -870,19 +854,6 @@ export async function boot(): Promise<void> {
       return;
     }
     showMainEmpty("This edit link is missing a valid app name.");
-    return;
-  }
-
-  if (embedMode) {
-    if (wantedSession) {
-      const match = sessionsState.list.find((s) => s.id === wantedSession);
-      if (match) await openSession(match, entriesPrefetch ?? undefined);
-      else showMainEmpty("That conversation wasn't found, or you don't have access to it.");
-    } else {
-      const scope = params.get("scope");
-      const context = scope ? (await ensureContexts()).find((c) => c.scopeId === scope) : undefined;
-      newChat(context ? { scopeId: context.scopeId, name: context.name ?? null } : undefined);
-    }
     return;
   }
 
@@ -914,7 +885,7 @@ export async function boot(): Promise<void> {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
     exitSplitIfActive();
     await openSession(recent);
-  } else if (!mountRestoredCanvas()) {
-    newChat();
+  } else if (!mountRestoredCanvas() && !mainConversation().state.threadRef) {
+    mainConversation().newChat();
   }
 }

@@ -31,7 +31,7 @@ import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, formatBytes, icon, initials, relTime, toggleFormMenu } from "./ui";
 import { appState, renderSidebarTop, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
-import { newChat } from "./chat";
+import { mainConversation } from "./conversations";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
 import { activityOf } from "./session-list";
 import type { CronView } from "./crons";
@@ -1204,7 +1204,7 @@ function selectContext(scopeId: string | null): void {
 }
 
 function startChatIn(c: CoreContext): void {
-  newChat(c.kind === "personal" ? undefined : { scopeId: c.scopeId, name: c.name });
+  mainConversation().newChat(c.kind === "personal" ? undefined : { scopeId: c.scopeId, name: c.name });
 }
 
 async function openFromContext(s: CoreSession): Promise<void> {

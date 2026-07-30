@@ -115,50 +115,69 @@ function buildOptions(
   return harnessId === "pi" ? buildOptions(DEFAULT_PICKER_MODEL_IDS, "pi", qualified, catalog) : [];
 }
 
-let activeModelOptions: ModelOption[] = buildOptions(DEFAULT_PICKER_MODEL_IDS);
-let defaultRuntimeValue: string | null = null;
-
-export function getModelOptions(): ModelOption[] {
-  return activeModelOptions;
+interface RuntimeOptions {
+  options: ModelOption[];
+  defaultValue: string | null;
 }
 
-export function getHarnessOptions(): Array<{ value: string; label: string }> {
-  return [...new Map(activeModelOptions.map((option) => [option.harnessId, option.harnessLabel])).entries()].map(
+const FALLBACK: RuntimeOptions = { options: buildOptions(DEFAULT_PICKER_MODEL_IDS), defaultValue: null };
+const byScope = new Map<string, RuntimeOptions>();
+let lastApplied: RuntimeOptions = FALLBACK;
+
+function runtimeFor(scopeKey?: string | null): RuntimeOptions {
+  if (scopeKey === undefined) return lastApplied;
+  return (scopeKey !== null ? byScope.get(scopeKey) : undefined) ?? lastApplied;
+}
+
+export function getModelOptions(scopeKey?: string | null): ModelOption[] {
+  return runtimeFor(scopeKey).options;
+}
+
+export function getHarnessOptions(scopeKey?: string | null): Array<{ value: string; label: string }> {
+  const options = runtimeFor(scopeKey).options;
+  return [...new Map(options.map((option) => [option.harnessId, option.harnessLabel])).entries()].map(
     ([value, label]) => ({ value, label }),
   );
 }
 
-export function getModelOptionsForHarness(harnessId: string): ModelOption[] {
-  return activeModelOptions.filter((option) => option.harnessId === harnessId);
+export function getModelOptionsForHarness(harnessId: string, scopeKey?: string | null): ModelOption[] {
+  return runtimeFor(scopeKey).options.filter((option) => option.harnessId === harnessId);
 }
 
 export function applyPickerModelIds(ids: readonly string[] | null | undefined, baseModelId?: string | null): void {
-  activeModelOptions = buildOptions(ids && ids.length ? ids : DEFAULT_PICKER_MODEL_IDS);
-  defaultRuntimeValue = baseModelId ?? null;
+  lastApplied = {
+    options: buildOptions(ids && ids.length ? ids : DEFAULT_PICKER_MODEL_IDS),
+    defaultValue: baseModelId ?? null,
+  };
 }
 
 export function applyRuntimeOptions(
+  scopeKey: string | null,
   approvedHarnesses: readonly string[],
   modelsByHarness: Readonly<Record<string, readonly string[]>>,
   effective: { harnessId: string; modelId: string },
   catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
 ): void {
-  activeModelOptions = approvedHarnesses.flatMap((harnessId) => {
+  let options = approvedHarnesses.flatMap((harnessId) => {
     const configured = buildOptions(modelsByHarness[harnessId] ?? [], harnessId, true, catalog);
     return configured.length
       ? configured
       : buildOptions(defaultModelIdsForHarness(harnessId), harnessId, true, catalog);
   });
-  if (!activeModelOptions.length) activeModelOptions = buildOptions(DEFAULT_PICKER_MODEL_IDS);
-  defaultRuntimeValue = `${effective.harnessId}:${effective.modelId}`;
+  if (!options.length) options = buildOptions(DEFAULT_PICKER_MODEL_IDS);
+  const applied = { options, defaultValue: `${effective.harnessId}:${effective.modelId}` };
+  lastApplied = applied;
+  if (scopeKey !== null) byScope.set(scopeKey, applied);
 }
 
-export function defaultModelValue(): ModelOptionValue {
-  return activeModelOptions.find((o) => o.value === defaultRuntimeValue)?.value ?? activeModelOptions[0].value;
+export function defaultModelValue(scopeKey?: string | null): ModelOptionValue {
+  const { options, defaultValue } = runtimeFor(scopeKey);
+  return options.find((o) => o.value === defaultValue)?.value ?? options[0]!.value;
 }
 
-export function transcriptModel(): Model<Api> {
-  return (activeModelOptions.find((o) => o.value === defaultRuntimeValue) ?? activeModelOptions[0]).model;
+export function transcriptModel(scopeKey?: string | null): Model<Api> {
+  const { options, defaultValue } = runtimeFor(scopeKey);
+  return (options.find((o) => o.value === defaultValue) ?? options[0]!).model;
 }
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | "auto";

@@ -1073,6 +1073,16 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return relay(res, r);
     }
 
+    if (method === "GET" && /^\/api\/sessions\/[^/]+\/entries\/\d+$/.test(path)) {
+      const [, , , rawId, , seq] = path.split("/");
+      const id = decodeURIComponent(rawId!);
+      const r = await coreFetch(
+        "GET",
+        `/v1/sessions/${encodeURIComponent(id)}/entries/${seq}?viewer=${encodeURIComponent(user)}`,
+      );
+      return relay(res, r);
+    }
+
     if (method === "GET" && path.startsWith("/api/sessions/")) {
       const id = decodeURIComponent(path.slice("/api/sessions/".length));
       const qs = new URLSearchParams({ viewer: user });
@@ -1413,7 +1423,10 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!threadRef.startsWith(`web:${user}:`)) {
         const sessionId = typeof record.sessionId === "string" ? record.sessionId : "";
         const visible = sessionId
-          ? await coreFetch("GET", `/v1/sessions/${encodeURIComponent(sessionId)}?viewer=${encodeURIComponent(user)}`)
+          ? await coreFetch(
+              "GET",
+              `/v1/sessions/${encodeURIComponent(sessionId)}?viewer=${encodeURIComponent(user)}&tailTurns=1`,
+            )
           : null;
         if (visible?.status !== 200) return json(res, 404, { error: "not_found" });
       }

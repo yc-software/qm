@@ -53,3 +53,23 @@ export function dropAddsTile(drop: { edge: boolean; wholeTile: boolean; sourceTi
   if (!drop.edge || drop.wholeTile) return false;
   return drop.sourceTilePanes !== 1;
 }
+
+export function layoutNeedsSessionList(layout: unknown): boolean {
+  const panels = (layout as { panels?: unknown } | null)?.panels;
+  if (!panels || typeof panels !== "object") return true;
+  return Object.values(panels as Record<string, unknown>).some((panel) => {
+    const params = (panel as { params?: unknown } | null)?.params as PaneSeedLike | undefined;
+    return paneNeedsSessionList(params ?? {});
+  });
+}
+
+interface PaneSeedLike {
+  sessionId?: unknown;
+  threadRef?: unknown;
+}
+
+export function paneNeedsSessionList(p: PaneSeedLike): boolean {
+  const hasSession = typeof p.sessionId === "string" && p.sessionId !== "";
+  const hasThread = typeof p.threadRef === "string" && p.threadRef !== "";
+  return !hasSession && hasThread;
+}

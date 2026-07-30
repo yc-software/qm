@@ -289,10 +289,78 @@ export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntr
   return entries.filter((e) => e.type !== "soul");
 }
 
+export const TRANSCRIPT_BYTE_BUDGET = 400_000;
+export const ENTRY_STRING_BUDGET = 2_000;
+
+export type TranscriptEntry = SessionEntry & { truncated?: true };
+
+const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
+const WALK_DEPTH = 8;
+
+function shortenStrings(value: unknown, depth: number): { value: unknown; truncated: boolean } {
+  if (typeof value === "string") {
+    return value.length > ENTRY_STRING_BUDGET
+      ? { value: value.slice(0, ENTRY_STRING_BUDGET), truncated: true }
+      : { value, truncated: false };
+  }
+  if (value === null || typeof value !== "object") return { value, truncated: false };
+  if (depth >= WALK_DEPTH) {
+    return payloadBytes(value, depth) > ENTRY_STRING_BUDGET
+      ? { value: null, truncated: true }
+      : { value, truncated: false };
+  }
+  let truncated = false;
+  if (Array.isArray(value)) {
+    const next = value.map((item) => {
+      const walked = shortenStrings(item, depth + 1);
+      truncated ||= walked.truncated;
+      return walked.value;
+    });
+    return truncated ? { value: next, truncated } : { value, truncated };
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const walked = shortenStrings(item, depth + 1);
+    truncated ||= walked.truncated;
+    next[key] = walked.value;
+  }
+  return truncated ? { value: next, truncated } : { value, truncated };
+}
+
+function postsToTheConversation(entry: SessionEntry): boolean {
+  const p = entry.payload as { action?: unknown } | null;
+  return entry.type === "tool_call" && p?.action === "post";
+}
+
+function projectEntry(entry: SessionEntry): TranscriptEntry {
+  if (!PROJECTED_TYPES.has(entry.type) || postsToTheConversation(entry)) return entry;
+  const walked = shortenStrings(entry.payload, 0);
+  return walked.truncated ? { ...entry, payload: walked.value, truncated: true } : entry;
+}
+
+function payloadBytes(value: unknown, depth: number): number {
+  if (typeof value === "string") return value.length + 2;
+  if (value === null || typeof value !== "object") return 8;
+  if (depth >= WALK_DEPTH) {
+    try {
+      return JSON.stringify(value)?.length ?? 8;
+    } catch {
+      return 8;
+    }
+  }
+  let bytes = 2;
+  if (Array.isArray(value)) {
+    for (const item of value) bytes += payloadBytes(item, depth + 1) + 1;
+    return bytes;
+  }
+  for (const [key, item] of Object.entries(value)) bytes += key.length + payloadBytes(item, depth + 1) + 4;
+  return bytes;
+}
+
 export function windowedTranscript(
   entries: SessionEntry[],
   window?: { tailTurns?: number; sinceSeq?: number; beforeSeq?: number },
-): { entries: SessionEntry[]; earlier: number } {
+): { entries: TranscriptEntry[]; earlier: number } {
   if (window?.beforeSeq !== undefined) {
     const at = entries.findIndex((e) => e.seq >= window.beforeSeq!);
     entries = entries.slice(0, at < 0 ? entries.length : at);
@@ -311,7 +379,21 @@ export function windowedTranscript(
       }
     }
   }
-  return { entries: cut > 0 ? entries.slice(cut) : entries, earlier: cut };
+  const windowed = (cut > 0 ? entries.slice(cut) : entries).map(projectEntry);
+  if (window === undefined || window.sinceSeq !== undefined) return { entries: windowed, earlier: cut };
+  let spend = 0;
+  let from = windowed.length;
+  while (from > 0) {
+    const bytes = payloadBytes(windowed[from - 1]!.payload, 0);
+    if (spend + bytes > TRANSCRIPT_BYTE_BUDGET && from < windowed.length) break;
+    spend += bytes;
+    from--;
+  }
+  if (from > 0) {
+    const boundary = windowed.findIndex((e, i) => i >= from && e.type === "user");
+    if (boundary > 0) from = boundary;
+  }
+  return { entries: from > 0 ? windowed.slice(from) : windowed, earlier: cut + from };
 }
 
 export function isOverheardEntry(e: Pick<SessionEntry, "type" | "payload">): boolean {

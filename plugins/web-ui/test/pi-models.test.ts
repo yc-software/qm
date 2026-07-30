@@ -31,12 +31,12 @@ test("models this pi-ai build lacks are cloned from a template of their own prov
 });
 
 test("fast-mode support is fed from core's runtime config, not a hardcoded client copy", () => {
-  setFastModeModelIds([]);
-  assert.equal(modelSupportsFastMode("claude-opus-4-8"), false);
+  setFastModeModelIds(null, []);
+  assert.equal(modelSupportsFastMode(null, "claude-opus-4-8"), false);
 
-  setFastModeModelIds(["claude-opus-4-8", "claude-opus-4-7"]);
-  assert.equal(modelSupportsFastMode("claude-opus-4-8"), true);
-  assert.equal(modelSupportsFastMode("claude-sonnet-4-6"), false);
-  assert.equal(modelSupportsFastMode("claude-haiku-4-5"), false);
-  assert.equal(modelSupportsFastMode(undefined), false);
+  setFastModeModelIds(null, ["claude-opus-4-8", "claude-opus-4-7"]);
+  assert.equal(modelSupportsFastMode(null, "claude-opus-4-8"), true);
+  assert.equal(modelSupportsFastMode(null, "claude-sonnet-4-6"), false);
+  assert.equal(modelSupportsFastMode(null, "claude-haiku-4-5"), false);
+  assert.equal(modelSupportsFastMode(null, undefined), false);
 });

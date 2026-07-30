@@ -189,6 +189,13 @@ export async function fetchTranscript(
   return api<TranscriptPage>(`/api/sessions/${encodeURIComponent(id)}${suffix}`);
 }
 
+export async function fetchEntry(sessionId: string, seq: number): Promise<SessionEntry> {
+  const r = await api<{ entry: SessionEntry }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/entries/${encodeURIComponent(String(seq))}`,
+  );
+  return r.entry;
+}
+
 export async function regenerateTitle(id: string): Promise<{ title: string | null }> {
   return api<{ title: string | null }>(`/api/sessions/${encodeURIComponent(id)}/title`, { method: "POST" });
 }
@@ -209,6 +216,7 @@ export interface SessionEntry {
   createdAt: number;
   seq?: number;
   parentSeq?: number | null;
+  truncated?: boolean;
 }
 
 export interface ToolActivity {
@@ -217,6 +225,7 @@ export interface ToolActivity {
   type: "tool_call" | "tool_result" | "approval_request" | "approval_resolved" | "thinking" | "text";
   payload: unknown;
   createdAt: number;
+  truncated?: boolean;
 }
 type WorkStatus = "thinking" | "working" | "complete" | "failed";
 export interface WorkBlock {
@@ -431,14 +440,20 @@ export async function updateRuntimeConfig(
 
 export type WorkObserver = (work: WorkBlock) => void;
 
-let liveRun: { runId: string } | null = null;
-
-export function hasLiveRun(): boolean {
-  return liveRun !== null;
+export interface RunSlot {
+  runId: string | null;
 }
 
-export async function signalLiveRun(kind: "abort" | "steer", text?: string): Promise<void> {
-  const run = liveRun;
+export function createRunSlot(): RunSlot {
+  return { runId: null };
+}
+
+export function hasLiveRun(slot: RunSlot): boolean {
+  return slot.runId !== null;
+}
+
+export async function signalLiveRun(slot: RunSlot, kind: "abort" | "steer", text?: string): Promise<void> {
+  const run = slot.runId !== null ? { runId: slot.runId } : null;
   if (!run) throw new Error("No active run to signal.");
   await api(runPath(run.runId, "/signal"), {
     method: "POST",
@@ -451,6 +466,7 @@ export function makeCoreStreamFn(
   agent: Agent,
   getTurnOptions?: () => TurnOptions,
   onWork?: WorkObserver,
+  slot?: RunSlot,
 ): StreamFn {
   const fn = (
     model: Model<Api>,
@@ -458,7 +474,7 @@ export function makeCoreStreamFn(
     options?: { signal?: AbortSignal },
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
-    void drive(stream, model, threadRef, agent, getTurnOptions, options?.signal, onWork);
+    void drive(stream, model, threadRef, agent, getTurnOptions, options?.signal, onWork, undefined, false, slot);
     return stream;
   };
   return fn as unknown as StreamFn;
@@ -470,14 +486,19 @@ export async function activeRunForThread(threadRef: string): Promise<ActiveRun |
   return r.runId && r.run ? { runId: r.runId, run: r.run } : null;
 }
 
-export function makeRunResumeStreamFn(runId: string, initialRun?: RunPoll, onWork?: WorkObserver): StreamFn {
+export function makeRunResumeStreamFn(
+  runId: string,
+  initialRun?: RunPoll,
+  onWork?: WorkObserver,
+  slot?: RunSlot,
+): StreamFn {
   const fn = (
     model: Model<Api>,
     _context: Context,
     options?: { signal?: AbortSignal },
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
-    void resumeDrive(stream, model, runId, initialRun, options?.signal, onWork);
+    void resumeDrive(stream, model, runId, initialRun, options?.signal, onWork, slot);
     return stream;
   };
   return fn as unknown as StreamFn;
@@ -490,9 +511,10 @@ export async function runApprovalTurn(
   getTurnOptions: (() => TurnOptions) | undefined,
   onWork: WorkObserver | undefined,
   signal?: AbortSignal,
+  slot?: RunSlot,
 ): Promise<void> {
   const stream = createAssistantMessageEventStream();
-  await drive(stream, agent.state.model, threadRef, agent, getTurnOptions, signal, onWork, decision);
+  await drive(stream, agent.state.model, threadRef, agent, getTurnOptions, signal, onWork, decision, false, slot);
   const outcome = await stream.result();
   if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
 }
@@ -502,6 +524,7 @@ export function makeOpenerStreamFn(
   agent: Agent,
   getTurnOptions: (() => TurnOptions) | undefined,
   onWork: WorkObserver | undefined,
+  slot?: RunSlot,
 ): StreamFn {
   const fn = (
     model: Model<Api>,
@@ -509,7 +532,7 @@ export function makeOpenerStreamFn(
     options?: { signal?: AbortSignal },
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
-    void drive(stream, model, threadRef, agent, getTurnOptions, options?.signal, onWork, undefined, true);
+    void drive(stream, model, threadRef, agent, getTurnOptions, options?.signal, onWork, undefined, true, slot);
     return stream;
   };
   return fn as unknown as StreamFn;
@@ -525,6 +548,7 @@ async function drive(
   onWork?: WorkObserver,
   approval?: ApprovalDecision,
   opener?: boolean,
+  slot?: RunSlot,
 ): Promise<void> {
   const partial = baseAssistant(model);
   const work: WorkBlock = { status: "thinking", activity: [] };
@@ -564,7 +588,7 @@ async function drive(
     });
 
     if (submit.runId) {
-      await followRun(stream, partial, submit.runId, signal, notify);
+      await followRun(stream, partial, submit.runId, signal, notify, undefined, slot);
       return;
     }
 
@@ -587,6 +611,7 @@ async function resumeDrive(
   initialRun?: RunPoll,
   signal?: AbortSignal,
   onWork?: WorkObserver,
+  slot?: RunSlot,
 ): Promise<void> {
   const partial = baseAssistant(model);
   const work: WorkBlock = { status: "thinking", activity: [] };
@@ -598,7 +623,7 @@ async function resumeDrive(
     stream.push({ type: "text_start", contentIndex: 0, partial });
     const st: Acc = { acc: "", lastProgressAt: now() };
     if (initialRun && applyRun(stream, partial, st, initialRun, notify) === "terminal") return;
-    await followRun(stream, partial, runId, signal, notify, st);
+    await followRun(stream, partial, runId, signal, notify, st, slot);
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();
@@ -614,8 +639,9 @@ async function followRun(
   signal?: AbortSignal,
   notify?: () => void,
   st: Acc = { acc: "", lastProgressAt: now() },
+  slot?: RunSlot,
 ): Promise<void> {
-  liveRun = { runId };
+  if (slot) slot.runId = runId;
   try {
     if (signal?.aborted) return abortStream(stream, partial);
     const viaSse = await streamRunViaSse(stream, partial, runId, st, signal, notify);
@@ -623,7 +649,7 @@ async function followRun(
     if (signal?.aborted) return abortStream(stream, partial);
     return await pollRun(stream, partial, runId, st, signal, notify);
   } finally {
-    if (liveRun?.runId === runId) liveRun = null;
+    if (slot?.runId === runId) slot.runId = null;
   }
 }
 
@@ -1110,6 +1136,7 @@ export function entriesToMessages(entries: SessionEntry[], model: Model<Api>): A
         type: e.type as ToolActivity["type"],
         payload: e.payload,
         createdAt: e.createdAt,
+        ...(e.truncated ? { truncated: true } : {}),
       };
       if (e.type === "tool_call") {
         const postText = postCallText(e.payload);

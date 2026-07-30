@@ -13,7 +13,7 @@ import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
+import type { SessionStore, TranscriptEntry } from "../sessions/session-store.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
@@ -243,12 +243,17 @@ export interface App {
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: SessionEntry[]; earlierEntries?: number } | null>;
+  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number } | null>;
   getSessionForViewer(
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: SessionEntry[]; earlierEntries?: number } | null>;
+  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number } | null>;
+  getSessionEntryForViewer(
+    sessionId: string,
+    principalId: string,
+    seq: number,
+  ): Promise<{ entry: SessionEntry } | null>;
   listSessions(principalId: string): Promise<Session[]>;
   sessionBackground(sessionId: string, viewer: string): Promise<SessionBackgroundView | null>;
   readSessionBackgroundOutput(

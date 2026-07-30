@@ -1,4 +1,5 @@
-import type { Session, SessionEntry as CoreSessionEntry } from "../../../src/types.ts";
+import type { Session } from "../../../src/types.ts";
+import type { TranscriptEntry as CoreSessionEntry } from "../../../src/sessions/session-store.ts";
 import type { ContextSummary, ProjectView } from "../../../src/api/app.ts";
 import type { CoreContext, CoreProject, CoreSession, SessionEntry } from "../src/core-bridge.ts";
 

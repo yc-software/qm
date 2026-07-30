@@ -11,7 +11,7 @@ test("composer input rests overflow-hidden below the height cap", () => {
 });
 
 test("resizeComposer opens scrolling only past the cap and pins scrollTop under it", () => {
-  const fn = composer.match(/export function resizeComposer\(\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const fn = composer.match(/function resizeComposer\(\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(
     fn,
     /const cap = parseFloat\(getComputedStyle\(ta\)\.maxHeight\) \|\| 180;/,
@@ -24,7 +24,7 @@ test("resizeComposer opens scrolling only past the cap and pins scrollTop under 
 });
 
 test("the send-clear path resets overflow and scroll before the input is seen empty", () => {
-  const fn = composer.match(/function clearComposerDom\(agent: Agent\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const fn = composer.match(/function clearComposerDom\(agent: Agent\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(fn, /overflowY = "hidden"/, "clearing must close the scroller synchronously");
   assert.match(fn, /scrollTop = 0/, "clearing must drop the clamped scroll offset");
 });

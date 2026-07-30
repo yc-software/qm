@@ -106,6 +106,20 @@ async function getSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, found);
 }
 
+async function getSessionEntry(ctx: ApiCtx): Promise<void> {
+  const { res, app, url } = ctx;
+  const id = ctx.params.id!;
+  const viewer = url.searchParams.get("viewer");
+  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
+  const seq = Number(ctx.params.seq);
+  if (!Number.isInteger(seq) || seq < 0) {
+    return sendJson(res, 400, { error: "bad_request", message: "seq must be a non-negative integer" });
+  }
+  const found = await app.getSessionEntryForViewer(id, viewer, seq);
+  if (!found) return sendJson(res, 404, { error: "not_found" });
+  return sendJson(res, 200, found);
+}
+
 async function listSessionApprovals(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const id = ctx.params.id!;
@@ -1131,6 +1145,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: getSessionBackgroundOutput,
   },
+  { method: "GET", path: "/v1/sessions/:id/entries/:seq", auth: "source", handle: getSessionEntry },
   { method: "GET", path: "/v1/sessions/:id", auth: "source", handle: getSession },
   { method: "GET", path: "/v1/files/:id/content", auth: "source", handle: getFileContent },
   { method: "POST", path: "/v1/files/upload", auth: "source", handle: uploadFile },

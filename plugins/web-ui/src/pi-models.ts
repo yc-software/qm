@@ -41,12 +41,15 @@ function cloneModel(model: PiModel, id: string, name: string): PiModel {
   return { ...structuredClone(model), id, name };
 }
 
-let fastModeModelIds = new Set<string>();
+const fastModeByScope = new Map<string, Set<string>>();
+let lastFastModeIds = new Set<string>();
 
-export function setFastModeModelIds(ids: readonly string[] | undefined): void {
-  fastModeModelIds = new Set(ids ?? []);
+export function setFastModeModelIds(scopeKey: string | null, ids: readonly string[] | undefined): void {
+  lastFastModeIds = new Set(ids ?? []);
+  if (scopeKey !== null) fastModeByScope.set(scopeKey, lastFastModeIds);
 }
 
-export function modelSupportsFastMode(modelId: string | undefined): boolean {
-  return !!modelId && fastModeModelIds.has(modelId);
+export function modelSupportsFastMode(scopeKey: string | null, modelId: string | undefined): boolean {
+  const ids = (scopeKey !== null ? fastModeByScope.get(scopeKey) : undefined) ?? lastFastModeIds;
+  return !!modelId && ids.has(modelId);
 }
