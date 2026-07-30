@@ -2,7 +2,6 @@
 
 :root {
   --app-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --app-serif: ui-serif, Georgia, "Times New Roman", Times, serif;
   --sidebar-w: 280px;
   --content-w: 820px;
   --radius-sm: 8px;
@@ -10,6 +9,7 @@
   --radius-lg: 16px;
   --chat-pad: 22px;
   --brand-accent: #4f46e5;
+  --dev-accent: #8a5a00;
   --brand-mark: "A";
 }
 
@@ -2468,7 +2468,7 @@ body.resizing-sidebar {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.impersonation-banner {
+.top-banner {
   position: fixed;
   top: 0;
   left: 0;
@@ -2486,10 +2486,13 @@ body.resizing-sidebar {
   font-size: 13px;
   font-weight: 500;
 }
-.impersonation-banner b {
+.top-banner.dev {
+  background: var(--dev-accent);
+}
+.top-banner b {
   font-weight: 700;
 }
-.impersonation-banner-exit {
+.top-banner-action {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -2499,10 +2502,10 @@ body.resizing-sidebar {
   border-radius: 6px;
   padding: 4px 12px;
 }
-.impersonation-banner-exit:hover {
+.top-banner-action:hover {
   background: rgba(0, 0, 0, 0.3);
 }
-.layout.impersonating {
+.layout.bannered {
   --surface-safe-top: 0px;
   height: calc(100vh - 38px - env(safe-area-inset-top));
   height: calc(100dvh - 38px - env(safe-area-inset-top));
@@ -3887,12 +3890,16 @@ body.resizing-sidebar {
   padding: 24px;
   box-sizing: border-box;
 }
+.signin-panel,
 .signin form {
   display: flex;
   flex-direction: column;
   gap: 12px;
   width: 340px;
   max-width: 100%;
+}
+.signin form {
+  width: auto;
 }
 .signin-brand {
   display: flex;
@@ -3903,6 +3910,35 @@ body.resizing-sidebar {
   letter-spacing: 0;
   margin-bottom: 4px;
 }
+.signin-brand .dev-chip {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--dev-accent);
+  color: #fff;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.signin-body {
+  font-size: 13.5px;
+  color: var(--muted-foreground);
+  line-height: 1.5;
+  margin: -4px 0 2px;
+}
+.signin-body b {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.9em;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.signin label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  margin-bottom: -6px;
+}
 .signin-brand .brand-mark {
   width: 22px;
   height: 22px;
@@ -3910,10 +3946,10 @@ body.resizing-sidebar {
   font-size: 16px;
 }
 .signin h1 {
-  font-family: var(--app-serif);
-  font-size: 26px;
-  font-weight: 500;
+  font-size: 22px;
+  font-weight: 600;
   letter-spacing: 0;
+  line-height: 1.2;
   margin: 0 0 2px;
 }
 .signin input {
@@ -3934,6 +3970,9 @@ body.resizing-sidebar {
   font-size: 12px;
   color: var(--muted-foreground);
   line-height: 1.45;
+}
+.signin .hint.error {
+  color: var(--destructive, #c00);
 }
 
 @media (max-width: 860px) {

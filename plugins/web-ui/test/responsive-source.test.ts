@@ -67,11 +67,11 @@ test("the sidebar's new-session action keeps the shared outline treatment", () =
   assert.doesNotMatch(css, /split-new-session/);
 });
 
-test("impersonation mode keeps its critical exit control below the top safe area", () => {
+test("a top banner keeps its critical action below the top safe area", () => {
   assert.match(compactCss, /height: calc\(38px \+ env\(safe-area-inset-top\)\)/);
   assert.match(compactCss, /padding: env\(safe-area-inset-top\)/);
   assert.match(compactCss, /margin-top: calc\(38px \+ env\(safe-area-inset-top\)\)/);
-  assert.match(compactCss, /\.layout\.impersonating \{\s*--surface-safe-top: 0px;/);
+  assert.match(compactCss, /\.layout\.bannered \{\s*--surface-safe-top: 0px;/);
   assert.match(compactCss, /padding-top: calc\(10px \+ var\(--surface-safe-top\)\)/);
 });
 

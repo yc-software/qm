@@ -62,9 +62,11 @@ import { renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderSkills } from "./skills";
 import { contextsState, ensureContexts, renderContexts, resetContextsState } from "./contexts";
-import { appState, isView, type Me, type View } from "./shell-state";
+import { appState, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 export { appState, can, type Me, type View } from "./shell-state";
+
+let authMode: AuthMode = "portal";
 
 export const ADMIN_BASE = (() => {
   const base = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
@@ -193,7 +195,16 @@ export async function signOut(): Promise<void> {
   resetContextsState();
   resetKeychainState();
   resetComposer();
-  renderSignin();
+  if (authMode === "portal") {
+    try {
+      await fetch("/auth/logout", { method: "POST", headers: { accept: "application/json" } });
+    } catch {
+      void 0;
+    }
+    location.href = "/";
+    return;
+  }
+  renderAuthGate({ kind: "dev" });
 }
 
 export async function exitImpersonation(): Promise<void> {
@@ -207,43 +218,104 @@ export async function exitImpersonation(): Promise<void> {
 
 function impersonationBanner(by: string) {
   return html`
-    <div class="impersonation-banner" role="status">
-      <span class="impersonation-banner-text"
-        >Viewing the assistant as <b>${appState.me?.user ?? ""}</b> — you are <b>${by}</b></span
-      >
-      <button class="impersonation-banner-exit" type="button" @click=${exitImpersonation}>Exit impersonation</button>
+    <div class="top-banner" role="status">
+      <span>Viewing the assistant as <b>${appState.me?.user ?? ""}</b> — you are <b>${by}</b></span>
+      <button class="top-banner-action" type="button" @click=${exitImpersonation}>Exit impersonation</button>
     </div>
   `;
 }
 
-export function renderSignin(errorText = ""): void {
-  render(
-    html`
-      <div class="signin">
-        <form
-          @submit=${async (e: Event) => {
-            e.preventDefault();
-            const input = (e.target as HTMLFormElement).querySelector("input");
-            const user = (input as HTMLInputElement)?.value.trim();
-            if (!user) return;
-            try {
-              await api("/signin", { method: "POST", body: JSON.stringify({ user }) });
-              await boot();
-            } catch (err) {
-              renderSignin(errMessage(err, "sign in failed"));
-            }
-          }}
-        >
-          <div class="signin-brand">${brandMark()}<span>${brandName()}</span></div>
-          <h1>Sign in</h1>
-          <input type="text" placeholder="your principal id (e.g. you@org.com)" autofocus />
-          <button class="btn primary" type="submit">Continue</button>
-          ${errorText ? html`<div class="hint" style="color:var(--destructive,#c00)">${errorText}</div>` : html`<div class="hint">Use your principal ID.</div>`}
-        </form>
+function devBanner(user: string) {
+  return html`
+    <div class="top-banner dev" role="status">
+      <span><b>Dev mode</b> — no identity provider, signed in as ${user}</span>
+      <button class="top-banner-action" type="button" @click=${signOut}>Sign out</button>
+    </div>
+  `;
+}
+
+function gateShell(body: unknown) {
+  return html`
+    <div class="signin">
+      <div class="signin-panel">
+        <div class="signin-brand">
+          ${brandMark()}<span>${brandName()}</span>
+          ${authMode === "dev" ? html`<span class="dev-chip">DEV</span>` : nothing}
+        </div>
+        ${body}
       </div>
-    `,
-    appEl as HTMLElement,
-  );
+    </div>
+  `;
+}
+
+function signInWithPortal(): void {
+  const returnTo = `${location.pathname}${location.search}`;
+  location.href = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+function portalGate() {
+  return gateShell(html`
+    <h1>Your session ended</h1>
+    <p class="signin-body">You've been signed out. Sign in again and you'll come back to this page.</p>
+    <button class="btn primary" type="button" @click=${signInWithPortal}>Sign in</button>
+  `);
+}
+
+function unreachableGate() {
+  return gateShell(html`
+    <h1>We couldn't reach the assistant</h1>
+    <p class="signin-body">The service didn't respond. This is usually temporary.</p>
+    <button class="btn primary" type="button" @click=${() => void boot()}>Try again</button>
+    <div class="hint">If this keeps happening, the core service may be down.</div>
+  `);
+}
+
+function devGate(errorText: string) {
+  return gateShell(html`
+    <form
+      @submit=${async (e: Event) => {
+        e.preventDefault();
+        const form = e.target as HTMLFormElement;
+        const input = form.querySelector("input") as HTMLInputElement | null;
+        const user = input?.value.trim();
+        if (!user || form.dataset.pending === "1") return;
+        form.dataset.pending = "1";
+        try {
+          await api("/signin", { method: "POST", body: JSON.stringify({ user }) });
+          await boot();
+        } catch (err) {
+          renderAuthGate({ kind: "dev", error: errMessage(err, "Sign-in failed.") });
+        }
+      }}
+    >
+      <h1>Dev sign-in</h1>
+      <p class="signin-body">
+        No identity provider is configured, so this instance trusts a local cookie. Set
+        <b>CORE_SIGNING_SECRET</b> and run the portal to use real sign-in.
+      </p>
+      <label for="dev-principal">Work email</label>
+      <input id="dev-principal" name="principal" type="email" autocomplete="username" autofocus spellcheck="false" />
+      <button class="btn primary" type="submit">Continue</button>
+      ${errorText ? html`<div class="hint error" role="alert">${errorText}</div>` : nothing}
+    </form>
+  `);
+}
+
+export type AuthGate = { kind: "portal" } | { kind: "unreachable" } | { kind: "dev"; error?: string };
+
+export function renderAuthGate(gate: AuthGate): void {
+  if (gate.kind === "dev") authMode = "dev";
+  const body = (() => {
+    switch (gate.kind) {
+      case "portal":
+        return portalGate();
+      case "unreachable":
+        return unreachableGate();
+      default:
+        return devGate(gate.error ?? "");
+    }
+  })();
+  render(body, appEl as HTMLElement);
 }
 
 export function mountShell(): void {
@@ -261,10 +333,13 @@ export function mountShell(): void {
   }
   applySavedSidebarWidth();
   const impersonatedBy = appState.me?.impersonatedBy ?? null;
+  let banner: TemplateResult | null = null;
+  if (impersonatedBy) banner = impersonationBanner(impersonatedBy);
+  else if (authMode === "dev") banner = devBanner(appState.me?.user ?? "");
   render(
     html`
-      ${impersonatedBy ? impersonationBanner(impersonatedBy) : nothing}
-      <div class="layout ${sidebarOpen ? "" : "sidebar-closed"} ${impersonatedBy ? "impersonating" : ""}">
+      ${banner ?? nothing}
+      <div class="layout ${sidebarOpen ? "" : "sidebar-closed"} ${banner ? "bannered" : ""}">
         <aside class="sidebar" aria-label="Navigation" @keydown=${onSidebarKeydown}>
           <div class="brand">
             <div class="brand-lockup">${brandMark()}<span class="brand-name">${brandName()}</span></div>
@@ -614,13 +689,29 @@ function openAppEditChat(slug: string): void {
 }
 
 export async function boot(): Promise<void> {
-  const r = await fetch(withBase("/me"));
+  let r: Response;
+  try {
+    r = await fetch(withBase("/me"));
+  } catch {
+    renderAuthGate({ kind: "unreachable" });
+    return;
+  }
   if (r.status === 401) {
-    renderSignin();
+    const mode = await r
+      .json()
+      .then((b: { mode?: AuthMode }) => b.mode)
+      .catch(() => undefined);
+    authMode = mode ?? "portal";
+    renderAuthGate(authMode === "dev" ? { kind: "dev" } : { kind: "portal" });
+    return;
+  }
+  if (!r.ok) {
+    renderAuthGate({ kind: "unreachable" });
     return;
   }
   resetKeychainState();
   appState.me = (await r.json()) as Me;
+  authMode = appState.me.mode ?? "portal";
   const runtimeConfig = await fetchRuntimeConfig(`personal:${appState.me.user}`);
   if (runtimeConfig)
     applyRuntimeOptions(

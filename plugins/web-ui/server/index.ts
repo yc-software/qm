@@ -33,6 +33,8 @@ const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`)
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
+const COOKIE_AUTH = !CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY;
+const AUTH_MODE = COOKIE_AUTH ? "dev" : "portal";
 const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
   .split(",")
   .map((s) => s.trim())
@@ -252,7 +254,7 @@ function resolveIdentity(
     name = claims.n ?? null;
     impersonator = claims.imp ?? null;
   } else {
-    if (CORE_SIGNING_SECRET && !ALLOW_UNSIGNED_TEST_IDENTITY) return null;
+    if (!COOKIE_AUTH) return null;
     user = cookie(req, "webuiuser");
     name = cookie(req, "webuiuser_name");
     impersonator = cookie(req, "webui_impersonator");
@@ -701,6 +703,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   }
 
   if (method === "POST" && path === "/signin") {
+    if (!COOKIE_AUTH) return json(res, 404, { error: "not_found" });
     const body = await readBody(req);
     const id = (() => {
       try {
@@ -709,7 +712,12 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return "";
       }
     })();
-    if (!id || (ALLOW.length > 0 && !ALLOW.includes(id))) return json(res, 403, { error: "not allowed" });
+    if (!id) return json(res, 400, { error: "bad_request", message: "Enter a principal to sign in as." });
+    if (ALLOW.length > 0 && !ALLOW.includes(id))
+      return json(res, 403, {
+        error: "not_allowed",
+        message: `${id.slice(0, 120)} isn't in this instance's allowed principals. Add it to WEB_UI_PRINCIPALS, or leave that unset to allow any principal.`,
+      });
     res.writeHead(200, {
       "set-cookie": sessionCookie(id),
       "content-type": "application/json",
@@ -741,7 +749,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
-    if (!user) return json(res, 401, { error: "sign in" });
+    if (!user) return json(res, 401, { error: "sign in", mode: AUTH_MODE });
 
     if (path === "/me") {
       res.setHeader("set-cookie", sessionCookie(user));
@@ -749,6 +757,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, {
         user,
         org: ORG,
+        mode: AUTH_MODE,
         slackWorkspaceUrl: await slackWorkspaceUrl(),
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         permissions,
@@ -1824,7 +1833,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (method === "GET" && path.startsWith("/deployments/")) {
     const user = cookieUser(req);
-    if (!user) return json(res, 401, { error: "sign in" });
+    if (!user) return json(res, 401, { error: "sign in", mode: AUTH_MODE });
     const rest = path.slice("/deployments/".length);
     const slash = rest.indexOf("/");
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
@@ -1896,7 +1905,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         );
         if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
           console.warn("[web-ui] dist-web/ not built — run `npm run build`");
-        if (ALLOW.length === 0)
+        if (COOKIE_AUTH && ALLOW.length === 0)
           console.warn("[web-ui] WEB_UI_PRINCIPALS unset — any principal id may sign in (dev only)");
         const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
         t.unref?.();
