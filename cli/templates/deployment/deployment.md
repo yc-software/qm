@@ -19,6 +19,12 @@ it in place. If the repository has not been initialized, collect:
   machine, is for a quick local test drive only, and is outside this
   workflow; never present it as the recommended path for a real deployment;
 - the first administrator's verified work email;
+- how people sign in: the built-in `auth` broker, which emails a one-time link,
+  or an external OIDC provider. Ask whether the company runs on Slack before
+  assuming the broker — Slack sign-in needs no email transport, no sending
+  domain, and no DNS, and domain verification is the step most likely to stall
+  a deploy. Recommend Slack sign-in to a Slack workspace and the broker
+  otherwise;
 - model provider: Anthropic, OpenAI, or OpenRouter (one key that routes to
   many models). This is a deployment choice, not a post-deploy one: it becomes
   `modelProvider` in `qm.config.jsonc`, which makes that provider's API key a
@@ -86,10 +92,16 @@ existing deployment config.
 Set the exact lowercased administrator email in `.env` as
 `ADMIN_GRANTS=<email>:org_admin`.
 
-Sign-in is the built-in `auth` broker, which emails a one-time link. There is no
-identity provider to register: the CLI generates the broker's signing key and
-the portal's client credentials and derives every `OIDC_*` value from
-`publicUrl`. Setting any of them by hand is refused.
+Follow the sign-in route chosen in step 1. Only the `auth` broker needs an email
+transport; skip to "Slack sign-in" below when the operator picked Slack, and
+skip `references/email.md` entirely with it.
+
+### The built-in broker
+
+The `auth` broker emails a one-time link. There is no identity provider to
+register: the CLI generates the broker's signing key and the portal's client
+credentials and derives every `OIDC_*` value from `publicUrl`. Setting any of
+them by hand is refused.
 
 What the operator supplies is a way to send those emails. Do not ask them to
 pick a transport by name; ask what they already use for email. An existing
@@ -102,7 +114,19 @@ Resend and controls DNS for a sending domain should pick `resend`. Set
 Resend path needs DNS control you will not have, so raise it with the operator
 early. Configure services, model, and the final public origin in the same pass.
 
-To use an external work-email OIDC provider instead, drop `"auth"` from
+### Slack sign-in
+
+A workspace that already runs on Slack can sign in with it and skip email
+altogether. Drop `"auth"` from `services` and follow
+`.codex/skills/deploy-qm/references/slack.md`, which covers the SSO app, the
+`env.portal` endpoints, the workspace trust boundary, and the client
+credentials. The bot app in that same reference is a separate decision — Slack
+sign-in does not require the agent in the workspace, and the agent does not
+require Slack sign-in.
+
+### Another OIDC provider
+
+To use a different work-email OIDC provider, drop `"auth"` from
 `services`, register `<publicUrl>/auth/callback` with the provider, and put its
 endpoints and the email gate in `env.portal`. For Google Workspace:
 
@@ -119,14 +143,17 @@ endpoints and the email gate in `env.portal`. For Google Workspace:
 }
 ```
 
-The base model needs a key in the same pass. `modelProvider` decides which one
-`qm setup` asks for — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
-`OPENROUTER_API_KEY` — and the wizard prints where to mint it. The operator owns
-the billing relationship, so they create the key; you only place it. It is a
-required secret, so `qm doctor` calls the provider to prove the key is accepted
-and `qm up` refuses a deployment that has none. Treat a rejected key exactly like
-a rejected email credential: stop and get a working one rather than deploying a
-stack that greets the administrator and then fails their first message.
+### The base model
+
+Whichever sign-in route the deployment takes, the base model needs a key in the
+same pass. `modelProvider` decides which one `qm setup` asks for —
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` — and the wizard
+prints where to mint it. The operator owns the billing relationship, so they
+create the key; you only place it. It is a required secret, so `qm doctor` calls
+the provider to prove the key is accepted and `qm up` refuses a deployment that
+has none. Treat a rejected key exactly like a rejected sign-in credential: stop
+and get a working one rather than deploying a stack that greets the
+administrator and then fails their first message.
 
 An operator may still prefer to hold the key centrally and rotate it from the
 Admin page. That is a deliberate choice, not the default: drop `modelProvider`
@@ -178,25 +205,28 @@ Open `adminConnectorsUrl` from `outputs --json`. For each chosen connector:
 
 Verify configured connectors appear and unconfigured connectors remain hidden.
 
-## 6. Add Slack
+## 6. Add the Slack bot
 
-Skip this when Slack was deferred. Otherwise read
-`.codex/skills/deploy-qm/references/slack.md`, then run:
+This is the agent in the workspace, not sign-in; a deployment using Slack
+sign-in already created its SSO app in step 3. Skip this when the bot was
+deferred. Otherwise read `.codex/skills/deploy-qm/references/slack.md`, then run:
 
 ```bash
 npm exec qm -- slack render
 npm exec qm -- outputs
 ```
 
-Create the app from the exact manifest URL. Enter its bot and app tokens in the
-Admin Slack card, invite it to a test channel, mention it, and receive a reply.
+Create the app from the exact bot manifest URL. Enter its bot and app tokens in
+the Admin Slack card, invite it to a test channel, mention it, and receive a
+reply.
 
 ## 7. Return the handoff
 
 Return:
 
 - the web, Admin onboarding, Admin connectors, and user connections URLs;
-- Slack app and test-channel links when enabled;
+- how people sign in, and the Slack SSO app link when that is the route;
+- Slack bot app and test-channel links when enabled;
 - provider, account or organization, and region;
 - the base model provider and where its key lives — the deployment `.env` or the
   Admin page — so the operator knows what to rotate and where;
