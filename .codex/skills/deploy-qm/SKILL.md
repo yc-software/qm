@@ -11,10 +11,12 @@ as the authoritative workflow. Read only the selected provider reference. Read
 transport and one of its steps needs the operator's DNS. Read
 `references/slack.md` only when Slack is requested.
 
-A deployment needs two credentials from the operator before it can do anything
-useful: a way to send sign-in mail, and a base model key. Collect both in the
-same pass. The base model provider is a deployment choice recorded as
-`modelProvider`, not a setting to leave for the Admin page.
+A deployment needs a base model key and a way for people to sign in. Collect
+both in the same pass. The base model provider is a deployment choice recorded
+as `modelProvider`, not a setting to leave for the Admin page. Sign-in is either
+the built-in `auth` broker, which needs an email transport, or an external OIDC
+provider such as Slack, which needs no email at all — read `references/email.md`
+only once the operator has chosen the broker.
 
 Use the installed `@yc-software/qm` dependency through `npm exec qm -- <command>`. Do
 not require or clone the QM source repository. Complete every acceptance check
