@@ -103,7 +103,7 @@ else if (command === "s3api put-object") {
     console.log(JSON.stringify({items:[image()]}));
   }
 } else if (command === "lambda-microvms list-tags") {
-  console.log(JSON.stringify({tags:{ManagedBy:"qm-cli",Deployment:process.env.FAKE_DEPLOYMENT_TAG || "acme"}}));
+  console.log(JSON.stringify({Tags:{ManagedBy:"qm-cli",Deployment:process.env.FAKE_DEPLOYMENT_TAG || "acme"}}));
 } else if (command === "lambda-microvms create-microvm-image" || command === "lambda-microvms update-microvm-image") {
   state = state || {version:0,state:"CREATED"};
   if (process.env.FAKE_CONFLICT === "1" && !state.conflictUsed) {

@@ -298,8 +298,8 @@ function imageTags(awsBin: string, region: string, imageArn: string): Record<str
       "json",
       "--no-cli-pager",
     ]),
-  ) as { tags?: Record<string, string> };
-  return parsed.tags ?? {};
+  ) as { Tags?: Record<string, string> };
+  return parsed.Tags ?? {};
 }
 
 function assertImageIdentity(config: QmConfig, awsBin: string, image: ImageSummary): ImageSummary {
