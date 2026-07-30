@@ -334,6 +334,15 @@ describe("capability-token control plane (crons + SOUL)", () => {
     assert.equal(res.status, 403);
   });
 
+  it("refuses a capability token minted for another audience on a self-service route", async () => {
+    const foreign = await capFor("U1", scopeId("personal", "U1"), { aud: "some-other-surface" });
+    const res = await get("/v1/keychain/overview", { "x-agent-capability": foreign });
+    assert.equal(res.status, 403);
+    assert.match(await res.text(), /audience not valid/);
+    const ok = await get("/v1/keychain/overview", { "x-agent-capability": await capFor("U1") });
+    assert.notEqual(ok.status, 403);
+  });
+
   it("Strict capabilities can observe but cannot directly mutate the control plane", async () => {
     const scope = scopeId("personal", "U-strict");
     await built.config.setSecurityPosture(scope, "strict");
