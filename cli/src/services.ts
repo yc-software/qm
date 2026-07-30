@@ -38,7 +38,7 @@ export interface LogOpts {
   tail?: number;
 }
 
-export interface FlyServiceCtx {
+export interface ServiceCtx {
   appPrefix: string;
   orgId: string;
   deployAppPrefix: string;
@@ -46,10 +46,14 @@ export interface FlyServiceCtx {
   hasPortal: boolean;
   hasAuth: boolean;
   authAllowedEmailDomain?: string;
+  /** Provider-supplied internal URL other services use to reach core. */
+  coreUrl: string;
+  /** Provider-supplied internal base URL of the auth service. */
+  authUrl: string;
 }
 
 interface FlyServiceSpec {
-  managed: (s: FlyServiceCtx) => Record<string, string>;
+  managed: (s: ServiceCtx) => Record<string, string>;
   stackKeys: string[];
   deployFlags: string[];
   flycast?: boolean;
@@ -134,16 +138,13 @@ export function brokerWiring(
   return {};
 }
 
-const flyCoreUrl = (s: FlyServiceCtx): string => `http://${s.appPrefix}-core.internal:8080`;
-const flyAuthUrl = (s: FlyServiceCtx): string => `http://${s.appPrefix}-auth.flycast`;
-
-const pluginWiring = (service: string, s: FlyServiceCtx): Record<string, string> => ({
-  CORE_API_URL: flyCoreUrl(s),
+const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
+  CORE_API_URL: s.coreUrl,
   ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal),
   ...(s.hasAuth
     ? brokerWiring(service, {
         publicUrl: s.publicUrl,
-        authBaseUrl: flyAuthUrl(s),
+        authBaseUrl: s.authUrl,
         ...(s.authAllowedEmailDomain ? { allowedEmailDomain: s.authAllowedEmailDomain } : {}),
       })
     : {}),

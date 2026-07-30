@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxCoreEnv, type QmConfig } from "../src/config.ts";
+import { FLY_TEMPLATE_ENV_DEFAULTS } from "../src/target-env-defaults.ts";
 import {
-  FLY_TEMPLATE_ENV_DEFAULTS,
   computedSecrets,
   renderEnvExample,
   runtimeSecretNames,

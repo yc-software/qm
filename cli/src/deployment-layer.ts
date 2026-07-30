@@ -1,10 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { appPrefixOf, dockerBasePort, type Target, type QmConfig } from "./config.ts";
+import type { QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
-import { capture, deploymentSecretValue, flyBin, readEnvFile } from "./util.ts";
+import { deploymentSecretValue, readEnvFile } from "./util.ts";
 
 interface DeploymentLayerFile {
   path: string;
@@ -135,16 +134,15 @@ function signingHeaders(secret: string, method: string, path: string, body: stri
   };
 }
 
-function coreUrl(config: QmConfig, target: Target): URL {
-  if (target === "docker") return new URL(`http://127.0.0.1:${dockerBasePort(config)}/v1/deployment-layer`);
+function defaultCoreUrl(config: QmConfig): URL {
   const url = new URL(config.publicUrl);
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
   return url;
 }
 
-class CoreUnreachableError extends CliError {}
+export class CoreUnreachableError extends CliError {}
 
-const CONNECTIVITY_CODES = new Set([
+export const CONNECTIVITY_CODES = new Set([
   "ECONNREFUSED",
   "ECONNRESET",
   "ENOTFOUND",
@@ -168,84 +166,67 @@ function isCoreUnreachable(error: unknown): boolean {
   return false;
 }
 
-const FLY_RESPONSE = "QM_LAYER_RESPONSE=";
-const FLY_REMOTE_ERROR = "QM_LAYER_ERROR=";
-const FLY_REQUEST_TIMEOUT_MS = 120_000;
+interface DeploymentLayerTransportOpts {
+  config: QmConfig;
+  configDir: string;
+  method: "GET" | "PUT";
+  body: string;
+  envFile?: string;
+}
 
-function flyRequest(config: QmConfig, method: "GET" | "PUT", body: string): { status: number; body: string } {
-  const app = `${appPrefixOf(config)}-core`;
-  const script = `const fs=require("node:fs"),{createHmac}=require("node:crypto");const fail=error=>{const code=error&&(error.cause&&error.cause.code||error.code);console.log(${JSON.stringify(FLY_REMOTE_ERROR)}+JSON.stringify({message:error&&error.message?error.message:String(error),...(typeof code==="string"?{code}:{})}))};try{const method=${JSON.stringify(method)},path="/v1/deployment-layer",body=fs.readFileSync(0,"utf8"),timestamp=Math.floor(Date.now()/1000),canonical=method+"\\n"+path+"\\n"+body,secret=process.env.CORE_SIGNING_SECRET;if(!secret)throw new Error("CORE_SIGNING_SECRET is not set on core");const signature=createHmac("sha256",secret).update("v0:"+timestamp+":"+canonical).digest("hex");fetch("http://127.0.0.1:"+(process.env.PORT||8080)+path,{method,headers:{"content-type":"application/json","x-timestamp":String(timestamp),"x-signature":"v0="+signature},...(method==="PUT"?{body}: {})}).then(async response=>console.log(${JSON.stringify(FLY_RESPONSE)}+JSON.stringify({status:response.status,body:await response.text()}))).catch(fail)}catch(error){fail(error)}`;
-  const encoded = Buffer.from(script).toString("base64");
-  const command = `node -e "eval(Buffer.from('${encoded}','base64').toString())"`;
-  let output: string;
-  try {
-    output = execFileSync(flyBin(), ["ssh", "console", "-a", app, "-C", command], {
-      encoding: "utf8",
-      input: body,
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: FLY_REQUEST_TIMEOUT_MS,
+/**
+ * How a hosting target reaches its core's /v1/deployment-layer endpoint.
+ * Each HostingProvider supplies one; nothing in this file knows about targets.
+ */
+export type DeploymentLayerTransport = (
+  opts: DeploymentLayerTransportOpts,
+) => Promise<{ status: number; body: string }>;
+
+/** Signed-HTTP transport used by providers whose core is reachable over plain HTTPS. */
+export function httpDeploymentLayerTransport(
+  o: {
+    urlOf?: (config: QmConfig) => URL;
+    secretFallback?: (config: QmConfig) => string | undefined;
+    timeoutMs?: number;
+  } = {},
+): DeploymentLayerTransport {
+  return async (opts) => {
+    const envPath = opts.envFile ?? join(opts.configDir, ".env");
+    const env = existsSync(envPath) ? readEnvFile(envPath) : new Map<string, string>();
+    let secret = deploymentSecretValue("CORE_SIGNING_SECRET", env.get("CORE_SIGNING_SECRET"));
+    if (!secret && o.secretFallback) secret = o.secretFallback(opts.config);
+    if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
+    const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
+    const response = await fetch(url, {
+      method: opts.method,
+      headers: signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
+      ...(opts.method === "PUT" ? { body: opts.body } : {}),
+      ...(o.timeoutMs ? { signal: AbortSignal.timeout(o.timeoutMs) } : {}),
     });
-  } catch (error) {
-    const detail = error as { stdout?: string; stderr?: string; message?: string };
-    const text = `${detail.stderr ?? ""}${detail.stdout ?? ""}`.trim() || detail.message || "fly ssh failed";
-    if (/could not find app|app not found/i.test(text)) throw new CliError(`Fly app ${app} not found: ${text}`);
-    throw new CoreUnreachableError(`could not reach the Fly core: ${text}`);
-  }
-  const remoteError = output.split("\n").find((value) => value.startsWith(FLY_REMOTE_ERROR));
-  if (remoteError) {
-    const detail = JSON.parse(remoteError.slice(FLY_REMOTE_ERROR.length)) as { message?: string; code?: string };
-    const message = detail.message ?? "deployment-layer request failed on the core";
-    if (detail.code && CONNECTIVITY_CODES.has(detail.code)) {
-      throw new CoreUnreachableError(`the core process on ${app} is not accepting connections: ${message}`);
-    }
-    throw new CliError(`deployment-layer request failed on ${app}: ${message}`);
-  }
-  const line = output.split("\n").find((value) => value.startsWith(FLY_RESPONSE));
-  if (!line) throw new CliError(`Fly core returned no deployment-layer response`);
-  return JSON.parse(line.slice(FLY_RESPONSE.length)) as { status: number; body: string };
+    return { status: response.status, body: await response.text() };
+  };
 }
 
 export async function deploymentLayerRequest(opts: {
   config: QmConfig;
-  target: Target;
   configDir: string;
   method: "GET" | "PUT";
   body?: string;
   envFile?: string;
+  transport: DeploymentLayerTransport;
 }): Promise<{ status: number; body: string }> {
-  const body = opts.body ?? "";
-  if (opts.target === "fly") return flyRequest(opts.config, opts.method, body);
-  const envPath = opts.envFile ?? join(opts.configDir, ".env");
-  const env = existsSync(envPath) ? readEnvFile(envPath) : new Map<string, string>();
-  let secret = deploymentSecretValue("CORE_SIGNING_SECRET", env.get("CORE_SIGNING_SECRET"));
-  if (!secret && opts.target === "aws" && opts.config.aws) {
-    secret = capture(process.env.AWS_BIN ?? "aws", [
-      "secretsmanager",
-      "get-secret-value",
-      "--secret-id",
-      `${opts.config.aws.secretsPrefix}CORE_SIGNING_SECRET`,
-      "--query",
-      "SecretString",
-      "--output",
-      "text",
-      "--region",
-      opts.config.aws.region,
-    ]).trim();
-  }
-  if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
-  const url = coreUrl(opts.config, opts.target);
-  const response = await fetch(url, {
+  return opts.transport({
+    config: opts.config,
+    configDir: opts.configDir,
     method: opts.method,
-    headers: signingHeaders(secret, opts.method, url.pathname + url.search, body),
-    ...(opts.method === "PUT" ? { body } : {}),
-    ...(opts.target === "aws" ? { signal: AbortSignal.timeout(60_000) } : {}),
+    body: opts.body ?? "",
+    ...(opts.envFile ? { envFile: opts.envFile } : {}),
   });
-  return { status: response.status, body: await response.text() };
 }
 
 export async function syncDeploymentLayer(opts: {
   config: QmConfig;
-  target: Target;
+  transport: DeploymentLayerTransport;
   configDir: string;
   sandboxDir: string;
   envFile?: string;
@@ -261,7 +242,7 @@ export async function syncDeploymentLayer(opts: {
 
 export async function currentDeploymentLayerState(opts: {
   config: QmConfig;
-  target: Target;
+  transport: DeploymentLayerTransport;
   configDir: string;
   envFile?: string;
 }): Promise<DeploymentLayerState> {
@@ -303,7 +284,7 @@ export async function currentDeploymentLayerState(opts: {
 export async function syncDeploymentLayerBody(
   opts: {
     config: QmConfig;
-    target: Target;
+    transport: DeploymentLayerTransport;
     configDir: string;
     envFile?: string;
     allowUnavailable?: boolean;
@@ -314,10 +295,10 @@ export async function syncDeploymentLayerBody(
   try {
     response = await deploymentLayerRequest({
       config: opts.config,
-      target: opts.target,
       configDir: opts.configDir,
       method: "PUT",
       body,
+      transport: opts.transport,
       ...(opts.envFile ? { envFile: opts.envFile } : {}),
     });
   } catch (error) {

@@ -13,7 +13,13 @@ import {
   type DeclaredServiceName,
   type ServiceName,
 } from "./services.ts";
-import { hostingProviderChoices, isTarget, type Target } from "./providers.ts";
+import {
+  hostingProviderChoices,
+  isTarget,
+  type Target,
+  SANDBOX_BACKEND_POLICY,
+  targetsAllowingSandboxBackend,
+} from "./providers.ts";
 import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
 
 export const CONFIG_FILENAME = "qm.config.jsonc";
@@ -1335,10 +1341,14 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     for (const name of se) assertEnvName(name, `"sandbox.secretEnv" entry`);
     out.secretEnv = se;
   }
+  if (out.backend !== undefined && !SANDBOX_BACKEND_POLICY[target].allowed.includes(out.backend)) {
+    const targets = targetsAllowingSandboxBackend(out.backend)
+      .map((allowed) => JSON.stringify(allowed))
+      .join(" or ");
+    const label = out.backend === "aws" ? " (Lambda MicroVM sandboxes)" : "";
+    throw new CliError(`${path}: "sandbox.backend": ${JSON.stringify(out.backend)}${label} requires target ${targets}`);
+  }
   if (out.backend === "aws") {
-    if (target !== "aws") {
-      throw new CliError(`${path}: "sandbox.backend": "aws" (Lambda MicroVM sandboxes) requires target "aws"`);
-    }
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
@@ -1354,9 +1364,9 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       `${path}: "sandbox.backend": ${JSON.stringify(out.backend)} requires "sandbox.app" (the Fly app agents execute in)`,
     );
   }
-  if (target === "aws" && out.backend === undefined) {
+  if (SANDBOX_BACKEND_POLICY[target].requireExplicit && out.backend === undefined) {
     throw new CliError(
-      `${path}: target "aws" requires an explicit "sandbox.backend" — "sprites" boots the operator-published layer image in "sandbox.app"; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default)`,
+      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" boots the operator-published layer image in "sandbox.app"; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default)`,
     );
   }
   return out;

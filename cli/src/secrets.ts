@@ -1,5 +1,6 @@
 import { isVirtualService, type DeclaredServiceName } from "./services.ts";
 import type { ModelProvider, QmConfig } from "./config.ts";
+import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 
 type SecretCondition =
   | { kind: "env-equals"; service: DeclaredServiceName; name: string; value: string }
@@ -392,21 +393,8 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   return value === condition.value;
 }
 
-export const FLY_TEMPLATE_ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  core: { HARNESS: "pi" },
-};
-
-const AWS_RENDER_ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  core: { SANDBOX_BACKEND: "aws" },
-};
-
 function targetEnvDefault(config: QmConfig, service: string, name: string): string | undefined {
-  if (config.target === "fly") return FLY_TEMPLATE_ENV_DEFAULTS[service]?.[name];
-  if (config.target !== "aws") return undefined;
-  const rendered = AWS_RENDER_ENV_DEFAULTS[service]?.[name];
-  if (rendered === undefined) return undefined;
-  if (name === "SANDBOX_BACKEND") return config.sandbox?.backend ?? rendered;
-  return rendered;
+  return TARGET_ENV_DEFAULTS[config.target](config, service, name);
 }
 
 function requirementFor(config: QmConfig, spec: SecretSpec): boolean | null {
