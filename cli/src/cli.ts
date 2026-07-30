@@ -18,7 +18,6 @@ import { HOSTING_PROVIDER_IDS, hostingProviderChoices, isTarget, type Target } f
 import { type LogOpts } from "./services.ts";
 import { runInit } from "./commands/init.ts";
 import { runSetup } from "./commands/setup.ts";
-import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "./commands/infra.ts";
 import { runSandboxBuild } from "./commands/sandbox.ts";
 import { runChecks, runCheckCommand } from "./commands/check.ts";
 import { assertNodeEngine } from "./preflight.ts";
@@ -448,18 +447,14 @@ async function dispatch(argv: string[]): Promise<void> {
         throw new CliError(`usage: ${CLI_NAME} infra render|build-image|delete-image|delete-task-definitions`);
       }
       const ctx = deployContext(flags);
-      if (ctx.target !== "aws") throw new CliError(`infra ${operation} is only available for target aws`);
+      const run = hostingProvider(ctx.target).infra?.[operation];
+      if (!run) throw new CliError(`infra ${operation} is not available for target ${ctx.target}`);
       if (operation === "delete-image" || operation === "delete-task-definitions") {
         if (!boolFlag(flags, "yes"))
           throw new CliError(`infra ${operation} requires --yes`, { clause: "cli.invocation" });
-        if (operation === "delete-image") await deleteAwsMicrovmImage(ctx.config);
-        else await deleteAwsTaskDefinitions(ctx.config);
-      } else if (operation === "build-image") {
-        await buildAwsMicrovmImage(ctx.config, ctx.configPath);
-      } else {
-        runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
-        renderTerraformVars(ctx.config, ctx.configDir);
       }
+      if (operation === "render") runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
+      await run(ctx);
       return;
     }
 
