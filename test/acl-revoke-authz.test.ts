@@ -33,10 +33,10 @@ test("revoke has the same owner check as grant: a non-owner cannot revoke a pers
   assert.equal((await acl.grantsFor(owner, "redline.md")).length, 0, "the owner can revoke");
 });
 
-test("org-owned grants have no single owner, so revoke is not owner-gated (same as grant)", async () => {
+test("org-owned grants fail closed: neither grant nor revoke passes without an approving manages hook", async () => {
   const acl = createAclStore();
-  await acl.grant(grant({ ownerScopeId: org, grantedBy: "admin" }));
-  await acl.revoke(org, "redline.md", carol, "someone-else");
+  await assert.rejects(acl.grant(grant({ ownerScopeId: org, grantedBy: "admin" })), /only a manager/);
+  await assert.rejects(acl.revoke(org, "redline.md", carol, "someone-else"), /only a manager/);
   assert.equal((await acl.grantsFor(org, "redline.md")).length, 0);
 });
 

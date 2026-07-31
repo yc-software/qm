@@ -63,14 +63,19 @@ test("without a membership predicate, channel/group grants pass unguarded (narro
   assert.equal((await acl.grantsFor(CHAN, ref)).length, 1);
 });
 
-test("org/team home scopes are not membership-managed: grants pass unguarded as before", async () => {
-  const acl = createAclStore(undefined, { manages });
+test("org/team home scopes fail closed: only a manages hook that approves may grant", async () => {
   const org = scopeId("org", "default-org");
   const team = scopeId("team", "eng");
-  await acl.grant(grant({ ownerScopeId: org, grantedBy: "admin" }));
-  await acl.grant(grant({ ownerScopeId: team, grantedBy: "someone" }));
-  assert.equal((await acl.grantsFor(org, ref)).length, 1);
-  assert.equal((await acl.grantsFor(team, ref)).length, 1);
+  await assert.rejects(createAclStore().grant(grant({ ownerScopeId: org, grantedBy: "anyone" })), /only a manager/);
+  await assert.rejects(createAclStore().grant(grant({ ownerScopeId: team, grantedBy: "anyone" })), /only a manager/);
+  const acl = createAclStore(undefined, { manages });
+  await assert.rejects(acl.grant(grant({ ownerScopeId: org, grantedBy: "admin" })), /only a manager/);
+  await assert.rejects(acl.grant(grant({ ownerScopeId: team, grantedBy: "someone" })), /only a manager/);
+  assert.equal((await acl.grantsFor(org, ref)).length, 0);
+  const orgManages: ScopeManagement = async (_principalId, scope) => scope === org;
+  const adminAcl = createAclStore(undefined, { manages: orgManages });
+  await adminAcl.grant(grant({ ownerScopeId: org, grantedBy: "admin" }));
+  assert.equal((await adminAcl.grantsFor(org, ref)).length, 1);
 });
 
 const PUBCHAN = scopeId("channel", "PUB");

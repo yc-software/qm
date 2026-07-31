@@ -140,8 +140,8 @@ export function createAclStore(
   async function canManage(scopeId: ScopeId, principalId: string, authoredBy?: string): Promise<boolean> {
     const owner = ownerOf(scopeId);
     if (owner !== null) return samePerson(principalId, owner);
-    if (isMembershipManaged(scopeId) && opts.manages) return opts.manages(principalId, scopeId, authoredBy);
-    return true;
+    if (opts.manages) return opts.manages(principalId, scopeId, authoredBy);
+    return isMembershipManaged(scopeId);
   }
   return {
     async grant(g, authoredBy) {

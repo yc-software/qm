@@ -243,10 +243,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     d: Deployment,
     da: NonNullable<DeployOrUpdateInput["defaultAudience"]>,
     isCreate: boolean,
+    actor: string,
   ): Promise<void> {
     if (!isCreate && !da.force && d.createdInScope && da.contextScopeId !== d.createdInScope) return;
     const ref = deploymentRef(d.id);
-    const owner = d.createdBy;
     const prior = isCreate ? [] : (d.defaultAudience?.granteeScopeIds ?? []);
     const priorSet = new Set(prior);
     const nextSet = new Set(da.granteeScopeIds);
@@ -254,11 +254,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     for (const grantee of prior) {
       if (nextSet.has(grantee)) continue;
       const explicit = before.filter((g) => g.granteeScopeId === grantee && g.permission !== "read");
-      await deps.acl.revoke(d.ownerScopeId, ref, grantee, owner);
+      await deps.acl.revoke(d.ownerScopeId, ref, grantee, actor);
       for (const g of explicit) await deps.acl.grant(g);
       deps.auditLog.record({
         at: Date.now(),
-        principalId: owner,
+        principalId: actor,
         action: "deploy_unshare",
         resource: ref,
         scopeLabel: grantee,
@@ -271,11 +271,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ref,
         granteeScopeId: grantee,
         permission: "read",
-        grantedBy: owner,
+        grantedBy: actor,
       });
       deps.auditLog.record({
         at: Date.now(),
-        principalId: owner,
+        principalId: actor,
         action: "deploy_share",
         resource: ref,
         scopeLabel: grantee,
@@ -580,7 +580,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             ...(input.env ? { env: input.env } : {}),
           });
           if (input.defaultAudience)
-            await reconcileDefaultAudience((await deps.deployStore.get(existing.id))!, input.defaultAudience, false);
+            await reconcileDefaultAudience(
+              (await deps.deployStore.get(existing.id))!,
+              input.defaultAudience,
+              false,
+              createdBy,
+            );
         }
         if (input.share?.length) await issueShares((await deps.deployStore.get(existing.id))!, createdBy, input.share);
         return (await deps.deployStore.get(existing.id))!;
@@ -630,7 +635,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         isCreate = true;
       }
       if (input.defaultAudience)
-        await reconcileDefaultAudience((await deps.deployStore.get(d.id))!, input.defaultAudience, isCreate);
+        await reconcileDefaultAudience((await deps.deployStore.get(d.id))!, input.defaultAudience, isCreate, createdBy);
       if (input.share?.length) await issueShares((await deps.deployStore.get(d.id))!, createdBy, input.share);
       return (await deps.deployStore.get(d.id))!;
     },

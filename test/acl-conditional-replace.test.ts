@@ -7,7 +7,7 @@ const owner = "org:default-org";
 const ref = "service-cred:k";
 
 test("conditional grant compensation preserves a newer full-tuple write", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { manages: async () => true });
   const original: Grant = {
     ownerScopeId: owner,
     ref,

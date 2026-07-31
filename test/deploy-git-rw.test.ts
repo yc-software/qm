@@ -32,7 +32,7 @@ const GIT_ENV = {
 
 function fixture() {
   const deployStore = createDeployStore({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } });
-  const acl: AclStore = createAclStore();
+  const acl: AclStore = createAclStore(undefined, { manages: async (principalId) => principalId === "U1" });
   const deploy = createDeployService({
     deployStore,
     provider: {

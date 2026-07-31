@@ -23,6 +23,9 @@ export interface ScopeMembershipDeps {
   identity?: {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
   };
+  admin?: {
+    adminStatusOf(p: Principal): Promise<{ isAdmin: boolean }>;
+  };
   sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
 }
 
@@ -196,8 +199,14 @@ export function createManagesArtifactHome(
 ): ManagesArtifactHome {
   return async function managesArtifactHome(homeScopeId, createdBy, principalId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
-    if (await canManageScope(principalId, homeScopeId)) return true;
     const { kind, ref } = parseScopeId(homeScopeId);
+    if (kind === "team" || kind === "org") {
+      return (
+        (await deps.admin?.adminStatusOf({ id: principalId, type: "internal" }).catch(() => undefined))?.isAdmin ===
+        true
+      );
+    }
+    if (await canManageScope(principalId, homeScopeId)) return true;
     if (!samePerson(createdBy, principalId)) return false;
     if (kind === "personal") return true;
     if (kind === "channel") return (await deps.directory?.channelPrivacy?.(ref).catch(() => undefined)) === false;
