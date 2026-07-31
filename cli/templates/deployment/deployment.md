@@ -158,21 +158,12 @@ A playground must be its **own deployment**, never a flag on a working org's
 instance: every visitor is an ordinary internal principal of the deployment's
 org, so anything granted or published at org scope — including org-granted
 credentials — is theirs. Grant nothing sensitive at org scope, connect no real
-connector credentials, and load no company data.
-
-Because a cleared cookie is a fresh identity, the per-principal brakes are
-soft; set the real ones in the same pass: `env.core.ORG_BUDGET_USD_PER_WINDOW`
-(the one hard spend ceiling), `BUDGET_USD_PER_WINDOW` and
-`RATE_LIMIT_PER_WINDOW` per principal, and after first boot pin a single model
-through the Admin page's base-model and web-UI model resources. The portal
-refuses to boot a playground alongside `PORTAL_COOKIE_DOMAIN`,
-`PORTAL_APPS_DOMAIN`, or `PORTAL_DEPLOYMENTS_ENABLED`, and refuses mint limits
-outside the claim store's bounds. Anonymous visitors are denied `/admin` and
-the connect and secret-drop flows. Nothing garbage-collects an abandoned
-visitor's scope yet, so expect storage to grow with traffic.
-`plugins/portal/README.md` § "Playground mode" documents the mechanism,
-including the per-address mint rate limits and how the client address is
-derived behind a proxy.
+connector credentials, and load no company data. A cleared cookie is a fresh
+identity, so set `env.core.ORG_BUDGET_USD_PER_WINDOW` — the one hard spend
+ceiling — in the same pass, and pin a single model from the Admin page after
+first boot. Nothing garbage-collects an abandoned visitor's scope yet.
+`plugins/portal/README.md` § "Playground mode" covers the rest: per-address
+mint limits, the boot refusals, and what anonymous visitors are denied.
 
 ### The base model
 
