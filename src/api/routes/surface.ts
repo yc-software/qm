@@ -189,10 +189,10 @@ async function getSessionBackgroundOutput(ctx: ApiCtx): Promise<void> {
 }
 
 async function getFileContent(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
+  const { res, app, capability, actor } = ctx;
   const id = ctx.params.id!;
-  const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
+  const viewer = capability?.actorId ?? actor?.p;
+  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
   const opened = await app.openFileForViewer(id, viewer);
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   res.writeHead(200, {
@@ -205,9 +205,9 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
 }
 
 async function listFiles(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
+  const { res, app, url, capability, actor } = ctx;
+  const viewer = capability?.actorId ?? actor?.p;
+  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
   const limitRaw = url.searchParams.get("limit");
   const cursor = url.searchParams.get("cursor");
   const scope = url.searchParams.get("scope");
@@ -1225,9 +1225,9 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: getSessionBackgroundOutput,
   },
   { method: "GET", path: "/v1/sessions/:id", auth: "source", handle: getSession },
-  { method: "GET", path: "/v1/files/:id/content", auth: "source", handle: getFileContent },
+  { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
   { method: "POST", path: "/v1/files/upload", auth: "source", handle: uploadFile },
-  { method: "GET", path: "/v1/files", auth: "source", handle: listFiles },
+  { method: "GET", path: "/v1/files", auth: "either", handle: listFiles },
   { method: "POST", path: "/v1/sessions/:id", auth: "source", handle: patchSession },
   { method: "GET", path: "/v1/sessions", auth: "source", handle: listSessions },
   { method: "GET", path: "/v1/conversations", auth: "either", handle: listAgentConversations },

@@ -143,6 +143,24 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    match: (m, p) => m === "GET" && (p === "/v1/files" || /^\/v1\/files\/[^/]+\/content$/.test(p)),
+    guidance:
+      "These show the ASKING PERSON's file library across every context they can reach. A file outside their visibility returns 404 without revealing whether it exists.",
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/files",
+        summary:
+          "list files the asking person can reach across their contexts, split into owned and shared files; use limit and cursor query parameters to page owned files",
+      },
+      {
+        method: "GET",
+        path: "/v1/files/:id/content",
+        summary: "download the bytes of a file from the asking person's file library",
+      },
+    ],
+  },
+  {
     match: onPath("POST", "/v1/reach"),
     routes: [
       {
