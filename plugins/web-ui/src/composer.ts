@@ -341,7 +341,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const runtimePending = activeRuntimeConfig === null;
     const modelToggled = !runtimePending && selectedModel.value !== defaultModelValue(scopeKey());
     const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0 || approvalPauses.length > 0;
-    const attachingDisabled = inputBlocked || agent.state.isStreaming;
+    const attachingDisabled = inputBlocked;
     let placeholder = "Ask anything";
     if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
     else if (agent.state.isStreaming) placeholder = "Steer the running task…";
@@ -657,17 +657,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       </button>`;
     }
     const canSteer = Boolean(composerState.draft.trim());
+    const steerTitle = composerState.attachments.length
+      ? "Steer the running task (attachments stay for your next message)"
+      : "Steer the running task";
     return html`
       <button class="stop-btn" type="button" title="Stop" aria-label="Stop" @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
-      <button
-        class="send-btn"
-        type="submit"
-        title="Steer the running task"
-        aria-label="Steer the running task"
-        ?disabled=${!canSteer}
-      >
+      <button class="send-btn" type="submit" title=${steerTitle} aria-label=${steerTitle} ?disabled=${!canSteer}>
         ${icon(ArrowUp, 17)}
       </button>
     `;
@@ -1185,12 +1182,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
     const text = data.getData("text/plain");
     if (text.length <= LARGE_PASTE_CHARS) return;
-    if (
-      ctx.chat.hasUnresolvedApproval() ||
-      ctx.chat.state.resolvingApprovals.size > 0 ||
-      agent.state.isStreaming ||
-      composerState.processingFiles
-    )
+    if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0 || composerState.processingFiles)
       return;
     e.preventDefault();
     const names = new Set(composerState.attachments.map((a) => a.fileName));
@@ -1242,8 +1234,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     if (
       (!files.length && !folders.length) ||
       ctx.chat.hasUnresolvedApproval() ||
-      ctx.chat.state.resolvingApprovals.size > 0 ||
-      agent.state.isStreaming
+      ctx.chat.state.resolvingApprovals.size > 0
     )
       return;
     if (composerState.processingFiles) {
@@ -1314,12 +1305,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function pickFiles(): void {
-    if (
-      ctx.chat.hasUnresolvedApproval() ||
-      ctx.chat.state.resolvingApprovals.size > 0 ||
-      ctx.chat.state.agent?.state.isStreaming
-    )
-      return;
+    if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
     ctx.chat.state.host?.querySelector<HTMLInputElement>(".file-input")?.click();
   }
 

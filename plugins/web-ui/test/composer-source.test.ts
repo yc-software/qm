@@ -34,3 +34,27 @@ test("composer-right keeps its control order: make default, use org default, mod
   assert.ok(model < harness, "the model picker should precede the harness picker");
   assert.ok(harness < send, "the harness picker should precede the send controls");
 });
+
+test("attaching files is allowed while a turn is streaming", () => {
+  // The attach button and drop/paste paths must not gate on isStreaming —
+  // only on runtime readiness and pending approvals.
+  assert.match(composer, /const attachingDisabled = inputBlocked;/);
+  assert.doesNotMatch(composer, /attachingDisabled = inputBlocked \|\| agent\.state\.isStreaming/);
+  // pickFiles, addFiles, and the large-paste path no longer check isStreaming.
+  const guards = composer.match(/isStreaming/g) ?? [];
+  const pickFiles = composer.slice(
+    composer.indexOf("function pickFiles"),
+    composer.indexOf("function removeAttachment"),
+  );
+  assert.doesNotMatch(pickFiles, /isStreaming/);
+  const addFiles = composer.slice(
+    composer.indexOf("async function addFiles"),
+    composer.indexOf("function dragHasFiles"),
+  );
+  assert.doesNotMatch(addFiles, /isStreaming/);
+  assert.ok(guards.length > 0, "streaming still gates steer/send routing");
+});
+
+test("steering with pending attachments explains they ride the next message", () => {
+  assert.match(composer, /attachments stay for your next message/);
+});
