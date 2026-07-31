@@ -206,6 +206,8 @@ const FAMILIES: AgentApiFamily[] = [
   {
     match: (m, p) =>
       (p === "/v1/memory/self" && (m === "GET" || m === "PUT")) ||
+      (p === "/v1/memory/history" && m === "GET") ||
+      (p === "/v1/memory/restore" && m === "POST") ||
       (m === "POST" && (p === "/v1/memory/search" || p === "/v1/memory/facts")),
     when: (v) => !!v.claims.memory,
     guidance: "Memory bodies and curation rules are documented in the memory skill.",
@@ -215,7 +217,13 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET|PUT",
         path: "/v1/memory/self",
-        summary: "read or rewrite (curate) this conversation's whole notebook",
+        summary: "read or rewrite (curate) this conversation's whole notebook; rewriting is destructive",
+      },
+      { method: "GET", path: "/v1/memory/history", summary: "list notebook versions available to undo a rewrite" },
+      {
+        method: "POST",
+        path: "/v1/memory/restore",
+        summary: "restore a prior notebook version using revision and expectedRevision; use scope: org for org memory",
       },
     ],
   },

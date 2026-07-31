@@ -98,7 +98,12 @@ function isAdminContentRead(pathname: string): boolean {
 }
 
 function strictPostAllowed(pathname: string, body: unknown): boolean {
-  if (pathname === "/v1/surface-context" || pathname === "/v1/memory/search" || pathname.startsWith("/v1/run-signals/"))
+  if (
+    pathname === "/v1/surface-context" ||
+    pathname === "/v1/memory/search" ||
+    pathname === "/v1/memory/restore" ||
+    pathname.startsWith("/v1/run-signals/")
+  )
     return true;
   return (
     /^\/v1\/triggers\/[^/]+\/consent$/.test(pathname) && (body as { decision?: unknown } | null)?.decision === "decline"

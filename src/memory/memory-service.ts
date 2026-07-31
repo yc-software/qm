@@ -11,7 +11,7 @@ function revisionToken(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-interface MemoryRevision {
+export interface MemoryRevision {
   revision: string;
   content: string;
   operation: string;

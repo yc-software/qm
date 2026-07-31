@@ -398,25 +398,47 @@ async function putSelfMemory(ctx: ApiCtx): Promise<void> {
 }
 
 async function getSelfMemoryHistory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
+  const { res, deps, url, capability, actor } = ctx;
+  const viewer = capability?.actorId ?? actor?.p;
+  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
+  const principalId = capability ? viewer : url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  if (url.searchParams.has("principalId") && url.searchParams.get("principalId") !== viewer) {
+    return sendJson(res, 404, { error: "not_found" });
+  }
+  const requestedScope = capability ? (url.searchParams.get("scope") ?? undefined) : undefined;
+  if (requestedScope !== undefined && requestedScope !== "org") {
+    return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
+  }
+  let scope: ScopeId | undefined = makeScopeId("personal", principalId);
+  if (capability) scope = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
+  if (!scope) return sendJson(res, 404, { error: "not_found" });
   if (!deps.memory?.history) return sendJson(res, 200, { revisions: [] });
-  return sendJson(res, 200, { revisions: await deps.memory.history(makeScopeId("personal", principalId), 30) });
+  return sendJson(res, 200, { revisions: await deps.memory.history(scope, 30) });
 }
 
 async function restoreSelfMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  const b = body as { principalId?: unknown; revision?: unknown; expectedRevision?: unknown };
-  if (typeof b.principalId !== "string" || typeof b.revision !== "string" || typeof b.expectedRevision !== "string") {
-    return sendJson(res, 400, { error: "bad_request", message: "principalId, revision, expectedRevision required" });
+  const { res, deps, body, capability, actor } = ctx;
+  const viewer = capability?.actorId ?? actor?.p;
+  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
+  const b = body as { principalId?: unknown; revision?: unknown; expectedRevision?: unknown; scope?: unknown };
+  const principalId = capability ? viewer : b.principalId;
+  if (typeof principalId !== "string" || typeof b.revision !== "string" || typeof b.expectedRevision !== "string") {
+    return sendJson(res, 400, { error: "bad_request", message: "revision and expectedRevision required" });
   }
-  const scope = makeScopeId("personal", b.principalId);
-  const restored = await deps.memory?.restore?.(scope, b.revision, b.expectedRevision, b.principalId);
+  if (b.principalId !== undefined && b.principalId !== viewer) return sendJson(res, 404, { error: "not_found" });
+  const requestedScope = capability ? b.scope : undefined;
+  if (requestedScope !== undefined && requestedScope !== "org") {
+    return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
+  }
+  let scope: ScopeId | undefined = makeScopeId("personal", principalId);
+  if (capability) scope = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
+  if (!scope) return sendJson(res, 404, { error: "not_found" });
+  const restored = await deps.memory?.restore?.(scope, b.revision, b.expectedRevision, viewer);
   if (!restored)
     return sendJson(res, 409, { error: "conflict", message: "Memory changed, or that revision no longer exists." });
   audit(deps, {
-    principalId: b.principalId,
+    principalId: viewer,
     action: "memory.self.restore",
     resource: `memory:${b.revision}`,
     scopeLabel: scope,
@@ -1159,8 +1181,8 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
   { method: "GET", path: "/v1/memory", auth: "source", handle: getSelfMemory },
   { method: "PUT", path: "/v1/memory", auth: "source", handle: putSelfMemory },
-  { method: "GET", path: "/v1/memory/history", auth: "source", handle: getSelfMemoryHistory },
-  { method: "POST", path: "/v1/memory/restore", auth: "source", handle: restoreSelfMemory },
+  { method: "GET", path: "/v1/memory/history", auth: "either", handle: getSelfMemoryHistory },
+  { method: "POST", path: "/v1/memory/restore", auth: "either", handle: restoreSelfMemory },
   { method: "GET", path: "/v1/apis", auth: "either", handle: listAgentApis },
   {
     match: (m, p) =>
