@@ -195,8 +195,8 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       const status =
         (e as { $metadata?: { httpStatusCode?: number }; status?: number })?.$metadata?.httpStatusCode ??
         (e as { status?: number })?.status;
-      if (!/NoSuchKey|NotFound/.test(code) && status !== 404) swallow("aws-sandbox: hydrate", e);
-      return false;
+      if (/NoSuchKey|NotFound/.test(code) || status === 404) return false;
+      throw e;
     }
     if (!bytes || !bytes.length) return false;
     await writeAbsBytes(id, HOME_TAR, bytes);
@@ -252,11 +252,12 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         if (stored) {
           const desc = await api.tryGetMicrovm(stored.microvmId);
           const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-          const stale = Date.now() - stored.createdAtMs > rotateAfterMs;
+          const stale = Date.now() - stored.createdAtMs > rotateAfterMs && !activeByMicrovm.has(stored.microvmId);
           if (alive && !stale) {
             endpointById.set(stored.microvmId, stored.endpoint);
             scopeByMicrovm.set(stored.microvmId, scope);
             await ensureRunning(stored.microvmId);
+            await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
             return { id: stored.microvmId, endpoint: stored.endpoint, coldStart: false };
           }
           if (alive && stale) {
@@ -270,12 +271,22 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         }
         const body = await launchBody(scope);
         scopeByMicrovm.set(body.id, scope);
-        const hydrated = await hydrateHome(scope, body.id);
+        let hydrated: boolean;
+        try {
+          hydrated = await hydrateHome(scope, body.id);
+        } catch (e) {
+          scopeByMicrovm.delete(body.id);
+          endpointById.delete(body.id);
+          client.evict(body.id);
+          await api.terminate(body.id).catch((e2) => swallow("aws-sandbox: hydrate-fail terminate", e2));
+          throw e;
+        }
         await store.put(scope, {
           microvmId: body.id,
           endpoint: body.endpoint,
           ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
           createdAtMs: Date.now(),
+          lastActivityMs: Date.now(),
           ...(hydrated ? { lastSnapshotMs: Date.now() } : {}),
           orgId: configOrgId(),
         });
@@ -451,7 +462,11 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         return;
       }
 
-      if (tdOpts?.keepWarm) return;
+      if (tdOpts?.keepWarm) {
+        const warmScope = scopeByMicrovm.get(handle.id) ?? (await scopeOf(handle.id));
+        if (warmScope) await store.merge(warmScope, { lastActivityMs: Date.now() }).catch(() => {});
+        return;
+      }
 
       const scope = scopeByMicrovm.get(handle.id) ?? (await scopeOf(handle.id));
       if (tdOpts?.destroy) {
@@ -490,6 +505,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       for (const [scope, rec] of await store.entries()) {
         if (rec.orgId && rec.orgId !== configOrgId()) continue;
         if (!rec.lastActivityMs || rec.lastActivityMs > cutoff) continue;
+        if (activeByMicrovm.has(rec.microvmId)) continue;
         const desc = await api.tryGetMicrovm(rec.microvmId);
         if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
           await store.delete(scope).catch(() => {});
