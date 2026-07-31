@@ -105,6 +105,7 @@ function strictPostAllowed(pathname: string, body: unknown): boolean {
     pathname.startsWith("/v1/run-signals/")
   )
     return true;
+  if (/^\/v1\/skills\/[^/]+\/restore$/.test(pathname)) return true;
   return (
     /^\/v1\/triggers\/[^/]+\/consent$/.test(pathname) && (body as { decision?: unknown } | null)?.decision === "decline"
   );

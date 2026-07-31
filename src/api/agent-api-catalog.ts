@@ -343,7 +343,10 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (m, p) =>
-      (m === "POST" && p === "/v1/skills") || ((m === "PUT" || m === "DELETE") && p.startsWith("/v1/skills/")),
+      (m === "POST" && p === "/v1/skills") ||
+      (m === "GET" && p.startsWith("/v1/skills/")) ||
+      ((m === "PUT" || m === "DELETE") && p.startsWith("/v1/skills/")) ||
+      (m === "POST" && /^\/v1\/skills\/[^/]+\/restore$/.test(p)),
     guidance:
       "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it auto-loads (skills/<name>/SKILL.md) on every future turn. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale.",
     routes: [
@@ -354,6 +357,11 @@ const FAMILIES: AgentApiFamily[] = [
           "save a NEW skill in this conversation's scope — {name, description, body} (the SKILL.md). Auto review+published; a name already taken in this scope is a 409 (edit it instead).",
       },
       {
+        method: "GET",
+        path: "/v1/skills/:id",
+        summary: "read a skill you can see, including an archived skill's body, files, status, and version",
+      },
+      {
         method: "PUT",
         path: "/v1/skills/:id",
         summary:
@@ -362,7 +370,12 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "DELETE",
         path: "/v1/skills/:id",
-        summary: "delete a skill you manage (hard delete). 404 if missing, 403 if it isn't yours to delete",
+        summary: "archive a skill you manage. 404 if missing, 403 if it isn't yours to archive",
+      },
+      {
+        method: "POST",
+        path: "/v1/skills/:id/restore",
+        summary: "restore an archived skill you manage by re-reviewing and publishing its preserved version",
       },
     ],
   },

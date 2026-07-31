@@ -620,8 +620,11 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
 }
 
 async function getSkillDetail(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
+  const { res, app, url, capability, actor } = ctx;
+  const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
+  if (!capability && !actor && ctx.secret) {
+    return sendJson(res, 401, { error: "capability_required" });
+  }
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const skill = await app.getSkill(ctx.params.id!);
   if (
@@ -655,7 +658,11 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
 
 async function restoreSkill(ctx: ApiCtx): Promise<void> {
   const b = (ctx.body ?? {}) as { principalId?: unknown };
-  const principalId = typeof b.principalId === "string" ? b.principalId : "";
+  const principalId =
+    ctx.capability?.actorId ?? ctx.actor?.p ?? (typeof b.principalId === "string" ? b.principalId : "");
+  if (!ctx.capability && !ctx.actor && ctx.secret) {
+    return sendJson(ctx.res, 401, { error: "capability_required" });
+  }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
   return restored ? sendJson(ctx.res, 200, { ok: true }) : sendJson(ctx.res, 404, { error: "not_found" });
@@ -1197,11 +1204,11 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: agentMemory,
   },
   { method: "GET", path: "/v1/skills", auth: "source", handle: listSkills },
-  { method: "GET", path: "/v1/skills/:id", auth: "source", handle: getSkillDetail },
+  { method: "GET", path: "/v1/skills/:id", auth: "either", handle: getSkillDetail },
   { method: "POST", path: "/v1/skills", auth: "either", handle: createSkill },
   { method: "PUT", path: "/v1/skills/:id", auth: "either", handle: updateSkill },
   { method: "DELETE", path: "/v1/skills/:id", auth: "either", handle: deleteSkill },
-  { method: "POST", path: "/v1/skills/:id/restore", auth: "source", handle: restoreSkill },
+  { method: "POST", path: "/v1/skills/:id/restore", auth: "either", handle: restoreSkill },
   { method: "POST", path: "/v1/grants", auth: "source", handle: createGrant },
   { method: "POST", path: "/v1/grants/revoke", auth: "source", handle: revokeGrant },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
