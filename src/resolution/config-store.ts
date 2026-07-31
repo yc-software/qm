@@ -19,6 +19,7 @@ import {
   type PublicConnectorClient,
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
+import { errMessage } from "../util/errors.ts";
 
 export interface PersistedSoul {
   scopeId: ScopeId;
@@ -267,7 +268,8 @@ export function createMemoryConfigStore(
   const browseModelStore = opts.browseModels ?? createMemoryMap<PersistedBrowseModel>();
   const turnWallClockStore = opts.turnWallClocks ?? createMemoryMap<PersistedTurnWallClock>();
   const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
-  const persistWarn = (what: string) => (e: unknown) => console.error(`[config] failed to persist ${what}:`, e);
+  const persistWarn = (what: string) => (e: unknown) =>
+    console.error(`[config] failed to persist ${what}:`, errMessage(e));
   const writeQueue = createKeyedQueue();
   const pendingWrites = new Map<string, Promise<void>>();
   const persist = (key: string, what: string, op: () => Promise<unknown>): void => {
@@ -285,7 +287,7 @@ export function createMemoryConfigStore(
       try {
         listener(id);
       } catch (e) {
-        console.error("[config] runtime-selection listener failed:", e);
+        console.error("[config] runtime-selection listener failed:", errMessage(e));
       }
     }
   };

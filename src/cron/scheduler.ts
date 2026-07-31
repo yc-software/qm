@@ -188,12 +188,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const t = nowArg ?? now();
     await leaderLease.hold(TICK_LEASE_KEY, async () => {
       await fireDue(t);
-      await deps.sweepAsks?.(t).catch((e: unknown) => console.error("[scheduler] ask sweep failed:", e));
+      await deps.sweepAsks?.(t).catch((e: unknown) => console.error("[scheduler] ask sweep failed:", errMessage(e)));
     });
   };
 
   const sweeper = createSweeper(
-    () => tick().catch((e: unknown) => console.error("[scheduler] tick failed:", e)),
+    () => tick().catch((e: unknown) => console.error("[scheduler] tick failed:", errMessage(e))),
     1000,
     { label: "scheduler" },
   );
@@ -227,7 +227,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         return;
       }
     } catch (e) {
-      console.error("[scheduler] fire failed:", e);
+      console.error("[scheduler] fire failed:", errMessage(e));
       await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
       return;
     }
@@ -242,9 +242,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (slot !== undefined) await deps.jobQueue!.enqueueFire({ cronId: cron.id, scheduledAt: slot });
       }
     } catch (e) {
-      console.error("[scheduler] tick failed:", e);
+      console.error("[scheduler] tick failed:", errMessage(e));
     }
-    await deps.sweepAsks?.(now()).catch((e: unknown) => console.error("[scheduler] ask sweep failed:", e));
+    await deps.sweepAsks?.(now()).catch((e: unknown) => console.error("[scheduler] ask sweep failed:", errMessage(e)));
   }
 
   const leaseGuard = createSweeper(

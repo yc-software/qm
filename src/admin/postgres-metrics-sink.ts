@@ -1,5 +1,6 @@
 import { createPostgresEventSink, type EventColumn } from "./scoped-event-sink.ts";
 import type { MetricsSink, TurnMetricSample } from "./metrics-sink.ts";
+import { errMessage } from "../util/errors.ts";
 
 const COLUMNS: readonly EventColumn<keyof TurnMetricSample & string>[] = [
   ["ts", "ts", "BIGINT", "number", true],
@@ -76,7 +77,7 @@ export function createPostgresMetricsSink(connectionString: string): MetricsSink
       params.push(runId);
       await sink
         .q(`UPDATE turn_metrics SET ${sets.join(", ")} WHERE run_id = $${params.length}`, params)
-        .catch((err) => console.error("[metrics] failed to patch turn metric:", err));
+        .catch((err) => console.error("[metrics] failed to patch turn metric:", errMessage(err)));
     },
     list: (opts = {}) => sink.list(opts),
   };

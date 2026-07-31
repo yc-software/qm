@@ -1,4 +1,5 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
+import { errMessage } from "../util/errors.ts";
 
 export interface IdempotencyRecord {
   key: string;
@@ -41,7 +42,7 @@ export function createIdempotencyStore(
         if (r.at < cutoff) await backing.delete(r.key);
       }
     })().catch((e: unknown) => {
-      console.error("[idempotency] retention prune failed:", e);
+      console.error("[idempotency] retention prune failed:", errMessage(e));
     });
   }
 

@@ -32,7 +32,7 @@ export async function startServer(): Promise<void> {
   });
   const server = createServer((req, res) => {
     void handle(req, res).catch((err: unknown) => {
-      console.error(`[auth] 500 ${req.method ?? "?"} ${(req.url ?? "?").split("?")[0]}:`, err);
+      console.error(`[auth] 500 ${req.method ?? "?"} ${(req.url ?? "?").split("?")[0]}:`, String(err));
       if (!res.headersSent) json(res, 500, { error: "internal_error" });
       else res.end();
     });

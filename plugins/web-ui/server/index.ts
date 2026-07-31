@@ -1918,7 +1918,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
 const server = createServer((req, res) => {
   void handler(req, res).catch((err: unknown) => {
-    console.error(`[web-ui] 502 ${req.method ?? "?"} ${req.url ?? "?"}:`, err);
+    console.error(`[web-ui] 502 ${req.method ?? "?"} ${req.url ?? "?"}:`, String(err));
     if (!res.headersSent) json(res, 502, { error: "bad_gateway", message: "upstream error" });
     else res.end();
   });
@@ -1942,7 +1942,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       });
     })
     .catch((err: unknown) => {
-      console.error("[web-ui] failed to start:", err);
+      console.error("[web-ui] failed to start:", String(err));
       process.exit(1);
     });
 }

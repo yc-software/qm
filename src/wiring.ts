@@ -512,13 +512,13 @@ export function buildApp(
       }
     };
     skillsReady = Promise.all([
-      installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", e)),
-      deploymentLayerReady.catch((e) => console.error("[seed] deployment layer not ready:", e)),
+      installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
+      deploymentLayerReady.catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
     ]).then(() => undefined);
   } else {
     skillsReady = deploymentLayerReady.then(
       () => undefined,
-      (e) => console.error("[seed] deployment layer not ready:", e),
+      (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
     );
   }
   const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };

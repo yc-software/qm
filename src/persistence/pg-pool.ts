@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { swallowAs } from "../util/errors.ts";
+import { errMessage } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
 
@@ -63,7 +64,7 @@ export function createPgPool(connectionString: string, statements: string[]): Pg
       poolP = (async () => {
         const pg = (await import("pg")).default;
         const p = new pg.Pool({ connectionString });
-        p.on("error", (err) => console.error("[pg] idle client error:", err));
+        p.on("error", (err) => console.error("[pg] idle client error:", errMessage(err)));
         try {
           await applyDdl(p, schema);
         } catch (e) {

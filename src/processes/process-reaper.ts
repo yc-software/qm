@@ -4,6 +4,7 @@ import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-l
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
 import type { ProcessSandbox } from "../sandbox/sandbox.ts";
+import { errMessage } from "../util/errors.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
@@ -66,7 +67,9 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
       if (!flipped) continue;
       reaped++;
       if (opts.onReaped)
-        await opts.onReaped(rec).catch((err) => console.error("[process-reaper] onReaped hook failed:", err));
+        await opts
+          .onReaped(rec)
+          .catch((err) => console.error("[process-reaper] onReaped hook failed:", errMessage(err)));
     }
     return { reaped };
   }

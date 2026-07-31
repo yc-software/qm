@@ -29,7 +29,7 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
         warmed = true;
         nextAt = Date.now() + REFRESH_MS;
       } catch (err) {
-        if (process.env.BRANDING_DEBUG) console.error("[branding] fetch failed:", err);
+        if (process.env.BRANDING_DEBUG) console.error("[branding] fetch failed:", String(err));
         nextAt = Date.now() + RETRY_MS;
       } finally {
         inflight = null;

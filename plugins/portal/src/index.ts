@@ -812,7 +812,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): void {
 
 const server = createServer((req, res) => {
   void handle(req, res).catch((err: unknown) => {
-    console.error(`[portal] 500 ${req.method ?? "?"} ${(req.url ?? "?").split("?")[0]}:`, err);
+    console.error(`[portal] 500 ${req.method ?? "?"} ${(req.url ?? "?").split("?")[0]}:`, String(err));
     if (!res.headersSent) json(res, 500, { error: "internal_error" });
     else res.end();
   });

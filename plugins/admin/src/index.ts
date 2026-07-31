@@ -141,7 +141,7 @@ async function forward(
     res.writeHead(r.status, { "content-type": "application/json" });
     pipeBody(res, r.body);
   } catch (err) {
-    console.error("[admin] core request failed:", err);
+    console.error("[admin] core request failed:", String(err));
     json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
 }
@@ -176,7 +176,7 @@ async function forwardDownload(res: ServerResponse, principal: string, corePath:
     res.writeHead(r.status, headers);
     pipeBody(res, r.body);
   } catch (err) {
-    console.error("[admin] core download failed:", err);
+    console.error("[admin] core download failed:", String(err));
     json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
 }
@@ -236,7 +236,7 @@ async function uploadFileFromRequest(
     });
     return forward(req, res, principal, "POST", corePath, body);
   } catch (err) {
-    console.error("[admin] upload failed:", err);
+    console.error("[admin] upload failed:", String(err));
     return json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
 }
@@ -301,7 +301,7 @@ const server = createServer((req, res) => {
   void portalTokenStore
     .run(token, () => handle(req, res))
     .catch((err: unknown) => {
-      console.error("[admin] unhandled request error:", err);
+      console.error("[admin] unhandled request error:", String(err));
       json(res, 500, { error: "internal_error", message: "internal server error" });
     });
 });
@@ -402,7 +402,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         res.writeHead(r.status, { "content-type": "application/json" });
         res.end(text);
       } catch (err) {
-        console.error("[admin] core request failed:", err);
+        console.error("[admin] core request failed:", String(err));
         json(res, 502, { error: "core_unreachable", message: "core unavailable" });
       }
       return;

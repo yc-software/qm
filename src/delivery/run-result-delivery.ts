@@ -4,6 +4,7 @@ import type { DeliveryStore } from "./delivery-store.ts";
 import type { Task, TaskStore } from "../tasks/task-store.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
+import { errMessage } from "../util/errors.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -56,6 +57,8 @@ export function wireRunResultDeliveries(runs: RunStore, deliveries: DeliveryStor
       const delivery = runResultDelivery(run, taskList);
       if (!delivery) return;
       await deliveries.enqueue(delivery);
-    })().catch((err) => console.error(`[delivery] failed to enqueue recovery delivery for run ${run.id}:`, err));
+    })().catch((err) =>
+      console.error(`[delivery] failed to enqueue recovery delivery for run ${run.id}:`, errMessage(err)),
+    );
   });
 }

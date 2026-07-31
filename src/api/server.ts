@@ -299,7 +299,7 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     else res.destroy();
     return;
   }
-  console.error(`[server] 500 ${req.method ?? "?"} ${req.url ?? "?"}:`, err);
+  console.error(`[server] 500 ${req.method ?? "?"} ${req.url ?? "?"}:`, errMessage(err));
   if (!res.headersSent) sendJson(res, 500, { error: "internal_error", message: "internal server error" });
   else res.destroy();
 }
@@ -368,7 +368,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
   fastify.decorateRequest("gate", undefined);
 
   fastify.setErrorHandler((err, request, reply) => {
-    console.error(`[server] 500 ${request.raw.method ?? "?"} ${request.raw.url ?? "?"}:`, err);
+    console.error(`[server] 500 ${request.raw.method ?? "?"} ${request.raw.url ?? "?"}:`, errMessage(err));
     return reply.code(500).send({ error: "internal_error", message: "internal server error" });
   });
 
@@ -451,7 +451,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
-  ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", err));
+  ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5_000;

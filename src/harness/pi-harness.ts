@@ -76,6 +76,7 @@ import { ELIDED_IMAGE_TEXT, planTapeSeed } from "./tape-fold.ts";
 import { compactTranscript, deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
+import { errMessage } from "../util/errors.ts";
 
 export interface PiHarnessOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
@@ -1271,7 +1272,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     try {
       reconstructed = reconstructMessagesFromHistory(history);
     } catch (err) {
-      console.error("[pi-harness] history reconstruction failed; will fall back:", err);
+      console.error("[pi-harness] history reconstruction failed; will fall back:", errMessage(err));
       reconstructed = null;
     }
     let foldSeed: PiReplayMessage[] | null = null;
@@ -1290,7 +1291,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           );
         }
       } catch (err) {
-        console.error(`${tag} fold threw:`, err);
+        console.error(`${tag} fold threw:`, errMessage(err));
       }
     }
     const seedSource = foldSeed ?? reconstructed;
@@ -1337,7 +1338,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       try {
         seedRawMessagesIntoSession(session, seedSource!);
       } catch (err) {
-        console.error("[pi-harness] failed to seed reconstructed history (continuing without it):", err);
+        console.error("[pi-harness] failed to seed reconstructed history (continuing without it):", errMessage(err));
       }
     } else if (seedPlan === "priorTurns") {
       try {
@@ -1356,7 +1357,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           }
         }
       } catch (err) {
-        console.error("[pi-harness] failed to seed prior turns (continuing without them):", err);
+        console.error("[pi-harness] failed to seed prior turns (continuing without them):", errMessage(err));
       }
     }
 
