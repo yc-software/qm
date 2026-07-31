@@ -38,9 +38,23 @@ export function parseDeepLink(
   const b = base.replace(/\/$/, "");
   const rel = pathname.startsWith(b) ? pathname.slice(b.length) : pathname;
   const segments = rel.replace(/^\/+/, "").split("/");
-  const requestedView = params.get("view") ?? decodeSegment(segments[0] ?? "");
+  const pathView = decodeSegment(segments[0] ?? "");
+  const projectItem =
+    pathView === "projects"
+      ? segments[1] === "channel"
+        ? decodeSegment(segments[2] ?? "")
+        : decodeSegment(segments[1] ?? "")
+      : null;
+  const requestedView = params.get("view") ?? (pathView === "projects" ? "contexts" : pathView);
   const view = requestedView === "connectors" ? "keychain" : requestedView;
-  return { view, session: params.get("session"), item: decodeSegment(segments[1] ?? "") };
+  return {
+    view,
+    session: params.get("session"),
+    item:
+      pathView === "projects" && segments[1] === "channel" && projectItem
+        ? `channel:${projectItem}`
+        : (projectItem ?? decodeSegment(segments[1] ?? "")),
+  };
 }
 
 export function sessionLink(origin: string, base: string, sessionId: string): string {

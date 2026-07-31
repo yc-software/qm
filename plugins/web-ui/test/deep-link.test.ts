@@ -35,6 +35,19 @@ test("parseDeepLink reads the view from the path", () => {
   assert.deepEqual(parseDeepLink("", "/", "?session=s1"), { view: null, session: "s1", item: null });
 });
 
+test("project paths open the contexts view with a resolvable project identifier", () => {
+  assert.deepEqual(parseDeepLink("", "/projects/atlas", ""), {
+    view: "contexts",
+    session: null,
+    item: "atlas",
+  });
+  assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/projects/channel/C0123", ""), {
+    view: "contexts",
+    session: null,
+    item: "channel:C0123",
+  });
+});
+
 test("parseDeepLink degrades a malformed percent-escape to no view instead of throwing", () => {
   assert.deepEqual(parseDeepLink("", "/%E0%A4%A", ""), { view: null, session: null, item: null });
 });

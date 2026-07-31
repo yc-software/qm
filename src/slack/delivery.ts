@@ -59,6 +59,10 @@ export function slackReplyArgs(
 export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: string): string | undefined {
   const base = (webUiPublicUrl ?? "").trim().replace(/\/+$/, "");
   if (!base || !scopeId) return undefined;
+  const personal = /^personal:([^@]+)@/.exec(scopeId);
+  if (personal?.[1] && /^[a-z0-9._-]+$/i.test(personal[1])) return `${base}/projects/${personal[1].toLowerCase()}`;
+  const channel = /^channel:([^:]+)$/.exec(scopeId);
+  if (channel?.[1]) return `${base}/projects/channel/${encodeURIComponent(channel[1])}`;
   return `${base}/contexts?scope=${encodeURIComponent(scopeId)}`;
 }
 
@@ -80,8 +84,9 @@ export function surfaceHeaderText(
   const agent = (facts.agentLabel ?? "").trim();
   const model = (facts.modelName ?? "").trim();
   const url = (projectUrl ?? "").trim();
-  const parts = [...(model ? [`${agent ? `${agent} ` : ""}Model: ${model}`] : []), ...(url ? [url] : [])];
-  return parts.length ? parts.join(" · ") : undefined;
+  const modelText = model ? `${agent ? `${agent} is using` : "Using"} ${model} here.` : "";
+  const link = url ? `<${url}|More settings>` : "";
+  return [modelText, link].filter(Boolean).join(" ") || undefined;
 }
 
 function unwrapSlackLinks(text: string): string {

@@ -226,6 +226,18 @@ export function personalScopeId(): string | null {
   return contextsState.list.find((c) => c.kind === "personal")?.scopeId ?? null;
 }
 
+export function resolveProjectScope(contexts: readonly CoreContext[], slug: string): string | null {
+  if (slug.startsWith("channel:")) {
+    return contexts.some((context) => context.scopeId === slug) ? slug : null;
+  }
+  const normalized = slug.toLowerCase();
+  const matches = contexts.filter((context) => {
+    const match = /^personal:([^@]+)@/.exec(context.scopeId);
+    return match?.[1]?.toLowerCase() === normalized;
+  });
+  return matches.length === 1 ? matches[0]!.scopeId : null;
+}
+
 function metaForScope(scopeId: string | null, fallbackName?: string | null): { title: string; glyph: IconNode } {
   const c = scopeId ? contextsState.list.find((x) => x.scopeId === scopeId) : undefined;
   if (c) {

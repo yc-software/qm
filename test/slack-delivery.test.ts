@@ -247,9 +247,9 @@ function fakeJoinClient(
   };
 }
 
-test("channelSurfaceUrl builds the contexts deep link and degrades when unset", () => {
-  assert.equal(channelSurfaceUrl(WEB_BASE, "C123"), `${WEB_BASE}/contexts?scope=channel%3AC123`);
-  assert.equal(channelSurfaceUrl("https://x/web-ui/", "C9"), "https://x/web-ui/contexts?scope=channel%3AC9");
+test("channelSurfaceUrl builds the project deep link and degrades when unset", () => {
+  assert.equal(channelSurfaceUrl(WEB_BASE, "C123"), `${WEB_BASE}/projects/channel/C123`);
+  assert.equal(channelSurfaceUrl("https://x/web-ui/", "C9"), "https://x/web-ui/projects/channel/C9");
   assert.equal(channelSurfaceUrl(undefined, "C1"), undefined);
   assert.equal(channelSurfaceUrl("", "C1"), undefined);
 });
@@ -275,7 +275,7 @@ test("onBotJoinedChannel: posts welcome with the deep link and sets the descript
       synced++;
     },
   });
-  const expectedUrl = `${WEB_BASE}/contexts?scope=channel%3AC123`;
+  const expectedUrl = `${WEB_BASE}/projects/channel/C123`;
   assert.equal(calls.posted.length, 1);
   assert.equal(calls.posted[0]!.channel, "C123");
   assert.ok(calls.posted[0]!.text.includes(expectedUrl), "welcome message must contain the channel surface deep link");
@@ -391,7 +391,7 @@ test("onBotJoinedChannel: welcomes a normal internal channel and hands the descr
     },
     ensureHeader: (channel) => ensured.push(channel),
   });
-  const expectedUrl = `${WEB_BASE}/contexts?scope=channel%3AC123`;
+  const expectedUrl = `${WEB_BASE}/projects/channel/C123`;
   assert.equal(calls.posted.length, 1, "welcome lands on a normal internal channel");
   assert.ok(calls.posted[0]!.text.includes(expectedUrl), "welcome message contains the project deep link");
   assert.deepEqual(ensured, ["C123"], "join triggers exactly one header ensure");
@@ -573,33 +573,33 @@ test("surfaceHeaderText names the agent, its model, and the project link — deg
   assert.equal(
     surfaceHeaderText(
       { agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" },
-      "https://claw.acme.dev/contexts?scope=channel%3AC1",
+      "https://claw.acme.dev/projects/channel/C1",
     ),
-    "Quartermaster Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=channel%3AC1",
+    "Quartermaster is using Claude Opus 4.8 here. <https://claw.acme.dev/projects/channel/C1|More settings>",
   );
   assert.equal(
     surfaceHeaderText({ agentLabel: "QM", modelName: "Claude Opus 4.8" }, undefined),
-    "QM Model: Claude Opus 4.8",
+    "QM is using Claude Opus 4.8 here.",
   );
   assert.equal(
     surfaceHeaderText({ modelName: "Claude Opus 4.8" }, undefined),
-    "Model: Claude Opus 4.8",
+    "Using Claude Opus 4.8 here.",
     "an unbranded deployment keeps the bare model line",
   );
-  assert.equal(surfaceHeaderText({}, "https://claw.acme.dev"), "https://claw.acme.dev");
+  assert.equal(surfaceHeaderText({}, "https://claw.acme.dev"), "<https://claw.acme.dev|More settings>");
   assert.equal(surfaceHeaderText({ agentLabel: "QM", modelName: "  " }, "  "), undefined);
 });
 
 test("headerUpdate rewrites only an empty or self-authored header", () => {
   const BOT = "U0BOT";
-  const desired = "Model: Claude Opus 4.8 · https://claw.acme.dev";
+  const desired = "Using Claude Opus 4.8 here. <https://claw.acme.dev|More settings>";
   assert.equal(headerUpdate(undefined, BOT, desired), "set");
   assert.equal(headerUpdate({ value: "" }, BOT, desired), "set");
   assert.equal(headerUpdate({ value: "Model: Claude Sonnet 5", creator: BOT }, BOT, desired), "set");
   assert.equal(headerUpdate({ value: desired, creator: BOT }, BOT, desired), "skip");
   assert.equal(headerUpdate({ value: "my own notes", creator: "U0HUMAN" }, BOT, desired), "skip");
   assert.equal(
-    headerUpdate({ value: "Model: Claude Opus 4.8 · <https://claw.acme.dev>", creator: BOT }, BOT, desired),
+    headerUpdate({ value: "Using Claude Opus 4.8 here. <https://claw.acme.dev>", creator: BOT }, BOT, desired),
     "skip",
   );
 });
@@ -650,7 +650,7 @@ test("surface header ensurer writes the header once, then goes quiet", async () 
   assert.equal(h.calls.set, 1);
   assert.equal(
     h.read()?.value,
-    "Quartermaster Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=personal%3Auser.one%40acme.dev",
+    "Quartermaster is using Claude Opus 4.8 here. <https://claw.acme.dev/projects/user.one|More settings>",
   );
   h.ensure(h.client, "D1");
   await h.flush();
@@ -710,8 +710,8 @@ test("a model change during an in-flight ensure is re-run, not dropped", async (
   ensure(client as any, "C1", "channel:C1", "channel");
   await new Promise((r) => setTimeout(r, 150));
   assert.deepEqual(
-    purposes.map((p) => p.split(" · ")[0]),
-    ["QM Model: Claude Opus 4.8", "QM Model: Claude Haiku 4.5"],
+    purposes.map((p) => p.split(" <")[0]),
+    ["QM is using Claude Opus 4.8 here.", "QM is using Claude Haiku 4.5 here."],
     "the change that landed mid-probe still reaches the description",
   );
 });
@@ -752,7 +752,7 @@ test("surface header ensurer writes a channel's description, not its topic", asy
   assert.equal(h.calls.set, 1);
   assert.equal(
     h.read()?.value,
-    "Quartermaster Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=channel%3AC1",
+    "Quartermaster is using Claude Opus 4.8 here. <https://claw.acme.dev/projects/channel/C1|More settings>",
     "a channel shows ITS scope's default model and links to ITS project page",
   );
 });
@@ -789,14 +789,20 @@ test("surface header ensurer never clobbers a human-written channel description"
 });
 
 test("scopeSurfaceUrl deep-links each context to its own project page", () => {
-  assert.equal(
-    scopeSurfaceUrl("https://claw.acme.dev/", "channel:C1"),
-    "https://claw.acme.dev/contexts?scope=channel%3AC1",
-  );
+  assert.equal(scopeSurfaceUrl("https://claw.acme.dev/", "channel:C1"), "https://claw.acme.dev/projects/channel/C1");
   assert.equal(
     scopeSurfaceUrl("https://claw.acme.dev", "personal:user.one@acme.dev"),
-    "https://claw.acme.dev/contexts?scope=personal%3Auser.one%40acme.dev",
+    "https://claw.acme.dev/projects/user.one",
   );
+  assert.equal(
+    scopeSurfaceUrl("https://claw.acme.dev", "personal:User.Two@acme.dev"),
+    "https://claw.acme.dev/projects/user.two",
+  );
+  assert.equal(
+    scopeSurfaceUrl("https://claw.acme.dev", "personal:unsafe+slug@acme.dev"),
+    "https://claw.acme.dev/contexts?scope=personal%3Aunsafe%2Bslug%40acme.dev",
+  );
+  assert.equal(scopeSurfaceUrl("https://claw.acme.dev", "group:G1"), "https://claw.acme.dev/contexts?scope=group%3AG1");
   assert.equal(scopeSurfaceUrl(undefined, "channel:C1"), undefined);
   assert.equal(scopeSurfaceUrl("https://claw.acme.dev", ""), undefined);
 });

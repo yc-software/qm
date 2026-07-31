@@ -62,7 +62,7 @@ import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeych
 import { renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderSkills } from "./skills";
-import { contextsState, renderContexts, resetContextsState } from "./contexts";
+import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 export { appState, can, type Me, type View } from "./shell-state";
@@ -870,7 +870,8 @@ export async function boot(): Promise<void> {
     switchView("keychain");
   } else if (viewIntent) {
     if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
-      const scope = params.get("scope");
+      const scope =
+        params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
     if (wanted === "crons" && wantedItem) openCronById(wantedItem);

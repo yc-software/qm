@@ -403,7 +403,8 @@ test("a human's DM sets the conversation header to the serving model + web surfa
     assert.deepEqual(f.client.topics, [
       {
         channel: "D1",
-        topic: "Quartermaster Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=personal%3AU1",
+        topic:
+          "Quartermaster is using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
       },
     ]);
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });
@@ -424,7 +425,8 @@ test("a channel's description names the channel's own default model and project 
     assert.deepEqual(f.client.purposes, [
       {
         channel: "C1",
-        purpose: "Quartermaster Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=channel%3AC1",
+        purpose:
+          "Quartermaster is using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>",
       },
     ]);
     assert.deepEqual(f.client.topics, [], "a channel's topic stays the members' own scratch space");
@@ -442,7 +444,8 @@ test("a scope's model change rewrites its channel description without waiting fo
     assert.deepEqual(f.client.purposes, [
       {
         channel: "C1",
-        purpose: "Quartermaster Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=channel%3AC1",
+        purpose:
+          "Quartermaster is using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>",
       },
     ]);
     for (const listener of f.core.modelChangeListeners) listener("personal:alice@example.com");
