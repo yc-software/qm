@@ -363,10 +363,12 @@ async function toCoreAttachment(a: PiAttachment): Promise<CoreAttachment> {
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  body: unknown;
+  constructor(message: string, status: number, body?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -400,7 +402,7 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
       (body as { error?: string; message?: string })?.message ??
       (body as { error?: string })?.error ??
       `HTTP ${r.status}`;
-    throw new ApiError(msg, r.status);
+    throw new ApiError(msg, r.status, body);
   }
   return body as T;
 }
@@ -452,13 +454,31 @@ export function hasLiveRun(slot: RunSlot): boolean {
   return slot.runId !== null;
 }
 
-export async function signalLiveRun(slot: RunSlot, kind: "abort" | "steer", text?: string): Promise<void> {
+export type SignalOutcome = { ok: true } | { ok: false; reason: string; replayed?: boolean };
+
+export async function signalLiveRun(slot: RunSlot, kind: "abort" | "steer", text?: string): Promise<SignalOutcome> {
   const run = slot.runId !== null ? { runId: slot.runId } : null;
   if (!run) throw new Error("No active run to signal.");
-  await api(runPath(run.runId, "/signal"), {
-    method: "POST",
-    body: JSON.stringify({ kind, ...(text !== undefined ? { text } : {}) }),
-  });
+  try {
+    await api(runPath(run.runId, "/signal"), {
+      method: "POST",
+      body: JSON.stringify({ kind, ...(text !== undefined ? { text } : {}) }),
+    });
+    return { ok: true };
+  } catch (err) {
+    // The run ended before (or as) the signal arrived. For a steer, core replays the
+    // text as a fresh turn when it can; surface that outcome instead of failing so the
+    // caller can attach to the replay run or resend, rather than dropping the message.
+    if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
+      const body = (err.body ?? {}) as { reason?: string; replayed?: boolean };
+      return {
+        ok: false,
+        reason: body.reason ?? (err.status === 404 ? "not_found" : "terminal"),
+        ...(body.replayed ? { replayed: true } : {}),
+      };
+    }
+    throw err;
+  }
 }
 
 export function makeCoreStreamFn(

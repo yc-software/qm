@@ -529,6 +529,10 @@ export function createChatSurface(ctx: ConvCtx): ChatSurface {
     }
     if (!activeRun || agent !== chatState.agent || appState.currentView !== "chats" || agent.state.isStreaming)
       return false;
+    // Pull the transcript before attaching so the turn's triggering user message
+    // (written by core, not by this tab) is on screen while the run streams.
+    await refreshTranscriptFromEntries(agent);
+    if (agent !== chatState.agent || agent.state.isStreaming) return false;
     const msgs = agent.state.messages.slice();
     while (msgs.length && (msgs[msgs.length - 1] as { role?: string }).role === "assistant") msgs.pop();
     if (!msgs.length) return false;

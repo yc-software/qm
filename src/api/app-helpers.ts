@@ -486,6 +486,23 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     for (const signal of await deps.signals.takePending(runId)) {
       if (signal.kind === "abort") continue;
       if (!signal.request) {
+        // A steer sent through /v1/runs/:id/signal carries no TurnRequest. Its text is
+        // still a real user message — re-enqueue it on the run's own request instead of
+        // dropping it, so a steer that raced the run's end is never silently lost.
+        const orphanRun = signal.text?.trim() ? await deps.runs.get(runId) : null;
+        if (orphanRun) {
+          try {
+            const { displayText: _d, attachments: _a, approval: _ap, ...base } = orphanRun.request;
+            const { run: fresh } = await deps.runs.enqueue({
+              sessionId: orphanRun.sessionId,
+              request: { ...base, text: signal.text! },
+            });
+            drained.push({ signal, replayRunId: fresh.id });
+            continue;
+          } catch (err) {
+            swallow(`signals: requestless orphaned-steer replay for run ${runId}`, err);
+          }
+        }
         console.warn(
           `[signals] orphaned ${signal.kind} for terminal run ${runId} has no stored request — dropped: ${signal.text?.slice(0, 120) ?? ""}`,
         );

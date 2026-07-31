@@ -238,7 +238,11 @@ export interface App {
     finishedAt: number | null;
   } | null>;
   activeRunForThread(threadRef: string, viewer?: string): Promise<{ runId: string } | null>;
-  signalRun(runId: string, signal: RunSignal, viewer?: string): Promise<{ accepted: boolean; reason?: string }>;
+  signalRun(
+    runId: string,
+    signal: RunSignal,
+    viewer?: string,
+  ): Promise<{ accepted: boolean; reason?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
   getSession(
     sessionId: string,

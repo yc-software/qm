@@ -1124,11 +1124,58 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     ctx.chat.drawActiveChat(agent);
     clearComposerDom(agent);
     try {
-      await ctx.chat.signalLiveRun("steer", text);
+      const outcome = await ctx.chat.signalLiveRun("steer", text);
+      if (!outcome.ok) recoverEndedRunSteer(agent, text, outcome);
     } catch (err) {
       composerState.error = errMessage(err, "Could not steer the running task.");
       ctx.chat.drawActiveChat(agent);
     }
+  }
+
+  // The run ended before the steer landed (the client believed it was still live).
+  // Core either replayed the text as a fresh turn (`replayed`) or never stored it.
+  // Either way the message must not silently vanish: detach from the stale stream,
+  // then attach to the replay run — or resend the text as an ordinary prompt.
+  function recoverEndedRunSteer(agent: Agent, text: string, outcome: { replayed?: boolean }): void {
+    agent.abort();
+    if (outcome.replayed) {
+      const last = agent.state.messages[agent.state.messages.length - 1] as
+        { role?: string; content?: unknown; steered?: boolean } | undefined;
+      // It is now an ordinary user turn in the transcript, not a mid-run steer.
+      if (last?.role === "user" && last.content === text && last.steered) delete last.steered;
+      ctx.chat.drawActiveChat(agent);
+      attachWhenIdle(agent, 0);
+      return;
+    }
+    const last = agent.state.messages[agent.state.messages.length - 1] as
+      { role?: string; content?: unknown } | undefined;
+    if (last?.role === "user" && last.content === text) agent.state.messages.pop();
+    composerState.draft = text;
+    ctx.chat.drawActiveChat(agent);
+    resendWhenIdle(agent, text, 0);
+  }
+
+  function attachWhenIdle(agent: Agent, attempt: number): void {
+    if (agent !== ctx.chat.state.agent) return;
+    if (agent.state.isStreaming) {
+      if (attempt < 20) window.setTimeout(() => attachWhenIdle(agent, attempt + 1), 250);
+      return;
+    }
+    ctx.chat.resumeIfIdle();
+  }
+
+  function resendWhenIdle(agent: Agent, text: string, attempt: number): void {
+    if (agent !== ctx.chat.state.agent) return;
+    if (agent.state.isStreaming) {
+      if (attempt < 20) window.setTimeout(() => resendWhenIdle(agent, text, attempt + 1), 250);
+      else {
+        composerState.error =
+          "Could not deliver the message — the running task ended mid-send. It is back in the composer.";
+        ctx.chat.drawActiveChat(agent);
+      }
+      return;
+    }
+    if (composerState.draft === text) void sendPrompt(agent);
   }
 
   async function sendPrompt(agent: Agent): Promise<void> {

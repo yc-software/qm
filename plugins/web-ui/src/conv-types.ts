@@ -51,7 +51,7 @@ interface ChatState {
 export interface ChatSurface {
   state: ChatState;
   hasLiveRun(): boolean;
-  signalLiveRun(kind: "abort" | "steer", text?: string): Promise<void>;
+  signalLiveRun(kind: "abort" | "steer", text?: string): Promise<import("./core-bridge").SignalOutcome>;
   newChat(context?: { scopeId: string; name: string | null }): string;
   teardown(): void;
   resetChatState(): void;

@@ -564,7 +564,7 @@ test("orphan replay: a steer unconsumed at run completion replays as a fresh tur
   assert.equal((await built.signals.takePending(liveRunId)).length, 0, "the orphaned signal was consumed by the drain");
 });
 
-test("orphan replay: a stale abort and a request-less signal are drained but not replayed", async () => {
+test("orphan replay: a stale abort is drained; a request-less steer replays on the run's own request", async () => {
   const built = freshApp();
   const channel = "C10";
   const root = "1000.1";
@@ -576,8 +576,28 @@ test("orphan replay: a stale abort and a request-less signal are drained but not
 
   await built.app.replayOrphanedRunSignals(liveRunId);
   assert.equal((await built.signals.takePending(liveRunId)).length, 0, "drained");
-  const runs = await built.runs.list();
-  assert.equal(runs.filter((r) => r.sessionId === threadRef).length, 1, "nothing replayable — no fresh turn");
+  const runs = (await built.runs.list()).filter((r) => r.sessionId === threadRef);
+  assert.equal(runs.length, 2, "the abort is dropped; the steer text becomes a fresh turn, never lost");
+  const fresh = runs.find((r) => r.id !== liveRunId);
+  assert.equal(fresh?.request.text, "manual web steer");
+});
+
+test("signalRun: a web steer that races the run's end is replayed and reports the fresh run", async () => {
+  const built = freshApp();
+  const channel = "C14";
+  const root = "1400.1";
+  const first = await built.app.turn(mention("@bot go", channel, root));
+  const liveRunId = first.runId!;
+  completeOnSend(built);
+
+  const raced = await built.app.signalRun(liveRunId, { kind: "steer", text: "did this make it?" });
+  assert.equal(raced.accepted, false);
+  assert.equal(raced.reason, "terminal");
+  assert.equal(raced.replayed, true, "the caller is told the text now rides a fresh run");
+  const fresh = await until(async () =>
+    (await built.runs.list()).find((r) => r.sessionId === `ch:${channel}:${root}` && r.id !== liveRunId),
+  );
+  assert.equal(fresh.request.text, "did this make it?");
 });
 
 test("signalRun: a steer already terminal at send is refused up front", async () => {

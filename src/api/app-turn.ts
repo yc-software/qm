@@ -502,7 +502,12 @@ export function createTurnMethods(
       const after = await deps.runs.get(runId);
       if (!after || isTerminal(after.status)) {
         await replayOrphanedRunSignals(runId);
-        return { accepted: false, reason: "terminal" };
+        if (signal.kind !== "steer") return { accepted: false, reason: "terminal" };
+        // The steer was stored before the run went terminal, so its text is replayed as
+        // a fresh turn (by this drain, the onTerminal hook, or the orphan sweeper —
+        // whoever drains first). Tell the caller so it attaches to the fresh run
+        // instead of treating the message as lost.
+        return { accepted: false, reason: "terminal", replayed: true };
       }
       return { accepted: true };
     },
