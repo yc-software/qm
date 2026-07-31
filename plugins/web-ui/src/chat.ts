@@ -275,7 +275,16 @@ export function createChatSurface(ctx: ConvCtx): ChatSurface {
     void ctx.composer.refreshRuntimeSelection(scopeId, agent);
 
     let listedWorking = false;
+    let titlePollStarted = false;
     agent.subscribe((e) => {
+      if (!titlePollStarted && agent.state.isStreaming) {
+        // The server generates a title at the START of the first turn; poll for
+        // it right away instead of waiting for the turn to end, so long
+        // tool-heavy first turns don't leave the chat unnamed in the sidebar.
+        titlePollStarted = true;
+        const row = sessionsState.list.find((r) => r.threadRef === threadRef);
+        if (!row?.title?.trim()) void settleNewSessionTitle(agent, threadRef);
+      }
       scheduleStreamDraw(agent);
       if (agent === chatState.agent && (agent.state.isStreaming || e.type === "agent_end"))
         chatState.pendingSend = null;
@@ -302,7 +311,7 @@ export function createChatSurface(ctx: ConvCtx): ChatSurface {
         if (agent !== chatState.agent) return;
         adoptActiveSessionFromList(agent);
         await refreshTranscriptFromEntries(agent);
-        if (wasUnsaved && chatState.sessionId) void settleNewSessionTitle(agent, chatState.sessionId);
+        if (wasUnsaved && chatState.sessionId) void settleNewSessionTitle(agent, threadRef);
       });
     });
 
@@ -568,15 +577,15 @@ export function createChatSurface(ctx: ConvCtx): ChatSurface {
     });
   }
 
-  async function settleNewSessionTitle(agent: Agent, sessionId: string): Promise<void> {
+  async function settleNewSessionTitle(agent: Agent, threadRef: string): Promise<void> {
     const titled = (): boolean => {
-      const s = sessionsState.list.find((row) => row.id === sessionId);
+      const s = sessionsState.list.find((row) => row.threadRef === threadRef);
       return Boolean(s?.title && s.title.trim());
     };
     if (titled()) return;
-    for (const delay of [600, 1200, 2400, 4000]) {
+    for (const delay of [1200, 1800, 2400, 3600, 4800, 6400, 8000, 8000]) {
       await sleep(delay);
-      if (agent !== chatState.agent || chatState.sessionId !== sessionId) return;
+      if (agent !== chatState.agent || chatState.threadRef !== threadRef) return;
       try {
         await refreshSessions({ silent: true });
       } catch {
