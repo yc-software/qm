@@ -3,7 +3,7 @@ import { Box } from "lucide";
 import { api, type CoreContext } from "./core-bridge";
 import type { SkillItem } from "./composer";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./ui";
+import { fieldSelect, icon } from "./ui";
 import { appState } from "./shell";
 import { skillActions } from "./skill-actions";
 import {
@@ -381,18 +381,17 @@ function creatorPane() {
       </label>
       <label class="skill-field">
         <span>Available to</span>
-        <select
-          class="skill-desc-input"
-          .value=${c.scopeId}
-          ?disabled=${creatingSaving}
-          @change=${(ev: Event) => {
-            c.scopeId = (ev.target as HTMLSelectElement).value;
+        ${fieldSelect({
+          className: "skill-scope-select",
+          value: c.scopeId,
+          disabled: creatingSaving,
+          onChange: (value) => {
+            c.scopeId = value;
             c.review = null;
             drawSkills();
-          }}
-        >
-          ${createScopes.map((scope) => html`<option value=${scope.scopeId}>${scope.name}</option>`)}
-        </select>
+          },
+          options: createScopes.map((scope) => html`<option value=${scope.scopeId}>${scope.name}</option>`),
+        })}
         <small class="card-meta">Everyone in a shared context can invoke and edit this skill.</small>
       </label>
       <label class="skill-field">
@@ -537,38 +536,40 @@ function drawSkills(loading = false): void {
           </div>
           <div class="skill-filter-fields">
             <label class="list-select"
-              ><span>Scope</span
-              ><select
-                aria-label="Filter skills by scope"
-                .value=${scopeFilter}
-                @change=${(e: Event) => {
-                  scopeFilter = (e.currentTarget as HTMLSelectElement).value;
+              ><span>Scope</span>${fieldSelect({
+                compact: true,
+                ariaLabel: "Filter skills by scope",
+                value: scopeFilter,
+                onChange: (value) => {
+                  scopeFilter = value;
                   drawSkills();
-                }}
-              >
-                <option value="all">All scopes</option>
-                <option value="personal">Personal</option>
-                <option value="channel">Channel</option>
-                <option value="group">Project / group</option>
-                <option value="team">Team</option>
-                <option value="org">Organization</option>
-              </select></label
+                },
+                options: [
+                  html`<option value="all">All scopes</option>`,
+                  html`<option value="personal">Personal</option>`,
+                  html`<option value="channel">Channel</option>`,
+                  html`<option value="group">Project / group</option>`,
+                  html`<option value="team">Team</option>`,
+                  html`<option value="org">Organization</option>`,
+                ],
+              })}</label
             >
             <label class="list-select"
-              ><span>Source</span
-              ><select
-                aria-label="Filter skills by source"
-                .value=${sourceFilter}
-                @change=${(e: Event) => {
-                  sourceFilter = (e.currentTarget as HTMLSelectElement).value;
+              ><span>Source</span>${fieldSelect({
+                compact: true,
+                ariaLabel: "Filter skills by source",
+                value: sourceFilter,
+                onChange: (value) => {
+                  sourceFilter = value;
                   drawSkills();
-                }}
-              >
-                <option value="all">All sources</option>
-                <option value="native">Created here</option>
-                <option value="pack">Skill packs</option>
-                <option value="overrides">Overrides</option>
-              </select></label
+                },
+                options: [
+                  html`<option value="all">All sources</option>`,
+                  html`<option value="native">Created here</option>`,
+                  html`<option value="pack">Skill packs</option>`,
+                  html`<option value="overrides">Overrides</option>`,
+                ],
+              })}</label
             >
           </div>
         </div>

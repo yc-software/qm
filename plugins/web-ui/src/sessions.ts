@@ -56,7 +56,7 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { errMessage } from "../../chassis/src/errors";
-import { copyText, icon, relTime } from "./ui";
+import { copyText, fieldSelect, icon, relTime } from "./ui";
 import { listPageTpl } from "./list-page";
 import {
   contextsState,
@@ -512,18 +512,19 @@ export function drawChatsPage(): void {
           )}
         </div>
         <label class="list-select"
-          ><span>Surface</span
-          ><select
-            .value=${chatsPageSurface}
-            @change=${(e: Event) => {
-              chatsPageSurface = (e.currentTarget as HTMLSelectElement).value as typeof chatsPageSurface;
+          ><span>Surface</span>${fieldSelect({
+            compact: true,
+            value: chatsPageSurface,
+            onChange: (value) => {
+              chatsPageSurface = value as typeof chatsPageSurface;
               drawChatsPage();
-            }}
-          >
-            <option value="all">All surfaces</option>
-            <option value="web">Web</option>
-            <option value="slack">Slack</option>
-          </select></label
+            },
+            options: [
+              html`<option value="all">All surfaces</option>`,
+              html`<option value="web">Web</option>`,
+              html`<option value="slack">Slack</option>`,
+            ],
+          })}</label
         >
       </div>`,
       rows,

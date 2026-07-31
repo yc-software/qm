@@ -2,7 +2,7 @@ import { html, nothing, render } from "lit";
 import { File, Image, Upload } from "lucide";
 import { api, reportSigninRequired, type SigninRequired, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { browserRenderableImage, formatBytes, icon, relTime } from "./ui";
+import { browserRenderableImage, fieldSelect, formatBytes, icon, relTime } from "./ui";
 import { contextsState, ensureContexts, personalScopeId, scopeChip, scopeFilterControl } from "./contexts";
 import { appState } from "./shell";
 import { fileListNeedsAllPages } from "./file-list";
@@ -56,10 +56,12 @@ function selectControl(
   onChange: (value: string) => void,
 ) {
   return html`<label class="list-select"
-    ><span>${label}</span
-    ><select .value=${value} @change=${(e: Event) => onChange((e.currentTarget as HTMLSelectElement).value)}>
-      ${options.map(([v, text]) => html`<option value=${v}>${text}</option>`)}
-    </select></label
+    ><span>${label}</span>${fieldSelect({
+      compact: true,
+      value,
+      onChange,
+      options: options.map(([v, text]) => html`<option value=${v}>${text}</option>`),
+    })}</label
   >`;
 }
 

@@ -19,10 +19,29 @@ test("policy edits redraw immediately and preserve focused text controls", () =>
 test("policy controls use product language and persistent accessible labels", () => {
   for (const label of ["Ignore", "Batch updates", "Act immediately", "Treat like a person"])
     assert.match(policy, new RegExp(label));
-  assert.match(policy, /<label class="ambient-field" for="ambient-orders">/);
+  assert.match(policy, /<label class="ambient-field-label" for="ambient-orders">/);
   assert.match(policy, /aria-describedby="ambient-orders-hint"/);
+  assert.match(policy, /describedBy: "ambient-enabled-hint"/);
   assert.match(policy, /aria-label="Bot name"/);
   assert.match(policy, /required/);
+});
+
+test("a field reads label, then control, then the prose explaining it", () => {
+  for (const [id, control] of [
+    ["ambient-enabled", "fieldSelect({"],
+    ["ambient-orders", "<textarea"],
+  ]) {
+    const group = policy.match(new RegExp(`<label class="ambient-field-label" for="${id}">[^]*?</div>`))?.[0] ?? "";
+    assert.ok(group, `${id} sits in its own group`);
+    const controlIndex = group.indexOf(control!);
+    assert.ok(controlIndex >= 0, `${id}'s control is present in its group`);
+    assert.ok(controlIndex < group.indexOf(`id="${id}-hint"`), `${id}'s control comes before its hint`);
+  }
+});
+
+test("both policy dropdowns come from the shared one, not hand-rolled markup", () => {
+  assert.equal((policy.match(/fieldSelect\(\{/g) ?? []).length, 2);
+  assert.doesNotMatch(policy, /<select/);
 });
 
 test("policy styles use the shell theme contract", () => {

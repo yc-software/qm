@@ -9,6 +9,7 @@ import {
   getModelOptionsForHarness,
   harnessSupportsEffort,
   harnessSupportsFastMode,
+  runtimeModelOptions,
 } from "../src/model-options.ts";
 import { modelSupportsFastMode, setFastModeModelIds } from "../src/pi-models.ts";
 
@@ -181,4 +182,18 @@ test("two panes on different scopes keep their own picker, default, and fast-mod
   );
   assert.equal(modelSupportsFastMode("personal:me", "claude-opus-5"), true);
   assert.equal(modelSupportsFastMode("group:team", "claude-opus-5"), false);
+});
+
+test("a scope's own model list is derived without disturbing the active picker", () => {
+  applyPickerModelIds(["claude-opus-4-8"], "claude-opus-4-8");
+  const scoped = runtimeModelOptions(["pi", "codex"], { pi: ["claude-sonnet-5"], codex: ["gpt-5.6-sol"] });
+  assert.deepEqual(
+    scoped.map((o) => o.value),
+    ["pi:claude-sonnet-5", "codex:gpt-5.6-sol"],
+  );
+  assert.deepEqual(
+    getModelOptions().map((o) => o.value),
+    ["claude-opus-4-8"],
+    "reading a scope's options never re-points the composer's picker",
+  );
 });

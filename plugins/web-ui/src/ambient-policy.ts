@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
+import { fieldSelect } from "./ui";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export type BotMode = (typeof BOT_MODES)[number];
@@ -153,22 +154,28 @@ const BOT_MODE_LABELS: Record<BotMode, string> = {
   user: "Treat like a person",
 };
 
+function ambientValue(enabled: boolean | null): string {
+  if (enabled === null) return "default";
+  return enabled ? "on" : "off";
+}
+
 function botRow(b: BotPolicyView, i: number): TemplateResult {
   return html`
     <div class="ambient-bot-row">
       <span class="ambient-bot-name">${b.name}</span>
-      <select
-        class="ambient-bot-mode"
-        aria-label=${`Handling for ${b.name}`}
-        ?disabled=${ambientPolicyState.saving}
-        @change=${(e: Event) => {
-          const mode = (e.currentTarget as HTMLSelectElement).value as BotMode;
+      ${fieldSelect({
+        className: "ambient-bot-mode",
+        compact: true,
+        ariaLabel: `Handling for ${b.name}`,
+        disabled: ambientPolicyState.saving,
+        value: b.mode,
+        onChange: (value) => {
+          const mode = value as BotMode;
           ambientPolicyState.bots = ambientPolicyState.bots.map((x, j) => (j === i ? { ...x, mode } : x));
           markDirty();
-        }}
-      >
-        ${BOT_MODES.map((m) => html`<option value=${m} ?selected=${m === b.mode}>${BOT_MODE_LABELS[m]}</option>`)}
-      </select>
+        },
+        options: BOT_MODES.map((m) => html`<option value=${m}>${BOT_MODE_LABELS[m]}</option>`),
+      })}
       ${
         b.mode === "rollup"
           ? html`<label class="ambient-bot-hours"
@@ -226,78 +233,78 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           <p class="context-panel-copy">Choose what this project should notice and act on.</p>
         </div>
       </div>
-      <label class="ambient-field" for="ambient-enabled">
-        <span class="ambient-field-label">Ambient behavior</span>
-        <span class="ambient-policy-hint"
-          >When off, the agent never acts on overheard messages here — it only responds to direct @mentions. Default: on
-          only when standing orders (or an action-mode bot) are set below — otherwise mention-only.</span
-        >
-      </label>
-      <select
-        id="ambient-enabled"
-        class="ambient-enabled-select"
-        data-focus-key="ambient-enabled"
-        ?disabled=${ambientPolicyState.saving}
-        @change=${(e: Event) => {
-          const v = (e.currentTarget as HTMLSelectElement).value;
-          ambientPolicyState.ambientEnabled = v === "default" ? null : v === "on";
-          markDirty();
-        }}
-      >
-        <option value="default" ?selected=${ambientPolicyState.ambientEnabled === null}>
-          Default (on when standing orders are set)
-        </option>
-        <option value="on" ?selected=${ambientPolicyState.ambientEnabled === true}>On</option>
-        <option value="off" ?selected=${ambientPolicyState.ambientEnabled === false}>Off</option>
-      </select>
-      <label class="ambient-field" for="ambient-orders">
-        <span class="ambient-field-label">Standing orders</span>
-        <span class="ambient-policy-hint" id="ambient-orders-hint"
-          >Plain-language guidance for proactive work. Leave empty to respond only when addressed.</span
-        >
-      </label>
-      <textarea
-        id="ambient-orders"
-        data-focus-key="ambient-orders"
-        class="ambient-orders"
-        rows="4"
-        aria-describedby="ambient-orders-hint"
-        placeholder="For example: Flag anything that could delay the launch."
-        .value=${ambientPolicyState.orders}
-        ?disabled=${ambientPolicyState.saving}
-        @input=${(e: InputEvent) => {
-          ambientPolicyState.orders = (e.currentTarget as HTMLTextAreaElement).value;
-          markDirty();
-        }}
-      ></textarea>
-      <div class="ambient-field-heading">
-        <h3>Automated posters</h3>
-        <p class="ambient-policy-hint">Control how messages from bots and integrations wake the agent.</p>
+      <div class="ambient-group">
+        <label class="ambient-field-label" for="ambient-enabled">Ambient behavior</label>
+        ${fieldSelect({
+          id: "ambient-enabled",
+          className: "ambient-enabled-select",
+          focusKey: "ambient-enabled",
+          describedBy: "ambient-enabled-hint",
+          disabled: ambientPolicyState.saving,
+          value: ambientValue(ambientPolicyState.ambientEnabled),
+          onChange: (v) => {
+            ambientPolicyState.ambientEnabled = v === "default" ? null : v === "on";
+            markDirty();
+          },
+          options: [
+            html`<option value="default">Default (on when standing orders are set)</option>`,
+            html`<option value="on">On</option>`,
+            html`<option value="off">Off</option>`,
+          ],
+        })}
+        <p class="ambient-policy-hint" id="ambient-enabled-hint">
+          When off, the agent never acts on overheard messages here — it only responds to direct @mentions. Default: on
+          only when standing orders (or an action-mode bot) are set below — otherwise mention-only.
+        </p>
       </div>
-      ${ambientPolicyState.bots.length ? html`<div class="ambient-bot-list">${ambientPolicyState.bots.map((b, i) => botRow(b, i))}</div>` : html`<div class="empty compact">No bots added. All bot posts are treated as activity.</div>`}
-      <form
-        class="ambient-bot-add"
-        @submit=${(e: SubmitEvent) => {
-          e.preventDefault();
-          addBot();
-        }}
-      >
-        <input
-          data-focus-key="ambient-bot-name"
-          type="text"
-          maxlength="120"
-          aria-label="Bot name"
-          required
-          placeholder="Bot name"
-          .value=${ambientPolicyState.newBotName}
+      <div class="ambient-group">
+        <label class="ambient-field-label" for="ambient-orders">Standing orders</label>
+        <textarea
+          id="ambient-orders"
+          data-focus-key="ambient-orders"
+          class="ambient-orders"
+          rows="4"
+          aria-describedby="ambient-orders-hint"
+          placeholder="For example: Flag anything that could delay the launch."
+          .value=${ambientPolicyState.orders}
           ?disabled=${ambientPolicyState.saving}
           @input=${(e: InputEvent) => {
-            ambientPolicyState.newBotName = (e.currentTarget as HTMLInputElement).value;
-            redraw();
+            ambientPolicyState.orders = (e.currentTarget as HTMLTextAreaElement).value;
+            markDirty();
           }}
-        />
-        <button class="btn" type="submit" ?disabled=${ambientPolicyState.saving}>Add bot</button>
-      </form>
+        ></textarea>
+        <p class="ambient-policy-hint" id="ambient-orders-hint">
+          Plain-language guidance for proactive work. Leave empty to respond only when addressed.
+        </p>
+      </div>
+      <div class="ambient-group">
+        <h3 class="ambient-field-label">Automated posters</h3>
+        <p class="ambient-policy-hint">Control how messages from bots and integrations wake the agent.</p>
+        ${ambientPolicyState.bots.length ? html`<div class="ambient-bot-list">${ambientPolicyState.bots.map((b, i) => botRow(b, i))}</div>` : html`<div class="empty compact">No bots added. All bot posts are treated as activity.</div>`}
+        <form
+          class="ambient-bot-add"
+          @submit=${(e: SubmitEvent) => {
+            e.preventDefault();
+            addBot();
+          }}
+        >
+          <input
+            data-focus-key="ambient-bot-name"
+            type="text"
+            maxlength="120"
+            aria-label="Bot name"
+            required
+            placeholder="Bot name"
+            .value=${ambientPolicyState.newBotName}
+            ?disabled=${ambientPolicyState.saving}
+            @input=${(e: InputEvent) => {
+              ambientPolicyState.newBotName = (e.currentTarget as HTMLInputElement).value;
+              redraw();
+            }}
+          />
+          <button class="btn" type="submit" ?disabled=${ambientPolicyState.saving}>Add bot</button>
+        </form>
+      </div>
       <div class="ambient-policy-actions">
         <button
           class="btn primary"

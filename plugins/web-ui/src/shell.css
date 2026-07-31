@@ -2934,6 +2934,14 @@ body.resizing-sidebar {
   font-size: 14px;
   box-sizing: border-box;
 }
+.skill-form-page .field-select {
+  display: flex;
+}
+.skill-form-page .field-select > select {
+  min-height: 43px;
+  padding: 10px 36px 10px 11px;
+  font-size: 14px;
+}
 .skill-form-page .skill-body-input {
   min-height: 320px;
 }
@@ -3110,7 +3118,7 @@ body.resizing-sidebar {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
   .skill-filter-fields .list-select,
-  .skill-filter-fields select {
+  .skill-filter-fields .field-select {
     min-width: 0;
     width: 100%;
   }
@@ -4373,16 +4381,6 @@ body.resizing-sidebar {
   font-size: 11px;
   font-weight: 600;
 }
-.list-select select {
-  min-height: 34px;
-  padding: 0 28px 0 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--background);
-  color: var(--foreground);
-  font: inherit;
-  font-size: 12px;
-}
 .resource-tabs {
   width: min(960px, 100%);
   margin: 16px auto 0;
@@ -5374,15 +5372,6 @@ body.resizing-sidebar {
   color: var(--muted-foreground);
   font-size: 12px;
 }
-.deploy-sort select {
-  height: 32px;
-  padding: 0 24px 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--background);
-  color: var(--foreground);
-  font: inherit;
-}
 .deploy-row-main {
   min-width: 0;
   display: grid;
@@ -5946,7 +5935,80 @@ body.resizing-sidebar {
   flex-shrink: 0;
   opacity: 0.85;
 }
-
+.field-select {
+  position: relative;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  color: var(--foreground);
+}
+.field-select > select {
+  min-width: 0;
+  width: 100%;
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 0 36px 0 10px;
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--background);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+.field-select > .icon {
+  position: absolute;
+  right: 12px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+.field-select.compact > select {
+  min-height: 30px;
+  padding-right: 32px;
+  font-size: 12.5px;
+}
+.field-select.compact > .icon {
+  right: 10px;
+}
+.field-select > select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--foreground) 30%, var(--border));
+}
+.field-select > select:focus-visible {
+  border-color: var(--foreground);
+  outline: 2px solid color-mix(in srgb, var(--foreground) 65%, transparent);
+  outline-offset: 2px;
+}
+.field-select:has(> select:disabled) {
+  opacity: 0.55;
+}
+.field-select > select:disabled {
+  cursor: not-allowed;
+}
+.context-model {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.context-model-select {
+  align-self: flex-start;
+  min-width: min(260px, 100%);
+}
+.context-model-hint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.context-model-status {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.context-model-status.error {
+  color: var(--destructive, #c0392b);
+}
 .ambient-policy {
   display: flex;
   flex-direction: column;
@@ -5957,29 +6019,27 @@ body.resizing-sidebar {
   font-size: 12px;
   line-height: 1.45;
 }
-.ambient-field {
+.ambient-group {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 6px;
+}
+.ambient-group + .ambient-group {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
 }
 .ambient-enabled-select {
   align-self: flex-start;
-  margin-bottom: 8px;
+  min-width: min(300px, 100%);
 }
-.ambient-field-label,
-.ambient-field-heading h3 {
+.ambient-field-label {
   color: var(--foreground);
   font-size: 12.5px;
   font-weight: 600;
 }
-.ambient-field-heading {
-  margin-top: 6px;
-}
-.ambient-field-heading h3 {
+h3.ambient-field-label {
   margin: 0;
-}
-.ambient-field-heading p {
-  margin: 3px 0 0;
 }
 .ambient-orders {
   width: 100%;
@@ -5997,7 +6057,6 @@ body.resizing-sidebar {
   line-height: 1.5;
 }
 .ambient-orders:focus-visible,
-.ambient-bot-mode:focus-visible,
 .ambient-bot-hours input:focus-visible,
 .ambient-bot-add input:focus-visible {
   border-color: var(--foreground);
@@ -6027,7 +6086,6 @@ body.resizing-sidebar {
   white-space: nowrap;
   font-size: 13px;
 }
-.ambient-bot-mode,
 .ambient-bot-hours input,
 .ambient-bot-add input {
   box-sizing: border-box;
@@ -6040,8 +6098,7 @@ body.resizing-sidebar {
   font-size: 12.5px;
 }
 .ambient-bot-mode {
-  max-width: 160px;
-  padding: 5px 7px;
+  max-width: 150px;
 }
 .ambient-bot-hours {
   display: inline-flex;
@@ -6074,7 +6131,9 @@ body.resizing-sidebar {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding-top: 2px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
 }
 .ambient-policy-status {
   color: var(--muted-foreground);

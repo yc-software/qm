@@ -84,3 +84,27 @@ test("runtime resolution reads approvals and selections from shared durable stat
     /not approved/,
   );
 });
+
+test("every write that changes a scope's served model notifies listeners", async () => {
+  const config = createMemoryConfigStore("default-org");
+  const seen: string[] = [];
+  config.onRuntimeSelectionChanged((id) => seen.push(id));
+  config.setApprovedHarnesses(["pi", "codex"]);
+
+  config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
+  await config.setRuntimeSelectionLatest(PERSONAL, { harnessId: "codex", modelId: "gpt-5.5" });
+  config.setBaseModel(PERSONAL, "gpt-5.6-sol");
+  await config.setRuntimeSelectionLatest(PERSONAL, null);
+  config.acknowledgeRuntimeSelection(PERSONAL);
+  assert.deepEqual(seen, [ORG, PERSONAL, PERSONAL, PERSONAL]);
+});
+
+test("a listener that throws cannot break the write that notified it", async () => {
+  const config = createMemoryConfigStore("default-org");
+  config.onRuntimeSelectionChanged(() => {
+    throw new Error("surface unreachable");
+  });
+  config.setApprovedHarnesses(["pi"]);
+  await config.setRuntimeSelectionLatest(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
+  assert.equal((await config.getRuntimeSelectionDurable(ORG))?.modelId, "claude-opus-4-8");
+});

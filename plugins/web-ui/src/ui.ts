@@ -1,5 +1,5 @@
-import { html, type TemplateResult } from "lit";
-import { createElement, type IconNode } from "lucide";
+import { html, nothing, type TemplateResult } from "lit";
+import { ChevronDown, createElement, type IconNode } from "lucide";
 
 export function brandName(): string {
   if (typeof document === "undefined") return "QM";
@@ -20,6 +20,36 @@ export function icon(node: IconNode, size = 18): SVGElement {
     "stroke-width": 1.9,
   });
   return el;
+}
+
+export function fieldSelect(props: {
+  options: TemplateResult | TemplateResult[];
+  onChange: (value: string, event: Event) => void;
+  value?: string;
+  id?: string;
+  ariaLabel?: string;
+  describedBy?: string;
+  focusKey?: string;
+  disabled?: boolean;
+  compact?: boolean;
+  className?: string;
+}): TemplateResult {
+  return html`<span
+    class=${`field-select${props.compact ? " compact" : ""}${props.className ? ` ${props.className}` : ""}`}
+  >
+    <select
+      id=${props.id ?? nothing}
+      aria-label=${props.ariaLabel ?? nothing}
+      aria-describedby=${props.describedBy ?? nothing}
+      data-focus-key=${props.focusKey ?? nothing}
+      .value=${props.value ?? nothing}
+      ?disabled=${props.disabled ?? false}
+      @change=${(e: Event) => props.onChange((e.currentTarget as HTMLSelectElement).value, e)}
+    >
+      ${props.options}
+    </select>
+    ${icon(ChevronDown, 16)}
+  </span>`;
 }
 
 export function initials(s: string): string {

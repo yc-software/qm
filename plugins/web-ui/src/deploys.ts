@@ -3,7 +3,7 @@ import { live } from "lit/directives/live.js";
 import { Archive, Check, Copy, ExternalLink, MoreHorizontal, Pencil, RotateCcw, X } from "lucide";
 import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { copyText, icon, relTime } from "./ui";
+import { copyText, fieldSelect, icon, relTime } from "./ui";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
@@ -305,19 +305,20 @@ function drawDeploysPage(): void {
         onRefresh: () => void renderDeploys(),
         action: { label: "Deploy with Agent", onClick: deployWithAgent },
         controls: html`<label class="deploy-sort"
-          ><span>Sort</span
-          ><select
-            aria-label="Sort apps"
-            .value=${deploySort}
-            @change=${(event: Event) => {
-              deploySort = (event.currentTarget as HTMLSelectElement).value as DeploymentSort;
+          ><span>Sort</span>${fieldSelect({
+            compact: true,
+            ariaLabel: "Sort apps",
+            value: deploySort,
+            onChange: (value) => {
+              deploySort = value as DeploymentSort;
               drawDeploysPage();
-            }}
-          >
-            <option value="newest">Newest</option>
-            <option value="name">Name</option>
-            <option value="status">Status</option>
-          </select></label
+            },
+            options: [
+              html`<option value="newest">Newest</option>`,
+              html`<option value="name">Name</option>`,
+              html`<option value="status">Status</option>`,
+            ],
+          })}</label
         >`,
         search: {
           value: deployQuery,

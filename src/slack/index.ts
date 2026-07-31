@@ -3,7 +3,7 @@ import bolt from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import { createDeduper, createThreadTracker } from "./lib.ts";
 import { installDevIntrospection } from "./dev-introspection.ts";
-import { setDefaultBotIdentity, createSurfaceHeaderEnsurer } from "./delivery.ts";
+import { setDefaultBotIdentity, createSurfaceHeaderEnsurer, type SurfaceHeaderClient } from "./delivery.ts";
 import { NO_RETRY, type SlackPluginConfig, normalizeSlackApiUrl, slackPluginConfigFromEnv } from "./config.ts";
 import { createCoreBridge } from "./core-bridge.ts";
 import { createAckEmojiPicker } from "./ack-emoji.ts";
@@ -130,9 +130,13 @@ export async function startSlackPlugin(
   });
   const approvals = createApprovals({ core, bridge, directory, threads });
   const ensureHeader = createSurfaceHeaderEnsurer({
-    effectiveModelName: (scope) => core.effectiveModelName(scope as Parameters<typeof core.effectiveModelName>[0]),
+    headerFacts: (scope) => core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0]),
     webUiPublicUrl: cfg.webUiPublicUrl,
     ids,
+  });
+  core.onScopeModelChanged((scope) => {
+    const channel = scope.startsWith("channel:") ? scope.slice("channel:".length) : "";
+    if (channel) ensureHeader(app.client as unknown as SurfaceHeaderClient, channel, scope, "channel");
   });
   const handler = createTurnHandler({
     bridge,

@@ -151,6 +151,20 @@ export function applyPickerModelIds(ids: readonly string[] | null | undefined, b
   };
 }
 
+export function runtimeModelOptions(
+  approvedHarnesses: readonly string[],
+  modelsByHarness: Readonly<Record<string, readonly string[]>>,
+  catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
+): ModelOption[] {
+  const options = approvedHarnesses.flatMap((harnessId) => {
+    const configured = buildOptions(modelsByHarness[harnessId] ?? [], harnessId, true, catalog);
+    return configured.length
+      ? configured
+      : buildOptions(defaultModelIdsForHarness(harnessId), harnessId, true, catalog);
+  });
+  return options.length ? options : buildOptions(DEFAULT_PICKER_MODEL_IDS);
+}
+
 export function applyRuntimeOptions(
   scopeKey: string | null,
   approvedHarnesses: readonly string[],
@@ -158,13 +172,7 @@ export function applyRuntimeOptions(
   effective: { harnessId: string; modelId: string },
   catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
 ): void {
-  let options = approvedHarnesses.flatMap((harnessId) => {
-    const configured = buildOptions(modelsByHarness[harnessId] ?? [], harnessId, true, catalog);
-    return configured.length
-      ? configured
-      : buildOptions(defaultModelIdsForHarness(harnessId), harnessId, true, catalog);
-  });
-  if (!options.length) options = buildOptions(DEFAULT_PICKER_MODEL_IDS);
+  const options = runtimeModelOptions(approvedHarnesses, modelsByHarness, catalog);
   const applied = { options, defaultValue: `${effective.harnessId}:${effective.modelId}` };
   lastApplied = applied;
   if (scopeKey !== null) byScope.set(scopeKey, applied);

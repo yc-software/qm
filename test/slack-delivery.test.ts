@@ -569,14 +569,25 @@ test("postWithVerify: threaded post verifies via conversations.replies", async (
   assert.equal(h.historyCalled, false, "threaded verify reads replies, not history");
 });
 
-test("surfaceHeaderText composes model + project link and degrades gracefully", () => {
+test("surfaceHeaderText names the agent, its model, and the project link — degrading gracefully", () => {
   assert.equal(
-    surfaceHeaderText("Claude Opus 4.8", "https://claw.acme.dev/contexts?scope=channel%3AC1"),
-    "Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=channel%3AC1",
+    surfaceHeaderText(
+      { agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" },
+      "https://claw.acme.dev/contexts?scope=channel%3AC1",
+    ),
+    "Quartermaster Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=channel%3AC1",
   );
-  assert.equal(surfaceHeaderText("Claude Opus 4.8", undefined), "Model: Claude Opus 4.8");
-  assert.equal(surfaceHeaderText(undefined, "https://claw.acme.dev"), "https://claw.acme.dev");
-  assert.equal(surfaceHeaderText("  ", "  "), undefined);
+  assert.equal(
+    surfaceHeaderText({ agentLabel: "QM", modelName: "Claude Opus 4.8" }, undefined),
+    "QM Model: Claude Opus 4.8",
+  );
+  assert.equal(
+    surfaceHeaderText({ modelName: "Claude Opus 4.8" }, undefined),
+    "Model: Claude Opus 4.8",
+    "an unbranded deployment keeps the bare model line",
+  );
+  assert.equal(surfaceHeaderText({}, "https://claw.acme.dev"), "https://claw.acme.dev");
+  assert.equal(surfaceHeaderText({ agentLabel: "QM", modelName: "  " }, "  "), undefined);
 });
 
 test("headerUpdate rewrites only an empty or self-authored header", () => {
@@ -620,7 +631,7 @@ function headerHarness(
     },
   };
   const raw = createSurfaceHeaderEnsurer({
-    effectiveModelName: async () => model,
+    headerFacts: async () => ({ agentLabel: "Quartermaster", modelName: model }),
     webUiPublicUrl: "https://claw.acme.dev",
     ids: { botUserId: "U0BOT" },
   });
@@ -639,7 +650,7 @@ test("surface header ensurer writes the header once, then goes quiet", async () 
   assert.equal(h.calls.set, 1);
   assert.equal(
     h.read()?.value,
-    "Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=personal%3Auser.one%40acme.dev",
+    "Quartermaster Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=personal%3Auser.one%40acme.dev",
   );
   h.ensure(h.client, "D1");
   await h.flush();
@@ -664,7 +675,7 @@ test("surface header ensurer collapses a burst on one channel into a single writ
     },
   };
   const ensure = createSurfaceHeaderEnsurer({
-    effectiveModelName: async () => "Claude Opus 4.8",
+    headerFacts: async () => ({ agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" }),
     webUiPublicUrl: "https://claw.acme.dev",
     ids: { botUserId: "U0BOT" },
   });
@@ -674,12 +685,43 @@ test("surface header ensurer collapses a burst on one channel into a single writ
   assert.equal(sets, 1);
 });
 
+test("a model change during an in-flight ensure is re-run, not dropped", async () => {
+  let model = "Claude Opus 4.8";
+  const purposes: string[] = [];
+  const client = {
+    conversations: {
+      info: async () => {
+        await new Promise((r) => setTimeout(r, 15));
+        return { channel: { purpose: {} } };
+      },
+      setPurpose: async ({ purpose }: { channel: string; purpose: string }) => {
+        purposes.push(purpose);
+        return {};
+      },
+    },
+  };
+  const ensure = createSurfaceHeaderEnsurer({
+    headerFacts: async () => ({ agentLabel: "QM", modelName: model }),
+    webUiPublicUrl: "https://claw.acme.dev",
+    ids: { botUserId: "U0BOT" },
+  });
+  ensure(client as any, "C1", "channel:C1", "channel");
+  model = "Claude Haiku 4.5";
+  ensure(client as any, "C1", "channel:C1", "channel");
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepEqual(
+    purposes.map((p) => p.split(" · ")[0]),
+    ["QM Model: Claude Opus 4.8", "QM Model: Claude Haiku 4.5"],
+    "the change that landed mid-probe still reaches the description",
+  );
+});
+
 test("surface header ensurer caps its per-channel memo", async () => {
   const client = {
     conversations: { info: async () => ({ channel: {} }), setTopic: async () => ({}) },
   };
   const ensure = createSurfaceHeaderEnsurer({
-    effectiveModelName: async () => "Claude Opus 4.8",
+    headerFacts: async () => ({ agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" }),
     webUiPublicUrl: "https://claw.acme.dev",
     ids: { botUserId: "U0BOT" },
     maxTracked: 3,
@@ -710,9 +752,32 @@ test("surface header ensurer writes a channel's description, not its topic", asy
   assert.equal(h.calls.set, 1);
   assert.equal(
     h.read()?.value,
-    "Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=channel%3AC1",
+    "Quartermaster Model: Claude Opus 4.8 · https://claw.acme.dev/contexts?scope=channel%3AC1",
     "a channel shows ITS scope's default model and links to ITS project page",
   );
+});
+
+test("surface header ensurer writes no channel header where an external member could read it", async () => {
+  for (const shape of [{ is_ext_shared: true }, { is_mpim: true }]) {
+    let sets = 0;
+    const client = {
+      conversations: {
+        info: async () => ({ channel: { ...shape, purpose: {} } }),
+        setPurpose: async () => {
+          sets += 1;
+          return {};
+        },
+      },
+    };
+    const ensure = createSurfaceHeaderEnsurer({
+      headerFacts: async () => ({ agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" }),
+      webUiPublicUrl: "https://claw.acme.dev",
+      ids: { botUserId: "U0BOT" },
+    });
+    ensure(client as any, "C1", "channel:C1", "channel");
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(sets, 0, `a ${JSON.stringify(shape)} conversation is not the bot's to describe`);
+  }
 });
 
 test("surface header ensurer never clobbers a human-written channel description", async () => {
@@ -746,7 +811,7 @@ test("surface header ensurer never clobbers a human-written topic", async () => 
 
 test("surface header ensurer swallows a Slack failure instead of surfacing it to the turn", async () => {
   const ensure = createSurfaceHeaderEnsurer({
-    effectiveModelName: async () => {
+    headerFacts: async () => {
       throw new Error("core unreachable");
     },
     webUiPublicUrl: "https://claw.acme.dev",

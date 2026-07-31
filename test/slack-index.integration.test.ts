@@ -192,12 +192,16 @@ class FakeCore implements SlackCoreClient {
   readonly polled: string[] = [];
   private runGate: Promise<void> | undefined;
   private releaseRun: (() => void) | undefined;
+  readonly modelChangeListeners: Array<(scope: any) => void> = [];
 
   async externalSlackParticipants(): Promise<boolean> {
     return this.externalParticipants;
   }
-  async effectiveModelName(): Promise<string> {
-    return "Claude Opus 4.8";
+  async surfaceHeaderFacts(): Promise<{ agentLabel?: string; modelName: string }> {
+    return { agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" };
+  }
+  onScopeModelChanged(listener: (scope: any) => void): void {
+    this.modelChangeListeners.push(listener);
   }
   async stageBlob(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }> {
     return { blobId: "blob-1", sizeBytes: bytes.byteLength };
@@ -399,7 +403,7 @@ test("a human's DM sets the conversation header to the serving model + web surfa
     assert.deepEqual(f.client.topics, [
       {
         channel: "D1",
-        topic: "Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=personal%3AU1",
+        topic: "Quartermaster Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=personal%3AU1",
       },
     ]);
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });
@@ -420,10 +424,30 @@ test("a channel's description names the channel's own default model and project 
     assert.deepEqual(f.client.purposes, [
       {
         channel: "C1",
-        purpose: "Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=channel%3AC1",
+        purpose: "Quartermaster Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=channel%3AC1",
       },
     ]);
     assert.deepEqual(f.client.topics, [], "a channel's topic stays the members' own scratch space");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a scope's model change rewrites its channel description without waiting for a message", async () => {
+  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
+  try {
+    assert.equal(f.core.modelChangeListeners.length, 1, "the plugin subscribes to core's model changes");
+    for (const listener of f.core.modelChangeListeners) listener("channel:C1");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(f.client.purposes, [
+      {
+        channel: "C1",
+        purpose: "Quartermaster Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=channel%3AC1",
+      },
+    ]);
+    for (const listener of f.core.modelChangeListeners) listener("personal:alice@example.com");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");
   } finally {
     await f.stop();
   }
