@@ -126,6 +126,26 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal(r.status, 403);
   });
 
+  it("ambient policy writes bind their body principalId to the portal actor", async () => {
+    const put = (body: unknown, headers: Record<string, string> = {}) =>
+      fetch(`${base}/v1/contexts/policy`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+    const body = { principalId: "U2", scope: "channel:C1", orders: "be loud" };
+    assert.equal((await put(body)).status, 401, "no identity at all");
+    const forged = await put(body, { "x-portal-identity": await token("U1") });
+    assert.equal(forged.status, 403, "naming another principal must not reach the handler");
+    const mine = await put({ ...body, principalId: "U1" }, { "x-portal-identity": await token("U1") });
+    assert.ok(mine.status !== 401 && mine.status !== 403, "my own policy write passes the gate");
+  });
+
+  it("skill restore binds its body principalId to the portal actor", async () => {
+    const r = await post("/v1/skills/s1/restore", { principalId: "U2" }, { "x-portal-identity": await token("U1") });
+    assert.equal(r.status, 403);
+  });
+
   it("Project reads and every mutation bind principalId to the portal identity", async () => {
     assert.equal((await fetch(`${base}/v1/projects?principalId=U1`)).status, 401);
     assert.equal(
@@ -141,6 +161,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
     for (const [method, path, body] of [
       ["POST", "/v1/projects", { principalId: "U2", name: "forged" }],
+      ["PATCH", "/v1/projects/p1", { principalId: "U2", name: "forged" }],
       ["POST", "/v1/projects/p1/members", { principalId: "U2", memberId: "U3" }],
       ["DELETE", "/v1/projects/p1/members/U3", { principalId: "U2" }],
     ] as const) {
