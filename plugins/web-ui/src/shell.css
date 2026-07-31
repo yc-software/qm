@@ -1790,7 +1790,7 @@ body.resizing-sidebar {
 .bg-chip {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   flex: 0 0 auto;
   margin-right: 6px;
   padding: 0 5px;
@@ -6803,4 +6803,25 @@ h3.ambient-field-label {
   border-color: var(--primary, #6366f1);
   color: var(--primary, #6366f1);
   background: color-mix(in srgb, var(--primary, #6366f1) 8%, var(--background));
+}
+
+/* Floating tooltip (ours — never the browser's native title bubble). */
+.qm-tooltip {
+  position: fixed;
+  z-index: 4000;
+  max-width: 320px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--background, #fff);
+  background: color-mix(in srgb, var(--foreground) 92%, transparent);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.18);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  white-space: nowrap;
+}
+.qm-tooltip.visible {
+  opacity: 1;
 }

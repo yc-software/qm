@@ -363,15 +363,23 @@ test("rowIndicators: awaitingInput maps through", () => {
 });
 
 test("backgroundLabel: jobs and watches fold into one chip with a spoken label", () => {
-  assert.deepEqual(backgroundLabel(1, 0), { count: 1, label: "1 background job running" });
-  assert.deepEqual(backgroundLabel(2, 1), { count: 3, label: "2 background jobs running · 1 watch armed" });
-  assert.deepEqual(backgroundLabel(0, 2), { count: 2, label: "2 watches armed" });
+  assert.deepEqual(backgroundLabel(1, 0), { jobs: 1, watches: 0, label: "1 background job running" });
+  assert.deepEqual(backgroundLabel(2, 1), {
+    jobs: 2,
+    watches: 1,
+    label: "2 background jobs running · 1 watch armed",
+  });
+  assert.deepEqual(backgroundLabel(0, 2), { jobs: 0, watches: 2, label: "2 watches armed" });
   assert.equal(backgroundLabel(0, 0), null, "nothing running, nothing to say");
 });
 
 test("rowIndicators: background counts flow through backgroundLabel — zero counts treated as absent", () => {
   const both = rowIndicators({ ...saved("1", "web:u:x"), backgroundJobs: 2, watches: 1 }, null);
-  assert.deepEqual(both.background, { count: 3, label: "2 background jobs running · 1 watch armed" });
+  assert.deepEqual(both.background, {
+    jobs: 2,
+    watches: 1,
+    label: "2 background jobs running · 1 watch armed",
+  });
   assert.equal(rowIndicators({ ...saved("1", "web:u:x"), backgroundJobs: 0, watches: 0 }, null).background, null);
   assert.equal(rowIndicators(saved("1", "web:u:x"), null).background, null);
 });
@@ -379,14 +387,15 @@ test("rowIndicators: background counts flow through backgroundLabel — zero cou
 test("conversationBackground: resolves the mounted conversation by session id", () => {
   const list = [saved("1", "web:u:a"), { ...saved("2", "web:u:b"), backgroundJobs: 2, watches: 1 }];
   assert.deepEqual(conversationBackground(list, "2", null), {
-    count: 3,
+    jobs: 2,
+    watches: 1,
     label: "2 background jobs running · 1 watch armed",
   });
 });
 
 test("conversationBackground: falls back to threadRef while the conversation is still pending adoption", () => {
   const list = [{ ...saved("1", "web:u:a"), watches: 1 }];
-  assert.deepEqual(conversationBackground(list, null, "web:u:a"), { count: 1, label: "1 watch armed" });
+  assert.deepEqual(conversationBackground(list, null, "web:u:a"), { jobs: 0, watches: 1, label: "1 watch armed" });
 });
 
 test("conversationBackground: null when the conversation has nothing running, or isn't in the list", () => {

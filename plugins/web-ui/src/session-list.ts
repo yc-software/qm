@@ -149,14 +149,17 @@ export function applySessionState(
 export interface RowIndicators {
   working: boolean;
   awaiting: boolean;
-  background: { count: number; label: string } | null;
+  background: { jobs: number; watches: number; label: string } | null;
 }
 
-export function backgroundLabel(jobs: number, watches: number): { count: number; label: string } | null {
+export function backgroundLabel(
+  jobs: number,
+  watches: number,
+): { jobs: number; watches: number; label: string } | null {
   const parts: string[] = [];
   if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
   if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
-  return parts.length ? { count: jobs + watches, label: parts.join(" · ") } : null;
+  return parts.length ? { jobs, watches, label: parts.join(" · ") } : null;
 }
 
 export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> | string | null): RowIndicators {

@@ -1,6 +1,6 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { Activity, Expand, Maximize2, Plus, Shrink, X } from "lucide";
+import { Binoculars, Cog, Expand, Maximize2, Plus, Shrink, X } from "lucide";
 import {
   createDockview,
   type DockviewApi,
@@ -27,6 +27,7 @@ import {
   type PaneSeed,
   type SplitEdge,
 } from "./split-layout";
+import { hideTooltip, showTooltip } from "./tooltip";
 import { icon } from "./ui";
 import { contextsState } from "./contexts";
 import type { DensityTier } from "./density";
@@ -812,8 +813,14 @@ class PaneTab implements ITabRenderer {
         ${awaiting ? html`<span class="awaiting-dot" title="Waiting for your reply" aria-label="Waiting for your reply"></span>` : nothing}
         ${
           background
-            ? html`<span class="bg-chip" title=${background.label} aria-label=${background.label}
-                >${icon(Activity, 11)}${background.count}</span
+            ? html`<span
+                class="bg-chip"
+                aria-label=${background.label}
+                @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, background.label)}
+                @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+                >${background.jobs > 0 ? icon(Cog, 11) : nothing}${
+                  background.watches > 0 ? icon(Binoculars, 11) : nothing
+                }</span
               >`
             : nothing
         }

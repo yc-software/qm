@@ -3,11 +3,12 @@ import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import {
-  Activity,
   Archive,
+  Binoculars,
   ArchiveRestore,
   ChevronDown,
   ChevronRight,
+  Cog,
   EllipsisVertical,
   Folder,
   Hash,
@@ -55,6 +56,7 @@ import {
   type RecentItem,
   type ChatBrowseStatus,
 } from "./session-list";
+import { hideTooltip, showTooltip } from "./tooltip";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, fieldSelect, icon, relTime } from "./ui";
 import { listPageTpl } from "./list-page";
@@ -577,11 +579,17 @@ function statusMarks(s: CoreSession): TemplateResult {
           class="bg-chip"
           role="button"
           tabindex="0"
-          title="${ind.background.label} — click to inspect"
           aria-label="${ind.background.label} — click to inspect"
+          @mouseenter=${(e: Event) =>
+            showTooltip(e.currentTarget as Element, `${ind.background!.label} — click to inspect`)}
+          @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+          @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `${ind.background!.label} — click to inspect`)}
+          @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
           @click=${(e: Event) => openBackgroundInspector(e, s)}
           @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
-          >${icon(Activity, 11)}${ind.background.count}</span
+          >${ind.background.jobs > 0 ? icon(Cog, 11) : nothing}${
+            ind.background.watches > 0 ? icon(Binoculars, 11) : nothing
+          }</span
         >`
       : nothing
   }`;
