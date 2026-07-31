@@ -369,8 +369,8 @@ export function fileCredentialFingerprint(files: CredentialFile[]): string {
 function keychainFilePath(path: string): string {
   try {
     return homeRelativePath(path);
-  } catch {
-    throw new KeychainError(400, `file path must be home-relative: ${path}`);
+  } catch (e) {
+    throw new KeychainError(400, errMessage(e));
   }
 }
 
@@ -1279,8 +1279,9 @@ const FILE_ENV_POINTERS: Array<[RegExp, (abs: string) => string]> = [
 
 export function renderUseScript(m: MaterializedCred): string {
   if (m.kind === "env") return m.env.map((e) => `export ${e.key}=${shq(e.value)}`).join("\n") + "\n";
+  const files = m.files.map((f) => ({ ...f, path: homeRelativePath(f.path) }));
   const lines = [`__kc_dir="$(mktemp -d "\${TMPDIR:-/tmp}/keychain.XXXXXX")"`, `umask 077`];
-  for (const f of m.files) {
+  for (const f of files) {
     const parent = f.path.includes("/") ? f.path.replace(/\/[^/]*$/, "") : "";
     if (parent) lines.push(`mkdir -p "$__kc_dir/${parent}"`);
     lines.push(
@@ -1289,7 +1290,7 @@ export function renderUseScript(m: MaterializedCred): string {
     );
   }
   const pointed = new Set<RegExp>();
-  for (const f of m.files) {
+  for (const f of files) {
     for (const [re, render] of FILE_ENV_POINTERS) {
       if (re.test(f.path) && !pointed.has(re)) {
         pointed.add(re);
@@ -1297,7 +1298,7 @@ export function renderUseScript(m: MaterializedCred): string {
       }
     }
   }
-  if (m.files.some((f) => !FILE_ENV_POINTERS.some(([re]) => re.test(f.path)))) {
+  if (files.some((f) => !FILE_ENV_POINTERS.some(([re]) => re.test(f.path)))) {
     lines.push(
       `for __e in "$HOME"/.[!.]* "$HOME"/*; do [ -e "$__e" ] || continue; __b=\${__e##*/}; [ -e "$__kc_dir/$__b" ] || ln -s "$__e" "$__kc_dir/$__b"; done`,
       `export HOME="$__kc_dir"`,

