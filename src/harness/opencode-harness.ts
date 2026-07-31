@@ -117,6 +117,19 @@ export function bridgeToolName(name: string): string {
   return name;
 }
 
+const OPENCODE_CHILD_TOOL_NAMES = new Set([
+  "workspace_execute",
+  "workspace_read",
+  "workspace_write",
+  "publish",
+  "memory",
+  "history",
+  "background",
+]);
+
+const OPENCODE_CHILD_POLICY =
+  "Do not contact people, schedule work, change standing configuration, or suppress the parent reply.";
+
 function body(req: IncomingMessage, max = 16 * 1024 * 1024): Promise<Buffer> {
   return new Promise((resolveBody, reject) => {
     const chunks: Buffer[] = [];
@@ -596,6 +609,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
               callID?: string;
               args?: unknown;
             };
+            if (state.child && !OPENCODE_CHILD_TOOL_NAMES.has(input.tool ?? ""))
+              return json(res, 404, { output: `[tool unavailable: ${input.tool ?? "unknown"}]` });
             const tool = input.tool ? state.tools.get(input.tool) : undefined;
             if (!tool) return json(res, 404, { output: `[tool unavailable: ${input.tool ?? "unknown"}]` });
             try {
@@ -628,6 +643,9 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         const bridgeUrl = `http://127.0.0.1:${address.port}`;
         const pluginUrl = pathToFileURL(join(import.meta.dirname, "opencode-plugin.ts")).href;
         const enabledTools = Object.fromEntries(definitions.map((item) => [item.name, true]));
+        const childTools = Object.fromEntries(
+          definitions.map((item) => [item.name, OPENCODE_CHILD_TOOL_NAMES.has(item.name)]),
+        );
         const config = {
           plugin: [pluginUrl],
           autoupdate: false,
@@ -678,20 +696,20 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             research: {
               mode: "subagent",
               description: "Research a bounded question and report evidence.",
-              prompt: "Complete only the delegated research task.",
-              tools: { ...enabledTools, task: false },
+              prompt: `Complete only the delegated research task. ${OPENCODE_CHILD_POLICY}`,
+              tools: { ...childTools, task: false },
             },
             code: {
               mode: "subagent",
               description: "Implement or inspect a bounded code task.",
-              prompt: "Complete only the delegated code task.",
-              tools: { ...enabledTools, task: false },
+              prompt: `Complete only the delegated code task. ${OPENCODE_CHILD_POLICY}`,
+              tools: { ...childTools, task: false },
             },
             consult: {
               mode: "subagent",
               description: "Provide an independent expert analysis.",
-              prompt: "Complete only the delegated consultation.",
-              tools: { ...enabledTools, task: false },
+              prompt: `Complete only the delegated consultation. ${OPENCODE_CHILD_POLICY}`,
+              tools: { ...childTools, task: false },
             },
           },
         };

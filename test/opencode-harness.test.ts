@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assistantFailure, createOpenCodeHarness, latestAssistantParts } from "../src/harness/opencode-harness.ts";
@@ -293,4 +293,72 @@ test("assistantFailure classifies provider errors and exempts aborts and output-
   assert.equal(assistantFailure({ role: "assistant", error: { name: "MessageOutputLengthError" } }), null);
   assert.equal(assistantFailure({ role: "assistant" }), null);
   assert.equal(assistantFailure(undefined), null);
+});
+
+test("OpenCode subagents get only the child-safe tools, and the bridge refuses parent-only tools to children", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
+  const configDump = join(dir, "config.json");
+  const childProbe = `
+  if (req.method === "GET" && url.pathname === "/session/ses_child") return json(res, { parentID: "ses_main" });
+  if (req.method === "POST" && message) {
+    await readBody(req);
+    await capture(message[1], { system: "s", messages: [{ role: "user" }] });
+    require("node:fs").writeFileSync(${JSON.stringify(configDump)}, process.env.OPENCODE_CONFIG_CONTENT);
+    const probe = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/ses_child/tool", {
+      method: "POST",
+      headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET, "content-type": "application/json" },
+      body: JSON.stringify({ tool: "cron", callID: "c1", args: {} }),
+    });
+    const probeBody = await probe.json();
+    const assistant = {
+      info: {
+        id: "msg_1", sessionID: "ses_main", role: "assistant", time: { created: 1000, completed: 1001 },
+        parentID: "", modelID: "gpt-5", providerID: "openai", mode: "qm", path: { cwd: "/", root: "/" },
+        cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, finish: "stop",
+      },
+      parts: [{ id: "prt_1", sessionID: "ses_main", messageID: "msg_1", type: "text",
+        text: "child probe " + probe.status + ": " + (probeBody.output || "") }],
+    };
+    return json(res, assistant);
+  }
+  if (req.method === "GET" && message) return json(res, []);
+`;
+  const harness = createOpenCodeHarness({
+    binaryPath: fakeSidecar(dir, "child-tools", childProbe),
+    controlTools: true,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const result = await harness.turns.runTurn(turnInput([], []));
+  assert.match(result.reply ?? "", /\[tool unavailable: cron\]/, "a child session is refused parent-only tools");
+
+  const config = JSON.parse(readFileSync(configDump, "utf8")) as {
+    agent: Record<string, { prompt: string; tools: Record<string, boolean> }>;
+  };
+  const childSafe = new Set([
+    "workspace_execute",
+    "workspace_read",
+    "workspace_write",
+    "publish",
+    "memory",
+    "history",
+    "background",
+  ]);
+  for (const name of ["research", "code", "consult"]) {
+    const agent = config.agent[name]!;
+    const enabled = Object.keys(agent.tools).filter((key) => agent.tools[key] === true);
+    assert.ok(enabled.length > 0, `${name} keeps the child-safe tools`);
+    for (const key of enabled) assert.ok(childSafe.has(key), `${name} must not enable ${key}`);
+    const denied = Object.keys(agent.tools).filter((key) => agent.tools[key] === false && key !== "task");
+    assert.ok(denied.length > 0, `${name} explicitly denies every parent-only tool`);
+    for (const key of denied) assert.ok(!childSafe.has(key), `${name} denies only parent-only tools`);
+    assert.equal(agent.tools.task, false, `${name} cannot spawn further subagents`);
+    assert.match(agent.prompt, /Do not contact people, schedule work/, `${name} carries the child policy`);
+  }
+  assert.ok(
+    Object.entries(config.agent.qm!.tools).some(([key, value]) => value === true && !childSafe.has(key)),
+    "the primary agent keeps the full bridged surface",
+  );
 });
