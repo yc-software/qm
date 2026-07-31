@@ -1,5 +1,7 @@
 # qm
 
+English · [中文](./README.zh-CN.md)
+
 A multiplayer agent harness for work. In Slack and on the web.
 
 ![The QM web UI: two concurrent sessions, a sidebar of personal files, crons, keychain, deploys, memory, and skills](./docs/screenshots/web-ui-hero.png)

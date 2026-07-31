@@ -1,5 +1,11 @@
 # Contributing
 
+<p align="center">
+  <a href="./CONTRIBUTING.md">English</a>
+  ·
+  <a href="./CONTRIBUTING.zh-CN.md">中文</a>
+</p>
+
 We'd like to try something a little different with this repo.
 
 Given that coding agents write most underlying code now, we'd prefer PRs in the form of _human-written_
