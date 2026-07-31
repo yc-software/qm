@@ -27,6 +27,7 @@ import {
   type PaneSeed,
   type SplitEdge,
 } from "./split-layout";
+import { preservingFocus } from "./pane-focus";
 import { hideTooltip, showTooltip } from "./tooltip";
 import { icon } from "./ui";
 import { contextsState } from "./contexts";
@@ -488,7 +489,9 @@ async function maximizePane(params: PaneParams): Promise<void> {
 }
 
 function focusPane(paneId: string): void {
-  dockApi?.getPanel(paneId)?.api.setActive();
+  const panel = dockApi?.getPanel(paneId);
+  if (!panel || panel.api.isActive) return;
+  preservingFocus(document, () => panel.api.setActive());
 }
 
 export function canvasToast(msg: string): void {
