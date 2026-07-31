@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { sanitizeTitle, TITLE_GENERATION_PROMPT } from "./pi-harness.ts";
+import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -931,7 +931,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             ...(recordLlmRequest ? { recordLlmRequest } : {}),
           }),
         ),
-      generateTitle: async (transcript) => sanitizeTitle(await single(TITLE_GENERATION_PROMPT, transcript)),
+      generateTitle: async (transcript) =>
+        sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript))),
       summarizeApproval: async (command, reason, purpose) =>
         single(
           "Explain this command in one plain-English sentence for an approver.",

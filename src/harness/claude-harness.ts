@@ -35,6 +35,7 @@ import {
   CONTEXT_COMPACTION_PROMPT,
   sanitizeTitle,
   TITLE_GENERATION_PROMPT,
+  titleUserPrompt,
   parseDetectVerdict,
   renderDetectPrompt,
 } from "./pi-harness.ts";
@@ -915,7 +916,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             ...(recordLlmRequest ? { recordLlmRequest } : {}),
           }),
         ),
-      generateTitle: async (transcript) => sanitizeTitle(await single(TITLE_GENERATION_PROMPT, transcript)),
+      generateTitle: async (transcript) =>
+        sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript))),
       summarizeApproval: async (command, reason, purpose) =>
         single(
           "Explain this command in one plain-English sentence for an approver.",

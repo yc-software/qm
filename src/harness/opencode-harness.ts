@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { sanitizeTitle, TITLE_GENERATION_PROMPT } from "./pi-harness.ts";
+import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -1151,7 +1151,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             signal,
           ),
         ),
-      generateTitle: async (transcript) => sanitizeTitle(await single(TITLE_GENERATION_PROMPT, transcript)),
+      generateTitle: async (transcript) =>
+        sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript))),
       summarizeApproval: async (command, reason, purpose) =>
         single(
           "Explain this command in one plain-English sentence for an approver.",
