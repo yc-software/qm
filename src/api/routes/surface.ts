@@ -1101,16 +1101,8 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     content = b.content;
     actorId = b.actorId;
   }
-  const allowSharedScope =
-    Boolean(capability) ||
-    (parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId)));
   try {
-    const version = await app.updateSoul(
-      scopeIdVal,
-      content,
-      actorId,
-      allowSharedScope ? { allowSharedScope: true } : undefined,
-    );
+    const version = await app.updateSoul(scopeIdVal, content, actorId);
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {
     const message = errMessage(e);

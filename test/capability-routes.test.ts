@@ -44,11 +44,11 @@ describe("capability-token control plane (crons + SOUL)", () => {
     audienceScopeId: scopeId("channel", "C"),
     label: "#eng (the whole channel)",
   } as const;
-  const capChannel = async (actorId: string) =>
+  const capChannel = async (actorId: string, channelId = "C") =>
     await mintCapabilityToken(
       {
         actorId,
-        scopeId: scopeId("channel", "C"),
+        scopeId: scopeId("channel", channelId),
         destination: { type: THREAD.type, target: THREAD.target, audienceScopeId: THREAD.audienceScopeId },
         destinations: [THREAD, ROOT],
         defaultDestinationKey: THREAD.key,
@@ -242,20 +242,38 @@ describe("capability-token control plane (crons + SOUL)", () => {
     assert.equal(built.config.soulVersion(scopeId("org", "default-org")), orgVerBefore, "org SOUL floor untouched");
   });
 
-  it("updates the token's shared-scope SOUL without touching the actor's personal SOUL", async () => {
+  it("allows a private-channel member to update shared SOUL and rejects the same token after removal", async () => {
     const personalScope = scopeId("personal", "U8");
-    const channelScope = scopeId("channel", "C");
+    const channelId = "C-soul";
+    const channelScope = scopeId("channel", channelId);
+    await built.app.upsertChannels([{ channelId, name: "eng", isPrivate: true }], [{ channelId, principalId: "U8" }]);
     const personalBefore = built.config.soulVersion(personalScope);
+    const capability = await capChannel("U8", channelId);
     const res = await post(
       "/v1/soul",
       { content: "Channel C speaks in haiku.", scopeId: personalScope, actorId: "U2" },
-      { "x-agent-capability": await capChannel("U8") },
+      { "x-agent-capability": capability },
     );
     assert.equal(res.status, 200);
 
     assert.equal(built.config.getSoul(channelScope), "Channel C speaks in haiku.");
     assert.ok(built.config.soulVersion(channelScope) >= 1, "channel SOUL was updated");
     assert.equal(built.config.soulVersion(personalScope), personalBefore, "actor's personal SOUL was not touched");
+
+    await built.app.upsertChannels([{ channelId, name: "eng", isPrivate: true }], []);
+    const revoked = await post("/v1/soul", { content: "revoked" }, { "x-agent-capability": capability });
+    assert.equal(revoked.status, 403);
+  });
+
+  it("rejects a public-channel capability from updating shared SOUL", async () => {
+    const channelId = "C-soul-public";
+    await built.app.upsertChannels([{ channelId, name: "eng", isPrivate: false }], [{ channelId, principalId: "U8" }]);
+    const res = await post(
+      "/v1/soul",
+      { content: "public channel floor" },
+      { "x-agent-capability": await capChannel("U8", channelId) },
+    );
+    assert.equal(res.status, 403);
   });
 
   it("does not let capability self-update org or team SOUL", async () => {

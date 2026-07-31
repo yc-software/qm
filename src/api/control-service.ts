@@ -578,9 +578,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
 
     async writeSoul(content, capability) {
       try {
-        const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
-          allowSharedScope: true,
-        });
+        const version = await app.updateSoul(capability.scopeId, content, capability.actorId);
         return { ok: true, version };
       } catch (e) {
         return { ok: false, code: "soul_update_denied", message: errMessage(e) };

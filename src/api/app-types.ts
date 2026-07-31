@@ -300,12 +300,7 @@ export interface App {
     orgSoulVersion: number;
     effectiveSoul: string;
   };
-  updateSoul(
-    scopeId: ScopeId,
-    content: string,
-    actorId: string,
-    opts?: { allowSharedScope?: boolean },
-  ): Promise<number>;
+  updateSoul(scopeId: ScopeId, content: string, actorId: string): Promise<number>;
   createCron(input: CreateCronInput): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(): Promise<Cron[]>;

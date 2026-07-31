@@ -577,10 +577,11 @@ export function createSessionMethods(
       };
     },
 
-    async updateSoul(scopeIdValue, content, actorId, opts) {
+    async updateSoul(scopeIdValue, content, actorId) {
       const { kind, ref } = parseScopeId(scopeIdValue);
       const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
-      const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
+      const allowedShared =
+        (kind === "channel" || kind === "group") && (await principalCanManageScope(actorId, scopeIdValue));
       if (!allowedPersonal && !allowedShared) {
         throw new Error("not authorized to update SOUL for this scope");
       }

@@ -722,10 +722,19 @@ test("soul read returns the effective SOUL; write replaces this scope's SOUL and
   assert.match(after.effectiveSoul, /Always greet in Spanish\./);
 });
 
-test("soul write in a shared (channel) scope is allowed (allowSharedScope, like the agent route)", async () => {
-  const { control } = setup();
-  const w = await control.writeSoul("Channel standing note.", claims("U1", scopeId("channel", "C9")));
+test("soul write in a shared scope requires current management access", async () => {
+  const { built, control } = setup();
+  await built.app.upsertChannels(
+    [{ channelId: "C9", name: "eng", isPrivate: true }],
+    [{ channelId: "C9", principalId: "U1" }],
+  );
+  const scope = scopeId("channel", "C9");
+  const w = await control.writeSoul("Channel standing note.", claims("U1", scope));
   assert.ok(w.ok, JSON.stringify(w));
-  const after = control.readSoul(claims("U1", scopeId("channel", "C9")));
-  assert.equal(after.soul, "Channel standing note.");
+  assert.equal(control.readSoul(claims("U1", scope)).soul, "Channel standing note.");
+
+  await built.app.upsertChannels([{ channelId: "C9", name: "eng", isPrivate: true }], []);
+  const revoked = await control.writeSoul("revoked note", claims("U1", scope));
+  assert.equal(revoked.ok, false);
+  assert.equal(revoked.ok ? "" : revoked.code, "soul_update_denied");
 });

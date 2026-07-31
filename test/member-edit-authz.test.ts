@@ -232,9 +232,10 @@ test("SOUL: a private-channel or group member may edit; a public-channel member 
   assert.equal(await app.managesScope(GROUP_MEMBER, groupScope), true, "group member may set the floor");
   assert.equal(await app.managesScope(PUB_MEMBER, pubScope), false, "public member may NOT set the floor");
   assert.equal(await app.managesScope(OUTSIDER, privScope), false, "a non-member may NOT");
-  assert.ok((await app.updateSoul(privScope, "be terse", PRIV_MEMBER, { allowSharedScope: true })) > 0);
-  assert.ok((await app.updateSoul(groupScope, "be kind", GROUP_MEMBER, { allowSharedScope: true })) > 0);
-  await assert.rejects(() => app.updateSoul(privScope, "x", PRIV_MEMBER), /not authorized/);
+  assert.ok((await app.updateSoul(privScope, "be terse", PRIV_MEMBER)) > 0);
+  assert.ok((await app.updateSoul(groupScope, "be kind", GROUP_MEMBER)) > 0);
+  await assert.rejects(() => app.updateSoul(pubScope, "x", PUB_MEMBER), /not authorized/);
+  await assert.rejects(() => app.updateSoul(privScope, "x", OUTSIDER), /not authorized/);
 });
 
 test("SOUL: shared-lock writers refresh fleet state before assigning the next version", async () => {
@@ -245,9 +246,9 @@ test("SOUL: shared-lock writers refresh fleet state before assigning the next ve
   const left = createApp(makeDeps({ config: leftConfig, advisoryLock: lock }) as unknown as AppDeps);
   const right = createApp(makeDeps({ config: rightConfig, advisoryLock: lock }) as unknown as AppDeps);
 
-  assert.equal(await left.updateSoul(privScope, "left", PRIV_MEMBER, { allowSharedScope: true }), 1);
+  assert.equal(await left.updateSoul(privScope, "left", PRIV_MEMBER), 1);
   assert.equal(rightConfig.soulVersion(privScope), 0, "the second core starts with a stale cache");
-  assert.equal(await right.updateSoul(privScope, "right", PRIV_MEMBER, { allowSharedScope: true }), 2);
+  assert.equal(await right.updateSoul(privScope, "right", PRIV_MEMBER), 2);
   assert.equal((await souls.get(privScope))?.version, 2);
   assert.equal((await souls.get(privScope))?.content, "right");
 });
@@ -257,12 +258,9 @@ test("SOUL: a durable write failure rejects and restores the live cache", async 
   const souls = failingPutMap<PersistedSoul>(control);
   const config = createMemoryConfigStore(ORG, { souls });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
-  assert.equal(await app.updateSoul(privScope, "durable", PRIV_MEMBER, { allowSharedScope: true }), 1);
+  assert.equal(await app.updateSoul(privScope, "durable", PRIV_MEMBER), 1);
   control.fail = true;
-  await assert.rejects(
-    () => app.updateSoul(privScope, "cache only", PRIV_MEMBER, { allowSharedScope: true }),
-    /forced durable put failure/,
-  );
+  await assert.rejects(() => app.updateSoul(privScope, "cache only", PRIV_MEMBER), /forced durable put failure/);
   assert.equal(config.getSoul(privScope), "durable");
   assert.equal(config.soulVersion(privScope), 1);
 });
