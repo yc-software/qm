@@ -448,7 +448,7 @@ export function mountShell(): void {
             <a class="icon-btn subtle" href=${ADMIN_HOME_URL} title="Back to admin" aria-label="Back to admin"
               >${icon(ArrowLeft, 17)}</a
             >
-            <theme-toggle></theme-toggle>
+            <theme-toggle .includeSystem=${true} title="Color scheme: light / dark / system"></theme-toggle>
             <button class="icon-btn subtle" title="Sign out" aria-label="Sign out" @click=${signOut}>
               ${icon(LogOut, 17)}
             </button>
@@ -483,7 +483,12 @@ export function mountShell(): void {
 export function renderSidebarTop(): void {
   if (!appState.topEl) return;
   const navRow = (v: View, glyph: IconNode, label: string) =>
-    html`<button class="navrow ${appState.currentView === v ? "active" : ""}" type="button" data-view=${v}>
+    html`<button
+      class="navrow ${appState.currentView === v ? "active" : ""}"
+      type="button"
+      data-view=${v}
+      title=${label}
+    >
       ${icon(glyph, 17)}<span>${label}</span>
     </button>`;
   const navGroup = (id: string, title: string, open: boolean, toggle: () => void, rows: TemplateResult) => html`
@@ -506,6 +511,7 @@ export function renderSidebarTop(): void {
     html`
       <button
         class="new-chat"
+        title=${splitState.active ? "New session" : "New chat"}
         @click=${() => {
           closeSidebarOnNarrowView();
           if (!addBlankPane()) mainConversation().newChat();

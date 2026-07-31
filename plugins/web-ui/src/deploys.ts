@@ -160,7 +160,7 @@ function deploymentRow(d: DeploymentView): TemplateResult {
         <span class="list-row-meta deploy-row-meta">
           ${contextScope ? scopeChip(contextScope) : nothing}
           <span>${ownerLabel(d)}</span>
-          ${permissionBadge(d)}
+          ${canManage(d) ? permissionBadge(d) : nothing}
           <span>${versionLabel(d)}</span>
           <span>${deployedLabel(d)}</span>
         </span>

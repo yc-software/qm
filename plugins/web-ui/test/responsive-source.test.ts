@@ -23,7 +23,7 @@ test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(shell, /main\.inert = modal/);
   assert.match(
     css,
-    /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;/,
+    /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\):not\(#sidebar-top\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;/,
   );
   assert.match(shell, /sidebar\.setAttribute\("role", modal \? "dialog" : "navigation"\)/);
   assert.match(

@@ -63,4 +63,6 @@ test("the empty Yours tab does not imply the account has no deployments", () => 
   const source = readFileSync(new URL("../src/deploys.ts", import.meta.url), "utf8");
   assert.match(source, /deploymentTabEmptyMessage\(deployTab\)/);
   assert.doesNotMatch(source, /No deployments yet\./);
+  const messages = readFileSync(new URL("../src/deploy-view.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(messages, /You have no apps\./);
 });

@@ -71,12 +71,36 @@ body.resizing-sidebar .sidebar {
 .sidebar > :not(.brand) {
   min-width: calc(var(--sidebar-w) - 16px);
 }
-.layout.sidebar-closed .sidebar > :not(.brand),
+.layout.sidebar-closed .sidebar > :not(.brand):not(#sidebar-top),
 .layout.sidebar-closed .brand-lockup {
   /* Untransitioned on purpose: the hide must be instant so nothing in the closed rail
      stays focusable or exposed to assistive tech while the width animates shut. */
   opacity: 0;
   visibility: hidden;
+}
+/* Collapsed, the nav stays in the rail as icon-only buttons (tooltips carry the
+   labels), so the rail keeps navigation instead of becoming a dead strip. */
+.layout.sidebar-closed #sidebar-top {
+  min-width: 0;
+  /* Short viewports: the rail's icons scroll rather than clip out of reach. */
+  min-height: 0;
+  overflow-y: auto;
+}
+.layout.sidebar-closed #sidebar-top .new-chat span,
+.layout.sidebar-closed #sidebar-top .navrow span,
+.layout.sidebar-closed #sidebar-top .nav-section-toggle,
+.layout.sidebar-closed #sidebar-top .section-label {
+  display: none;
+}
+.layout.sidebar-closed #sidebar-top .nav-group.collapsed {
+  /* The Browse group may be folded; the rail always shows its icons. */
+  grid-template-rows: 1fr;
+}
+.layout.sidebar-closed #sidebar-top .new-chat,
+.layout.sidebar-closed #sidebar-top .navrow {
+  justify-content: center;
+  gap: 0;
+  padding-inline: 0;
 }
 .layout.sidebar-closed .brand {
   padding-inline: 0;
@@ -894,6 +918,8 @@ body.resizing-sidebar {
   border-top: 1px solid var(--border);
 }
 .user-pill {
+  cursor: default;
+  user-select: none;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -2584,6 +2610,10 @@ body.resizing-sidebar {
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   font: inherit;
   font-size: 13px;
   padding: 7px 13px;
@@ -4934,6 +4964,9 @@ body.resizing-sidebar {
   background: color-mix(in srgb, var(--foreground) 28%, transparent);
 }
 .project-dialog {
+  /* Tailwind's preflight zeroes every margin, which strips the UA centering from
+     modal dialogs — restore it so showModal() opens centered, not top-left. */
+  margin: auto;
   width: min(440px, 100%);
   max-height: calc(100vh - var(--dialog-pad-top) - var(--dialog-pad-bottom));
   max-height: calc(100dvh - var(--dialog-pad-top) - var(--dialog-pad-bottom));

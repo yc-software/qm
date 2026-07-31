@@ -94,7 +94,7 @@ export function deploymentTab(d: DeploymentView, viewer: string | undefined): De
 export function deploymentTabEmptyMessage(tab: DeploymentTab): string {
   if (tab === "shared") return "No apps shared with you.";
   if (tab === "archived") return "Nothing archived.";
-  return "No apps in Yours.";
+  return "No apps of your own yet.";
 }
 
 export function filterDeployments(
