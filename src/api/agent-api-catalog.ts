@@ -125,7 +125,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/conversations/:id",
         summary:
-          "update one of the asking person's conversations — body {archived?, pinned?, title?}; archive/unarchive, pin/unpin, rename (null title clears). Per-person and reversible; 404 for a conversation not on their list",
+          "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). Per-person and reversible; 404 for a conversation not on their list",
       },
     ],
   },

@@ -88,11 +88,28 @@ describe("agent conversations self-API", async () => {
     assert.equal(res.status, 404);
   });
 
+  it("refuses to color a conversation the actor can't see", async () => {
+    const res = await post(`/v1/conversations/${theirsId}`, { color: "#123456" }, await capFor("U1"));
+    assert.equal(res.status, 404);
+  });
+
   it("validates the patch body", async () => {
     const token = await capFor("U1");
     assert.equal((await post(`/v1/conversations/${mineId}`, {}, token)).status, 400);
     assert.equal((await post(`/v1/conversations/${mineId}`, { archived: "yes" }, token)).status, 400);
     assert.equal((await post(`/v1/conversations/${mineId}`, { title: 5 }, token)).status, 400);
+    assert.equal((await post(`/v1/conversations/${mineId}`, { color: "red" }, token)).status, 400);
+  });
+
+  it("sets and clears the sidebar color", async () => {
+    const token = await capFor("U1");
+    const set = await post(`/v1/conversations/${mineId}`, { color: "#A1B2C3" }, token);
+    assert.equal(set.status, 200);
+    assert.equal(((await set.json()) as { conversation: { color: string | null } }).conversation.color, "#a1b2c3");
+
+    const clear = await post(`/v1/conversations/${mineId}`, { color: null }, token);
+    assert.equal(clear.status, 200);
+    assert.equal(((await clear.json()) as { conversation: { color: string | null } }).conversation.color, null);
   });
 
   it("renames and pins through the same patch", async () => {

@@ -46,6 +46,10 @@ function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null
   return SHARED_SKILL_TRIGGER_REFUSAL;
 }
 
+function isConversationColor(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value));
+}
+
 async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -232,7 +236,7 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
     patch.pinned = b.pinned;
   }
   if ("color" in b) {
-    if (b.color !== null && !(typeof b.color === "string" && /^#[0-9a-fA-F]{6}$/.test(b.color))) {
+    if (!isConversationColor(b.color)) {
       return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
     }
     patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
@@ -276,7 +280,7 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
   const b = isObj(body) ? body : {};
-  const patch: { title?: string | null; archived?: boolean; pinned?: boolean } = {};
+  const patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null } = {};
   if ("archived" in b) {
     if (typeof b.archived !== "boolean") {
       return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
@@ -296,8 +300,19 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
     patch.title = trimmed ? trimmed : null;
   }
-  if (patch.archived === undefined && patch.pinned === undefined && patch.title === undefined) {
-    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, or title required" });
+  if ("color" in b) {
+    if (!isConversationColor(b.color)) {
+      return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
+    }
+    patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
+  }
+  if (
+    patch.archived === undefined &&
+    patch.pinned === undefined &&
+    patch.title === undefined &&
+    patch.color === undefined
+  ) {
+    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, title, or color required" });
   }
   const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
@@ -314,6 +329,7 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
       title: session.title ?? null,
       archived: session.archived === true,
       pinned: session.pinned === true,
+      color: session.color ?? null,
     },
   });
 }
