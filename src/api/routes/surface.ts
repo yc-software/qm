@@ -77,36 +77,84 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
-async function getSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const id = ctx.params.id!;
-  const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
+async function forkAgentConversation(ctx: ApiCtx): Promise<void> {
+  const { res, app, body, capability } = ctx;
+  if (!capability) {
+    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
+  }
+  const b = isObj(body) ? body : {};
+  if (b.upToSeq !== undefined && (typeof b.upToSeq !== "number" || !Number.isInteger(b.upToSeq) || b.upToSeq < 0)) {
+    return sendJson(res, 400, { error: "bad_request", message: "upToSeq must be a non-negative integer" });
+  }
+  const out = await app.forkSession(
+    ctx.params.id!,
+    capability.actorId,
+    b.upToSeq !== undefined ? { upToSeq: b.upToSeq } : undefined,
+  );
+  if (!out) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
+  return sendJson(res, 200, out);
+}
+
+function transcriptWindow(
+  url: URL,
+  defaultTailTurns?: number,
+): { tailTurns?: number; sinceSeq?: number; beforeSeq?: number } | null {
   const windowParam = (name: "tailTurns" | "sinceSeq" | "beforeSeq", min: number): number | undefined | null => {
     const raw = url.searchParams.get(name);
     if (raw === null) return undefined;
     const n = Number(raw);
     return Number.isInteger(n) && n >= min ? n : null;
   };
-  const tailTurns = windowParam("tailTurns", 1);
+  const requestedTailTurns = windowParam("tailTurns", 1);
   const sinceSeq = windowParam("sinceSeq", 0);
   const beforeSeq = windowParam("beforeSeq", 1);
-  if (tailTurns === null || sinceSeq === null || beforeSeq === null) {
+  if (requestedTailTurns === null || sinceSeq === null || beforeSeq === null) return null;
+  const tailTurns = requestedTailTurns ?? (sinceSeq === undefined ? defaultTailTurns : undefined);
+  if (tailTurns === undefined && sinceSeq === undefined && beforeSeq === undefined) return {};
+  return {
+    ...(tailTurns !== undefined ? { tailTurns } : {}),
+    ...(sinceSeq !== undefined ? { sinceSeq } : {}),
+    ...(beforeSeq !== undefined ? { beforeSeq } : {}),
+  };
+}
+
+async function getSession(ctx: ApiCtx): Promise<void> {
+  const { res, app, url } = ctx;
+  const id = ctx.params.id!;
+  const viewer = url.searchParams.get("viewer");
+  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
+  const window = transcriptWindow(url);
+  if (!window) {
     return sendJson(res, 400, {
       error: "bad_request",
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
-  const window =
-    tailTurns !== undefined || sinceSeq !== undefined || beforeSeq !== undefined
-      ? {
-          ...(tailTurns !== undefined ? { tailTurns } : {}),
-          ...(sinceSeq !== undefined ? { sinceSeq } : {}),
-          ...(beforeSeq !== undefined ? { beforeSeq } : {}),
-        }
-      : undefined;
-  const found = await app.getSessionForViewer(id, viewer, window);
+  const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
   if (!found) return sendJson(res, 404, { error: "not_found" });
+  return sendJson(res, 200, found);
+}
+
+async function getAgentConversation(ctx: ApiCtx): Promise<void> {
+  const { res, app, url, capability } = ctx;
+  if (!capability) {
+    return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
+  }
+  if (url.searchParams.has("sinceSeq")) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "agent transcript paging supports tailTurns and beforeSeq",
+    });
+  }
+  const window = transcriptWindow(url, 20);
+  if (!window) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
+    });
+  }
+  const found = await app.getSessionForViewer(ctx.params.id!, capability.actorId, window);
+  if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, found);
 }
 
@@ -1183,7 +1231,9 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/sessions/:id", auth: "source", handle: patchSession },
   { method: "GET", path: "/v1/sessions", auth: "source", handle: listSessions },
   { method: "GET", path: "/v1/conversations", auth: "either", handle: listAgentConversations },
+  { method: "GET", path: "/v1/conversations/:id", auth: "either", handle: getAgentConversation },
   { method: "POST", path: "/v1/conversations/:id", auth: "either", handle: patchAgentConversation },
+  { method: "POST", path: "/v1/conversations/:id/fork", auth: "either", handle: forkAgentConversation },
   { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
   { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
   { method: "GET", path: "/v1/memory", auth: "source", handle: getSelfMemory },

@@ -102,7 +102,8 @@ function strictPostAllowed(pathname: string, body: unknown): boolean {
     pathname === "/v1/surface-context" ||
     pathname === "/v1/memory/search" ||
     pathname === "/v1/memory/restore" ||
-    pathname.startsWith("/v1/run-signals/")
+    pathname.startsWith("/v1/run-signals/") ||
+    /^\/v1\/conversations\/[^/]+\/fork$/.test(pathname)
   )
     return true;
   if (/^\/v1\/skills\/[^/]+\/restore$/.test(pathname)) return true;
