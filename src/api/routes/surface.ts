@@ -1047,6 +1047,8 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "harness_not_approved" });
     if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
+    const picker = await config.getWebuiModelsDurable(orgScope(ctx.deps));
+    if (picker?.length && !picker.includes(modelId)) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
     await config.setRuntimeSelectionLatest(target.scope, { harnessId, modelId });
   }
   audit(ctx.deps, {

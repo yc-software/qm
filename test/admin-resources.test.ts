@@ -249,6 +249,19 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     ]);
     assert.deepEqual(initial.modelsByHarness.codex, ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 
+    const outsidePicker = await fetch(`${srv.base}/v1/runtime-config`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        principalId: "alice",
+        scopeId: "personal:alice",
+        harnessId: "claude",
+        modelId: "claude-opus-4-8",
+      }),
+    });
+    assert.equal(outsidePicker.status, 400);
+    assert.equal(((await outsidePicker.json()) as { error: string }).error, "model_not_enabled");
+
     const set = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
       headers: { "content-type": "application/json" },

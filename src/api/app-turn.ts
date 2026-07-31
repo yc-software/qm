@@ -5,7 +5,7 @@ import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
-import { turnModelOptions, validateWebTurnModelOptions } from "../core/turn-options.ts";
+import { turnModelOptions, validateWebTurnModelOptions, webTurnRuntimeModelRefusal } from "../core/turn-options.ts";
 import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
 import {
   defaultModelForHarness,
@@ -184,7 +184,9 @@ export function createTurnMethods(
             ]),
           ];
         }
-        const invalidModelOption = validateWebTurnModelOptions(req, enabledWebuiModels, providers);
+        const invalidModelOption =
+          validateWebTurnModelOptions(req, enabledWebuiModels, providers) ??
+          webTurnRuntimeModelRefusal(runtime.modelId, orgRuntime.modelId, configuredWebuiModels);
         if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
       }
 

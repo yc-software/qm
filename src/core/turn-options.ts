@@ -34,6 +34,16 @@ export function turnModelOptions(input: { triggered?: boolean; thinkingLevel?: s
   };
 }
 
+export function webTurnRuntimeModelRefusal(
+  runtimeModelId: string,
+  orgModelId: string,
+  configuredWebuiModels: readonly string[] | null | undefined,
+): string | null {
+  if (!configuredWebuiModels?.length) return null;
+  if (runtimeModelId === orgModelId) return null;
+  return configuredWebuiModels.includes(runtimeModelId) ? null : "that model is not enabled for the web UI";
+}
+
 export function validateWebTurnModelOptions(
   input: { model?: string; thinkingLevel?: string },
   enabledModels: readonly string[] | null,
