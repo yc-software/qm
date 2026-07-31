@@ -172,7 +172,7 @@ export function createTurnMethods(
         const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
         let enabledWebuiModels: string[] | null = null;
         if (configuredWebuiModels?.length) {
-          enabledWebuiModels = configuredWebuiModels;
+          enabledWebuiModels = [...new Set([...configuredWebuiModels, orgRuntime.modelId])];
         } else if (providers?.openrouter) {
           enabledWebuiModels = [
             ...new Set([

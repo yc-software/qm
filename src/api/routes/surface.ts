@@ -1015,6 +1015,16 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
 }
 
+async function webuiModelEnabled(ctx: ApiCtx, modelId: string): Promise<boolean> {
+  const config = ctx.deps.config!;
+  const picker = await config.getWebuiModelsDurable(orgScope(ctx.deps));
+  if (!picker?.length || picker.includes(modelId)) return true;
+  const org = orgScope(ctx.deps);
+  const stored = await config.getRuntimeSelectionDurable(org);
+  const orgModel = stored?.modelId ?? (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
+  return modelId === orgModel;
+}
+
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
   if (ctx.capability && ctx.capability.liveActor !== true)
@@ -1033,7 +1043,8 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
       if (
         legacyModel &&
         approved.includes(fallback.harnessId) &&
-        modelSupportedByHarness(legacyModel, fallback.harnessId)
+        modelSupportedByHarness(legacyModel, fallback.harnessId) &&
+        (await webuiModelEnabled(ctx, legacyModel))
       ) {
         await config.setRuntimeSelectionLatest(target.scope, { harnessId: fallback.harnessId, modelId: legacyModel });
       }
@@ -1047,8 +1058,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "harness_not_approved" });
     if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
-    const picker = await config.getWebuiModelsDurable(orgScope(ctx.deps));
-    if (picker?.length && !picker.includes(modelId)) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
+    if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
     await config.setRuntimeSelectionLatest(target.scope, { harnessId, modelId });
   }
   audit(ctx.deps, {

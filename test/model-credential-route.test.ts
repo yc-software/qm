@@ -411,3 +411,38 @@ test("admin model credentials survive a second app instance on the same durable 
   assert.doesNotMatch(JSON.stringify(await backing.all()), /durable-openrouter-key/);
   assert.doesNotMatch(JSON.stringify(await second.statuses()), /durable-openrouter-key/);
 });
+
+test("a stored scope override outside the configured picker refuses web turns; the org default stays exempt", async () => {
+  const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
+  try {
+    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "mock", modelId: "claude-opus-4-8" });
+    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.setRuntimeSelectionLatest("personal:alice", {
+      harnessId: "mock",
+      modelId: "claude-haiku-4-5",
+    });
+    const turn = (threadRef: string, model?: string) =>
+      srv.built.app.turn({
+        surface: "web",
+        actor: { externalId: "alice" },
+        conversation: { kind: "dm", threadRef },
+        text: "hello",
+        ...(model ? { model } : {}),
+        async: true,
+      });
+
+    const stale = await turn("web:alice:stale-override");
+    assert.equal(stale.status, "refused");
+    assert.match(stale.reason ?? "", /not enabled for the web UI/);
+
+    const explicitOrgDefault = await turn("web:alice:org-default", "claude-opus-4-8");
+    assert.equal(explicitOrgDefault.status, "queued");
+
+    await srv.built.config.setRuntimeSelectionLatest("personal:alice", null);
+    const inherited = await turn("web:alice:inherited");
+    assert.equal(inherited.status, "queued");
+  } finally {
+    await srv.close();
+  }
+});

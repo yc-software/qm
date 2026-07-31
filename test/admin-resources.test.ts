@@ -256,7 +256,7 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
         principalId: "alice",
         scopeId: "personal:alice",
         harnessId: "claude",
-        modelId: "claude-opus-4-8",
+        modelId: "claude-haiku-4-5",
       }),
     });
     assert.equal(outsidePicker.status, 400);
