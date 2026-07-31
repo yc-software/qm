@@ -102,7 +102,7 @@ known limitations.
 Create an organization-owned deployment repository that depends on `@yc-software/qm`:
 
 ```bash
-npm exec --yes --package=@yc-software/qm@<exact-version> -- \
+npm exec --yes --package=@yc-software/qm@latest -- \
   qm init . --org <slug> --target <fly-or-aws>
 npm install
 ```

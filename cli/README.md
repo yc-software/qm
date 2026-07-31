@@ -6,7 +6,7 @@ security guarantees, target behavior, and lifecycle are in
 the agent-consumable package runbook into the deployment repository.
 
 ```bash
-npm exec --yes --package=@yc-software/qm@<exact-version> -- \
+npm exec --yes --package=@yc-software/qm@latest -- \
   qm init . --org acme --target aws
 npm install
 npm exec qm -- check

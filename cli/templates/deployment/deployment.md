@@ -57,13 +57,17 @@ contracts are scaffolded as one unit.
 Require Node 24+, npm, Git, Docker with Buildx, and `openssl`.
 
 For a repository without `qm.config.jsonc`, first confirm the hosting target
-and the derived slug, install an exact CLI version, and initialize its root:
+and the derived slug, then initialize its root with the current CLI:
 
 ```bash
-npm exec --yes --package=@yc-software/qm@<exact-version> -- \
+npm exec --yes --package=@yc-software/qm@latest -- \
   qm init . --org <slug> --target <fly-or-aws> --model-provider <provider>
 npm install
 ```
+
+`qm init` writes the version it resolved to as an exact dependency, so the pin
+lands in the deployment repository and its lockfile rather than in the command
+that bootstraps it.
 
 `--model-provider` takes `anthropic`, `openai`, or `openrouter` and defaults to
 `anthropic`. It writes `modelProvider` into the scaffolded config, which is what
