@@ -160,8 +160,9 @@ org, so anything granted or published at org scope — including org-granted
 credentials — is theirs. Grant nothing sensitive at org scope, connect no real
 connector credentials, and load no company data. A cleared cookie is a fresh
 identity, so set `env.core.ORG_BUDGET_USD_PER_WINDOW` — the one hard spend
-ceiling — in the same pass, and pin a single model from the Admin page after
-first boot. Nothing garbage-collects an abandoned visitor's scope yet.
+ceiling — in the same pass, and from the Admin page after first boot restrict
+the model picker to the subset you want to offer (one model or several).
+Nothing garbage-collects an abandoned visitor's scope yet.
 `plugins/portal/README.md` § "Playground mode" covers the rest: per-address
 mint limits, the boot refusals, and what anonymous visitors are denied.
 
