@@ -17,6 +17,8 @@ export interface DeliveryStore {
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   ackByKey(idempotencyKey: string, at: number): Promise<void>;
   setEditRefByKey(idempotencyKey: string, editRef: string): Promise<void>;
+  recordAttachment(id: string, index: number): Promise<void>;
+  recordAttachmentByKey(idempotencyKey: string, index: number): Promise<void>;
   get(id: string): Promise<Delivery | null>;
   recordRecipientThread(id: string, recipientThreadRef: string, at: number): Promise<void>;
   listByRecipientThread(recipientThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
@@ -30,15 +32,25 @@ export function createDeliveryStore(): DeliveryStore {
   const deliveries = new Map<string, Delivery>();
   const byKey = new Map<string, string>();
   const claimedUntil = new Map<string, number>();
+  const pendingAttachmentIndexes = new Map<string, Set<number>>();
   const enqueueListeners = new Set<() => void>();
+
+  const withAttachmentIndex = (destination: Destination, index: number): Destination => {
+    const indexes = new Set(destination.uploadedAttachmentIndexes ?? []);
+    indexes.add(index);
+    return { ...destination, uploadedAttachmentIndexes: [...indexes].sort((a, b) => a - b) };
+  };
 
   return {
     async enqueue(input) {
       const existingId = byKey.get(input.idempotencyKey);
       if (existingId) return deliveries.get(existingId)!;
+      const pending = pendingAttachmentIndexes.get(input.idempotencyKey);
+      const destination = pending ? [...pending].reduce(withAttachmentIndex, input.destination) : input.destination;
+      pendingAttachmentIndexes.delete(input.idempotencyKey);
       const delivery: Delivery = {
         id: randomUUID(),
-        destination: input.destination,
+        destination,
         text: input.text,
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(input.provenance ? { provenance: input.provenance } : {}),
@@ -101,6 +113,20 @@ export function createDeliveryStore(): DeliveryStore {
       const existingId = byKey.get(idempotencyKey);
       const d = existingId ? deliveries.get(existingId) : undefined;
       if (d && d.deliveredAt === null) d.destination = { ...d.destination, editRef };
+    },
+    async recordAttachment(id, index) {
+      const d = deliveries.get(id);
+      if (d && d.deliveredAt === null) d.destination = withAttachmentIndex(d.destination, index);
+    },
+    async recordAttachmentByKey(idempotencyKey, index) {
+      const existingId = byKey.get(idempotencyKey);
+      if (existingId) {
+        await this.recordAttachment(existingId, index);
+        return;
+      }
+      const pending = pendingAttachmentIndexes.get(idempotencyKey) ?? new Set<number>();
+      pending.add(index);
+      pendingAttachmentIndexes.set(idempotencyKey, pending);
     },
     async get(id) {
       return deliveries.get(id) ?? null;

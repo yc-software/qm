@@ -105,20 +105,38 @@ export function createDeliveryPoller(deps: {
             const text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
             const replayAttachments = async (root?: string): Promise<void> => {
               if (!d.attachments?.length) return;
+              const completed = new Set(d.destination.uploadedAttachmentIndexes ?? []);
+              const pending = d.attachments
+                .map((attachment, index) => ({ attachment, index }))
+                .filter(({ index }) => !completed.has(index));
+              if (!pending.length) return;
               try {
                 await uploadAttachments(
                   client,
                   channel,
                   root,
-                  d.attachments,
+                  pending.map(({ attachment }) => attachment),
                   fetchBlobFromCore,
                   fetchFileArtifactFromCore,
+                  async (pendingIndex) => {
+                    const index = pending[pendingIndex]!.index;
+                    await core.recordDeliveryAttachment(d.id, index);
+                    const indexes = new Set(d.destination.uploadedAttachmentIndexes ?? []);
+                    indexes.add(index);
+                    d.destination = {
+                      ...d.destination,
+                      uploadedAttachmentIndexes: [...indexes].sort((a, b) => a - b),
+                    };
+                  },
                 );
               } catch (err) {
                 console.error(`[slack-plugin] delivery ${d.id} attachment upload failed:`, (err as Error).message);
-                await client.chat
-                  .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root))
-                  .catch(swallowAs("slack: post upload-failure note", undefined));
+                await postWithVerify(
+                  postClient,
+                  { ...slackReplyArgs(channel, uploadFailureNote(err), root) },
+                  `${d.idempotencyKey ?? d.id}:attachment-failure`,
+                  { verifyFirst: true },
+                ).catch(swallowAs("slack: post upload-failure note", undefined));
               }
             };
             const taskList = d.destination.taskList?.length ? renderTaskList(d.destination.taskList) : undefined;

@@ -31,7 +31,7 @@ import {
   isMpim,
   type SurfaceHeaderClient,
   maybeInterceptStop,
-  postThenAckRunDelivery,
+  postThenAckDelivery,
   postWithVerify,
   processInboundFiles,
   refusalDelivery,
@@ -157,6 +157,7 @@ export function createTurnHandler(deps: {
     ackRunDeliveryWithRetry,
     reportTurnMetrics,
     checkpointRunEditRef,
+    checkpointRunAttachment,
     stageBlobInCore,
     fetchBlobFromCore,
     fetchFileArtifactFromCore,
@@ -203,12 +204,19 @@ export function createTurnHandler(deps: {
     let slackIdsByPrincipal: Map<string, string> | undefined;
     let conversationKind: SlackConversationKind = inc.kind;
     let allowedTs: Set<string> = new Set();
-    const postReply = async (msg: string, blocks?: Array<Record<string, unknown>>): Promise<string | undefined> => {
-      const posted = await client.chat.postMessage({
+    const postReply = async (
+      msg: string,
+      blocks?: Array<Record<string, unknown>>,
+      idempotencyKey?: string,
+    ): Promise<string | undefined> => {
+      const args = {
         ...slackReplyArgs(inc.channel, msg, replyThreadTs, { threadOnly: inc.kind === "channel", unfurlLinks: false }),
         ...(blocks ? { blocks } : {}),
-      });
-      const ts = posted.ts as string | undefined;
+      };
+      const posted = idempotencyKey
+        ? await postWithVerify(client, args, idempotencyKey, { verifyFirst: true })
+        : await client.chat.postMessage(args);
+      const ts = typeof posted?.ts === "string" ? posted.ts : undefined;
       mirrorSelfPost(inc.channel, ts, msg, { sub: replyThreadTs });
       return ts;
     };
@@ -495,7 +503,16 @@ export function createTurnHandler(deps: {
 
     if (result.status === "silent") {
       if (inc.unprompted) console.error(`[slack-plugin] turn.silent (no reply) ch=${inc.channel} ts=${inc.ts}`);
-      await settleAck();
+      if (queuedRunId) {
+        const runId = queuedRunId;
+        await postThenAckDelivery({
+          post: settleAck,
+          ack: () => ackRunDeliveryWithRetry(runId),
+          release: () => inFlightRuns.delete(runId),
+        });
+      } else {
+        await settleAck();
+      }
       return;
     }
 
@@ -523,29 +540,46 @@ export function createTurnHandler(deps: {
       const postText = reply;
       const tDeliverStart = performance.now();
       let finalizedTaskList = false;
-      if (result.attachments?.length) {
+      const deliverReply = async (): Promise<void> => {
         let uploadError: unknown;
-        try {
-          await uploadAttachments(
-            client,
-            inc.channel,
-            replyThreadTs,
-            result.attachments,
-            fetchBlobFromCore,
-            fetchFileArtifactFromCore,
-          );
-        } catch (err) {
-          uploadError = err;
-          console.error("[slack-plugin] file upload failed:", (err as Error).message);
+        if (result.attachments?.length) {
+          try {
+            await uploadAttachments(
+              client,
+              inc.channel,
+              replyThreadTs,
+              result.attachments,
+              fetchBlobFromCore,
+              fetchFileArtifactFromCore,
+              queuedRunId ? (index) => checkpointRunAttachment(queuedRunId!, index) : undefined,
+            );
+          } catch (err) {
+            uploadError = err;
+            console.error("[slack-plugin] file upload failed:", (err as Error).message);
+          }
         }
         await settleAck();
         if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
-        if (uploadError) await postReply(uploadFailureNote(uploadError));
+        if (postText && !finalizedTaskList)
+          await postReply(postText, undefined, queuedRunId ? `run:${queuedRunId}` : undefined);
+        if (uploadError) {
+          await postReply(
+            uploadFailureNote(uploadError),
+            undefined,
+            queuedRunId ? `run:${queuedRunId}:attachment-failure` : undefined,
+          );
+          if (queuedRunId) throw uploadError;
+        }
+      };
+      if (queuedRunId) {
+        const runId = queuedRunId;
+        await postThenAckDelivery({
+          post: deliverReply,
+          ack: () => ackRunDeliveryWithRetry(runId),
+          release: () => inFlightRuns.delete(runId),
+        });
       } else {
-        await settleAck();
-        if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
+        await deliverReply();
       }
       if (queuedRunId) {
         reportTurnMetrics(queuedRunId, {
@@ -614,13 +648,13 @@ export function createTurnHandler(deps: {
         });
       }
     } else {
-      await settleAck();
       const delivery = refusalDelivery(result, inc.unprompted === true);
       if (delivery === "thread") {
         if (queuedRunId) {
           const runId = queuedRunId;
           const text = refusalNote(result, inc.kind);
           const post = async () => {
+            await settleAck();
             const posted = await postWithVerify(
               client,
               {
@@ -633,25 +667,53 @@ export function createTurnHandler(deps: {
             );
             mirrorSelfPost(inc.channel, posted.ts, text, { sub: replyThreadTs });
           };
-          await postThenAckRunDelivery({
+          await postThenAckDelivery({
             post,
             ack: () => ackRunDeliveryWithRetry(runId),
             release: () => inFlightRuns.delete(runId),
           });
         } else {
+          await settleAck();
           await postReply(refusalNote(result, inc.kind));
         }
         return;
       }
       if (delivery === "silent") {
-        if (queuedRunId && result.refusalKind === "security_quarantine") inFlightRuns.delete(queuedRunId);
+        if (queuedRunId) {
+          const runId = queuedRunId;
+          await postThenAckDelivery({
+            post: settleAck,
+            ack: () => ackRunDeliveryWithRetry(runId),
+            release: () => inFlightRuns.delete(runId),
+          });
+        } else {
+          await settleAck();
+        }
         console.error(
           `[slack-plugin] unprompted turn ${result.status} (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${result.reason ?? "refused"}`,
         );
         return;
       }
-      if (ack?.postedAck()) await postReply(refusalNote(result, inc.kind));
-      else await ephemeralOrSay(refusalNote(result, inc.kind));
+      const refusalText = refusalNote(result, inc.kind);
+      if (queuedRunId) {
+        const runId = queuedRunId;
+        await postThenAckDelivery({
+          post: async () => {
+            await settleAck();
+            if (inc.kind === "channel" && !ack?.postedAck()) {
+              await client.chat.postEphemeral({ channel: inc.channel, user: inc.userId, text: refusalText });
+              return;
+            }
+            await postReply(refusalText, undefined, `run:${runId}`);
+          },
+          ack: () => ackRunDeliveryWithRetry(runId),
+          release: () => inFlightRuns.delete(runId),
+        });
+      } else {
+        await settleAck();
+        if (ack?.postedAck()) await postReply(refusalText);
+        else await ephemeralOrSay(refusalText);
+      }
     }
   }
 

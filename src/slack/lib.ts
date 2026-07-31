@@ -1,4 +1,5 @@
-export { isBoundaryRefusal, refusalDelivery, postThenAckRunDelivery, refusalNote } from "./refusals.ts";
+export { isBoundaryRefusal, refusalDelivery, refusalNote } from "./refusals.ts";
+export { postThenAckDelivery } from "./delivery.ts";
 export { inlineCode, clip, sleep } from "./util.ts";
 export {
   decodeSlackEntities,

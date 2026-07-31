@@ -9,6 +9,7 @@ import {
   deliveryCandidatesFor,
   createDeliveryTracker,
   deliverWithRetry,
+  postThenAckDelivery,
   postWithVerify,
   channelSurfaceUrl,
   channelWelcomeMessage,
@@ -185,6 +186,41 @@ test("deliverWithRetry: transient post failures recover before the cap", async (
   assert.equal(h.posts.length, 1);
   assert.equal(h.acks.length, 1);
   assert.ok(!h.tracker.givenUp("d1"));
+});
+
+test("postThenAckDelivery: acknowledges only after the Slack post succeeds", async () => {
+  const calls: string[] = [];
+  let finishPost!: () => void;
+  const posting = postThenAckDelivery({
+    post: () =>
+      new Promise<void>((resolve) => {
+        calls.push("post");
+        finishPost = resolve;
+      }),
+    ack: () => calls.push("ack"),
+    release: () => calls.push("release"),
+  });
+
+  assert.deepEqual(calls, ["post"]);
+  finishPost();
+  await posting;
+  assert.deepEqual(calls, ["post", "ack"]);
+});
+
+test("postThenAckDelivery: releases recovery when the Slack post fails", async () => {
+  const calls: string[] = [];
+  await assert.rejects(
+    postThenAckDelivery({
+      post: async () => {
+        calls.push("post");
+        throw new Error("Slack unavailable");
+      },
+      ack: () => calls.push("ack"),
+      release: () => calls.push("release"),
+    }),
+    /Slack unavailable/,
+  );
+  assert.deepEqual(calls, ["post", "release"]);
 });
 
 test("createDeliveryTracker: a posted-but-unacked entry evicted by the cap is given up on, never re-posted", () => {

@@ -308,6 +308,31 @@ test("uploadAttachments falls back to durable file artifacts when the transient 
   assert.equal(Buffer.from(calls[0]!.file as Uint8Array).toString("utf8"), "artifact:A1:U1");
 });
 
+test("uploadAttachments reports each completed attachment", async () => {
+  const uploaded: number[] = [];
+  const client = {
+    files: {
+      uploadV2: async () => ({ ok: true }),
+      info: async () => ({ file: { shares: {} } }),
+    },
+  };
+  await uploadAttachments(
+    client,
+    "C1",
+    undefined,
+    [
+      { name: "x.txt", mimetype: "text/plain", sizeBytes: 2, blobId: "B1" },
+      { name: "empty.txt", mimetype: "text/plain", sizeBytes: 0, blobId: "B2" },
+    ],
+    async (id) => (id === "B1" ? Buffer.from("data") : Buffer.alloc(0)),
+    undefined,
+    (index) => {
+      uploaded.push(index);
+    },
+  );
+  assert.deepEqual(uploaded, [0, 1]);
+});
+
 test("uploadAttachments propagates an upload failure (so the caller can report it)", async () => {
   const client = {
     files: {

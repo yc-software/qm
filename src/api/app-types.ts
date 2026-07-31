@@ -348,6 +348,8 @@ export interface App {
   ): Promise<AmbientDecision>;
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
+  recordDeliveryAttachment(id: string, index: number): Promise<void>;
+  recordRunDeliveryAttachment(runId: string, index: number): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
   upsertDirectory(members: DirectoryMember[]): Promise<void>;
   upsertChannels(channels: DirectoryChannel[], channelMembers?: ChannelMembership[]): Promise<void>;

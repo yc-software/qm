@@ -18,6 +18,8 @@ class FakeSlackClient {
   readonly deletes: any[] = [];
   readonly reactionsAdded: any[] = [];
   readonly reactionsRemoved: any[] = [];
+  postError: Error | undefined;
+  uploadError: Error | undefined;
   readonly usersById = new Map<string, any>();
   readonly channelsById = new Map<string, any>();
   readonly membersByChannel = new Map<string, string[]>();
@@ -70,6 +72,7 @@ class FakeSlackClient {
   readonly purposes: { channel: string; purpose: string }[] = [];
   readonly chat = {
     postMessage: async (body: any) => {
+      if (this.postError) throw this.postError;
       this.posts.push(body);
       return { ok: true, ts: `posted-${++this.postSequence}` };
     },
@@ -98,7 +101,10 @@ class FakeSlackClient {
     get: async () => ({}),
   };
   readonly files = {
-    uploadV2: async () => ({ ok: true }),
+    uploadV2: async () => {
+      if (this.uploadError) throw this.uploadError;
+      return { ok: true };
+    },
     info: async () => ({ file: {} }),
   };
   readonly bots = { info: async () => ({ bot: {} }) };
@@ -190,6 +196,7 @@ class FakeCore implements SlackCoreClient {
   queuedRunId: string | undefined;
   private heldRunClaimed = false;
   readonly polled: string[] = [];
+  readonly ackedRuns: string[] = [];
   private runGate: Promise<void> | undefined;
   private releaseRun: (() => void) | undefined;
 
@@ -203,7 +210,7 @@ class FakeCore implements SlackCoreClient {
     return { blobId: "blob-1", sizeBytes: bytes.byteLength };
   }
   async readBlob(): Promise<Buffer> {
-    return Buffer.alloc(0);
+    return Buffer.from("file");
   }
   async readFileArtifact(): Promise<Buffer> {
     return Buffer.alloc(0);
@@ -250,9 +257,13 @@ class FakeCore implements SlackCoreClient {
   async signalRunAbort(runId: string): Promise<void> {
     this.abortedRuns.push(runId);
   }
-  async ackRunDelivery(): Promise<void> {}
+  async ackRunDelivery(runId: string): Promise<void> {
+    this.ackedRuns.push(runId);
+  }
   async reportTurnMetrics(): Promise<void> {}
   async reportRunEditRef(): Promise<void> {}
+  async recordDeliveryAttachment(): Promise<void> {}
+  async recordRunDeliveryAttachment(): Promise<void> {}
   async getApproval(): Promise<null> {
     return null;
   }
@@ -386,6 +397,111 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
       f.client.posts.map((p) => p.text),
       ["agent reply"],
     );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a queued normal reply posts run metadata before acknowledging recovery", async () => {
+  const f = await fixture();
+  try {
+    f.core.holdRun("R1");
+    const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "100.2" });
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.finishRun({ status: "ok", reply: "agent reply" });
+    await turn;
+    await waitFor(() => f.core.ackedRuns.length === 1);
+
+    const post = f.client.posts.find((candidate) => candidate.text === "agent reply");
+    assert.deepEqual(post?.metadata, {
+      event_type: "qm_delivery",
+      event_payload: { idempotency_key: "run:R1" },
+    });
+    assert.deepEqual(f.core.ackedRuns, ["R1"]);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a queued normal reply does not acknowledge recovery when its Slack post fails", async () => {
+  const f = await fixture();
+  try {
+    f.client.postError = new Error("Slack unavailable");
+    f.core.holdRun("R2");
+    const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "100.3" });
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.finishRun({ status: "ok", reply: "agent reply" });
+    await turn;
+    assert.deepEqual(f.core.ackedRuns, []);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a queued silent result acknowledges without a Slack post", async () => {
+  const f = await fixture();
+  try {
+    f.core.holdRun("R3");
+    const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "100.4" });
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.finishRun({ status: "silent" });
+    await turn;
+    await waitFor(() => f.core.ackedRuns.length === 1);
+    assert.deepEqual(f.core.ackedRuns, ["R3"]);
+    assert.deepEqual(f.client.posts, []);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a queued silent refusal acknowledges without a Slack post", async () => {
+  const f = await fixture();
+  try {
+    f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
+    f.client.messagesByChannel.set("G1", [
+      { channel: "G1", user: "U1", text: "kick off", ts: "100.5" },
+      { channel: "G1", user: "UBOT", text: "on it", ts: "100.6", thread_ts: "100.5" },
+    ]);
+    f.core.holdRun("R5");
+    const turn = f.app.emitMessage({
+      channel: "G1",
+      channel_type: "mpim",
+      user: "U2",
+      text: "hello agent",
+      ts: "100.7",
+      thread_ts: "100.5",
+    });
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.finishRun({ status: "refused", reason: "not addressed" });
+    await turn;
+    await waitFor(() => f.core.ackedRuns.length === 1);
+    assert.deepEqual(f.core.ackedRuns, ["R5"]);
+    assert.deepEqual(f.client.posts, []);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a queued attachment failure keeps recovery claimable and keys its failure note", async () => {
+  const f = await fixture();
+  try {
+    f.client.uploadError = new Error("files unavailable");
+    f.core.holdRun("R4");
+    const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "100.5" });
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.finishRun({
+      status: "ok",
+      reply: "agent reply",
+      attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 4, blobId: "blob-1" }],
+    });
+    await turn;
+    assert.deepEqual(f.core.ackedRuns, []);
+    const failure = f.client.posts.find((candidate) => candidate.text?.includes("couldn't attach"));
+    assert.deepEqual(failure?.metadata, {
+      event_type: "qm_delivery",
+      event_payload: { idempotency_key: "run:R4:attachment-failure" },
+    });
   } finally {
     await f.stop();
   }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { refusalNote, refusalDelivery, postThenAckRunDelivery, isBoundaryRefusal } from "../src/slack/lib.ts";
+import { refusalNote, refusalDelivery, isBoundaryRefusal } from "../src/slack/lib.ts";
 
 const ADMIN_URL = "https://portal.example.com/admin/?view=history&session=s-1";
 
@@ -48,41 +48,6 @@ test("refusalDelivery: quarantine posts in-thread only when addressed; every unp
   assert.equal(refusalDelivery({ refusalKind: "security_quarantine" }, true), "silent");
   assert.equal(refusalDelivery({}, true), "silent");
   assert.equal(refusalDelivery({}, false), "requester");
-});
-
-test("postThenAckRunDelivery: acknowledges only after the Slack post succeeds", async () => {
-  const calls: string[] = [];
-  let finishPost!: () => void;
-  const posting = postThenAckRunDelivery({
-    post: () =>
-      new Promise<void>((resolve) => {
-        calls.push("post");
-        finishPost = resolve;
-      }),
-    ack: () => calls.push("ack"),
-    release: () => calls.push("release"),
-  });
-
-  assert.deepEqual(calls, ["post"]);
-  finishPost();
-  await posting;
-  assert.deepEqual(calls, ["post", "ack"]);
-});
-
-test("postThenAckRunDelivery: releases recovery when the Slack post fails", async () => {
-  const calls: string[] = [];
-  await assert.rejects(
-    postThenAckRunDelivery({
-      post: async () => {
-        calls.push("post");
-        throw new Error("Slack unavailable");
-      },
-      ack: () => calls.push("ack"),
-      release: () => calls.push("release"),
-    }),
-    /Slack unavailable/,
-  );
-  assert.deepEqual(calls, ["post", "release"]);
 });
 
 test("isBoundaryRefusal: only internal-only reasons are boundary refusals", () => {

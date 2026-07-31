@@ -283,6 +283,20 @@ export function createDeliveryTracker(opts: { maxAttempts?: number; maxTracked?:
   };
 }
 
+export async function postThenAckDelivery(opts: {
+  post: () => Promise<unknown>;
+  ack: () => void;
+  release: () => void;
+}): Promise<void> {
+  try {
+    await opts.post();
+  } catch (err) {
+    opts.release();
+    throw err;
+  }
+  opts.ack();
+}
+
 export async function deliverWithRetry(opts: {
   tracker: DeliveryTracker;
   id: string;

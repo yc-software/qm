@@ -68,6 +68,8 @@ export interface SlackCoreClient {
   pushDirectory(body: DirectoryPush): Promise<void>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
+  recordDeliveryAttachment(id: string, index: number): Promise<void>;
+  recordRunDeliveryAttachment(runId: string, index: number): Promise<void>;
   onDeliveryEnqueued(listener: () => void): () => void;
   pendingContextRequests(): Promise<SurfaceContextRequest[]>;
   onContextRequest(listener: (request: SurfaceContextRequest) => void): () => void;
@@ -287,6 +289,14 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async ackDelivery(id, body) {
       if (body?.recipientThreadRef) await deps.app.recordPrincipalDelivery(id, body.recipientThreadRef);
       await deps.app.ackDelivery(id, body?.slackApiMs);
+    },
+
+    async recordDeliveryAttachment(id, index) {
+      await deps.app.recordDeliveryAttachment(id, index);
+    },
+
+    async recordRunDeliveryAttachment(runId, index) {
+      await deps.app.recordRunDeliveryAttachment(runId, index);
     },
 
     onDeliveryEnqueued(listener) {

@@ -100,6 +100,20 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
     "attachments round-trip",
   );
   assert.equal(d.attachments, undefined, "attachment-less deliveries stay bare");
+  await store.recordAttachmentByKey("run:r-4", 1);
+  const progress = await store.enqueue({
+    destination: { type: "slack", target: "C5" },
+    text: "attachment progress",
+    attachments: [
+      { name: "one.txt", mimetype: "text/plain", sizeBytes: 1, blobId: "blob-1" },
+      { name: "two.txt", mimetype: "text/plain", sizeBytes: 1, blobId: "blob-2" },
+    ],
+    idempotencyKey: "run:r-4",
+  });
+  assert.deepEqual(progress.destination.uploadedAttachmentIndexes, [1]);
+  await store.recordAttachment(progress.id, 0);
+  assert.deepEqual((await store.get(progress.id))?.destination.uploadedAttachmentIndexes, [0, 1]);
+  await store.ack(progress.id, 150);
   await store.ackByKey("run:r-1", 200);
   assert.equal((await store.get(recovery.id))?.deliveredAt, 200);
   await store.ackByKey("run:r-1", 300);

@@ -164,6 +164,7 @@ export interface Destination {
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
   editRef?: string;
+  uploadedAttachmentIndexes?: number[];
   taskList?: Array<{
     id: string;
     title: string;

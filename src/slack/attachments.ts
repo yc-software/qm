@@ -193,8 +193,9 @@ export async function uploadAttachments(
   attachments: readonly OutgoingAttachment[],
   fetchBlob: (blobId: string) => Promise<Buffer>,
   fetchArtifact?: (artifactId: string, viewerId: string) => Promise<Buffer>,
+  onUploaded?: (index: number) => Promise<void> | void,
 ): Promise<void> {
-  for (const a of attachments) {
+  for (const [index, a] of attachments.entries()) {
     let file: Buffer;
     try {
       file = await fetchBlob(a.blobId);
@@ -202,7 +203,10 @@ export async function uploadAttachments(
       if (!fetchArtifact || !a.artifactId || !a.artifactViewerId) throw err;
       file = await fetchArtifact(a.artifactId, a.artifactViewerId);
     }
-    if (file.length === 0) continue;
+    if (file.length === 0) {
+      await onUploaded?.(index);
+      continue;
+    }
     const res = (await client.files.uploadV2({
       channel_id: channel,
       ...(threadTs ? { thread_ts: threadTs } : {}),
@@ -211,6 +215,7 @@ export async function uploadAttachments(
     })) as any;
     const fileId = res?.files?.[0]?.files?.[0]?.id ?? res?.files?.[0]?.id ?? res?.file?.id;
     if (fileId) await waitForShareCommit(client, channel, fileId);
+    await onUploaded?.(index);
   }
 }
 

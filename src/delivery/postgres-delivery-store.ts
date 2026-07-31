@@ -31,6 +31,11 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
         created_at BIGINT NOT NULL,
         delivered_at BIGINT
       )`,
+    `CREATE TABLE IF NOT EXISTS delivery_attachment_progress(
+        idempotency_key TEXT NOT NULL,
+        attachment_index INT NOT NULL,
+        PRIMARY KEY (idempotency_key, attachment_index)
+      )`,
     `CREATE INDEX IF NOT EXISTS idx_deliveries_pending
         ON deliveries ((destination->>'type'), created_at) WHERE delivered_at IS NULL`,
     `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS attachments JSONB`,
@@ -52,6 +57,21 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
 
   const enqueueListeners = new Set<() => void>();
 
+  async function withAttachmentProgress(row: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const progress = await q(
+      "SELECT attachment_index FROM delivery_attachment_progress WHERE idempotency_key = $1 ORDER BY attachment_index",
+      [row.idempotency_key],
+    );
+    if (!progress.length) return row;
+    return {
+      ...row,
+      destination: {
+        ...(row.destination as Destination),
+        uploadedAttachmentIndexes: progress.map((item) => Number(item.attachment_index)),
+      },
+    };
+  }
+
   return {
     async enqueue(input) {
       const inserted = await q(
@@ -72,11 +92,11 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
       );
       if (inserted[0]) {
         if (input.shadow !== true) for (const l of enqueueListeners) l();
-        return rowToDelivery(inserted[0]);
+        return rowToDelivery(await withAttachmentProgress(inserted[0]));
       }
       const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);
       if (!existing[0]) throw new Error(`delivery enqueue lost a race for key ${input.idempotencyKey}`);
-      return rowToDelivery(existing[0]);
+      return rowToDelivery(await withAttachmentProgress(existing[0]));
     },
     async pending(type) {
       const rows = await q(
@@ -134,6 +154,38 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
         `UPDATE deliveries SET destination = jsonb_set(destination, '{editRef}', to_jsonb($2::text))
          WHERE idempotency_key = $1 AND delivered_at IS NULL`,
         [idempotencyKey, editRef],
+      );
+    },
+    async recordAttachment(id, index) {
+      await query(
+        `UPDATE deliveries
+            SET destination = jsonb_set(
+              destination,
+              '{uploadedAttachmentIndexes}',
+              COALESCE(destination->'uploadedAttachmentIndexes', '[]'::jsonb) || jsonb_build_array($2::int),
+              true
+            )
+          WHERE id = $1 AND delivered_at IS NULL`,
+        [id, index],
+      );
+    },
+    async recordAttachmentByKey(idempotencyKey, index) {
+      await query(
+        `INSERT INTO delivery_attachment_progress (idempotency_key, attachment_index)
+         VALUES ($1, $2)
+         ON CONFLICT (idempotency_key, attachment_index) DO NOTHING`,
+        [idempotencyKey, index],
+      );
+      await query(
+        `UPDATE deliveries
+            SET destination = jsonb_set(
+              destination,
+              '{uploadedAttachmentIndexes}',
+              COALESCE(destination->'uploadedAttachmentIndexes', '[]'::jsonb) || jsonb_build_array($2::int),
+              true
+            )
+          WHERE idempotency_key = $1 AND delivered_at IS NULL`,
+        [idempotencyKey, index],
       );
     },
     async get(id) {

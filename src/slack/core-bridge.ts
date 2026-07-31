@@ -24,6 +24,7 @@ export interface CoreBridge {
   ackRunDeliveryWithRetry(runId: string): void;
   reportTurnMetrics(runId: string, patch: { deliverMs?: number; slackInflightMs?: number }): void;
   checkpointRunEditRef(runId: string, editRef: string): Promise<void>;
+  checkpointRunAttachment(runId: string, index: number): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): void;
   stageBlobInCore(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }>;
   fetchBlobFromCore(blobId: string): Promise<Buffer>;
@@ -98,6 +99,10 @@ export function createCoreBridge(core: SlackCoreClient): CoreBridge {
     await core.reportRunEditRef(runId, editRef);
   }
 
+  async function checkpointRunAttachment(runId: string, index: number): Promise<void> {
+    await core.recordRunDeliveryAttachment(runId, index);
+  }
+
   function reportRunEditRef(runId: string, editRef: string): void {
     void checkpointRunEditRef(runId, editRef).catch((err) =>
       console.error(`[slack-plugin] delivery-state checkpoint failed for run ${runId}:`, (err as Error).message),
@@ -151,9 +156,7 @@ export function createCoreBridge(core: SlackCoreClient): CoreBridge {
     if (result?.status === "refused" && result.refusalKind === "security_quarantine") {
       return result;
     }
-    if (result && (result.status === "ok" || result.status === "refused" || result.status === "failed")) {
-      ackRunDeliveryWithRetry(runId);
-    } else {
+    if (result?.status !== "ok" && result?.status !== "refused" && result?.status !== "failed") {
       inFlightRuns.delete(runId);
     }
     if (result) return result;
@@ -169,6 +172,7 @@ export function createCoreBridge(core: SlackCoreClient): CoreBridge {
     ackRunDeliveryWithRetry,
     reportTurnMetrics,
     checkpointRunEditRef,
+    checkpointRunAttachment,
     reportRunEditRef,
     stageBlobInCore,
     fetchBlobFromCore,

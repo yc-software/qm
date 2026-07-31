@@ -12,20 +12,6 @@ export function refusalDelivery(
   return result.refusalKind === "security_quarantine" ? "thread" : "requester";
 }
 
-export async function postThenAckRunDelivery(opts: {
-  post: () => Promise<unknown>;
-  ack: () => void;
-  release: () => void;
-}): Promise<void> {
-  try {
-    await opts.post();
-  } catch (err) {
-    opts.release();
-    throw err;
-  }
-  opts.ack();
-}
-
 export function refusalNote(
   result: { reason?: string; adminUrl?: string; refusalKind?: "security_quarantine" },
   kind: "dm" | "channel",
