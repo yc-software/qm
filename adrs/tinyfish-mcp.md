@@ -11,6 +11,8 @@ We want to connect `https://agent.tinyfish.ai/mcp` without a skill or API key. F
 
 I tested the endpoint directly with OAuth. Tool discovery returned all four tools. Search found the TinyFish docs, fetch returned the Example Domain page, synchronous automation returned its title, and asynchronous automation completed with the same result through `get_run`.
 
+This proposal does not itself connect TinyFish to a QM agent. QM still needs to load these remote MCP tools into the active harness tool set before the model can select them.
+
 The connection should belong to the person who authorized it. It should not be stored in an ephemeral harness home or shared with a room.
 
 The QM checks should prove that a current-web question selects `search`, a supplied URL selects `fetch_content`, an interactive website request selects `run_web_automation`, and an explicitly backgrounded website request selects `run_web_automation_async`.
