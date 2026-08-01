@@ -534,10 +534,19 @@ export function createChatSurface(ctx: ConvCtx): ChatSurface {
     await refreshTranscriptFromEntries(agent);
     if (agent !== chatState.agent || agent.state.isStreaming) return false;
     const msgs = agent.state.messages.slice();
-    while (msgs.length && (msgs[msgs.length - 1] as { role?: string }).role === "assistant") msgs.pop();
+    const popped: AgentMessage[] = [];
+    while (msgs.length && (msgs[msgs.length - 1] as { role?: string }).role === "assistant")
+      popped.unshift(msgs.pop()!);
     if (!msgs.length) return false;
     agent.state.messages = msgs;
-    agent.streamFn = makeRunResumeStreamFn(activeRun.runId, activeRun.run, onWork, runSlot);
+    // Seed the resumed stream with the assistant text we just removed so the
+    // model's already-visible words (e.g. its opening ack) don't blink out
+    // while we re-attach to the live run.
+    const seedText = popped
+      .map((m) => messageText(m).trim())
+      .filter(Boolean)
+      .join("\n\n");
+    agent.streamFn = makeRunResumeStreamFn(activeRun.runId, activeRun.run, onWork, runSlot, seedText);
     try {
       await agent.continue();
     } catch (err) {

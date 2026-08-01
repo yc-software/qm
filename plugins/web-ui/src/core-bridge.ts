@@ -511,6 +511,7 @@ export function makeRunResumeStreamFn(
   initialRun?: RunPoll,
   onWork?: WorkObserver,
   slot?: RunSlot,
+  seedText?: string,
 ): StreamFn {
   const fn = (
     model: Model<Api>,
@@ -518,7 +519,7 @@ export function makeRunResumeStreamFn(
     options?: { signal?: AbortSignal },
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
-    void resumeDrive(stream, model, runId, initialRun, options?.signal, onWork, slot);
+    void resumeDrive(stream, model, runId, initialRun, options?.signal, onWork, slot, seedText);
     return stream;
   };
   return fn as unknown as StreamFn;
@@ -632,6 +633,7 @@ async function resumeDrive(
   signal?: AbortSignal,
   onWork?: WorkObserver,
   slot?: RunSlot,
+  seedText?: string,
 ): Promise<void> {
   const partial = baseAssistant(model);
   const work: WorkBlock = { status: "thinking", activity: [] };
@@ -642,6 +644,11 @@ async function resumeDrive(
     stream.push({ type: "start", partial });
     stream.push({ type: "text_start", contentIndex: 0, partial });
     const st: Acc = { acc: "", lastProgressAt: now() };
+    // Keep any assistant text the transcript already showed for this in-flight
+    // run visible: seed the accumulator with it so attaching the live stream
+    // never blanks text the person has already read. The server's own partial
+    // (when longer) simply replaces it via the normal delta path.
+    if (seedText?.trim()) pushDelta(stream, partial, st, seedText);
     if (initialRun && applyRun(stream, partial, st, initialRun, notify) === "terminal") return;
     await followRun(stream, partial, runId, signal, notify, st, slot);
   } catch (e) {
