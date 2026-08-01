@@ -790,6 +790,11 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         @dragstart=${(e: DragEvent) => onSessionDragStart(e, s)}
         @dragend=${() => endSessionDrag()}
         @click=${() => openSession(s)}
+        @dblclick=${(e: Event) => {
+          if (!saved) return;
+          e.preventDefault();
+          startRename(s);
+        }}
       >
         <div class="title" aria-live="polite">
           ${statusMarks(s)}${surfaceGlyph(s)}${readOnly ? html`<span class="ro-lock" title="Read-only">${icon(Lock, 12)}</span>` : nothing}<span
