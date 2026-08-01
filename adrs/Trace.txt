@@ -1,0 +1,12 @@
+So as and when qm grows, I think you'll eventually reach a point where
+multiple agents can satisfy the same prompt. Right now the scheduler appears to choose
+based on capability, but I think it could eventually benefit from
+considering trust signals as well. Like rather than treating every agent equally qm could maintain 
+a lightweight agent metadata such as success rates, policy violations, recent behavioural change, etc.
+These would simply provide an additional confidence score that helps the scheduler make better decisions.
+
+
+Me and my friend explored a similar problem while building Trace, a trust routing system we developed
+as part of our yc application. Trace focused on decentralized agent to agent marketplaces. so its assumptions dont directly
+mirror here, but the idea that may transfer is separating "can execute" from "should execute". I'd be happy to discuss how a 
+lightweight version might fit qm
