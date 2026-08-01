@@ -1706,6 +1706,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.config ? { config: deps.config } : {}),
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
+          ...(deps.web ? { web: deps.web } : {}),
           memory: deps.memory,
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),

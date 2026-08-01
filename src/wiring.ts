@@ -156,6 +156,7 @@ import { createPostgresCredentialUsageSink } from "./admin/postgres-credential-u
 import { createEgressAuditSink, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { createConsentLinkStore, type ConsentLinkStore, type ConsentLinkRecord } from "./connectors/consent-link.ts";
+import { createFirecrawlWeb } from "./connectors/firecrawl.ts";
 import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts";
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
@@ -947,6 +948,10 @@ export function buildApp(
     directory,
     managedGroups: projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
+    web: createFirecrawlWeb({
+      ...(config.firecrawlApiKey ? { apiKey: config.firecrawlApiKey } : {}),
+      ...(config.firecrawlBaseUrl ? { baseUrl: config.firecrawlBaseUrl } : {}),
+    }),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),
     environments,

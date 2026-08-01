@@ -49,6 +49,8 @@ export interface Config {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  firecrawlApiKey?: string;
+  firecrawlBaseUrl?: string;
   modelProvider?: ModelProvider;
   piCaptureRequests: boolean;
   piSystemCacheSplit: boolean;
@@ -727,6 +729,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
     ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
+    ...(env.FIRECRAWL_API_KEY ? { firecrawlApiKey: env.FIRECRAWL_API_KEY } : {}),
+    ...(env.FIRECRAWL_BASE_URL ? { firecrawlBaseUrl: env.FIRECRAWL_BASE_URL } : {}),
     ...(modelProvider ? { modelProvider } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     piCaptureRequests: boolEnvStrict("PI_CAPTURE_REQUESTS", env.PI_CAPTURE_REQUESTS) ?? true,
