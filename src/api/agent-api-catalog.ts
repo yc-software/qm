@@ -207,10 +207,11 @@ const FAMILIES: AgentApiFamily[] = [
     match: (m, p) =>
       (m === "GET" && p === "/v1/deployments") ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+$/.test(p)) ||
+      (m === "GET" && /^\/v1\/deployments\/[^/]+\/fetch$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/git-url$/.test(p)) ||
       (m === "POST" && /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name)$/.test(p)),
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). A published app (`publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
+      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
     routes: [
       {
         method: "GET",
@@ -223,6 +224,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/deployments/:id",
         summary:
           "inspect one deployment you can reach — status, owner/home scope, effective permission, current and applied versions, version history with commit ids and timestamps, and gitUrl",
+      },
+      {
+        method: "GET",
+        path: "/v1/deployments/:id/fetch",
+        summary:
+          "read a deployment's rendered content as the asking person — query path defaults to / and maxBytes defaults to 256KB; returns upstream status, contentType, body, and truncation metadata",
       },
       {
         method: "GET",
