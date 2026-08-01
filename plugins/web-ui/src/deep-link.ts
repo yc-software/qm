@@ -39,16 +39,19 @@ export function parseDeepLink(
   const rel = pathname.startsWith(b) ? pathname.slice(b.length) : pathname;
   const segments = rel.replace(/^\/+/, "").split("/");
   const pathView = decodeSegment(segments[0] ?? "");
-  const projectSegment = segments[1] === "channel" ? segments[2] : segments[1];
-  const projectItem = pathView === "projects" ? decodeSegment(projectSegment ?? "") : null;
+  const projectKind = segments[1] === "channel" || segments[1] === "group" ? segments[1] : null;
+  let projectItem: string | null = null;
+  if (pathView === "projects") {
+    projectItem = projectKind ? decodeSegment(segments[2] ?? "") : decodeSegment(segments[1] ?? "");
+  }
   const requestedView = params.get("view") ?? (pathView === "projects" ? "contexts" : pathView);
   const view = requestedView === "connectors" ? "keychain" : requestedView;
   return {
     view,
     session: params.get("session"),
     item:
-      pathView === "projects" && segments[1] === "channel" && projectItem
-        ? `channel:${projectItem}`
+      pathView === "projects" && projectKind && projectItem
+        ? `${projectKind}:${projectItem}`
         : (projectItem ?? decodeSegment(segments[1] ?? "")),
   };
 }

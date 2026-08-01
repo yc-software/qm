@@ -46,6 +46,11 @@ test("project paths open the contexts view with a resolvable project identifier"
     session: null,
     item: "channel:C0123",
   });
+  assert.deepEqual(parseDeepLink("", "/projects/group/G9ABC", ""), {
+    view: "contexts",
+    session: null,
+    item: "group:G9ABC",
+  });
 });
 
 test("parseDeepLink degrades a malformed percent-escape to no view instead of throwing", () => {

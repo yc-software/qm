@@ -61,8 +61,8 @@ export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: str
   if (!base || !scopeId) return undefined;
   const personal = /^personal:([^@]+)@/.exec(scopeId);
   if (personal?.[1] && /^[a-z0-9._-]+$/i.test(personal[1])) return `${base}/projects/${personal[1].toLowerCase()}`;
-  const channel = /^channel:([^:]+)$/.exec(scopeId);
-  if (channel?.[1]) return `${base}/projects/channel/${encodeURIComponent(channel[1])}`;
+  const shared = /^(channel|group):(.+)$/.exec(scopeId);
+  if (shared?.[1] && shared[2]) return `${base}/projects/${shared[1]}/${encodeURIComponent(shared[2])}`;
   return `${base}/contexts?scope=${encodeURIComponent(scopeId)}`;
 }
 

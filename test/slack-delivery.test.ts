@@ -802,7 +802,8 @@ test("scopeSurfaceUrl deep-links each context to its own project page", () => {
     scopeSurfaceUrl("https://claw.acme.dev", "personal:unsafe+slug@acme.dev"),
     "https://claw.acme.dev/contexts?scope=personal%3Aunsafe%2Bslug%40acme.dev",
   );
-  assert.equal(scopeSurfaceUrl("https://claw.acme.dev", "group:G1"), "https://claw.acme.dev/contexts?scope=group%3AG1");
+  assert.equal(scopeSurfaceUrl("https://claw.acme.dev", "group:G1"), "https://claw.acme.dev/projects/group/G1");
+  assert.equal(scopeSurfaceUrl("https://claw.acme.dev", "team:T1"), "https://claw.acme.dev/contexts?scope=team%3AT1");
   assert.equal(scopeSurfaceUrl(undefined, "channel:C1"), undefined);
   assert.equal(scopeSurfaceUrl("https://claw.acme.dev", ""), undefined);
 });
