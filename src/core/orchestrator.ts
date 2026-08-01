@@ -51,6 +51,7 @@ import {
   type CapabilityClaims,
 } from "../auth/capability-token.ts";
 import type { GapWork, HarnessLlmRequestRecord } from "../harness/harness.ts";
+import { clampGrindBudget, parseGrindDirective } from "../harness/grind.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
 import {
   renderSecurityPolicyPrompt,
@@ -2121,6 +2122,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .join("\n\n"),
         );
         const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
+        const parsedGrind = parseGrindDirective(baseText);
         const pausedTurnUserEntry = input.approval
           ? [...visibleHistory].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
           : undefined;
@@ -2147,7 +2149,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         const turnInput = partial
           ? resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume })
-          : baseText;
+          : parsedGrind.input;
         const turnEnvironment = turnEnv;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some((e) => e.type === "tool_call");
@@ -2251,6 +2253,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : {}),
             ...(isPollFire ? { pollFire: true } : {}),
             ...(effectiveTurnWallClockMs !== undefined ? { turnWallClockMs: effectiveTurnWallClockMs } : {}),
+            ...(parsedGrind.grind ? { grind: clampGrindBudget(parsedGrind.grind, effectiveTurnWallClockMs) } : {}),
             ...(securityPolicy.inboundScreening === "external"
               ? {
                   screenToolResult: async (
