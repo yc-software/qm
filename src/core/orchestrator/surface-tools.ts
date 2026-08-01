@@ -417,9 +417,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (conversation.kind === "dm" || !conversation.channelRef)
         return { ok: false, message: "standing orders are per-channel — there isn't one for a DM." };
       const p = await deps.channelPolicy.get(conversation.channelRef);
-      return { ok: true, orders: p?.orders ?? "", ...(p?.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}) };
+      return {
+        ok: true,
+        orders: p?.orders ?? "",
+        ...(p?.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}),
+        ...(p?.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
+      };
     },
-    setStandingOrder: async (orders: string, bots?: Record<string, BotPolicy>) => {
+    setStandingOrder: async (orders: string, bots?: Record<string, BotPolicy>, ambientEnabled?: boolean | null) => {
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)
         return { ok: false, message: "standing orders are per-channel — you can only set one from inside a channel." };
@@ -433,6 +438,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         setBy: actor.id,
         bots: parsedBots,
         sessionId: session.id,
+        ambientEnabled,
       });
       deps.auditLog.record({
         at: Date.now(),
@@ -441,7 +447,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         resource: conversation.channelRef,
         scopeLabel: scopeId,
       });
-      return { ok: true, orders, ...(p.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}) };
+      return {
+        ok: true,
+        orders,
+        ...(p.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}),
+        ...(p.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
+      };
     },
     staySilent: async (reason: string) => {
       spine.staySilentReason = reason;

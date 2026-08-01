@@ -305,7 +305,8 @@ interface SurfaceFileResult {
 }
 
 type SurfaceStandingOrderResult =
-  { ok: true; orders: string; bots?: Record<string, BotPolicy> } | { ok: false; message: string };
+  | { ok: true; orders: string; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
+  | { ok: false; message: string };
 
 export interface SurfaceToolDeps {
   post(text: string, opts?: SurfacePostOpts, files?: readonly string[]): Promise<SurfacePostResult>;
@@ -319,7 +320,11 @@ export interface SurfaceToolDeps {
   readMembers(): Promise<SurfaceMembersResult>;
   readFile(ref: string): Promise<SurfaceFileResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;
-  setStandingOrder(orders: string, bots?: Record<string, BotPolicy>): Promise<SurfaceStandingOrderResult>;
+  setStandingOrder(
+    orders: string,
+    bots?: Record<string, BotPolicy>,
+    ambientEnabled?: boolean | null,
+  ): Promise<SurfaceStandingOrderResult>;
   staySilent(reason: string): Promise<{ ok: true; message: string }>;
 }
 
@@ -943,7 +948,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     readMembers: () => surfaceOp((s) => s.readMembers()),
     readFile: (ref) => surfaceOp((s) => s.readFile(ref)),
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
-    setStandingOrder: (orders, bots) => surfaceOp((s) => s.setStandingOrder(orders, bots)),
+    setStandingOrder: (orders, bots, ambientEnabled) =>
+      surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled)),
     staySilent: (reason) =>
       deps.surface
         ? deps.surface.staySilent(reason)

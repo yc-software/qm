@@ -7,6 +7,7 @@ import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>, outboxListing: string[]): Sandbox {
   return {
@@ -100,6 +101,38 @@ test("surface post rejects traversal before provisioning or staging any attachme
   const r = await tools!.post("hello", undefined, ["report.pdf", "../.ssh/id_ed25519"]);
   assert.equal(r.ok, false);
   assert.deepEqual(calls, { provision: 0, read: 0, put: 0, grant: 0 });
+});
+
+test("surface standing orders preserve and reset the stored ambient reply policy", async () => {
+  const channelPolicy = createMemoryChannelPolicyStore();
+  const tools = createSurfaceToolDeps({
+    deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+    input: { surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "channel", channelRef: "C1" },
+    session: { id: "S1" },
+    scopeId: "channel:C1",
+    defaultDestination: {},
+    strictReadOnly: false,
+    blobTransfer: {},
+    fileRegistration: {},
+    provision: async () => handle,
+    postProvenance() {
+      return {};
+    },
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+
+  await tools.setStandingOrder("watch", undefined, true);
+  assert.equal((await channelPolicy.get("C1"))?.ambientEnabled, true);
+  const enabledOrder = await tools.getStandingOrder();
+  assert.equal(enabledOrder.ok && enabledOrder.ambientEnabled, true);
+  await tools.setStandingOrder("keep watching");
+  assert.equal((await channelPolicy.get("C1"))?.ambientEnabled, true);
+  await tools.setStandingOrder("keep watching", undefined, null);
+  assert.equal((await channelPolicy.get("C1"))?.ambientEnabled, undefined);
+  const defaultOrder = await tools.getStandingOrder();
+  assert.equal(defaultOrder.ok && defaultOrder.ambientEnabled, undefined);
 });
 
 test("collectNamedOutbound: a missing/empty path is reported (so post can fail the WHOLE call)", async () => {

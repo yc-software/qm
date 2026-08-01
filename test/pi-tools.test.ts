@@ -1574,7 +1574,7 @@ test("guidance conversation scope reads the effective SOUL; write requires conte
 });
 
 test("guidance defaults to channel scope when a channel is available, and rewrites the channel order", async () => {
-  assert.match(textOut(await call(tool("guidance"), { action: "read" })), /no channel guidance set/);
+  assert.match(textOut(await call(tool("guidance"), { action: "read" })), /Ambient replies: default/);
   assert.match(
     textOut(await call(tool("guidance"), { action: "write", content: "reply piratey to tweets" })),
     /channel guidance updated/,
@@ -1585,7 +1585,44 @@ test("guidance defaults to channel scope when a channel is available, and rewrit
   );
   assert.match(
     textOut(await call(tool("guidance"), { action: "write" })),
-    /\[error\].*needs `content`.*and\/or `bots`/,
+    /\[error\].*needs `content`.*`bots`.*and\/or `ambientEnabled`/,
+  );
+});
+
+test("guidance reads and writes channel ambient replies without changing omitted state", async () => {
+  let ambientEnabled: boolean | undefined;
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    async getStandingOrder() {
+      return { ok: true, orders: "keep watch", ...(ambientEnabled === undefined ? {} : { ambientEnabled }) };
+    },
+    async setStandingOrder(orders, _bots, nextAmbientEnabled) {
+      if (nextAmbientEnabled !== undefined) ambientEnabled = nextAmbientEnabled ?? undefined;
+      return { ok: true, orders, ...(ambientEnabled === undefined ? {} : { ambientEnabled }) };
+    },
+  };
+
+  assert.match(textOut(await call(tool("guidance", tc), { action: "write", ambientEnabled: true })), /updated/);
+  assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: on/);
+  await call(tool("guidance", tc), { action: "write", content: "keep watching" });
+  assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: on/);
+  await call(tool("guidance", tc), { action: "write", ambientEnabled: false });
+  assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: off/);
+  await call(tool("guidance", tc), { action: "write", ambientEnabled: null });
+  assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: default/);
+});
+
+test("guidance rejects ambient replies at conversation scope", async () => {
+  assert.match(
+    textOut(
+      await call(tool("guidance"), {
+        action: "write",
+        scope: "conversation",
+        content: "Be terse.",
+        ambientEnabled: true,
+      }),
+    ),
+    /\[error\].*applies only to channel scope/,
   );
 });
 

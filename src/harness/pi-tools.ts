@@ -1742,6 +1742,12 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       action: Type.Union([Type.Literal("read"), Type.Literal("write")]),
       scope: Type.Optional(Type.Union([Type.Literal("channel"), Type.Literal("conversation")])),
       content: Type.Optional(Type.String()),
+      ambientEnabled: Type.Optional(
+        Type.Union([Type.Boolean(), Type.Null()], {
+          description:
+            "Channel scope only. true judges every message for an unprompted reply, false responds only when addressed, and null uses the platform default.",
+        }),
+      ),
       bots: Type.Optional(
         Type.Record(
           Type.String(),
@@ -1796,22 +1802,37 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
           const note = convoExists
             ? "\n\n(conversation-scope guidance also exists — read with scope=conversation)"
             : "";
-          const body = (channel!.orders.trim() ? channel!.orders : "[no channel guidance set]") + ledger + note;
+          let ambientState = "default";
+          if (channel!.ambientEnabled !== undefined) ambientState = channel!.ambientEnabled ? "on" : "off";
+          const ambient = `\n\nAmbient replies: ${ambientState}`;
+          const body =
+            (channel!.orders.trim() ? channel!.orders : "[no channel guidance set]") + ambient + ledger + note;
           return recordResult(callId, { tool: "guidance", scope, ok: true }, text(body));
         }
-        if (typeof params.content !== "string" && params.bots === undefined) {
+        if (typeof params.content !== "string" && params.bots === undefined && params.ambientEnabled === undefined) {
           return recordResult(
             callId,
-            { tool: "guidance", scope, error: "content or bots required" },
-            text("[error] guidance write needs `content` (the full new channel guidance) and/or `bots`."),
+            { tool: "guidance", scope, error: "content, bots, or ambientEnabled required" },
+            text(
+              "[error] guidance write needs `content` (the full new channel guidance), `bots`, and/or `ambientEnabled`.",
+            ),
             true,
           );
         }
         const orders = typeof params.content === "string" ? params.content : channel!.orders;
-        const r = await tc.setStandingOrder(orders, params.bots);
+        const r = await tc.setStandingOrder(orders, params.bots, params.ambientEnabled);
         if (!r.ok)
           return recordResult(callId, { tool: "guidance", scope, ok: false }, text(`[error] ${r.message}`), true);
         return recordResult(callId, { tool: "guidance", scope, ok: true }, text("[channel guidance updated]"));
+      }
+
+      if (params.ambientEnabled !== undefined) {
+        return recordResult(
+          callId,
+          { tool: "guidance", scope, error: "ambientEnabled is channel scope only" },
+          text("[error] `ambientEnabled` applies only to channel scope."),
+          true,
+        );
       }
 
       if (params.action === "read") {
