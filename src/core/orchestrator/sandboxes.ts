@@ -14,7 +14,6 @@ import {
   type ResidentAuthConnector,
 } from "../../credentials/resident-auth.ts";
 import { shq } from "../../util/shell.ts";
-import type { BrokeredLayerTool } from "../../deployment/load-layer.ts";
 import { createSkillMaterializer, safeSkillDirName } from "../../skills/materialize.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
@@ -43,8 +42,7 @@ export interface TurnSandboxContext {
   ownerAuthAvailable: boolean;
   ownerAuthEnv: Record<string, string>;
   ownerEnvCredentialIds: string[];
-  brokerVended: Map<string, { tool: BrokeredLayerTool; env: Record<string, string> }>;
-  brokeredTools: readonly BrokeredLayerTool[];
+  brokeredTools: readonly import("../../deployment/load-layer.ts").BrokeredLayerTool[];
   quarantinedServices: string[];
   brokerCutoverServices: string[];
   cutoverModeOf: (service: string) => DeviceFlowCutoverMode;
@@ -76,7 +74,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     ownerAuthAvailable,
     ownerAuthEnv,
     ownerEnvCredentialIds,
-    brokerVended,
     brokeredTools,
     quarantinedServices,
     brokerCutoverServices,
@@ -91,6 +88,20 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   } = ctx;
 
   let ownerAuthCommand: ((command: string) => string) | undefined;
+  const brokerEnvKeys = [
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+  ];
+  const unsetBrokerEnv = (env: Record<string, string>): string => {
+    const keys = brokerEnvKeys.filter((key) => !(key in env));
+    return keys.length ? `unset ${keys.join(" ")}; ` : "";
+  };
+  const scopedCommand = brokerCutoverServices.length
+    ? (command: string): string => `${unsetBrokerEnv(connectorEnv)}${command}`
+    : undefined;
   if (ownerAuthAvailable) {
     ownerAuthCommand = (command) => {
       for (const credentialId of ownerEnvCredentialIds) {
@@ -102,30 +113,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           scopeLabel: scopeId,
         });
       }
-      const invoked = [...brokerVended.values()].filter(({ tool }) =>
-        new RegExp(`(^|[\\s;&|()])${tool.binary}(?=$|[\\s;&|()])`).test(command),
-      );
-      for (const { tool } of invoked) {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "credential.materialize",
-          resource: `${tool.service} (ephemeral broker)`,
-          scopeLabel: scopeId,
-        });
-      }
       const exports = Object.entries(ownerAuthEnv)
         .map(([key, value]) => `${key}=${shq(value)}`)
         .join(" ");
-      const wrappers = invoked
-        .map(({ tool, env }) => {
-          const brokerExports = Object.entries(env)
-            .map(([key, value]) => `${key}=${shq(value)}`)
-            .join(" ");
-          return `${tool.binary}() { ${brokerExports} command ${tool.binary} "$@"; }; `;
-        })
-        .join("");
-      return `${exports ? `export ${exports}; ` : ""}${wrappers}${command}`;
+      return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN AGENT_OUTBOX; ${unsetBrokerEnv(ownerAuthEnv)}${exports ? `export ${exports}; ` : ""}${command}`;
     };
   }
   const box: {
@@ -583,6 +574,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     scratchBox,
     ownerAuthBox,
     ownerAuthCommand,
+    scopedCommand,
     provision,
     provisionScratch,
     provisionOwnerAuth,

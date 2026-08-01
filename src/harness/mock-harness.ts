@@ -19,6 +19,7 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!run ",
   "!scratch ",
   "!owner ",
+  "!credential ",
   "!reach ",
   "!paused-approval ",
   "!collect-approval ",
@@ -262,6 +263,22 @@ export function createMockHarness(): Harness {
             scopeLabel: turn.scopeLabel,
           });
           reply = "thought about it";
+        } else if (command0.startsWith("!credential ")) {
+          const rest = command0.slice("!credential ".length);
+          const split = rest.indexOf(" ");
+          const service = split === -1 ? rest : rest.slice(0, split);
+          const args = split === -1 ? [] : (JSON.parse(rest.slice(split + 1)) as string[]);
+          if (!turn.tools.credentialExec) throw new Error("credential_exec unavailable");
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "credential_exec", service, args },
+            scopeLabel: turn.scopeLabel,
+          });
+          const result = await turn.tools.credentialExec(service, args);
+          await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+          turn.onProgress?.({ toolCalls: 1 });
+          usedTool = true;
+          reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
         } else if (command0.startsWith("!run ") || command0.startsWith("!scratch ") || command0.startsWith("!owner ")) {
           let tag = "!run ";
           if (command0.startsWith("!scratch ")) tag = "!scratch ";

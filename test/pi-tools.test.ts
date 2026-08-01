@@ -1178,6 +1178,72 @@ test("execute forwards the agent's timeout_seconds into tc.execute; omitting it 
   assert.equal(sink.lastExecOpts, undefined);
 });
 
+test("credential_exec is turn-scoped, typed, and forwards only service plus literal argv", async () => {
+  const calls: unknown[] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
+    async credentialExec(service, args, opts) {
+      calls.push({ service, args, opts });
+      return { stdout: "authenticated", stderr: "", code: 0, timedOut: false };
+    },
+  };
+  const absent = createPiTools({ current: fakeToolContext() });
+  assert.equal(
+    absent.some((tool) => tool.name === "credential_exec"),
+    false,
+  );
+  const tools = createPiTools(
+    { current: tc },
+    { credentialExecServices: tc.credentialExecServices, execTimeoutCeilingMs: 10_000 },
+  );
+  const tool = tools.find((candidate) => candidate.name === "credential_exec")!;
+  assert.match(tool.description, /acme \(acmecli\)/);
+  assert.match(tool.description, /Shell operators and pipelines are not supported/);
+  const args = ["; env", "$(env)", "a|b", "> out", "two words"];
+  const result = await call(tool, { service: "acme", args, timeout_seconds: 7 });
+  assert.deepEqual(calls, [{ service: "acme", args, opts: { timeoutSeconds: 7 } }]);
+  assert.match((result as { content: Array<{ text: string }> }).content[0]!.text, /authenticated/);
+});
+
+test("credential_exec surfaces NeedsApproval and CommandDenied like execute", async () => {
+  const gated: ToolContext = {
+    ...fakeToolContext(),
+    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
+    async credentialExec() {
+      throw new NeedsApproval("'acmecli' 'tool'", "mutating subcommand", "approval", "tool", "\\bacmecli\\s+tool\\b");
+    },
+  };
+  const ref = { current: gated, pendingApprovals: [] as NonNullable<ToolContextRef["pendingApprovals"]> };
+  const tool = createPiTools(ref, { credentialExecServices: gated.credentialExecServices }).find(
+    (candidate) => candidate.name === "credential_exec",
+  )!;
+  const blocked = (await call(tool, { service: "acme", args: ["tool"] })) as {
+    content: Array<{ text: string }>;
+    terminate?: boolean;
+  };
+  assert.match(blocked.content[0]!.text, /needs human approval/);
+  assert.equal(blocked.terminate, true);
+  assert.equal(ref.pendingApprovals.length, 1);
+  assert.equal(ref.pendingApprovals[0]!.approvalKey, "\\bacmecli\\s+tool\\b");
+  assert.equal((ref as { pausedOnApproval?: boolean }).pausedOnApproval, true);
+
+  const denied: ToolContext = {
+    ...fakeToolContext(),
+    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
+    async credentialExec() {
+      throw new CommandDenied("'acmecli'", "must be run with credential_exec");
+    },
+  };
+  const deniedTool = createPiTools({ current: denied }, { credentialExecServices: denied.credentialExecServices }).find(
+    (candidate) => candidate.name === "credential_exec",
+  )!;
+  const deniedResult = (await call(deniedTool, { service: "acme", args: [] })) as {
+    content: Array<{ text: string }>;
+  };
+  assert.match(deniedResult.content[0]!.text, /denied by policy/);
+});
+
 test('execute scope:"owner" routes only when the owner-auth surface is enabled', async () => {
   const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
   const execute = createPiTools({ current: fakeToolContext(sink) }, { ownerAuthExec: true })[0]!;

@@ -232,7 +232,12 @@ function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiTool
     backgroundJobTtlMs: opts.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
     ...(turn
-      ? { readOnly: turn.readOnly, surfaceTools: turn.surfaceTools, surfaceName: turn.surfaceName }
+      ? {
+          readOnly: turn.readOnly,
+          surfaceTools: turn.surfaceTools,
+          surfaceName: turn.surfaceName,
+          credentialExecServices: turn.credentialExecServices,
+        }
       : { surfaceTools: true, surfaceName: "slack" }),
   };
 }

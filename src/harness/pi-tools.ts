@@ -230,6 +230,7 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
 }
 
 export interface PiToolsOptions {
+  credentialExecServices?: readonly { service: string; binary: string }[];
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;
@@ -279,6 +280,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
   const ownerAuthExec = !!opts?.ownerAuthExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
+  const credentialExecServices = opts?.credentialExecServices ?? ref.current?.credentialExecServices ?? [];
   const surfaceTools = !!opts?.surfaceTools;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
@@ -2394,8 +2396,78 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     },
   });
 
+  const credentialExec = defineTool({
+    name: "credential_exec",
+    label: "Credential exec",
+    description:
+      "Run a configured credential-bearing CLI in a one-shot isolated box. Shell operators and pipelines are not supported; args are passed literally. Available services: " +
+      credentialExecServices.map(({ service, binary }) => `${service} (${binary})`).join(", "),
+    parameters: Type.Object({
+      service: Type.String({ enum: credentialExecServices.map(({ service }) => service) }),
+      args: Type.Array(Type.String()),
+      timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: execCeilingSec })),
+    }),
+    async execute(callId, params: { service: string; args: string[]; timeout_seconds?: number }) {
+      const tc = ref.current;
+      await recordCall(callId, { tool: "credential_exec", service: params.service, args: params.args });
+      if (!tc?.credentialExec) {
+        return recordResult(
+          callId,
+          { tool: "credential_exec", unavailable: true },
+          text("[error] credential_exec is unavailable on this turn"),
+          true,
+        );
+      }
+      try {
+        const result = await tc.credentialExec(params.service, params.args, {
+          ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
+          ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
+        });
+        const parts = [result.stdout, result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
+        return recordResult(
+          callId,
+          { tool: "credential_exec", service: params.service, ...result },
+          text(`${parts}\n[exit ${result.code}${result.timedOut ? " timed-out" : ""}]`),
+          result.code !== 0,
+        );
+      } catch (error) {
+        if (error instanceof NeedsApproval) {
+          ref.pendingApprovals?.push({
+            command: error.command,
+            reason: error.approvalReason,
+            kind: error.kind,
+            matched: error.matched,
+            ...(error.approvalKey ? { approvalKey: error.approvalKey } : {}),
+          });
+          ref.pausedOnApproval = true;
+          return recordResult(
+            callId,
+            { tool: "credential_exec", blocked: "needs_approval", reason: error.approvalReason },
+            { ...text(`[blocked: needs human approval] ${error.approvalReason}`), terminate: true },
+            true,
+          );
+        }
+        if (error instanceof CommandDenied) {
+          return recordResult(
+            callId,
+            { tool: "credential_exec", denied: true, reason: error.message },
+            text(`[denied by policy] ${error.message}`),
+            true,
+          );
+        }
+        return recordResult(
+          callId,
+          { tool: "credential_exec", service: params.service, failed: true },
+          text(`[error] ${errMessage(error)}`),
+          true,
+        );
+      }
+    },
+  });
+
   const tools = [
     execute,
+    ...(credentialExecServices.length ? [credentialExec] : []),
     read,
     write,
     publish,
