@@ -82,7 +82,7 @@ the tokens, core simply runs without Slack.
   with `reactions.add` to the message that triggered the turn — or, when the directive carries an
   `@ <id>` target (`[[react: tada @ ~abc123]]`), to that _specific_ earlier message instead. So the
   agent can resolve a phrase like "react to Alice's last message," each channel turn
-  reconstructs the conversation as structured roled turns (`renderConversationView`, fed by a
+  reconstructs the conversation as structured role-based turns (`renderConversationView`, fed by a
   best-effort `conversations.history`/`replies` fetch that reuses the `channels:history` /
   `groups:history` scopes); every reaction-eligible message carries a **short, stable id** in
   brackets like `[~abc123]` — the message's Slack `ts` packed into base36 (`encodeTs`), written
