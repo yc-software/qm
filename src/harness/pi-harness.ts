@@ -79,6 +79,7 @@ import { compactTranscript, deterministicCompactSummary, estimateHistoryTokens }
 import { countTokens } from "../util/tokens.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
+import { createGrindMeter, enforceGrindBudget, meterGrindCall } from "./grind.ts";
 
 export interface PiHarnessOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
@@ -1569,6 +1570,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           });
 
           const callStats: Array<PerCallStat> = [];
+          const grindMeter = createGrindMeter();
           let curStart: number | undefined;
           let curFirst: number | undefined;
           let prevStepEnd: number | undefined;
@@ -1629,6 +1631,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
               const end = Date.now();
               const u = (event.message as { usage?: PiUsageShape }).usage;
+              meterGrindCall(
+                grindMeter,
+                piUsageToCallUsage(u),
+                (entry.agentSession.model as { id?: string } | undefined)?.id ?? effectiveModel,
+              );
               callStats.push({
                 ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
                 durationMs: curStart !== undefined ? end - curStart : null,
@@ -1766,6 +1773,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 )
               : null;
           const promptStart = Date.now();
+          let grindWaiverNote = "";
           const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
             if (userAborted || turn.cancel?.aborted) return false;
             const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
@@ -1811,6 +1819,39 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 abort: () => entry.agentSession.abort(),
               },
             );
+            if (wallClock === "ok" && turn.grind && !userAborted && !turn.cancel?.aborted) {
+              const grindResult = await enforceGrindBudget({
+                grind: turn.grind,
+                meter: grindMeter,
+                outcome: wallClock,
+                ok: "ok" as const,
+                closingText: () => entry.agentSession.getLastAssistantText() ?? "",
+                toolCalls: () =>
+                  entry.agentSession.messages
+                    .slice(messagesBefore)
+                    .filter((message) => contentHasToolUse((message as { role?: string; content?: unknown }).content))
+                    .length,
+                blocked: () =>
+                  userAborted ||
+                  !!turn.cancel?.aborted ||
+                  !!entry.ref.pausedOnApproval ||
+                  !!entry.ref.pendingApprovals?.length,
+                beforePrompt: async (note) => {
+                  console.error(`${note} session=${turn.session.id}`);
+                  entry.ref.silentRequested = false;
+                  await thinkTail;
+                },
+                prompt: (note) => {
+                  const capMs = turnWallClockMs > 0 ? turnWallClockMs - (Date.now() - promptStart) : turnWallClockMs;
+                  return raceTurnWallClock(entry.agentSession.prompt(note), {
+                    capMs,
+                    abort: () => entry.agentSession.abort(),
+                  });
+                },
+              });
+              wallClock = grindResult.outcome;
+              grindWaiverNote = grindResult.waiverNote;
+            }
             if (wallClock === "ok" && !userAborted && !turn.cancel?.aborted) {
               const refusal = providerRefusalError(entry.agentSession, messagesBefore);
               if (refusal) {
@@ -1923,7 +1964,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             return cacheUsage ? { ...base, cacheUsage } : base;
           }
           const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
-          const reply = entry.ref.silentRequested ? "" : closingText;
+          const closingTextWithWaiver = [closingText, grindWaiverNote].filter(Boolean).join("\n\n");
+          // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
+          const reply = entry.ref.silentRequested && !grindWaiverNote ? "" : closingTextWithWaiver;
           const finalEntry = await turn.emit({
             type: "assistant",
             payload: { text: reply },
