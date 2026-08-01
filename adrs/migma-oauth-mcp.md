@@ -1,13 +1,23 @@
-# Migma over OAuth MCP
+# Use Migma.ai for email campaigns in QM
 
-I saw the TinyFish OAuth MCP proposal. Migma fits the same connection seam, but
-the job is different: TinyFish brings web tools; Migma handles email work and
-includes consequential writes.
+Migma.ai is an email platform agents can use to create, edit, validate, send,
+schedule, and track branded emails. It exposes those actions through an OAuth
+MCP server at `https://migma.ai/mcp`.
 
-I'd like a QM user to connect `https://migma.ai/mcp` with their own Migma
-account through OAuth. Interactive turns should use the speaker's connection.
-Scheduled work should use the instruction owner's connection. One person's
-connection should never become a room credential.
+I'd like QM users to connect Migma and handle email work from their existing
+Slack or web conversation. A user could ask QM to prepare a campaign, review
+the result, approve a send or schedule, then ask for delivery, click, bounce,
+and unsubscribe results without moving the workflow into another chat.
+
+I noticed the TinyFish OAuth MCP proposal. Connection mechanics are similar,
+but use cases differ: TinyFish brings web research and automation tools; Migma
+brings an email workflow with approval-sensitive sends and durable campaign
+results.
+
+Each QM user should connect their own Migma account through OAuth. Interactive
+turns should use the speaker's connection. Scheduled work should use the
+instruction owner's connection. One person's connection should never become a
+room credential.
 
 After connecting, QM should discover the Migma tools and call
 `migma_get_capabilities` before choosing a workflow. The agent can then prepare,
