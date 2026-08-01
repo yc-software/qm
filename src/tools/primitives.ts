@@ -215,6 +215,7 @@ export interface ToolContext extends SurfaceToolDeps {
     content: string,
   ): Promise<ControlOk<{ version: number }> | ControlErr<"soul_update_denied"> | ControlUnavailable>;
   shareArtifact(req: ShareArtifactRequest): Promise<ShareArtifactResult | ControlUnavailable>;
+  webProvider?: string;
   webSearch(query: string, opts?: WebSearchOptions): Promise<WebSearchResult>;
   webScrape(url: string, opts?: WebScrapeOptions): Promise<WebScrapeResult>;
 }
@@ -254,6 +255,7 @@ export interface WebScrapeResult {
 }
 
 export interface WebToolDeps {
+  readonly name: string;
   search(query: string, opts?: WebSearchOptions): Promise<WebSearchResult>;
   scrape(url: string, opts?: WebScrapeOptions): Promise<WebScrapeResult>;
 }
@@ -436,6 +438,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   const fallbackMounts = deps.layers.filter((l) => l.mode === "ro" && l.mountPath);
   const persistExclude = deps.persistWritesToStore?.excludeDirs;
   const orgScopeId = deps.layers.find((l) => l.mountPath === "global")?.scopeId ?? null;
+  const webProvider = deps.web?.name.trim();
 
   const ledger = deps.ledger ?? createNullLedger();
   const runId = deps.runId;
@@ -1001,6 +1004,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ? deps.surface.staySilent(reason)
         : Promise.resolve({ ok: true as const, message: "[staying silent]" }),
 
+    ...(webProvider ? { webProvider } : {}),
     webSearch: (query, opts) => webOp((w) => w.search(query, opts)),
     webScrape: (url, opts) => webOp((w) => w.scrape(url, opts)),
   };

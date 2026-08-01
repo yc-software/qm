@@ -112,6 +112,8 @@ export function createFirecrawlWeb(opts: FirecrawlOptions): WebToolDeps {
   }
 
   return {
+    name: "Firecrawl",
+
     async search(query: string, searchOpts?: WebSearchOptions): Promise<WebSearchResult> {
       const q = query.trim();
       if (!q) return { ok: false, message: "a search needs a query" };

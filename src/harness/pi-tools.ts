@@ -1091,6 +1091,9 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
+      const provider = tc.webProvider;
+      const answered = provider ? { provider } : {};
+      const lead = (body: string): string => `[${provider ? `${provider}: ` : ""}${body}]`;
       const missing = (field: string) =>
         recordResult(
           callId,
@@ -1110,14 +1113,14 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
         if (!r.ok || r.content === undefined)
           return recordResult(
             callId,
-            { tool: "web", action: "scrape", ok: false, url: r.url ?? params.url },
-            text(`[couldn't read ${r.url ?? params.url}] ${r.message ?? "unavailable"}`),
+            { tool: "web", action: "scrape", ok: false, url: r.url ?? params.url, ...answered },
+            text(`${lead(`couldn't read ${r.url ?? params.url}`)} ${r.message ?? "unavailable"}`),
             true,
           );
         return recordExternalResult(
           callId,
-          { tool: "web", action: "scrape", ok: true, url: r.url, chars: r.content.length },
-          text(`[${r.title ?? "page"} — ${r.url}]\n\n${r.content}`),
+          { tool: "web", action: "scrape", ok: true, url: r.url, chars: r.content.length, ...answered },
+          text(`${lead(`${r.title ?? "page"} — ${r.url}`)}\n\n${r.content}`),
           "web",
           "web page",
         );
@@ -1135,15 +1138,19 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       if (!r.ok)
         return recordResult(
           callId,
-          { tool: "web", action: "search", ok: false },
-          text(`[couldn't search the web] ${r.message ?? "unavailable"}`),
+          { tool: "web", action: "search", ok: false, ...answered },
+          text(`${lead("couldn't search the web")} ${r.message ?? "unavailable"}`),
           true,
         );
       const hits = r.hits ?? [];
       return recordExternalResult(
         callId,
-        { tool: "web", action: "search", ok: true, query: params.query, count: hits.length },
-        text(hits.length ? hits.map(fmtWebHit).join("\n") : `[nothing on the web matches "${params.query}"]`),
+        { tool: "web", action: "search", ok: true, query: params.query, count: hits.length, ...answered },
+        text(
+          hits.length
+            ? `${lead(`${hits.length} result${hits.length === 1 ? "" : "s"}`)}\n${hits.map(fmtWebHit).join("\n")}`
+            : lead(`nothing on the web matches "${params.query}"`),
+        ),
         "web",
         "web search results",
       );

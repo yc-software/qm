@@ -251,7 +251,7 @@ test("a blank api key falls back to keyless instead of sending a header the prov
 
 test("a keyless client sends the same search and scrape bodies as a keyed one", async () => {
   const reply = (path: string): StubReply =>
-    path === "/search"
+    path.endsWith("/search")
       ? { json: { success: true, data: { web: [] } } }
       : { json: { success: true, data: { markdown: "text", metadata: { url: "https://firecrawl.dev" } } } };
   const keyed = firecrawl(reply);
@@ -315,6 +315,16 @@ test("a 401 without a key does not blame a key the instance never had", async ()
 });
 
 const noSandbox = {} as unknown as Sandbox;
+
+const stubWeb = (name: string): WebToolDeps => ({
+  name,
+  async search() {
+    return { ok: true, hits: [{ url: "https://intranet.acme.dev/runbook", title: "Deploy runbook" }] };
+  },
+  async scrape(url: string) {
+    return { ok: true, url, title: "Deploy runbook", content: "# Deploy runbook" };
+  },
+});
 
 function toolContextWith(web?: WebToolDeps): ToolContext {
   return createToolContext({
@@ -395,7 +405,10 @@ test("web search emits a call and a result, and renders hits the model can act o
     ["tool_call:web", "tool_result:web"],
   );
   assert.equal(emitted[1]!.payload.count, 1);
-  assert.equal(out, "1. Firecrawl — https://firecrawl.dev\n   Turn websites into LLM-ready data.");
+  assert.equal(
+    out,
+    "[Firecrawl: 1 result]\n1. Firecrawl — https://firecrawl.dev\n   Turn websites into LLM-ready data.",
+  );
 });
 
 test("a search with no matches says so rather than returning a blank result", async () => {
@@ -404,7 +417,7 @@ test("a search with no matches says so rather than returning a blank result", as
 
   const out = textOut(await call(tool, { action: "search", query: "zzzz" }));
 
-  assert.equal(out, '[nothing on the web matches "zzzz"]');
+  assert.equal(out, '[Firecrawl: nothing on the web matches "zzzz"]');
 });
 
 test("the tool caps `limit` so a model cannot ask for an unbounded crawl", async () => {
@@ -427,7 +440,7 @@ test("web scrape hands back the page with its provenance attached", async () => 
 
   const out = textOut(await call(tool, { action: "scrape", url: "https://firecrawl.dev" }));
 
-  assert.equal(out, "[Firecrawl — https://firecrawl.dev]\n\n# Firecrawl");
+  assert.equal(out, "[Firecrawl: Firecrawl — https://firecrawl.dev]\n\n# Firecrawl");
   assert.equal(emitted[1]!.payload.ok, true);
 });
 
@@ -437,7 +450,7 @@ test("a page that cannot be read is an error result naming the url", async () =>
 
   const out = textOut(await call(tool, { action: "scrape", url: "https://firecrawl.dev" }));
 
-  assert.match(out, /\[couldn't read https:\/\/firecrawl\.dev\] .*out of credits/);
+  assert.match(out, /\[Firecrawl: couldn't read https:\/\/firecrawl\.dev\] .*out of credits/);
   assert.equal(emitted[1]!.payload.isError, true);
 });
 
@@ -477,4 +490,71 @@ test("web content runs through the external-content screen, and a blocked page n
   const persisted = emitted.find((e) => e.type === "tool_result")!.payload;
   assert.equal(persisted.securityBlocked, true);
   assert.doesNotMatch(JSON.stringify(persisted), /attacker@example\.com/);
+});
+
+test("the provider names itself, so nothing above it has to know which provider it is", () => {
+  assert.equal(createFirecrawlWeb({ apiKey: "fc-test" }).name, "Firecrawl");
+  assert.equal(toolContextWith(createFirecrawlWeb({ apiKey: "fc-test" })).webProvider, "Firecrawl");
+  assert.equal(toolContextWith().webProvider, undefined, "an instance with no provider claims none");
+});
+
+test("every web result names the provider that answered it, in the text and in the transcript", async () => {
+  const { web } = firecrawl((path) =>
+    path.endsWith("/search")
+      ? {
+          json: {
+            success: true,
+            data: { web: [webPage("https://anthropic.com/news", "Anthropic News", "Model releases.")] },
+          },
+        }
+      : {
+          json: {
+            success: true,
+            data: { markdown: "# News", metadata: { title: "Anthropic News", url: "https://anthropic.com/news" } },
+          },
+        },
+  );
+  const { tool, emitted } = webTool(toolContextWith(web));
+  const broke = webTool(
+    toolContextWith(firecrawl(() => ({ status: 402, json: { error: "Insufficient credits" } })).web),
+  );
+
+  const search = textOut(await call(tool, { action: "search", query: "anthropic" }));
+  const scrape = textOut(await call(tool, { action: "scrape", url: "https://anthropic.com/news" }));
+  const failed = textOut(await call(broke.tool, { action: "search", query: "anthropic" }));
+
+  assert.match(search, /^\[Firecrawl: 1 result\]\n1\. Anthropic News/);
+  assert.match(scrape, /^\[Firecrawl: Anthropic News — https:\/\/anthropic\.com\/news\]\n\n# News$/);
+  assert.match(failed, /^\[Firecrawl: couldn't search the web\] .*out of credits/);
+  assert.deepEqual(
+    [...emitted, ...broke.emitted].filter((e) => e.type === "tool_result").map((e) => e.payload.provider),
+    ["Firecrawl", "Firecrawl", "Firecrawl"],
+  );
+});
+
+test("a provider that isn't Firecrawl surfaces its own name, because the tool layer knows no vendor", async () => {
+  const { tool, emitted } = webTool(toolContextWith(stubWeb("Acme Intranet Index")));
+
+  const search = textOut(await call(tool, { action: "search", query: "deploy runbook" }));
+  const scrape = textOut(await call(tool, { action: "scrape", url: "https://intranet.acme.dev/runbook" }));
+
+  assert.match(search, /^\[Acme Intranet Index: 1 result\]\n1\. Deploy runbook/);
+  assert.match(scrape, /^\[Acme Intranet Index: Deploy runbook — https:\/\/intranet\.acme\.dev\/runbook\]\n\n/);
+  assert.deepEqual(
+    emitted.filter((e) => e.type === "tool_result").map((e) => e.payload.provider),
+    ["Acme Intranet Index", "Acme Intranet Index"],
+  );
+  assert.doesNotMatch(JSON.stringify([search, scrape, emitted]), /firecrawl/i);
+});
+
+test("a provider with no usable name is left unattributed rather than announced as an empty one", async () => {
+  const none = webTool(toolContextWith());
+  const unnamed = webTool(toolContextWith(stubWeb("  ")));
+
+  const unavailable = textOut(await call(none.tool, { action: "search", query: "anything" }));
+  const anonymous = textOut(await call(unnamed.tool, { action: "search", query: "deploy runbook" }));
+
+  assert.equal(unavailable, "[couldn't search the web] the web tool isn't available on this instance");
+  assert.equal(anonymous, "[1 result]\n1. Deploy runbook — https://intranet.acme.dev/runbook");
+  assert.equal(unnamed.emitted.at(-1)!.payload.provider, undefined);
 });
