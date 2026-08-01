@@ -76,6 +76,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       "Firecrawl API key: raises the limits on the agent's `web` tool (web search and page reads). Without it the tool still works, on the provider's keyless free allowance.",
   },
   {
+    name: "FIRECRAWL_BASE_URL",
+    service: "core",
+    required: false,
+    description:
+      "Points the agent's `web` tool at a self-hosted Firecrawl or an egress proxy instead of the hosted API. Defaults to the hosted API.",
+  },
+  {
     name: "PUBLIC_API_URL",
     service: "core",
     required: { when: { kind: "env-in", service: "core", name: "HARNESS", values: ["pi", "opencode", "codex"] } },
