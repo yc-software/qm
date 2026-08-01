@@ -21,7 +21,7 @@ test("policy controls use product language and persistent accessible labels", ()
     assert.match(policy, new RegExp(label));
   assert.match(policy, /<label class="ambient-field" for="ambient-orders">/);
   assert.match(policy, /aria-describedby="ambient-orders-hint"/);
-  assert.match(policy, /aria-label="Bot name"/);
+  assert.match(policy, /aria-label=\$\{t\("Bot name"\)\}/);
   assert.match(policy, /required/);
 });
 

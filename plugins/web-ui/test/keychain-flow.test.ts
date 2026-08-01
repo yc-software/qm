@@ -140,7 +140,7 @@ test("keychain overview wires managed connector grants into account controls", (
 
 test("destructive controls settle duplicate attempts while a mutation is busy", () => {
   assert.match(connectorsSource, /\?disabled=\$\{keychainOperations\.mutationInFlight\}/);
-  assert.match(connectorsSource, /connectorNotice = "Another keychain change is still in progress\."/);
+  assert.match(connectorsSource, /connectorNotice = t\("Another keychain change is still in progress\."\)/);
   assert.equal(connectorsSource.match(/const operation = beginKeychainMutation\(\)/g)?.length, 3);
   assert.equal(
     connectorsSource.match(/if \(keychainOperations\.finishMutation\(operation\)\) drawConnectors\(\)/g)?.length,
@@ -151,8 +151,8 @@ test("destructive controls settle duplicate attempts while a mutation is busy", 
 test("keychain rows reserve success badges for actionable states", () => {
   assert.doesNotMatch(connectorsSource, /Stored securely/);
   assert.doesNotMatch(connectorsSource, />Connected<\/span>/);
-  assert.match(connectorsSource, /expired \? html`<span class="kc-state warning">Expired<\/span>` : ""/);
-  assert.match(connectorsSource, /<span class="kc-state warning">Reconnect needed<\/span>/);
+  assert.match(connectorsSource, /expired \? html`<span class="kc-state warning">\$\{t\("Expired"\)\}<\/span>` : ""/);
+  assert.match(connectorsSource, /<span class="kc-state warning">\$\{t\("Reconnect needed"\)\}<\/span>/);
 });
 
 test("keychain actions keep secondary weight and compact mobile sizing", () => {

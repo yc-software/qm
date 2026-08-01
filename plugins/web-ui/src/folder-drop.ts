@@ -1,3 +1,5 @@
+import { currentLocale, t } from "./i18n.ts";
+
 export interface DropEntryLike {
   isFile: boolean;
   isDirectory: boolean;
@@ -74,14 +76,20 @@ async function collectFolder(root: DropEntryLike, caps: FolderCaps): Promise<{ p
       if (!entry.isFile || !entry.file || JUNK_FILES.has(entry.name)) continue;
       if (out.length >= caps.maxFiles) {
         throw new FolderDropError(
-          `"${root.name}" has too many files (over ${caps.maxFiles.toLocaleString()}) — zip it yourself or drop a subfolder.`,
+          t('"{name}" has too many files (over {count}) — zip it yourself or drop a subfolder.', {
+            name: root.name,
+            count: caps.maxFiles.toLocaleString(currentLocale()),
+          }),
         );
       }
       const file = await new Promise<File>((resolve, reject) => entry.file!(resolve, reject));
       bytes += file.size;
       if (bytes > caps.maxBytes) {
         throw new FolderDropError(
-          `"${root.name}" is too big (over ${Math.round(caps.maxBytes / (1024 * 1024))} MB) — zip it yourself or drop a subfolder.`,
+          t('"{name}" is too big (over {size} MB) — zip it yourself or drop a subfolder.', {
+            name: root.name,
+            size: Math.round(caps.maxBytes / (1024 * 1024)),
+          }),
         );
       }
       out.push({ path: `${prefix}${entry.name}`, file });
@@ -93,7 +101,7 @@ async function collectFolder(root: DropEntryLike, caps: FolderCaps): Promise<{ p
 
 export async function folderToZipFile(root: DropEntryLike, caps: FolderCaps = DEFAULT_CAPS): Promise<File> {
   const files = await collectFolder(root, caps);
-  if (!files.length) throw new FolderDropError(`"${root.name}" has no files in it.`);
+  if (!files.length) throw new FolderDropError(t('"{name}" has no files in it.', { name: root.name }));
   const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
   for (const { path, file } of files) zip.file(path, await file.arrayBuffer());

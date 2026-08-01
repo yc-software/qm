@@ -1,4 +1,5 @@
 import { sharedContextLabel, type CoreContext, type CoreProject, type CoreSession } from "./core-bridge.ts";
+import { t } from "./i18n.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
@@ -40,7 +41,7 @@ export function recentProjectSeeds(contexts: readonly ProjectAwareContext[]): Re
   return contexts.map((context): RecentProjectSeed => {
     if (context.project)
       return { scopeId: context.scopeId, name: context.project.name.trim() || null, kind: "project" };
-    if (context.kind === "personal") return { scopeId: context.scopeId, name: "Personal", kind: "personal" };
+    if (context.kind === "personal") return { scopeId: context.scopeId, name: t("Personal"), kind: "personal" };
     if (context.kind === "group")
       return { scopeId: context.scopeId, name: sharedContextLabel(context.scopeId, context.name), kind: "group" };
     return { scopeId: context.scopeId, name: sharedContextLabel(context.scopeId, context.name), kind: "channel" };
@@ -86,11 +87,11 @@ export function groupProjectSessions(
 export function recencyGroup(ms: number, now = Date.now()): string {
   const d = new Date(now);
   const dayStart = (back: number): number => new Date(d.getFullYear(), d.getMonth(), d.getDate() - back).getTime();
-  if (ms >= dayStart(0)) return "Today";
-  if (ms >= dayStart(1)) return "Yesterday";
-  if (ms >= dayStart(6)) return "Previous 7 days";
-  if (ms >= dayStart(29)) return "Previous 30 days";
-  return "Older";
+  if (ms >= dayStart(0)) return t("Today");
+  if (ms >= dayStart(1)) return t("Yesterday");
+  if (ms >= dayStart(6)) return t("Previous 7 days");
+  if (ms >= dayStart(29)) return t("Previous 30 days");
+  return t("Older");
 }
 
 export function withPendingSession(list: CoreSession[], pending: CoreSession): CoreSession[] {
@@ -154,8 +155,9 @@ export interface RowIndicators {
 
 export function backgroundLabel(jobs: number, watches: number): { count: number; label: string } | null {
   const parts: string[] = [];
-  if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
-  if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
+  if (jobs > 0)
+    parts.push(t(jobs === 1 ? "{count} background job running" : "{count} background jobs running", { count: jobs }));
+  if (watches > 0) parts.push(t(watches === 1 ? "{count} watch armed" : "{count} watches armed", { count: watches }));
   return parts.length ? { count: jobs + watches, label: parts.join(" · ") } : null;
 }
 

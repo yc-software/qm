@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBaseModel } from "./pi-models.ts";
+import { t } from "./i18n.ts";
 
 export type ModelOptionValue = string;
 export interface ModelOption {
@@ -164,13 +165,13 @@ export function transcriptModel(): Model<Api> {
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | "auto";
 
 export const EFFORT_LEVELS: Array<{ value: EffortLevel; label: string }> = [
-  { value: "auto", label: "Auto" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "XHigh" },
-  { value: "max", label: "Max" },
-  { value: "ultracode", label: "Ultracode" },
+  { value: "auto", label: t("Auto") },
+  { value: "low", label: t("Low") },
+  { value: "medium", label: t("Medium") },
+  { value: "high", label: t("High") },
+  { value: "xhigh", label: t("XHigh") },
+  { value: "max", label: t("Max") },
+  { value: "ultracode", label: t("Ultracode") },
 ];
 
 export function effortLabel(level: EffortLevel): string {

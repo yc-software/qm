@@ -5,6 +5,7 @@ import { swallow } from "../../chassis/src/errors.ts";
 import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
 import { defaultEffortForModel, harnessSupportsEffort } from "./model-options.ts";
+import { t } from "./i18n.ts";
 
 const BASE_URL = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
 
@@ -114,8 +115,8 @@ export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): 
 
 export function sharedContextLabel(scopeId: string | null, name: string | null): string | null {
   if (!scopeId) return null;
-  if (scopeId.startsWith("channel:")) return name ? `#${name.replace(/^#/, "")}` : "Shared channel";
-  if (scopeId.startsWith("group:")) return groupDmText(name) ?? name ?? "Group";
+  if (scopeId.startsWith("channel:")) return name ? `#${name.replace(/^#/, "")}` : t("Shared channel");
+  if (scopeId.startsWith("group:")) return groupDmText(name) ?? name ?? t("Group");
   return null;
 }
 
@@ -439,7 +440,7 @@ export function hasLiveRun(): boolean {
 
 export async function signalLiveRun(kind: "abort" | "steer", text?: string): Promise<void> {
   const run = liveRun;
-  if (!run) throw new Error("No active run to signal.");
+  if (!run) throw new Error(t("No active run to signal."));
   await api(runPath(run.runId, "/signal"), {
     method: "POST",
     body: JSON.stringify({ kind, ...(text !== undefined ? { text } : {}) }),
@@ -494,7 +495,7 @@ export async function runApprovalTurn(
   const stream = createAssistantMessageEventStream();
   await drive(stream, agent.state.model, threadRef, agent, getTurnOptions, signal, onWork, decision);
   const outcome = await stream.result();
-  if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
+  if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || t("Could not send the approval."));
 }
 
 export function makeOpenerStreamFn(
@@ -741,7 +742,7 @@ function applyRun(
     return "terminal";
   }
   if (!paused && !quiet && (run.status === "failed" || (res && res.status !== "ok"))) {
-    fail(stream, partial, res?.reason ?? "The agent run failed.");
+    fail(stream, partial, res?.reason ?? t("The agent run failed."));
     return "terminal";
   }
   finish(stream, partial, st, st.acc);
@@ -767,7 +768,7 @@ export async function pollRun(
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) return fail(stream, partial, e.message);
       consecutiveFailures++;
       if (now() - st.lastProgressAt > RUN_IDLE_MS)
-        return fail(stream, partial, "Timed out waiting for the agent to respond.");
+        return fail(stream, partial, t("Timed out waiting for the agent to respond."));
       await sleep(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), POLL_RETRY_MAX_MS));
       continue;
     }
@@ -777,7 +778,7 @@ export async function pollRun(
     if (run.alive === true || (st.staleSince !== undefined && now() - st.staleSince < STALE_GRACE_MS))
       st.lastProgressAt = now();
     if (now() - st.lastProgressAt > RUN_IDLE_MS)
-      return fail(stream, partial, "Timed out waiting for the agent to respond.");
+      return fail(stream, partial, t("Timed out waiting for the agent to respond."));
     await sleep(POLL_MS);
   }
 }
@@ -980,8 +981,8 @@ function deliveredFilesFromAttachments(
 function approvalDeniedMessage(reason?: string): string | null {
   const trimmed = reason?.trim();
   if (!trimmed) return null;
-  if (trimmed === "approval denied") return "Denied.";
-  return trimmed.startsWith("approval denied for ") ? "Denied." : null;
+  if (trimmed === "approval denied") return t("Denied.");
+  return trimmed.startsWith("approval denied for ") ? t("Denied.") : null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1152,7 +1153,7 @@ export function entriesToMessages(entries: SessionEntry[], model: Model<Api>): A
           msg.attachments = atts.map((a, i) => ({
             id: a.artifactId ?? `${e.seq ?? e.createdAt}:${i}`,
             type: a.mimetype?.startsWith("image/") ? "image" : "document",
-            fileName: a.name ?? "file",
+            fileName: a.name ?? t("file"),
             mimeType: a.mimetype ?? "application/octet-stream",
             ...(typeof a.sizeBytes === "number" ? { size: a.sizeBytes } : {}),
             ...(a.artifactId ? { artifactId: a.artifactId } : {}),

@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
+import { t } from "./i18n.ts";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export type BotMode = (typeof BOT_MODES)[number];
@@ -74,7 +75,7 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
     ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
   } catch (e) {
     if (seq !== loadSeq) return;
-    ambientPolicyState.notice = errMessage(e, "Couldn't load this scope's standing orders.");
+    ambientPolicyState.notice = errMessage(e, t("Couldn't load this scope's standing orders."));
     ambientPolicyState.noticeKind = "error";
   } finally {
     if (seq === loadSeq) {
@@ -121,10 +122,10 @@ async function save(): Promise<void> {
     }));
     ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
     ambientPolicyState.dirty = false;
-    ambientPolicyState.notice = "Saved.";
+    ambientPolicyState.notice = t("Saved.");
     ambientPolicyState.noticeKind = "saved";
   } catch (e) {
-    ambientPolicyState.notice = errMessage(e, "Couldn't save — try again.");
+    ambientPolicyState.notice = errMessage(e, t("Couldn't save — try again."));
     ambientPolicyState.noticeKind = "error";
   } finally {
     ambientPolicyState.saving = false;
@@ -136,7 +137,7 @@ function addBot(): void {
   const name = ambientPolicyState.newBotName.trim();
   if (!name) return;
   if (ambientPolicyState.bots.some((b) => b.name.toLowerCase() === name.toLowerCase())) {
-    ambientPolicyState.notice = `“${name}” is already in the ledger.`;
+    ambientPolicyState.notice = t("“{name}” is already in the ledger.", { name });
     ambientPolicyState.noticeKind = "error";
     redraw();
     return;
@@ -147,10 +148,10 @@ function addBot(): void {
 }
 
 const BOT_MODE_LABELS: Record<BotMode, string> = {
-  ignore: "Ignore",
-  rollup: "Batch updates",
-  action: "Act immediately",
-  user: "Treat like a person",
+  ignore: t("Ignore"),
+  rollup: t("Batch updates"),
+  action: t("Act immediately"),
+  user: t("Treat like a person"),
 };
 
 function botRow(b: BotPolicyView, i: number): TemplateResult {
@@ -159,7 +160,7 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
       <span class="ambient-bot-name">${b.name}</span>
       <select
         class="ambient-bot-mode"
-        aria-label=${`Handling for ${b.name}`}
+        aria-label=${t("Handling for {name}", { name: b.name })}
         ?disabled=${ambientPolicyState.saving}
         @change=${(e: Event) => {
           const mode = (e.currentTarget as HTMLSelectElement).value as BotMode;
@@ -172,13 +173,13 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
       ${
         b.mode === "rollup"
           ? html`<label class="ambient-bot-hours"
-              >every
+              >${t("every")}
               <input
                 type="number"
                 min="1"
                 step="1"
                 data-focus-key=${`ambient-hours-${i}`}
-                aria-label=${`Batch interval for ${b.name} in hours`}
+                aria-label=${t("Batch interval for {name} in hours", { name: b.name })}
                 .value=${String(b.rollupHours ?? 24)}
                 ?disabled=${ambientPolicyState.saving}
                 @input=${(e: InputEvent) => {
@@ -189,15 +190,15 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
                   markDirty();
                 }}
               />
-              h</label
+              ${t("h")}</label
             >`
           : nothing
       }
       <button
         class="project-icon-button danger"
         type="button"
-        aria-label=${`Remove ${b.name} from the ledger`}
-        title="Remove"
+        aria-label=${t("Remove {name} from the ledger", { name: b.name })}
+        title=${t("Remove")}
         ?disabled=${ambientPolicyState.saving}
         @click=${() => {
           ambientPolicyState.bots = ambientPolicyState.bots.filter((_, j) => j !== i);
@@ -215,22 +216,21 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
   if (ambientPolicyState.scope !== scopeId) return nothing;
   if (ambientPolicyState.loading)
     return html`<section class="context-panel ambient-policy" aria-labelledby="ambient-policy-title">
-      <h2 class="context-panel-title" id="ambient-policy-title">Agent behavior</h2>
-      <div class="context-panel-loading">Loading…</div>
+      <h2 class="context-panel-title" id="ambient-policy-title">${t("Agent behavior")}</h2>
+      <div class="context-panel-loading">${t("Loading…")}</div>
     </section>`;
   return html`
     <section class="context-panel ambient-policy" aria-labelledby="ambient-policy-title">
       <div class="context-panel-heading">
         <div>
-          <h2 class="context-panel-title" id="ambient-policy-title">Agent behavior</h2>
-          <p class="context-panel-copy">Choose what this project should notice and act on.</p>
+          <h2 class="context-panel-title" id="ambient-policy-title">${t("Agent behavior")}</h2>
+          <p class="context-panel-copy">${t("Choose what this project should notice and act on.")}</p>
         </div>
       </div>
       <label class="ambient-field" for="ambient-enabled">
-        <span class="ambient-field-label">Ambient behavior</span>
+        <span class="ambient-field-label">${t("Ambient behavior")}</span>
         <span class="ambient-policy-hint"
-          >When off, the agent never acts on overheard messages here — it only responds to direct @mentions. Default: on
-          only when standing orders (or an action-mode bot) are set below — otherwise mention-only.</span
+          >${t("When off, the agent never acts on overheard messages here — it only responds to direct @mentions. Default: on only when standing orders (or an action-mode bot) are set below — otherwise mention-only.")}</span
         >
       </label>
       <select
@@ -245,15 +245,15 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
         }}
       >
         <option value="default" ?selected=${ambientPolicyState.ambientEnabled === null}>
-          Default (on when standing orders are set)
+          ${t("Default (on when standing orders are set)")}
         </option>
-        <option value="on" ?selected=${ambientPolicyState.ambientEnabled === true}>On</option>
-        <option value="off" ?selected=${ambientPolicyState.ambientEnabled === false}>Off</option>
+        <option value="on" ?selected=${ambientPolicyState.ambientEnabled === true}>${t("On")}</option>
+        <option value="off" ?selected=${ambientPolicyState.ambientEnabled === false}>${t("Off")}</option>
       </select>
       <label class="ambient-field" for="ambient-orders">
-        <span class="ambient-field-label">Standing orders</span>
+        <span class="ambient-field-label">${t("Standing orders")}</span>
         <span class="ambient-policy-hint" id="ambient-orders-hint"
-          >Plain-language guidance for proactive work. Leave empty to respond only when addressed.</span
+          >${t("Plain-language guidance for proactive work. Leave empty to respond only when addressed.")}</span
         >
       </label>
       <textarea
@@ -262,7 +262,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
         class="ambient-orders"
         rows="4"
         aria-describedby="ambient-orders-hint"
-        placeholder="For example: Flag anything that could delay the launch."
+        placeholder=${t("For example: Flag anything that could delay the launch.")}
         .value=${ambientPolicyState.orders}
         ?disabled=${ambientPolicyState.saving}
         @input=${(e: InputEvent) => {
@@ -271,10 +271,10 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
         }}
       ></textarea>
       <div class="ambient-field-heading">
-        <h3>Automated posters</h3>
-        <p class="ambient-policy-hint">Control how messages from bots and integrations wake the agent.</p>
+        <h3>${t("Automated posters")}</h3>
+        <p class="ambient-policy-hint">${t("Control how messages from bots and integrations wake the agent.")}</p>
       </div>
-      ${ambientPolicyState.bots.length ? html`<div class="ambient-bot-list">${ambientPolicyState.bots.map((b, i) => botRow(b, i))}</div>` : html`<div class="empty compact">No bots added. All bot posts are treated as activity.</div>`}
+      ${ambientPolicyState.bots.length ? html`<div class="ambient-bot-list">${ambientPolicyState.bots.map((b, i) => botRow(b, i))}</div>` : html`<div class="empty compact">${t("No bots added. All bot posts are treated as activity.")}</div>`}
       <form
         class="ambient-bot-add"
         @submit=${(e: SubmitEvent) => {
@@ -286,9 +286,9 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           data-focus-key="ambient-bot-name"
           type="text"
           maxlength="120"
-          aria-label="Bot name"
+          aria-label=${t("Bot name")}
           required
-          placeholder="Bot name"
+          placeholder=${t("Bot name")}
           .value=${ambientPolicyState.newBotName}
           ?disabled=${ambientPolicyState.saving}
           @input=${(e: InputEvent) => {
@@ -296,7 +296,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
             redraw();
           }}
         />
-        <button class="btn" type="submit" ?disabled=${ambientPolicyState.saving}>Add bot</button>
+        <button class="btn" type="submit" ?disabled=${ambientPolicyState.saving}>${t("Add bot")}</button>
       </form>
       <div class="ambient-policy-actions">
         <button
@@ -305,7 +305,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           ?disabled=${!ambientPolicyState.dirty || ambientPolicyState.saving}
           @click=${() => void save()}
         >
-          ${ambientPolicyState.saving ? "Saving…" : "Save"}
+          ${t(ambientPolicyState.saving ? "Saving…" : "Save")}
         </button>
         ${
           ambientPolicyState.notice

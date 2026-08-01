@@ -1,3 +1,5 @@
+import { t } from "./i18n.ts";
+
 export function bytesToBase64(bytes: Uint8Array): string {
   const parts: string[] = [];
   const chunkSize = 0x8000;
@@ -28,7 +30,7 @@ export function pasteChipLabel(charCount: number): string {
   let count = `${Math.round(k)}k`;
   if (charCount < 1000) count = `${charCount}`;
   else if (k < 9.95) count = `${k.toFixed(1)}k`;
-  return `Pasted text · ${count} chars`;
+  return t("Pasted text · {count} chars", { count });
 }
 
 export function insertIntoDraft(draft: string, text: string, cursor: number | null): { draft: string; cursor: number } {

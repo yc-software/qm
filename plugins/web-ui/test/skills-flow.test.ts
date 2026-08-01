@@ -23,7 +23,7 @@ test("focused create/edit flows leave list search and filters untouched on open 
 });
 
 test("closing a focused flow clears an unfinished edit loading notice", () => {
-  assert.match(bodyOf("startEdit"), /skillsNotice = "Loading skill instructions…"/);
+  assert.match(bodyOf("startEdit"), /skillsNotice = t\("Loading skill instructions…"\)/);
   assert.match(bodyOf("closeFocusedFlow"), /skillsNotice = ""/);
 });
 
