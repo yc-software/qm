@@ -305,15 +305,41 @@ test("addressed + no post → exactly one nudge → the agent posts on the conti
   }
 });
 
-test("addressed + STILL no post after the nudge → the final worklog text is delivered as the fallback", async () => {
+test("addressed + no post but a final text reply → the reply is delivered directly, no nudge", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!shed", "C-shed", "710.1"));
+    const direct = await pollFor(built.deliveries, (d) => d.text === "worklog: did the thing but never posted");
+    assert.ok(direct, "the final text reply was delivered directly");
+    assert.equal(direct.destination.target, "slack:C-shed:710.1", "delivered to the addressed conversation");
+    const session = await built.sessions.getByThread("ch:C-shed:710.1");
+    const requests = await built.sessions.listLlmRequests(session!.id);
+    assert.ok(
+      !requests.some((r) => JSON.stringify(r.request).includes("[system] You were addressed directly")),
+      "no nudge model call — the existing reply text is delivered as-is",
+    );
+    await sleep(300);
+    const all = (await built.deliveries.pending("slack")) as any[];
+    assert.equal(
+      all.filter((d) => d.text === "worklog: did the thing but never posted").length,
+      1,
+      "the reply delivers once",
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("addressed + STILL no post after the nudge → the nudge turn's text is delivered as the fallback", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    await built.app.turn(mention("!shedmute", "C-shedmute", "710.3"));
     const fallback = await pollFor(built.deliveries, (d) => d.text === "worklog: did the thing but never posted");
     assert.ok(fallback, "the shed reply was delivered as the fallback");
-    assert.equal(fallback.destination.target, "slack:C-shed:710.1", "delivered to the addressed conversation");
-    const session = await built.sessions.getByThread("ch:C-shed:710.1");
+    assert.equal(fallback.destination.target, "slack:C-shedmute:710.3", "delivered to the addressed conversation");
+    const session = await built.sessions.getByThread("ch:C-shedmute:710.3");
     const nudgeRequest = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.request as {
       messages?: Array<{ role?: string; content?: string }>;
     };
@@ -343,7 +369,7 @@ test("reply-or-decline nudge preserves the trigger image and environment", async
     const image = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const { blobId } = await built.blobTransfer.put(image);
     await built.app.turn({
-      ...mention("!shed", "C-nudge-image", "710.2"),
+      ...mention("!shedmute", "C-nudge-image", "710.2"),
       conversationHeader: "QA-IMAGE-ENVIRONMENT",
       attachments: [{ name: "qa.png", mimetype: "image/png", sizeBytes: image.length, blobId }],
     });
@@ -384,7 +410,7 @@ test("nudge tape reread failure falls back to refreshed history, never the stale
       return originalGetTape(sessionId);
     };
 
-    await built.app.turn(mention("!shed", "C-nudge-read", "711.1"));
+    await built.app.turn(mention("!shedmute", "C-nudge-read", "711.1"));
     assert.ok(await pollFor(built.deliveries, (d) => d.text === "worklog: did the thing but never posted"));
     const session = await built.sessions.getByThread("ch:C-nudge-read:711.1");
     const nudgeRequest = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.request as {
@@ -410,8 +436,8 @@ test("addressed spine turn: the first text block posts immediately as the ack wh
     const ack = await pollFor(built.deliveries, (d) => d.text === "On it — checking the deploy logs.");
     assert.ok(ack, "the first block was harvested and enqueued while the tool ran");
     assert.equal(ack.destination.target, "slack:C-ack:720.1", "the ack lands in the addressed conversation");
-    const posted = await pollFor(built.deliveries, (d) => d.text === "nudged reply");
-    assert.ok(posted, "the ack did not satisfy the reply contract");
+    const posted = await pollFor(built.deliveries, (d) => d.text === "All clear — nothing broke.");
+    assert.ok(posted, "the trailing reply text is delivered (the ack alone did not satisfy the reply contract)");
   } finally {
     await built.runtime.stop();
   }

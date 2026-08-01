@@ -132,6 +132,7 @@ export function createMockHarness(): Harness {
         });
 
         let reply: string;
+        let muteReply = false;
         let usedTool = false;
         let silent = false;
         const collected: Array<{
@@ -189,6 +190,10 @@ export function createMockHarness(): Harness {
             usedTool = true;
             reply = r.ok ? "(posted after nudge)" : `[not sent] ${r.message ?? "failed"}`;
           }
+        } else if (command0.startsWith("!shedmute")) {
+          shedSessions.add(turn.session.id);
+          reply = "worklog: did the thing but never posted";
+          muteReply = true;
         } else if (command0.startsWith("!shed")) {
           shedSessions.add(turn.session.id);
           reply = "worklog: did the thing but never posted";
@@ -653,6 +658,7 @@ export function createMockHarness(): Harness {
               modelCalls,
             }
           : { reply, modelCalls };
+        if (muteReply) base.reply = "";
         return { ...base, ...(silent ? { silent: true as const } : {}), cacheUsage };
       },
 

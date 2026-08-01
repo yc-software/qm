@@ -2300,79 +2300,101 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !result.silent
         ) {
           const firstTapeWriteFailed = !!result.tapeWriteFailed;
-          const nudgeHistory = filterHistory(
-            forModelContext(await deps.sessions.getEntries(session.id), { includeSecurityTainted: false }),
-          );
-          const nudgeTape = tapeRows
-            ? await deps.sessions
-                .getTape(session.id)
-                .then(async (allRows) => {
-                  const rows = filterTapeForAudience(allRows, conversation.audience, scopeId, resolution.orgScopeId);
-                  const sameHarness = rows.every(
-                    (row) => row.kind !== "message" || row.harness === undefined || row.harness === "pi",
-                  );
-                  const eventsEntitled = tapeEventsEntitled(
-                    rows,
-                    conversation.audience,
-                    scopeId,
-                    resolution.orgScopeId,
-                  );
-                  const primarySubturnComplete =
-                    primarySubturnEndSeq !== undefined &&
-                    rows.some(
-                      (row) =>
-                        row.kind === "annotation" &&
-                        row.entrySeq === primarySubturnEndSeq &&
-                        (row.payload as { subturnEnd?: unknown } | null)?.subturnEnd === true,
+          // The model already wrote a reply as plain assistant text — deliver that text
+          // directly instead of nudging it to re-post (a nudge here re-sends near-identical
+          // text, which surfaces that render assistant entries show twice).
+          const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
+          if (primaryReply && defaultDestination && deps.deliveries) {
+            try {
+              const directKey = `post:${session.id}:${randomUUID()}`;
+              await reachEnqueue({
+                deliveries: deps.deliveries,
+                destination: defaultDestination,
+                text: primaryReply,
+                idempotencyKey: directKey,
+                provenance: postProvenance(directKey),
+              });
+              spine.surfaceOutboundCount += 1;
+              if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+            } catch (e) {
+              console.error(`[orchestrator] direct reply delivery failed session=${session.id}:`, errMessage(e));
+            }
+          }
+          if (spine.surfaceOutboundCount === 0) {
+            const nudgeHistory = filterHistory(
+              forModelContext(await deps.sessions.getEntries(session.id), { includeSecurityTainted: false }),
+            );
+            const nudgeTape = tapeRows
+              ? await deps.sessions
+                  .getTape(session.id)
+                  .then(async (allRows) => {
+                    const rows = filterTapeForAudience(allRows, conversation.audience, scopeId, resolution.orgScopeId);
+                    const sameHarness = rows.every(
+                      (row) => row.kind !== "message" || row.harness === undefined || row.harness === "pi",
                     );
-                  if (
-                    primaryServedTape &&
-                    !firstTapeWriteFailed &&
-                    sameHarness &&
-                    eventsEntitled &&
-                    primarySubturnComplete
-                  ) {
-                    const fold = await rehydrateTape(foldTape(rows));
-                    if (fold.length && lintFold(fold).ok) return { rows, mode: "serve" as const, fold };
-                  }
-                  return { rows, mode: "shadow" as const };
-                })
-                .catch((e) => {
-                  swallow("tape: nudge read", e);
-                  return undefined;
-                })
-            : undefined;
-          result = await runHarnessTurn(
-            "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with stay_silent — ending the turn without either is not allowed here.",
-            {
-              ...(turnEnvironment ? { environment: turnEnvironment } : {}),
-              ...(nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {}),
-            },
-            { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
-          );
-          if (firstTapeWriteFailed || result.tapeWriteFailed) result = { ...result, tapeWriteFailed: true };
-          if (spine.surfaceOutboundCount === 0 && spine.staySilentReason === undefined && !result.silent) {
-            const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-            if (fallback && defaultDestination && deps.deliveries) {
-              try {
-                const fallbackKey = `post:${session.id}:${randomUUID()}`;
-                await reachEnqueue({
-                  deliveries: deps.deliveries,
-                  destination: defaultDestination,
-                  text: fallback,
-                  idempotencyKey: fallbackKey,
-                  provenance: postProvenance(fallbackKey),
-                });
-                spine.surfaceOutboundCount += 1;
-                if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
-              } catch (e) {
-                console.error(
-                  `[orchestrator] shed-reply fallback delivery failed session=${session.id}:`,
-                  errMessage(e),
-                );
+                    const eventsEntitled = tapeEventsEntitled(
+                      rows,
+                      conversation.audience,
+                      scopeId,
+                      resolution.orgScopeId,
+                    );
+                    const primarySubturnComplete =
+                      primarySubturnEndSeq !== undefined &&
+                      rows.some(
+                        (row) =>
+                          row.kind === "annotation" &&
+                          row.entrySeq === primarySubturnEndSeq &&
+                          (row.payload as { subturnEnd?: unknown } | null)?.subturnEnd === true,
+                      );
+                    if (
+                      primaryServedTape &&
+                      !firstTapeWriteFailed &&
+                      sameHarness &&
+                      eventsEntitled &&
+                      primarySubturnComplete
+                    ) {
+                      const fold = await rehydrateTape(foldTape(rows));
+                      if (fold.length && lintFold(fold).ok) return { rows, mode: "serve" as const, fold };
+                    }
+                    return { rows, mode: "shadow" as const };
+                  })
+                  .catch((e) => {
+                    swallow("tape: nudge read", e);
+                    return undefined;
+                  })
+              : undefined;
+            result = await runHarnessTurn(
+              "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with stay_silent — ending the turn without either is not allowed here.",
+              {
+                ...(turnEnvironment ? { environment: turnEnvironment } : {}),
+                ...(nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {}),
+              },
+              { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
+            );
+            if (firstTapeWriteFailed || result.tapeWriteFailed) result = { ...result, tapeWriteFailed: true };
+            if (spine.surfaceOutboundCount === 0 && spine.staySilentReason === undefined && !result.silent) {
+              const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
+              if (fallback && defaultDestination && deps.deliveries) {
+                try {
+                  const fallbackKey = `post:${session.id}:${randomUUID()}`;
+                  await reachEnqueue({
+                    deliveries: deps.deliveries,
+                    destination: defaultDestination,
+                    text: fallback,
+                    idempotencyKey: fallbackKey,
+                    provenance: postProvenance(fallbackKey),
+                  });
+                  spine.surfaceOutboundCount += 1;
+                  if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+                } catch (e) {
+                  console.error(
+                    `[orchestrator] shed-reply fallback delivery failed session=${session.id}:`,
+                    errMessage(e),
+                  );
+                }
+              } else {
+                console.error(`[orchestrator] addressed turn ended silent after nudge session=${session.id}`);
               }
-            } else {
-              console.error(`[orchestrator] addressed turn ended silent after nudge session=${session.id}`);
             }
           }
         }
