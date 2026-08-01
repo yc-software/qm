@@ -38,9 +38,10 @@ import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { mimeFromName } from "../core/attachments.ts";
+import { MAX_SHARED_ARTIFACT_BYTES, mimeFromName } from "../core/attachments.ts";
 import { swallow } from "../util/errors.ts";
-import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
+import { fileArtifactId, isArtifactPath, type FileArtifactStore } from "../files/file-artifact-store.ts";
+import { collectBytes } from "../util/bytes.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
@@ -544,8 +545,18 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           };
         }
         const granted = matches[0]!;
-        const bytes = await deps.workspace.readBytes(granted.ownerScopeId, granted.ownerPath);
-        if (bytes === null) return { content: null, sourceScopeId: granted.ownerScopeId };
+        const shared = await readGrantedBytes(deps, granted);
+        if (shared.kind === "too_large") {
+          const size = shared.sizeBytes === null ? "" : ` (${shared.sizeBytes} bytes)`;
+          return {
+            content:
+              `[${granted.handlePath}${size} exceeds the ${MAX_SHARED_ARTIFACT_BYTES}-byte limit for shared files — ` +
+              `ask the owner for a smaller excerpt]`,
+            sourceScopeId: granted.ownerScopeId,
+          };
+        }
+        if (shared.kind === "missing") return { content: null, sourceScopeId: granted.ownerScopeId };
+        const bytes = shared.bytes;
         const asText = tryDecodeUtf8(bytes);
         if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId };
         const handle = await deps.provision();
@@ -972,6 +983,34 @@ function audienceFromGrantees(
     ...(origin.kind === "channel" ? { channelRef: origin.ref } : {}),
     memberCount: granteeScopeIds.length,
   };
+}
+
+type GrantedBytes =
+  { kind: "bytes"; bytes: Uint8Array } | { kind: "too_large"; sizeBytes: number | null } | { kind: "missing" };
+
+async function readGrantedBytes(
+  deps: { workspace: WorkspaceStore; files?: FileArtifactStore },
+  granted: GrantedHandle,
+): Promise<GrantedBytes> {
+  const fromWorkspace = await deps.workspace.readBytes(granted.ownerScopeId, granted.ownerPath);
+  if (fromWorkspace !== null) return { kind: "bytes", bytes: fromWorkspace };
+  if (!deps.files || !isArtifactPath(granted.ownerPath)) return { kind: "missing" };
+  const rows = await deps.files.resolveByOwnerPaths([{ ownerScopeId: granted.ownerScopeId, path: granted.ownerPath }]);
+  const artifact = rows.find((r) => r.ownerScopeId === granted.ownerScopeId && r.path === granted.ownerPath);
+  if (!artifact) return { kind: "missing" };
+  const opened = await deps.files.open(artifact.id);
+  if (!opened) return { kind: "missing" };
+  if (opened.sizeBytes > MAX_SHARED_ARTIFACT_BYTES) {
+    opened.stream.destroy();
+    return { kind: "too_large", sizeBytes: opened.sizeBytes };
+  }
+  try {
+    const { data } = await collectBytes(opened.stream, { maxBytes: MAX_SHARED_ARTIFACT_BYTES });
+    return { kind: "bytes", bytes: data };
+  } catch {
+    opened.stream.destroy();
+    return { kind: "too_large", sizeBytes: null };
+  }
 }
 
 function tryDecodeUtf8(bytes: Uint8Array): string | null {

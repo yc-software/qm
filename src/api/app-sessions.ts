@@ -1,7 +1,7 @@
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { fileArtifactId } from "../files/file-artifact-store.ts";
+import { artifactPath, fileArtifactId } from "../files/file-artifact-store.ts";
 import { transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
@@ -101,7 +101,7 @@ export function createSessionMethods(
       const name = safeAttachmentName(input.name);
       const mimetype = (input.mimetype ?? mimeFromName(name)).split(";")[0]!.trim().toLowerCase() || mimeFromName(name);
       const id = fileArtifactId(`upload:${principalId}:${createdInScope}:${Date.now()}:${randomUUID()}`, "in", 0);
-      const path = `artifacts/${id}/${name}`;
+      const path = artifactPath(id, name);
       const { artifact } = await deps.files.put({
         id,
         ownerScopeId,

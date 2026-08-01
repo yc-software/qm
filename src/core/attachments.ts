@@ -10,7 +10,12 @@ import type {
 } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { MAX_BLOB_BYTES, collectBlob, type BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
+import {
+  artifactPath,
+  fileArtifactId,
+  type FileArtifactStore,
+  type FileDirection,
+} from "../files/file-artifact-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
@@ -34,6 +39,8 @@ export const MAX_VISION_IMAGE_BYTES = 5_000_000;
 export const MAX_LLM_REQUEST_BYTES = 18_000_000;
 
 export const MAX_HISTORY_IMAGE_BYTES = 10_000_000;
+
+export const MAX_SHARED_ARTIFACT_BYTES = 10_000_000;
 
 export interface InboundImage {
   name: string;
@@ -131,7 +138,7 @@ async function registerArtifact(
 > {
   try {
     const id = fileArtifactId(reg.seed, direction, batchIndex);
-    const path = `artifacts/${id}/${name}`;
+    const path = artifactPath(id, name);
     const { created } = await reg.store.put({
       id,
       ownerScopeId: reg.ownerScopeId,

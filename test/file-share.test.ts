@@ -4,12 +4,19 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createToolContext } from "../src/tools/primitives.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
+import { createLocalWorkspaceStore, type WorkspaceStore } from "../src/workspace/workspace-store.ts";
+import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
+import { createAuditLog, type AuditLog } from "../src/audit/audit-log.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
-import { scopeId, type Principal, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId, type GrantedHandle, type Principal, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import {
+  createMemoryFileArtifactStore,
+  fileArtifactId,
+  type FileArtifactStore,
+} from "../src/files/file-artifact-store.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
+import { MAX_SHARED_ARTIFACT_BYTES } from "../src/core/attachments.ts";
 
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,
@@ -22,6 +29,29 @@ const ws = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fshare-")
 const sameBytes = (a: Uint8Array | null | undefined, b: Uint8Array) => assert.deepEqual([...(a ?? [])], [...b]);
 
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0xff]);
+
+const artifactStore = (): FileArtifactStore => createMemoryFileArtifactStore(createMemoryDurableByteStore());
+
+async function uploadArtifact(
+  files: FileArtifactStore,
+  owner: ScopeId,
+  name: string,
+  data: Uint8Array,
+): Promise<string> {
+  const id = fileArtifactId(`upload:${owner}:${name}`, "in", 0);
+  const path = `artifacts/${id}/${name}`;
+  await files.put({
+    id,
+    ownerScopeId: owner,
+    createdBy: owner.split(":")[1] ?? owner,
+    name,
+    path,
+    mimetype: "application/octet-stream",
+    data,
+    direction: "in",
+  });
+  return path;
+}
 
 function memSandbox(seed: Record<string, Uint8Array> = {}): { sandbox: Sandbox; files: Map<string, Uint8Array> } {
   const files = new Map<string, Uint8Array>(Object.entries(seed));
@@ -45,12 +75,13 @@ function memSandbox(seed: Record<string, Uint8Array> = {}): { sandbox: Sandbox; 
 
 function toolCtx(opts: {
   scope: string;
-  workspace: ReturnType<typeof createLocalWorkspaceStore>;
+  workspace: WorkspaceStore;
   sandbox: Sandbox;
-  acl: ReturnType<typeof createAclStore>;
-  auditLog?: ReturnType<typeof createAuditLog>;
+  acl: AclStore;
+  auditLog?: AuditLog;
   layers?: WorkspaceLayer[];
-  grantedHandles?: Awaited<ReturnType<ReturnType<typeof createAclStore>["handlesFor"]>>;
+  grantedHandles?: GrantedHandle[];
+  files?: FileArtifactStore;
   sharedMaterializeDir?: string;
   createdBy?: string;
 }) {
@@ -65,6 +96,7 @@ function toolCtx(opts: {
     workspace: opts.workspace,
     deploy: {} as never,
     acl: opts.acl,
+    ...(opts.files ? { files: opts.files } : {}),
     ...(opts.auditLog ? { auditLog: opts.auditLog } : {}),
     createdBy: opts.createdBy ?? opts.scope.split(":")[1] ?? opts.scope,
   });
@@ -297,4 +329,158 @@ test("write without data or share is rejected; sharing a missing file / from a r
       }).write("x.png", undefined, [{ scope: "org" }]),
     /writable scope/,
   );
+});
+
+test("an uploaded file the grantee never had on disk still reads through its shared handle", async () => {
+  const workspace = ws();
+  const acl = createAclStore();
+  const files = artifactStore();
+  const owner = scopeId("personal", "U1");
+  const channel = scopeId("channel", "C1");
+
+  const ref = await uploadArtifact(files, owner, "brief.md", new TextEncoder().encode("the brief"));
+  await acl.grant({ ownerScopeId: owner, ref, granteeScopeId: channel, permission: "read", grantedBy: "U1" });
+
+  const got = await toolCtx({
+    scope: channel,
+    workspace,
+    sandbox: memSandbox().sandbox,
+    acl,
+    files,
+    grantedHandles: await acl.handlesFor([channel]),
+  }).read("shared/brief.md");
+
+  assert.equal(got.content, "the brief");
+  assert.equal(got.sourceScopeId, owner);
+});
+
+test("a binary upload materializes into the sandbox like any other shared binary", async () => {
+  const workspace = ws();
+  const acl = createAclStore();
+  const files = artifactStore();
+  const owner = scopeId("personal", "U1");
+  const channel = scopeId("channel", "C1");
+
+  const ref = await uploadArtifact(files, owner, "orange.jpg", JPEG);
+  await acl.grant({ ownerScopeId: owner, ref, granteeScopeId: channel, permission: "read", grantedBy: "U1" });
+
+  const box = memSandbox();
+  const got = await toolCtx({
+    scope: channel,
+    workspace,
+    sandbox: box.sandbox,
+    acl,
+    files,
+    grantedHandles: await acl.handlesFor([channel]),
+    sharedMaterializeDir: "shared/turn-1",
+  }).read("shared/orange.jpg");
+
+  assert.match(got.content ?? "", /shared\/turn-1\/orange\.jpg/);
+  sameBytes(box.files.get("shared/turn-1/orange.jpg"), JPEG);
+});
+
+test("an oversize upload reports its size rather than reading as a missing file", async () => {
+  const workspace = ws();
+  const acl = createAclStore();
+  const files = artifactStore();
+  const owner = scopeId("personal", "U1");
+  const channel = scopeId("channel", "C1");
+
+  const big = new Uint8Array(MAX_SHARED_ARTIFACT_BYTES + 1);
+  const ref = await uploadArtifact(files, owner, "dump.bin", big);
+  await acl.grant({ ownerScopeId: owner, ref, granteeScopeId: channel, permission: "read", grantedBy: "U1" });
+
+  const box = memSandbox();
+  const got = await toolCtx({
+    scope: channel,
+    workspace,
+    sandbox: box.sandbox,
+    acl,
+    files,
+    grantedHandles: await acl.handlesFor([channel]),
+  }).read("shared/dump.bin");
+
+  assert.match(got.content ?? "", new RegExp(`${big.length} bytes`));
+  assert.match(got.content ?? "", /exceeds the .* limit/);
+  assert.equal(got.sourceScopeId, owner);
+  assert.equal(box.files.size, 0);
+});
+
+test("a workspace-backed share never falls back to the artifact store's snapshot of it", async () => {
+  const workspace = ws();
+  const acl = createAclStore();
+  const files = artifactStore();
+  const owner = scopeId("personal", "U1");
+  const channel = scopeId("channel", "C1");
+
+  await files.put({
+    id: fileArtifactId(`${owner}:notes.md`, "out", 0),
+    ownerScopeId: owner,
+    createdBy: "U1",
+    name: "notes.md",
+    path: "notes.md",
+    mimetype: "text/markdown",
+    data: new TextEncoder().encode("stale snapshot"),
+    direction: "out",
+  });
+  await acl.grant({
+    ownerScopeId: owner,
+    ref: "notes.md",
+    granteeScopeId: channel,
+    permission: "read",
+    grantedBy: "U1",
+  });
+
+  const read = () =>
+    toolCtx({
+      scope: channel,
+      workspace,
+      sandbox: memSandbox().sandbox,
+      acl,
+      files,
+      grantedHandles: [
+        { handlePath: "shared/notes.md", ownerScopeId: owner, ownerPath: "notes.md", permission: "read" },
+      ],
+    }).read("shared/notes.md");
+
+  assert.equal((await read()).content, null, "no workspace copy means missing, never the snapshot");
+
+  await workspace.write(owner, "notes.md", new TextEncoder().encode("live"));
+  assert.equal((await read()).content, "live");
+});
+
+test("an artifact-backed handle disappears for an audience member who is not entitled", async () => {
+  const acl = createAclStore();
+  const files = artifactStore();
+  const owner = scopeId("personal", "U1");
+  const grantee = scopeId("personal", "U2");
+  const org = scopeId("org", "default-org");
+  const channel = scopeId("channel", "C1");
+
+  const ref = await uploadArtifact(files, owner, "brief.md", new TextEncoder().encode("the brief"));
+  await acl.grant({ ownerScopeId: owner, ref, granteeScopeId: grantee, permission: "read", grantedBy: "U1" });
+
+  const paired = await acl.handlesForAudience([person("U1"), person("U2")], channel, org, principalEntitledToScope);
+  assert.deepEqual(
+    paired.map((h) => h.handlePath),
+    ["shared/brief.md"],
+  );
+
+  const withOutsider = await acl.handlesForAudience(
+    [person("U1"), person("U2"), person("U3")],
+    channel,
+    org,
+    principalEntitledToScope,
+  );
+  assert.deepEqual(withOutsider, [], "an unentitled member in the room removes the handle entirely");
+
+  const got = await toolCtx({
+    scope: channel,
+    workspace: ws(),
+    sandbox: memSandbox().sandbox,
+    acl,
+    files,
+    grantedHandles: withOutsider,
+  }).read("shared/brief.md");
+  assert.equal(got.content, null);
 });
