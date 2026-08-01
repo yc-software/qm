@@ -776,6 +776,9 @@ body.resizing-sidebar {
   position: absolute;
   top: 50%;
   right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 
   margin-top: -13px;
 }

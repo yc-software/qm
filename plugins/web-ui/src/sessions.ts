@@ -807,6 +807,18 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         saved
           ? html`<div class="session-menu">
               <button
+                class="session-menu-btn session-archive-btn"
+                type="button"
+                title=${s.archived ? "Unarchive" : "Archive"}
+                aria-label=${`${s.archived ? "Unarchive" : "Archive"} ${sessionTitle(s)}`}
+                @click=${(e: Event) => {
+                  e.stopPropagation();
+                  setArchived(s, !s.archived);
+                }}
+              >
+                ${s.archived ? icon(ArchiveRestore, 15) : icon(Archive, 15)}
+              </button>
+              <button
                 class="session-menu-btn"
                 data-menu-id=${s.id}
                 type="button"
