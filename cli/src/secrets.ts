@@ -69,6 +69,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), and it bills the base model when modelProvider is "openai".',
   },
   {
+    name: "FIRECRAWL_API_KEY",
+    service: "core",
+    required: false,
+    description:
+      "Firecrawl API key: raises the limits on the agent's `web` tool (web search and page reads). Without it the tool still works, on the provider's keyless free allowance.",
+  },
+  {
     name: "PUBLIC_API_URL",
     service: "core",
     required: { when: { kind: "env-in", service: "core", name: "HARNESS", values: ["pi", "opencode", "codex"] } },
