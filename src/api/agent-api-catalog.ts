@@ -52,6 +52,38 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (m, p) =>
+      (p === "/v1/projects" && (m === "GET" || m === "POST")) ||
+      (/^\/v1\/projects\/[^/]+$/.test(p) && m === "PATCH") ||
+      (/^\/v1\/projects\/[^/]+\/members$/.test(p) && m === "POST") ||
+      (/^\/v1\/projects\/[^/]+\/members\/[^/]+$/.test(p) && m === "DELETE"),
+    guidance:
+      "These act as the ASKING PERSON across every project they belong to, matching the web UI. Do not send principalId; the capability token always determines the person, and inaccessible projects return 404.",
+    routes: [
+      { method: "GET", path: "/v1/projects", summary: "list every project the asking person belongs to" },
+      {
+        method: "POST",
+        path: "/v1/projects",
+        summary: "create a project owned by the asking person — body {name}",
+      },
+      {
+        method: "PATCH",
+        path: "/v1/projects/:id",
+        summary: "rename a project the asking person owns — body {name}",
+      },
+      {
+        method: "POST",
+        path: "/v1/projects/:id/members",
+        summary: "add an internal directory member to a project the asking person belongs to — body {memberId}",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/projects/:id/members/:memberId",
+        summary: "remove a member from a project the asking person owns",
+      },
+    ],
+  },
+  {
+    match: (m, p) =>
       (p === "/v1/crons" && (m === "POST" || m === "GET")) ||
       (m === "POST" &&
         p.startsWith("/v1/crons/") &&
