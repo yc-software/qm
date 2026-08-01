@@ -1,0 +1,5 @@
+Tried to get a local dev instance running on a fresh fork today. npm install worked fine. npm run dev-instance fails though, "no free pool app" / "no poolN.env files in the pool store." Dug into scripts/dev/cli.ts and it looks like dev up always tries to claim a pre-provisioned pool slot, and each slot has real Slack app credentials attached. Makes sense for internal YC use where those slots already exist, but as an outside contributor there's no poolN.env.example and no documented way to mint your own, so local dev is a dead end out of the box.
+
+--sandbox local doesn't help either, that's about where code execution happens, not the Slack token requirement.
+
+Would it make sense to have a Slack-free local mode (skip Slack plugin entirely, just run core + web UI) for people who don't have pool access? Happy to be wrong if I'm missing something.
