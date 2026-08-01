@@ -487,6 +487,55 @@ test("init preserves an installed local package artifact", () => {
   }
 });
 
+test("init preserves an installed local package artifact linked for development", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-init-linked-package-"));
+  try {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        private: true,
+        dependencies: { "@yc-software/qm": "link:../qm/cli" },
+      }),
+    );
+
+    quiet(() => runInit({ dir, org: "acme", target: "fly" }));
+
+    const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    assert.equal(manifest.dependencies?.["@yc-software/qm"], "link:../qm/cli");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("init replaces stale registry dependency specifications with the executing CLI version", () => {
+  const dirs = ["0.1.0", "^0.1.0", "latest"].map((stale) => ({
+    stale,
+    dir: mkdtempSync(join(tmpdir(), "qm-init-registry-package-")),
+  }));
+  try {
+    for (const { stale, dir } of dirs) {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          private: true,
+          dependencies: { "@yc-software/qm": stale },
+        }),
+      );
+
+      quiet(() => runInit({ dir, org: "acme", target: "fly" }));
+
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      assert.equal(manifest.dependencies?.["@yc-software/qm"], cliVersion(), `stale spec "${stale}" is replaced`);
+    }
+  } finally {
+    for (const { dir } of dirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("init --target aws vendors a contract-valid Terraform deployment", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-init-aws-"));
   try {
