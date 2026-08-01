@@ -1,6 +1,6 @@
 ---
 name: browse
-description: Drive a real stealth browser from your shell — act on websites (order food, file an expense, pull data behind a login), with per-person persistent sign-ins via the provider's managed auth (Kernel, Anchor, or Browserbase — picked by which API key you have). Use for ACTING on a site; to just read a page, use curl/wget first. Requires keychain grants for the provider key and the browser model key; without them, follow the missing-key steps below.
+description: Drive a real stealth browser from your shell — act on websites (order food, file an expense, pull data behind a login), with per-person persistent sign-ins via the provider's managed auth (Kernel, Anchor, or Browserbase — picked by which API key you have). Use for ACTING on a site; to just read a page, use the `web` tool. Requires keychain grants for the provider key and the browser model key; without them, follow the missing-key steps below.
 ---
 
 # Browse (the skill-based browser)
@@ -9,9 +9,9 @@ This is the platform's browser: the logic lives in this skill and runs in your s
 the heavy runtime (browser-use + Chromium) is baked into your computer's image at
 `/opt/browser-engine/venv`. The browser itself is a remote stealth browser you drive over
 CDP, hosted by whichever provider the deployment configures. It is slow and expensive — for _acting on_ a site, not
-reading one. To retrieve information (read a page, check a price, hit an API), reach for
-`curl`/`wget` first; browse only when you must interact — sign in, fill and submit forms,
-click through a flow — or when a plain fetch is genuinely blocked by heavy JS or a bot wall.
+reading one. To retrieve information (read a page, check a price), reach for the `web` tool first;
+`curl` is for hitting a JSON API, not for reading a page. Browse only when you must interact —
+sign in, fill and submit forms, click through a flow — or when `web` itself comes back blocked.
 (To verify a localhost site you built, don't use this at all — a remote browser can't reach
 your loopback; use the local headless `chromium` binary.)
 
