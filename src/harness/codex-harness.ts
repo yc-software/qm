@@ -15,24 +15,23 @@ import { countTokens } from "../util/tokens.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { CodexAppServer, CodexRpcError } from "./codex-app-server.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
-import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
+import {
+  coreToolOptions,
+  createPiTools,
+  harnessToolOptions,
+  type CoreToolOptions,
+  type PiToolsOptions,
+  type ToolContextRef,
+} from "./pi-tools.ts";
 import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
 
-export interface CodexHarnessOptions {
+export interface CodexHarnessOptions extends CoreToolOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
   defaultModelId?: string;
   judgeModelId?: string;
   binaryPath?: string;
   env?: NodeJS.ProcessEnv;
-  scratchExec?: boolean;
-  ownerAuthExec?: boolean;
-  reachExec?: boolean;
-  controlTools?: boolean;
   turnWallClockMs?: number;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
   appServerStartTimeoutMs?: number;
   signals?: RunSignalStore;
   tasks?: TaskStore;
@@ -222,19 +221,12 @@ async function transitionTask(
 }
 
 function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
-  return {
-    scratchExec: opts.scratchExec,
-    ownerAuthExec: opts.ownerAuthExec,
-    reachExec: opts.reachExec,
-    controlTools: opts.controlTools,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    ...(turn
+  return harnessToolOptions(
+    opts,
+    turn
       ? { readOnly: turn.readOnly, surfaceTools: turn.surfaceTools, surfaceName: turn.surfaceName }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
+      : { surfaceTools: true, surfaceName: "slack" },
+  );
 }
 
 function asTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {

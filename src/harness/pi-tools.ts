@@ -262,6 +262,12 @@ export interface PiToolsOptions {
 
 export type CoreToolOptions = Omit<PiToolsOptions, "readOnly" | "surfaceTools" | "surfaceName">;
 
+export type TurnToolOptions = Pick<PiToolsOptions, "readOnly" | "surfaceTools" | "surfaceName">;
+
+export function harnessToolOptions(opts: CoreToolOptions | undefined, turn: TurnToolOptions): PiToolsOptions {
+  return { ...opts, ...turn };
+}
+
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
     scratchExec: config.scratchExecEnabled,

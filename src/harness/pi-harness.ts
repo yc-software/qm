@@ -58,7 +58,14 @@ import {
   type HarnessTurnResult,
   type GapWork,
 } from "./harness.ts";
-import { coreToolOptions, createPiTools, pauseStampAfterToolCall, type ToolContextRef } from "./pi-tools.ts";
+import {
+  coreToolOptions,
+  createPiTools,
+  harnessToolOptions,
+  pauseStampAfterToolCall,
+  type CoreToolOptions,
+  type ToolContextRef,
+} from "./pi-tools.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   planColdStartSeed,
@@ -75,7 +82,7 @@ import { compactTranscript, deterministicCompactSummary, estimateHistoryTokens }
 import { countTokens } from "../util/tokens.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 
-export interface PiHarnessOptions {
+export interface PiHarnessOptions extends CoreToolOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
   defaultModelId?: string;
   resolveBaseModelId?: () => string | undefined;
@@ -89,15 +96,7 @@ export interface PiHarnessOptions {
   tempDirPrefix?: string;
   captureRequests?: boolean;
   systemCacheSplit?: boolean;
-  scratchExec?: boolean;
-  ownerAuthExec?: boolean;
-  reachExec?: boolean;
-  controlTools?: boolean;
   turnWallClockMs?: number;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
 }
 
@@ -1212,10 +1211,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     keys[model.provider as keyof ProviderKeys];
   const captureRequests = opts?.captureRequests ?? true;
   const systemCacheSplit = opts?.systemCacheSplit ?? false;
-  const scratchExec = opts?.scratchExec ?? false;
-  const ownerAuthExec = opts?.ownerAuthExec ?? false;
-  const reachExec = opts?.reachExec ?? false;
-  const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
   async function createTurnSession(
@@ -1282,19 +1277,14 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         model,
         modelRuntime,
         resourceLoader,
-        customTools: createPiTools(ref, {
-          scratchExec,
-          ownerAuthExec,
-          reachExec,
-          controlTools,
-          ...(surfaceTools ? { surfaceTools: true } : {}),
-          ...(surfaceName ? { surfaceName } : {}),
-          ...(readOnly ? { readOnly: true } : {}),
-          ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
-          ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
-          ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
-          ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
-        }),
+        customTools: createPiTools(
+          ref,
+          harnessToolOptions(opts, {
+            ...(surfaceTools ? { surfaceTools: true } : {}),
+            ...(surfaceName ? { surfaceName } : {}),
+            ...(readOnly ? { readOnly: true } : {}),
+          }),
+        ),
         noTools: "builtin",
         sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
         cwd,
