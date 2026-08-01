@@ -1,0 +1,83 @@
+name: PR Labeler
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  label:
+    name: Apply PR labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label PR from title
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v7.0.1
+        with:
+          script: |
+            const title = context.payload.pull_request.title.toLowerCase();
+
+            const typeMap = {
+              enhancement: [
+                /^feat\b/,
+                /^feature\b/,
+                /^perf\b/,
+                /^refactor\b/,
+                /^test\b/,
+                /^chore\b/,
+                /^ci\b/,
+                /^build\b/,
+                /^style\b/,
+              ],
+              bug: [/^fix\b/],
+              documentation: [/^docs\b/],
+            };
+
+            const typeLabels = [];
+            for (const [label, patterns] of Object.entries(typeMap)) {
+              if (patterns.some((pattern) => pattern.test(title))) {
+                typeLabels.push(label);
+                break;
+              }
+            }
+
+            const priorityPatterns = {
+              'priority:high': [
+                /\bpriority\s*:\s*high\b/,
+                /\bhotfix\b/,
+                /\burgent\b/,
+                /\bcritical\b/,
+              ],
+              'priority:low': [
+                /\bpriority\s*:\s*low\b/,
+                /\bminor\b/,
+                /\bnit\b/,
+                /\bpolish\b/,
+              ],
+            };
+
+            let priorityLabel = 'priority:medium';
+            for (const [label, patterns] of Object.entries(priorityPatterns)) {
+              if (patterns.some((pattern) => pattern.test(title))) {
+                priorityLabel = label;
+                break;
+              }
+            }
+
+            const labelsToAdd = [...typeLabels, priorityLabel];
+            if (labelsToAdd.length === 0) {
+              return;
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: labelsToAdd,
+            });
