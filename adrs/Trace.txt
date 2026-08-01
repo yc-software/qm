@@ -1,8 +1,8 @@
-So as and when qm grows, I think you'll eventually reach a point where
-multiple agents can satisfy the same prompt. Right now the scheduler appears to choose
-based on capability, but I think it could eventually benefit from
-considering trust signals as well. Like rather than treating every agent equally qm could maintain 
-a lightweight agent metadata such as success rates, policy violations, recent behavioural change, etc.
+As QM grows, I think you’ll eventually reach a point where multiple agents can satisfy the same prompt.
+Right now the scheduler appears to choose based on capability, but it could also benefit from trust signals.
+Rather than treating every agent equally, QM could maintain lightweight per-agent metadata such as
+success rates, policy violations, and recent behavioral changes.
+These signals could provide an additional confidence score that helps the scheduler make better decisions.
 These would simply provide an additional confidence score that helps the scheduler make better decisions.
 
 
