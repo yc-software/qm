@@ -1,0 +1,1 @@
+recallBody runs the notebook through capTail(body, RECALL_MAX_CHARS) so past 6,000 characters the model only gets the tail. The memory is there but the agent doesnt know to call it. A count would at least tell the agent there is more to the record.
