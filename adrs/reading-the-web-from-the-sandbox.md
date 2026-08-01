@@ -22,9 +22,12 @@ is in memory.
 so i'm not claiming it all works today. i'm saying a web read wants to be on the side of
 that line which gets better as you fix it.
 
-a fetch from the sandbox is on that side. i checked that crw honours HTTPS_PROXY, so on
-sprites, the one backend that injects it, its reads go through the proxy like anything
-else, and on the others the same command starts benefiting whenever that gets wired. a
+a fetch from the sandbox is on that side. i checked that crw honours HTTPS_PROXY, so
+wherever that env is injected its reads go through the proxy like anything else. the
+awkward part, which i'd rather name than have you find: sprites is the only backend that
+injects it today, and sprites is also the one image you don't build, so my branch marks crw
+not-installed there. right now the enforcement and the binary sit on different backends.
+both halves of that are fixable, and neither is fixable for a call made from core. a
 fetch made by core to a vendor API is on the other side permanently: no policy decision, no
 audit row for the page, and the page itself pulled from the vendor's network. later work on
 egress doesn't reach it. SECURITY.md already carries the browser provider version of this
