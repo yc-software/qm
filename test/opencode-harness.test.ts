@@ -139,7 +139,7 @@ test("OpenCode records real usage, cost, and timings for each captured model cal
   assert.equal(row.step, 0);
   assert.equal(row.model, "openai/gpt-5");
   assert.equal(row.truncated, false);
-  assert.deepEqual(row.request, { system: "s", messages: [{ role: "user" }] });
+  assert.deepEqual(row.promptEnvelope, { system: "s" }, "messages stay on the tape, not in the envelope");
   assert.deepEqual(row.transport, { modelId: "openai/gpt-5" });
   assert.equal(row.durationMs, 1929);
   assert.deepEqual(row.usage, {

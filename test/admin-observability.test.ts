@@ -183,7 +183,14 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
     const r = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?scope=org:default-org`);
     assert.equal(r.status, 200);
     const d = (await r.json()) as {
-      requests: { turnSeq: number | null; step: number; model: string; truncated: boolean; request: unknown }[];
+      requests: {
+        turnSeq: number | null;
+        step: number;
+        model: string;
+        truncated: boolean;
+        request: unknown;
+        promptEnvelope?: unknown;
+      }[];
     };
     assert.ok(d.requests.length >= 1, "at least one captured request");
     const meta = d.requests[0]!;
@@ -191,6 +198,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
     assert.equal(typeof meta.turnSeq, "number", "correlated to the turn's user entry");
     assert.equal(meta.truncated, false);
     assert.equal(meta.request, null, "the bare list omits the prompt body — bodies load per turn on demand");
+    assert.equal(meta.promptEnvelope, undefined, "…and the prompt envelope");
     const tr = await get(
       s.base,
       `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?turnSeq=${meta.turnSeq}&scope=org:default-org`,
@@ -199,21 +207,21 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
     const td = (await tr.json()) as {
       requests: {
         turnSeq: number | null;
-        request: { system?: string; messages?: { role: string; content: string }[] };
+        promptEnvelope: { system?: string; messages?: { role: string; content: string }[] };
       }[];
     };
     assert.ok(td.requests.length >= 1, "the turn's requests");
     const req = td.requests[0]!;
     assert.equal(req.turnSeq, meta.turnSeq, "scoped to the requested turn");
     assert.ok(
-      req.request.messages?.some((m) => m.content.includes("what's the weather")),
+      req.promptEnvelope.messages?.some((m) => m.content.includes("what's the weather")),
       "the snapshot carries exactly what we sent — the user message",
     );
     assert.ok(
-      !req.request.messages?.some((m) => m.role === "soul"),
+      !req.promptEnvelope.messages?.some((m) => m.role === "soul"),
       "SOUL is carried in the system prompt, not as a provider message",
     );
-    assert.ok(typeof req.request.system === "string", "and the system prompt we sent");
+    assert.ok(typeof req.promptEnvelope.system === "string", "and the system prompt we sent");
     assert.equal(
       (await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?turnSeq=nope&scope=org:default-org`))
         .status,
@@ -272,7 +280,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
       step: 0,
       model: "mock",
       scopeLabel: sourceScope,
-      request: { model: "mock", messages: [{ role: "user", content: "post the digest" }] },
+      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "post the digest" }] },
       truncated: false,
     });
     await s.built.sessions.recordLlmRequest(source.id, {
@@ -280,7 +288,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
       step: 1,
       model: "mock",
       scopeLabel: sourceScope,
-      request: { model: "mock", messages: [{ role: "user", content: "(system note: resume)" }] },
+      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "(system note: resume)" }] },
       truncated: false,
     });
 
@@ -331,7 +339,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     assert.equal(event.sourceSession.scopeId, sourceScope);
     assert.equal(event.llmRequests.length, 2);
     assert.equal(event.llmRequests[0].turnSeq, sourceUser.seq);
-    assert.deepEqual(event.llmRequests[0].request.messages, [{ role: "user", content: "post the digest" }]);
+    assert.deepEqual(event.llmRequests[0].promptEnvelope.messages, [{ role: "user", content: "post the digest" }]);
     assert.equal(event.llmRequests[1].turnSeq, sourceResume.seq);
 
     const scopedRead = await get(
@@ -395,7 +403,7 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
       step: 0,
       model: "mock",
       scopeLabel: sourceScope,
-      request: { model: "mock", messages: [{ role: "user", content: "triage the webhook" }] },
+      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "triage the webhook" }] },
       truncated: false,
     });
 
@@ -637,7 +645,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
     assert.equal((await s.built.app.turn(turn)).status, "ok");
     const reqs = await s.built.sessions.listLlmRequests(session!.id);
     const latest = reqs[reqs.length - 1] as any;
-    const userMessage = latest.request.messages.at(-1).content;
+    const userMessage = latest.promptEnvelope.messages.at(-1).content;
     assert.match(userMessage, /Recent agent-initiated deliveries to this conversation/);
     assert.match(userMessage, /the deploy is done/);
   } finally {
@@ -672,7 +680,7 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
       step: 0,
       model: "mock",
       scopeLabel: "personal:U-carol",
-      request: { model: "mock", messages: [{ role: "user", content: "monitor wake" }] },
+      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "monitor wake" }] },
       truncated: false,
     });
     const delivery = await s.built.deliveries.enqueue({

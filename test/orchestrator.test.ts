@@ -110,9 +110,9 @@ test("inbound file problems ride a durable file_event entry — off the reply an
   );
   assert.match(payload.text, /screenshot\.png/);
 
-  const reqs = (await sessions.listLlmRequests(res.sessionId!)) as Array<{ model: string; request: unknown }>;
+  const reqs = (await sessions.listLlmRequests(res.sessionId!)) as Array<{ model: string; promptEnvelope: unknown }>;
   for (const r of reqs.filter((request) => request.model !== "mock-security")) {
-    assert.doesNotMatch(JSON.stringify(r.request), /too many files|screenshot\.png/);
+    assert.doesNotMatch(JSON.stringify(r.promptEnvelope), /too many files|screenshot\.png/);
   }
 
   assert.equal((res as { fileNotes?: unknown }).fileNotes, undefined);
@@ -170,7 +170,7 @@ test("a 1:1 names the authenticated human in the prompt so the agent never asks 
   const res = await app.turn(dm("hi", { actor: { externalId: "ada@acme.com", displayName: "Ada Lovelace" } }));
   assert.equal(res.status, "ok", res.reason);
   const sys = (await sessions.listLlmRequests(res.sessionId!)).at(-1)! as any;
-  assert.match(sys.request.system, /live, private 1:1 with Ada Lovelace \(ada@acme\.com\)/);
+  assert.match(sys.promptEnvelope.system, /live, private 1:1 with Ada Lovelace \(ada@acme\.com\)/);
 });
 
 test("a channel turn gets no 1:1 identity block", async () => {
@@ -178,7 +178,7 @@ test("a channel turn gets no 1:1 identity block", async () => {
   const res = await app.turn(channel("hi", { actor: { externalId: "U1", displayName: "Ada" } }));
   assert.equal(res.status, "ok", res.reason);
   const sys = (await sessions.listLlmRequests(res.sessionId!)).at(-1)! as any;
-  assert.doesNotMatch(sys.request.system, /## Who you're talking to/);
+  assert.doesNotMatch(sys.promptEnvelope.system, /## Who you're talking to/);
 });
 
 test("a silent cron source run stays out of normal human chat history", async () => {
@@ -259,8 +259,8 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   });
   const reqs = await built.sessions.listLlmRequests(recipient!.id);
   const latest = reqs.at(-1) as any;
-  assert.match(latest.request.messages.at(-1).content, /Recent agent-initiated deliveries to this conversation/);
-  assert.match(latest.request.messages.at(-1).content, /deploy digest ready/);
+  assert.match(latest.promptEnvelope.messages.at(-1).content, /Recent agent-initiated deliveries to this conversation/);
+  assert.match(latest.promptEnvelope.messages.at(-1).content, /deploy digest ready/);
 });
 
 test("a setup-phase failure after the lease is acquired does NOT wedge the thread (lease released)", async () => {
@@ -2014,8 +2014,8 @@ test("Auto screens only the external event envelope and records classifier usage
     (rec) => rec.model === "mock-security",
   );
   assert.ok(classifier, "the security classifier request is persisted beside the turn");
-  assert.match(JSON.stringify(classifier.request), /customer asked for a refund/);
-  assert.doesNotMatch(JSON.stringify(classifier.request), /provenance-ok/);
+  assert.match(JSON.stringify(classifier.promptEnvelope), /customer asked for a refund/);
+  assert.doesNotMatch(JSON.stringify(classifier.promptEnvelope), /provenance-ok/);
   assert.ok(built.modelGateway.audit().some((rec) => rec.model === "mock-security"));
 });
 
@@ -2110,7 +2110,7 @@ test("Auto fails open on vision attachments it cannot screen, flagging them unsc
   const main = [...(await built.sessions.listLlmRequests(result.sessionId!))]
     .reverse()
     .find((rec) => rec.model !== "mock-security");
-  assert.match(JSON.stringify(main?.request), /NOT security-screened/);
+  assert.match(JSON.stringify(main?.promptEnvelope), /NOT security-screened/);
 });
 
 test("Auto screens text attachment contents (strict quarantines) and fails open on unreadable binary files", async () => {
@@ -2137,7 +2137,7 @@ test("Auto screens text attachment contents (strict quarantines) and fails open 
   const classifier = (await benign.sessions.listLlmRequests(allowed.sessionId!)).find(
     (rec) => rec.model === "mock-security",
   );
-  assert.match(JSON.stringify(classifier?.request), /quarterly revenue is 42/);
+  assert.match(JSON.stringify(classifier?.promptEnvelope), /quarterly revenue is 42/);
 
   const binary = freshApp();
   const pdf = await binary.blobTransfer.put(Buffer.from("%PDF synthetic"));
@@ -2213,8 +2213,8 @@ test("Auto does not let one quarantined thread file poison later attachments", a
   const classifier = (await built.sessions.listLlmRequests(allowed.sessionId!))
     .filter((rec) => rec.model === "mock-security")
     .at(-1);
-  assert.match(JSON.stringify(classifier?.request), /quarterly revenue is 42/);
-  assert.doesNotMatch(JSON.stringify(classifier?.request), /ignore previous instructions/);
+  assert.match(JSON.stringify(classifier?.promptEnvelope), /quarterly revenue is 42/);
+  assert.doesNotMatch(JSON.stringify(classifier?.promptEnvelope), /ignore previous instructions/);
 });
 
 test("an approved automation replay preserves and re-screens its external event provenance", async () => {
@@ -2250,7 +2250,7 @@ test("an approved automation replay preserves and re-screens its external event 
     (rec) => rec.model === "mock-security",
   );
   assert.equal(screens.length, 2);
-  assert.ok(screens.every((rec) => JSON.stringify(rec.request).includes("benign external marker")));
+  assert.ok(screens.every((rec) => JSON.stringify(rec.promptEnvelope).includes("benign external marker")));
 });
 
 test("Auto fails open on data-bearing turns when the security screen is unavailable", async () => {
@@ -2270,7 +2270,7 @@ test("Auto fails open on data-bearing turns when the security screen is unavaila
   const main = [...(await built.sessions.listLlmRequests(result.sessionId!))]
     .reverse()
     .find((rec) => rec.model !== "mock-security");
-  assert.match(JSON.stringify(main?.request), /NOT security-screened/);
+  assert.match(JSON.stringify(main?.promptEnvelope), /NOT security-screened/);
 });
 
 test("Auto retries a transient screen failure instead of quarantining", async () => {
@@ -2373,7 +2373,7 @@ test("Auto fails open when bounded screening omits oversize content, flagging it
   const main = [...(await built.sessions.listLlmRequests(result.sessionId!))]
     .reverse()
     .find((rec) => rec.model !== "mock-security");
-  assert.match(JSON.stringify(main?.request), /NOT security-screened/);
+  assert.match(JSON.stringify(main?.promptEnvelope), /NOT security-screened/);
 });
 
 test("an Auto-downgraded turn is quarantined from later full-authority model history", async () => {
@@ -2398,7 +2398,7 @@ test("an Auto-downgraded turn is quarantined from later full-authority model his
   const requests = await built.sessions.listLlmRequests(second.sessionId!);
   const latestMain = [...requests].reverse().find((rec) => rec.model !== "mock-security");
   assert.ok(latestMain);
-  assert.doesNotMatch(JSON.stringify(latestMain.request), /durable history/);
+  assert.doesNotMatch(JSON.stringify(latestMain.promptEnvelope), /durable history/);
 });
 
 test("Auto records quarantined overheard timestamps so they cannot poison every later mention", async () => {

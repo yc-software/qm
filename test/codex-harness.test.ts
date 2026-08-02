@@ -18,7 +18,6 @@ import {
   codexTurnInputText,
   createCodexHarness,
   prepareCodexHome,
-  stripCodexImageBytes,
 } from "../src/harness/codex-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
@@ -310,19 +309,6 @@ test("Codex children cannot use parent surface, control, or terminal tools", () 
   for (const denied of ["slack", "cron", "guidance", "share", "stay_silent", "finish_silently"]) {
     assert.equal(codexChildToolAllowed(denied), false, denied);
   }
-});
-
-test("Codex observability preserves image presence without persisting bytes", () => {
-  assert.deepEqual(
-    stripCodexImageBytes([
-      { type: "text", text: "hello" },
-      { type: "image", url: "data:image/png;base64,SECRET" },
-    ]),
-    [
-      { type: "text", text: "hello" },
-      { type: "image", url: "[image bytes omitted]" },
-    ],
-  );
 });
 
 test("Codex interrupts the provider after a terminal QM tool", async (t) => {

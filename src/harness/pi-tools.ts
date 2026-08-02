@@ -43,7 +43,7 @@ export interface ToolContextRef {
   orgScopeId?: ScopeId;
   tapeResultScopes?: Map<string, ScopeId>;
   llmCapture?: Array<{
-    request: unknown;
+    envelope: unknown;
     truncated: boolean;
     transport?: { modelId?: string; headers?: Record<string, string> };
   }>;

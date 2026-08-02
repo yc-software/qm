@@ -51,8 +51,8 @@ test("ingest → ambient judge engages → spawns a smart-model worker that post
     const worker = await built.sessions.getByThread(`slack:${container}:ambient:100.1`);
     assert.ok(worker);
     const classifier = (await built.sessions.listLlmRequests(worker!.id)).find((rec) => rec.model === "mock-security");
-    assert.match(JSON.stringify(classifier?.request), /did the Q3 launch slip/);
-    assert.match(JSON.stringify(classifier?.request), /ambient reply/);
+    assert.match(JSON.stringify(classifier?.promptEnvelope), /did the Q3 launch slip/);
+    assert.match(JSON.stringify(classifier?.promptEnvelope), /ambient reply/);
   } finally {
     await built.runtime.stop();
   }

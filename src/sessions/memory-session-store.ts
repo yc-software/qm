@@ -22,6 +22,7 @@ import type {
 import {
   cronIdOf,
   isOverheardEntry,
+  promptEnvelopeBody,
   sessionBucket,
   sessionCategory,
   sessionOrigin,
@@ -41,6 +42,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
   const entries = new Map<string, SessionEntry[]>();
   const tape = new Map<string, TapeRecord[]>();
   const llmRequests = new Map<string, LlmRequestRecord[]>();
+  const promptEnvelopes = new Map<string, string>();
   const byThread = new Map<string, string>();
   const participants = new Map<string, Set<string>>();
   const windows = new Map<
@@ -222,6 +224,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async recordLlmRequest(sessionId, rec: NewLlmRequest) {
+      const envelope = promptEnvelopeBody(rec.promptEnvelope);
+      if (envelope && !promptEnvelopes.has(envelope.hash)) promptEnvelopes.set(envelope.hash, envelope.body);
       const full: LlmRequestRecord = {
         id: randomUUID(),
         sessionId,
@@ -230,7 +234,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         model: rec.model,
         scopeLabel: rec.scopeLabel as ScopeId,
         createdAt: now(),
-        request: rec.request,
+        request: null,
+        promptHash: envelope?.hash ?? null,
         truncated: rec.truncated ?? false,
         ttftMs: rec.ttftMs ?? null,
         durationMs: rec.durationMs ?? null,
@@ -246,7 +251,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         llmRequests.set(sessionId, arr);
       }
       arr.push(full);
-      return full;
+      return rec.promptEnvelope !== undefined ? { ...full, promptEnvelope: rec.promptEnvelope } : full;
     },
 
     async listLlmRequests(sessionId, opts) {
@@ -259,7 +264,11 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
                 (want != null && r.turnSeq !== null && want.has(r.turnSeq)) || (!!opts?.orphans && r.turnSeq === null),
             )
           : all;
-      return filtered.map((r) => (opts?.omitRequest ? { ...r, request: null } : { ...r }));
+      return filtered.map((r) => {
+        if (opts?.omitRequest) return { ...r, request: null };
+        const body = r.promptHash != null ? promptEnvelopes.get(r.promptHash) : undefined;
+        return body !== undefined ? { ...r, promptEnvelope: JSON.parse(body) } : { ...r };
+      });
     },
 
     async addParticipant(sessionId, principalId, title, opts) {

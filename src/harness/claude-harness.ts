@@ -525,9 +525,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
     let timer: NodeJS.Timeout | undefined;
     let signalsStopped = false;
-    const recordedRequest = {
+    const recordedEnvelope = {
       system: turn.systemPrompt,
-      prompt: text,
       tools: allowSubagents ? ["Agent"] : [],
       allowedTools: [...(allowSubagents ? ["Agent"] : []), ...bridgedNames],
       childAgents: allowSubagents ? childAgents : {},
@@ -557,7 +556,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           turnSeq: userEntry.seq,
           step,
           model,
-          request: step === 0 ? recordedRequest : { prompt: steerPrompts[step - 1] ?? "[steer]" },
+          promptEnvelope: recordedEnvelope,
           truncated: false,
           transport: { modelId: model },
           ttftMs: message.subtype === "success" ? (message.ttft_ms ?? null) : null,
@@ -803,7 +802,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             turnSeq: userEntry.seq,
             step: 0,
             model,
-            request: recordedRequest,
+            promptEnvelope: recordedEnvelope,
             truncated: false,
             transport: { modelId: model },
           });

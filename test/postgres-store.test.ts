@@ -66,14 +66,14 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     step: 0,
     model: "claude-x",
     scopeLabel: scope,
-    request: { messages: [] },
+    promptEnvelope: { system: "sys" },
   });
   await s.recordLlmRequest(a.id, {
     turnSeq: 0,
     step: 1,
     model: "claude-x",
     scopeLabel: scope,
-    request: { messages: [] },
+    promptEnvelope: { system: "sys" },
     truncated: true,
     ttftMs: 1200,
     durationMs: 8400,
@@ -102,7 +102,7 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     step: 0,
     model: "claude-x",
     scopeLabel: scope,
-    request: { messages: [] },
+    promptEnvelope: { system: "sys" },
   });
   assert.deepEqual(
     (await s.listLlmRequests(a.id, { orphans: true })).map((r) => r.turnSeq),
@@ -270,7 +270,7 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", {
     step: 0,
     model: "claude-x",
     scopeLabel: scope,
-    request: { messages: [] },
+    promptEnvelope: { system: "sys" },
   });
 
   await s.deleteSession(a.id);

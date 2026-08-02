@@ -399,33 +399,21 @@ test("turn-detection prompt treats implied assistant-target follow-ups as addres
   assert.match(prompt, /<@U123> what do you mean by that\?[^]*NO/);
 });
 
-test("sanitizeLlmPayload elides thinking signatures while keeping thinking text and redacting images", () => {
-  const signature = "EsMM".repeat(2000);
-  const imageBytes = "AAAA".repeat(1000);
+test("sanitizeLlmPayload captures the prompt envelope and drops the message array", () => {
   const payload = {
     model: "claude-opus-4-8",
-    messages: [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "Let me reason about this.", signature },
-          { type: "image", source: { type: "base64", media_type: "image/png", data: imageBytes } },
-        ],
-      },
-    ],
+    system: [{ type: "text", text: "be helpful" }],
+    tools: [{ name: "execute" }],
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
   };
 
-  const { request, truncated } = sanitizeLlmPayload(payload);
+  const { envelope, truncated } = sanitizeLlmPayload(payload);
   assert.equal(truncated, false);
-
-  const content = (request as any).messages[0].content;
-  const [thinkingBlock, imageBlock] = content;
-
-  assert.equal(thinkingBlock.thinking, "Let me reason about this.", "thinking text is preserved");
-  assert.equal(thinkingBlock.signature, `<signature ${signature.length} chars omitted>`);
-  assert.doesNotMatch(thinkingBlock.signature, /EsMM/, "raw signature bytes are gone");
-
-  assert.match(imageBlock.source.data, /<base64 image\/png omitted: \d+ chars>/, "sibling image still redacted");
+  assert.deepEqual(envelope, {
+    model: "claude-opus-4-8",
+    system: [{ type: "text", text: "be helpful" }],
+    tools: [{ name: "execute" }],
+  });
 });
 
 const imageBlock = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
@@ -533,16 +521,16 @@ test("sanitizeLlmPayload attaches transport from the model arg alongside the red
   assert.equal(sanitizeLlmPayload({ messages: [] }).transport, undefined);
 });
 
-test("sanitizeLlmPayload elides redacted_thinking data", () => {
-  const data = "redacted".repeat(500);
+test("sanitizeLlmPayload redacts image bytes that appear outside the message array", () => {
+  const big = "AAAA".repeat(2000);
   const payload = {
-    messages: [{ role: "assistant", content: [{ type: "redacted_thinking", data }] }],
+    system: [{ type: "image", source: { type: "base64", media_type: "image/png", data: big } }],
+    messages: [],
   };
 
-  const { request } = sanitizeLlmPayload(payload);
-  const block = (request as any).messages[0].content[0];
-  assert.equal(block.data, `<redacted_thinking ${data.length} chars omitted>`);
-  assert.doesNotMatch(block.data, /redactedredacted/, "raw redacted_thinking bytes are gone");
+  const { envelope } = sanitizeLlmPayload(payload);
+  const block = (envelope as any).system[0];
+  assert.match(block.source.data, /<base64 image\/png omitted: \d+ chars>/, "image bytes never persist");
 });
 
 test("renderDetectPrompt uses prior assistant replies, not assembled prior user prompts", () => {

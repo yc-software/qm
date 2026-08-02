@@ -52,6 +52,7 @@ import {
 import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
 import {
   defineHarness,
+  envelopeWithoutMessages,
   type Harness,
   type HarnessCompactInput,
   type HarnessDetectInput,
@@ -769,28 +770,28 @@ export function transportFromModel(model: unknown): LlmTransportMeta | undefined
 export function sanitizeLlmPayload(
   payload: unknown,
   model?: unknown,
-): { request: unknown; truncated: boolean; transport?: LlmTransportMeta } {
+): { envelope: unknown; truncated: boolean; transport?: LlmTransportMeta } {
   const transport = transportFromModel(model);
-  const withTransport = (r: { request: unknown; truncated: boolean }) => (transport ? { ...r, transport } : r);
+  const withTransport = (r: { envelope: unknown; truncated: boolean }) => (transport ? { ...r, transport } : r);
   let redacted: unknown;
   try {
-    redacted = redactImageBytes(payload);
+    redacted = redactImageBytes(envelopeWithoutMessages(payload));
   } catch {
-    return withTransport({ request: { note: "payload not capturable" }, truncated: true });
+    return withTransport({ envelope: { note: "payload not capturable" }, truncated: true });
   }
   let json: string;
   try {
     json = JSON.stringify(redacted);
   } catch {
-    return withTransport({ request: { note: "payload not serializable" }, truncated: true });
+    return withTransport({ envelope: { note: "payload not serializable" }, truncated: true });
   }
   if (json.length > MAX_CAPTURED_PAYLOAD_CHARS) {
     return withTransport({
-      request: { truncated: true, bytes: json.length, preview: json.slice(0, MAX_CAPTURED_PAYLOAD_CHARS) },
+      envelope: { truncated: true, bytes: json.length, preview: json.slice(0, MAX_CAPTURED_PAYLOAD_CHARS) },
       truncated: true,
     });
   }
-  return withTransport({ request: redacted, truncated: false });
+  return withTransport({ envelope: redacted, truncated: false });
 }
 
 export function thinkingBlocksFromContent(
@@ -1685,7 +1686,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   turnSeq: userEntry.seq,
                   step,
                   model: captured[step]!.transport?.modelId ?? effectiveModel,
-                  request: captured[step]!.request,
+                  promptEnvelope: captured[step]!.envelope,
                   truncated: captured[step]!.truncated,
                   transport: captured[step]!.transport ?? null,
                   ttftMs: stat?.ttftMs ?? null,
@@ -2019,7 +2020,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             turnSeq: null,
             step: -1,
             model: modelId,
-            request: { system: SECURITY_SCREEN_SYSTEM_PROMPT, messages: [{ role: "user", content: payload }] },
+            promptEnvelope: { system: SECURITY_SCREEN_SYSTEM_PROMPT, messages: [{ role: "user", content: payload }] },
             truncated: false,
           });
           return parseSecurityScreenVerdict(

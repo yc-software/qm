@@ -30,6 +30,7 @@ import {
   LEGACY_CRON_ID_PATTERN,
   legacyOriginPattern,
   ORIGIN_ALTERNATION,
+  promptEnvelopeBody,
   sessionOrigin,
   STABLE_CRON_ID_PATTERN,
   stableOriginPattern,
@@ -79,6 +80,8 @@ function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
     scopeLabel: r.scope_label as ScopeId,
     createdAt: Number(r.created_at),
     request: r.request != null ? JSON.parse(r.request as string) : null,
+    promptHash: r.prompt_hash == null ? null : (r.prompt_hash as string),
+    ...(r.prompt_body != null ? { promptEnvelope: JSON.parse(r.prompt_body as string) } : {}),
     truncated: Boolean(r.truncated),
     ttftMs: r.ttft_ms == null ? null : Number(r.ttft_ms),
     durationMs: r.duration_ms == null ? null : Number(r.duration_ms),
@@ -243,6 +246,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS usage_json TEXT`,
     `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS transport_json TEXT`,
     `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS gap_phases_json TEXT`,
+    `ALTER TABLE session_llm_requests ALTER COLUMN request DROP NOT NULL`,
+    `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS prompt_hash TEXT`,
+    `CREATE TABLE IF NOT EXISTS llm_prompt_envelopes(
+        hash TEXT PRIMARY KEY, body TEXT NOT NULL, created_at BIGINT NOT NULL
+      )`,
     `CREATE INDEX IF NOT EXISTS sessions_by_scope ON sessions(scope_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS sessions_by_activity ON sessions((COALESCE(last_activity, created_at)) DESC, id DESC)`,
     `CREATE INDEX IF NOT EXISTS sessions_by_scope_activity
@@ -507,6 +515,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
+      const envelope = promptEnvelopeBody(rec.promptEnvelope);
+      if (envelope) {
+        await q("INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING", [
+          envelope.hash,
+          envelope.body,
+          now(),
+        ]);
+      }
       const full: LlmRequestRecord = {
         id: randomUUID(),
         sessionId,
@@ -515,7 +531,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         model: rec.model,
         scopeLabel: rec.scopeLabel as ScopeId,
         createdAt: now(),
-        request: rec.request,
+        request: null,
+        promptHash: envelope?.hash ?? null,
+        ...(rec.promptEnvelope !== undefined ? { promptEnvelope: rec.promptEnvelope } : {}),
         truncated: rec.truncated ?? false,
         ttftMs: rec.ttftMs ?? null,
         durationMs: rec.durationMs ?? null,
@@ -526,7 +544,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         transport: rec.transport ?? null,
       };
       await q(
-        "INSERT INTO session_llm_requests(id, session_id, turn_seq, step, model, scope_label, request, truncated, created_at, ttft_ms, duration_ms, step_gap_ms, tool_wall_json, usage_json, transport_json, gap_phases_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
+        "INSERT INTO session_llm_requests(id, session_id, turn_seq, step, model, scope_label, prompt_hash, truncated, created_at, ttft_ms, duration_ms, step_gap_ms, tool_wall_json, usage_json, transport_json, gap_phases_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
         [
           full.id,
           full.sessionId,
@@ -534,7 +552,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           full.step,
           full.model,
           full.scopeLabel,
-          JSON.stringify(full.request ?? null),
+          full.promptHash,
           full.truncated,
           full.createdAt,
           full.ttftMs,
@@ -551,21 +569,26 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async listLlmRequests(sessionId, opts): Promise<LlmRequestRecord[]> {
       const cols = opts?.omitRequest
-        ? "id, session_id, turn_seq, step, model, scope_label, created_at, truncated, ttft_ms, duration_ms, step_gap_ms, tool_wall_json, usage_json, transport_json, gap_phases_json"
-        : "*";
-      const conds = ["session_id = $1"];
+        ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.ttft_ms, r.duration_ms, r.step_gap_ms, r.tool_wall_json, r.usage_json, r.transport_json, r.gap_phases_json"
+        : "r.*, e.body AS prompt_body";
+      const from = opts?.omitRequest
+        ? "session_llm_requests r"
+        : "session_llm_requests r LEFT JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash";
+      const conds = ["r.session_id = $1"];
       const args: unknown[] = [sessionId];
       const turnSeqs = opts?.turnSeqs;
       if (turnSeqs) {
         args.push(turnSeqs);
         conds.push(
-          opts?.orphans ? `(turn_seq = ANY($${args.length}) OR turn_seq IS NULL)` : `turn_seq = ANY($${args.length})`,
+          opts?.orphans
+            ? `(r.turn_seq = ANY($${args.length}) OR r.turn_seq IS NULL)`
+            : `r.turn_seq = ANY($${args.length})`,
         );
       } else if (opts?.orphans) {
-        conds.push("turn_seq IS NULL");
+        conds.push("r.turn_seq IS NULL");
       }
       const rows = await q(
-        `SELECT ${cols} FROM session_llm_requests WHERE ${conds.join(" AND ")} ORDER BY created_at ASC, step ASC`,
+        `SELECT ${cols} FROM ${from} WHERE ${conds.join(" AND ")} ORDER BY r.created_at ASC, r.step ASC`,
         args,
       );
       return rows.map(rowToLlmRequest);

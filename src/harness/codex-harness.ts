@@ -250,14 +250,6 @@ function userInput(text: string): Record<string, unknown> {
   return { type: "text", text, text_elements: [] };
 }
 
-export function stripCodexImageBytes(items: readonly Record<string, unknown>[]): Record<string, unknown>[] {
-  return items.map((item) =>
-    item.type === "image" && typeof item.url === "string" && item.url.startsWith("data:")
-      ? { ...item, url: "[image bytes omitted]" }
-      : { ...item },
-  );
-}
-
 export function codexReplayCallId(id: string): string {
   return id.length <= 64 ? id : createHash("sha256").update(id).digest("hex");
 }
@@ -709,13 +701,11 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       stopped: false,
     };
     active.set(threadId, state);
-    const requestPayload = {
+    const promptEnvelope = {
       threadStart: {
         ...threadStartRequest,
         cwd: "[ephemeral control jail]",
       },
-      replay,
-      input: stripCodexImageBytes(input),
     };
     const startedAt = Date.now();
     const recordRequest = async (): Promise<void> => {
@@ -725,7 +715,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           turnSeq: userEntry.seq,
           step: 0,
           model: selectedModel,
-          request: requestPayload,
+          promptEnvelope,
           truncated: Boolean(turn.images?.length),
           transport: { modelId: selectedModel },
           ttftMs: state.firstOutputAt ? state.firstOutputAt - startedAt : null,

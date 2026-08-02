@@ -119,7 +119,7 @@ export function createMockHarness(): Harness {
           turnSeq: userEntry.seq,
           step: 0,
           model: "mock",
-          request: {
+          promptEnvelope: {
             model: "mock",
             system: turn.systemPrompt,
             messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
@@ -638,7 +638,7 @@ export function createMockHarness(): Harness {
             turnSeq: userEntry.seq,
             step: 1,
             model: "mock",
-            request: {
+            promptEnvelope: {
               model: "mock",
               system: turn.systemPrompt,
               messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
@@ -747,7 +747,7 @@ export function createMockHarness(): Harness {
           turnSeq: null,
           step: -1,
           model,
-          request: { system: SECURITY_SCREEN_SYSTEM_PROMPT, messages: [{ role: "user", content: payload }] },
+          promptEnvelope: { system: SECURITY_SCREEN_SYSTEM_PROMPT, messages: [{ role: "user", content: payload }] },
           truncated: false,
         });
         if (/!security-screen-hang/i.test(payload)) {

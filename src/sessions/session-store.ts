@@ -1,4 +1,17 @@
+import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType } from "../types.ts";
+
+export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
+  if (envelope == null) return null;
+  let body: string;
+  try {
+    body = JSON.stringify(envelope);
+  } catch {
+    return null;
+  }
+  if (body === undefined) return null;
+  return { hash: createHash("sha256").update(body).digest("hex"), body };
+}
 
 export interface Lease {
   sessionId: string;
@@ -166,6 +179,8 @@ export interface LlmRequestRecord {
   scopeLabel: ScopeId;
   createdAt: number;
   request: unknown;
+  promptHash: string | null;
+  promptEnvelope?: unknown;
   truncated: boolean;
   ttftMs: number | null;
   durationMs: number | null;
@@ -181,7 +196,7 @@ export interface NewLlmRequest {
   step: number;
   model: string;
   scopeLabel: ScopeId;
-  request: unknown;
+  promptEnvelope?: unknown;
   truncated?: boolean;
   ttftMs?: number | null;
   durationMs?: number | null;

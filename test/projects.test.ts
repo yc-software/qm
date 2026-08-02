@@ -362,8 +362,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal((await turn("owner", "web:owner:first", "after joining")).status, "ok");
   assert.ok((await built.app.listSessions("member")).some((session) => session.id === first.id));
   const latestRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
-  assert.match(JSON.stringify(latestRequest.request), /secret-before-join/);
-  assert.match(JSON.stringify(latestRequest.request), /after joining/);
+  assert.match(JSON.stringify(latestRequest.promptEnvelope), /secret-before-join/);
+  assert.match(JSON.stringify(latestRequest.promptEnvelope), /after joining/);
 
   const sharedApproval = await turn("owner", "web:owner:shared-approval", "!run git push --force origin main");
   assert.equal(sharedApproval.status, "pending_approval");
@@ -445,7 +445,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
   assert.equal((await turn("owner", racingFork.session.threadRef, "continue the fork")).status, "ok");
   const continuedForkRequest = (await built.sessions.listLlmRequests(racingFork.session.id)).at(-1)!;
-  assert.match(JSON.stringify(continuedForkRequest.request), /after joining/);
+  assert.match(JSON.stringify(continuedForkRequest.promptEnvelope), /after joining/);
 
   const participantOrder: string[] = [];
   const acquireLease = built.sessions.acquireLease.bind(built.sessions);
@@ -505,8 +505,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   await built.identity.reactivate("member");
   assert.equal((await turn("owner", "web:owner:first", "after-reactivation")).status, "ok");
   const reactivatedRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
-  assert.doesNotMatch(JSON.stringify(reactivatedRequest.request), /inactive-gap-secret/);
-  assert.match(JSON.stringify(reactivatedRequest.request), /after-reactivation/);
+  assert.doesNotMatch(JSON.stringify(reactivatedRequest.promptEnvelope), /inactive-gap-secret/);
+  assert.match(JSON.stringify(reactivatedRequest.promptEnvelope), /after-reactivation/);
   await built.identity.deactivate("owner");
   assert.deepEqual(await built.app.listProjects("member"), []);
   assert.equal((await turn("member", "web:owner:first")).status, "refused");
@@ -686,7 +686,7 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
   );
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
-  const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.request as {
+  const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.promptEnvelope as {
     tapeMode?: string;
     messages?: unknown[];
   };
@@ -806,7 +806,7 @@ test("a member added to a Project inherits the chats that predate them", async (
     ).status,
     "ok",
   );
-  const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.request as { messages?: unknown[] };
+  const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.promptEnvelope as { messages?: unknown[] };
   assert.match(JSON.stringify(request.messages), /BEFORE_JOIN_TOPIC/, "the agent keeps the project's full history");
 });
 

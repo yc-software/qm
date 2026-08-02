@@ -12060,7 +12060,7 @@
         const stats = document.createElement("div");
         stats.className = "context-stats";
         const latest = reqs[reqs.length - 1];
-        const latestSections = contextSections(latest.request, latest.transport);
+        const latestSections = contextSections(requestBody(latest), latest.transport);
         stats.append(metaChip((latest.model || "?") + " · " + fmtContextSize(latest, latestSections)));
         cacheMetaItems(turnCache).forEach((b) => stats.appendChild(b));
         stats.appendChild(rawJsonLink(reqs));
@@ -13928,6 +13928,9 @@
           "\n\n(auth + anthropic-version headers are added by the provider SDK below the capture point, so they aren't shown)"
         );
       }
+      function requestBody(q) {
+        return q && q.promptEnvelope != null ? q.promptEnvelope : q ? q.request : null;
+      }
       function contextSections(request, transport) {
         const req = request && typeof request === "object" ? request : {};
         const messages = Array.isArray(req.messages) ? req.messages : [];
@@ -13947,7 +13950,9 @@
           {
             key: "messages",
             label: "Messages",
-            note: messages.length + " message" + (messages.length === 1 ? "" : "s"),
+            note: messages.length
+              ? messages.length + " message" + (messages.length === 1 ? "" : "s")
+              : "not re-captured per step — the transcript is the record",
             text: messages.map(messageEntryText).join("\n\n"),
           },
           {
@@ -14113,8 +14118,8 @@
         a.className = "context-raw";
         let payload;
         if (requests.length === 1) {
-          payload = requests[0]?.request;
-          if (requests[0]?.transport) payload = { request: requests[0].request, transport: requests[0].transport };
+          payload = requestBody(requests[0]);
+          if (requests[0]?.transport) payload = { request: requestBody(requests[0]), transport: requests[0].transport };
         } else {
           payload = requests.map((q) => ({
             step: q.step,
@@ -14122,7 +14127,7 @@
             createdAt: q.createdAt,
             truncated: !!q.truncated,
             ...(q.transport ? { transport: q.transport } : {}),
-            request: q.request,
+            request: requestBody(q),
           }));
         }
         a.href = "#";
@@ -14139,7 +14144,7 @@
         return a;
       }
       function renderContextRequest(q, i, totalRequests) {
-        const sections = contextSections(q.request, q.transport);
+        const sections = contextSections(requestBody(q), q.transport);
         const wrap = document.createElement("div");
         wrap.className = "context-request";
         const selection = document.createElement("div");
@@ -14181,7 +14186,7 @@
         role.className = "role";
         role.textContent = "sent to model";
         const latest = requests[requests.length - 1] || { request: {} };
-        const latestSections = opts.latestSections || contextSections(latest.request, latest.transport);
+        const latestSections = opts.latestSections || contextSections(requestBody(latest), latest.transport);
         const sync = () => {
           const open = !block.classList.contains("collapsed");
           tog.textContent = open ? "▾" : "▸";

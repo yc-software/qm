@@ -316,7 +316,7 @@ test("addressed + no post but a final text reply → the reply is delivered dire
     const session = await built.sessions.getByThread("ch:C-shed:710.1");
     const requests = await built.sessions.listLlmRequests(session!.id);
     assert.ok(
-      !requests.some((r) => JSON.stringify(r.request).includes("[system] You were addressed directly")),
+      !requests.some((r) => JSON.stringify(r.promptEnvelope).includes("[system] You were addressed directly")),
       "no nudge model call — the existing reply text is delivered as-is",
     );
     await sleep(300);
@@ -340,7 +340,7 @@ test("addressed + STILL no post after the nudge → the nudge turn's text is del
     assert.ok(fallback, "the shed reply was delivered as the fallback");
     assert.equal(fallback.destination.target, "slack:C-shedmute:710.3", "delivered to the addressed conversation");
     const session = await built.sessions.getByThread("ch:C-shedmute:710.3");
-    const nudgeRequest = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.request as {
+    const nudgeRequest = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.promptEnvelope as {
       messages?: Array<{ role?: string; content?: string }>;
     };
     assert.ok(
@@ -377,7 +377,7 @@ test("reply-or-decline nudge preserves the trigger image and environment", async
       await pollFor(built.deliveries, (d) => d.text.startsWith("worklog: did the thing but never posted"), 15_000),
     );
     const session = await built.sessions.getByThread("ch:C-nudge-image:710.2");
-    const request = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.request as {
+    const request = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.promptEnvelope as {
       messages?: Array<{ role?: string; content?: string }>;
       images?: Array<{ mimeType?: string; dataBase64?: string }>;
     };
@@ -413,7 +413,7 @@ test("nudge tape reread failure falls back to refreshed history, never the stale
     await built.app.turn(mention("!shedmute", "C-nudge-read", "711.1"));
     assert.ok(await pollFor(built.deliveries, (d) => d.text === "worklog: did the thing but never posted"));
     const session = await built.sessions.getByThread("ch:C-nudge-read:711.1");
-    const nudgeRequest = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.request as {
+    const nudgeRequest = (await built.sessions.listLlmRequests(session!.id)).at(-1)!.promptEnvelope as {
       messages?: Array<{ role?: string; content?: string }>;
     };
     assert.ok(

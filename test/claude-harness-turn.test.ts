@@ -244,7 +244,11 @@ test("each steered prompt gets its own LLM request record", async () => {
     [0, 1],
   );
   assert.equal(llmRequests[1]!.truncated, false);
-  assert.deepEqual(llmRequests[1]!.request, { prompt: "and another thing" });
+  assert.equal(
+    (llmRequests[1]!.promptEnvelope as { system: string }).system,
+    "be brief",
+    "steer steps reuse the turn's envelope — the steer text itself lives on the tape",
+  );
   assert.equal(llmRequests[0]!.usage?.costUsd, 0.1);
   assert.ok(Math.abs((llmRequests[1]!.usage?.costUsd ?? 0) - 0.2) < 1e-9);
 });
@@ -268,7 +272,7 @@ test("a turn that dies before its first result still records exactly one request
   assert.equal(llmRequests.length, 1);
   assert.equal(llmRequests[0]!.step, 0);
   assert.equal(llmRequests[0]!.truncated, false);
-  assert.equal((llmRequests[0]!.request as { system: string }).system, "be brief");
+  assert.equal((llmRequests[0]!.promptEnvelope as { system: string }).system, "be brief");
 });
 
 test("the claude harness offers compaction and detection so a utility role cannot silently disable them", async () => {
