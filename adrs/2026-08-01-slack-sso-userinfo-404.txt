@@ -1,0 +1,71 @@
+Slack SSO sign-in fails at the userinfo step with a non-JSON HTTP 404 from Slack.
+
+Deployment: Fly.io target, services = core/slack/web-ui/admin/portal (auth broker
+dropped per references/slack.md for Slack sign-in). CLI 0.1.4, published images
+from the release manifest (portal sha256:e245dfc2c12a47f18f0bb367622538b30e9b89e890a145dcfd5abefe342d0e98).
+
+Setup followed references/slack.md exactly:
+
+- env.portal declares all five Slack endpoints explicitly plus OIDC_CLIENT_ID and
+  PORTAL_EXPECTED_TEAM_ID; generated portal.fly.toml verified to contain them.
+- SSO app created from the `qm outputs` manifest URL, installed to the workspace.
+- Client secret supplied as OIDC_CLIENT_SECRET and pushed with `qm secrets push`.
+
+Symptom, deterministic across attempts and across portal restarts/redeploys:
+
+  "We couldn't sign you in — Details: userinfo returned non-JSON (HTTP 404)"
+
+Diagnosis performed (all steps reproducible):
+
+1. Token exchange and id_token verification SUCCEED. The failure is isolated to
+   fetchUserinfo. (The portal reaches the fetchUserinfo call in
+   plugins/portal/src/index.ts; the expected-team claim check immediately before
+   it passes — proving the id_token verified, which in turn proves client id,
+   client secret, redirect URI, and PKCE are all correct.)
+
+2. A debug build adding one console.error to readJson's catch in oidc.ts captured
+   the exact failing call:
+
+     userinfo https://slack.com/api/openid/connect.userInfo 404
+     <!DOCTYPE html><html lang="en-US" data-cdn="https://a.slack-edge.com/">...
+
+   The URL is correct (matches both the deployment config and Slack's discovery
+   document). Slack served its WEB-tier 404 HTML page, not an API JSON error.
+
+3. The identical flow succeeds outside the portal. A from-scratch replay of the
+   portal's exact sequence (PKCE authorize URL built per oidc.ts, code exchange at
+   the same token endpoint with client_secret_basic, then GET userinfo with the
+   issued xoxp- token) returns HTTP 200 with full JSON user info. GET and POST
+   both work.
+
+4. From INSIDE the portal machine itself (fly ssh console), a manual undici fetch
+   to the same userinfo URL returns proper JSON — so the machine's network path
+   and Slack's API edge both behave.
+
+5. Working calls vs failing call: same URL, same method, same headers, same token
+   type (xoxp-), same machine, minutes apart. The only unobserved variable is
+   what the portal's fetch actually puts on the wire during the live flow — the
+   token-exchange response body and the exact request framing were not captured.
+
+Hypotheses we could not disambiguate without deeper instrumentation:
+
+  a. The authorize URL as built by buildAuthorizeUrl is rewritten by Slack's
+     workspace-OAuth shim (observed: the browser is bounced through
+     /oauth?...user_scope=openid,profile,email&openid_connect=1&granular_bot_scope=1).
+     Whether the granted token always carries the openid user-scope after that
+     rewrite is not verifiable from outside.
+  b. Undici-level behavior (e.g. HTTP/2 connection coalescing across slack.com
+     authorities) routing the API request to Slack's web tier.
+  c. A Slack edge race: userinfo called immediately after exchange hits a shard
+     where the token is not yet valid, and Slack's web tier — not the API tier —
+     answers that path.
+
+Repro for maintainers: deploy per slack.md to Fly, create the SSO app from the
+generated manifest, install it, sign in. Failure appears at first sign-in.
+Adding one log line to readJson's catch in plugins/portal/src/oidc.ts reproduces
+the capture in (2) within minutes.
+
+Ask: either fix the userinfo call, or add first-class logging of the OIDC
+exchange and userinfo responses so operators can self-diagnose. Happy to test
+any patched image — the deployment is live and one sign-in attempt takes
+30 seconds.
