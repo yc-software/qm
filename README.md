@@ -168,6 +168,7 @@ messages, and screenshots for organization identifiers before it pushes. Nothing
 
 ## Going deeper
 
+- [`docs/README.md`](./docs/README.md) — documentation by audience and purpose
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full

@@ -110,7 +110,7 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
     (`GET /api/files/:id/content`, streamed binary). Image files (`image/*`) show an inline
     thumbnail rendered straight from that same `/content` stream. Backed by a durable, owner-scoped registry —
     NOT a transcript scan. Delivered/uploaded files are owned at the initiator's personal scope so
-    they surface here, and auto-shared with the conversation (ADR-0003 D2/D4): a public-channel file
+    they surface here, and auto-shared with the conversation: a public-channel file
     gets an `org:` read grant so every member sees it under "Shared with you"; private-channel
     per-member grants are sequencing-gated (off until enabled), so those stay owner-only until then.
   - **Connectors** — per-provider OAuth status with Connect / Reconnect / Disconnect. The server
