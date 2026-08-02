@@ -1,7 +1,6 @@
 import zlib from "node:zlib";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-
 const W = 200;
 const H = 200;
 const px = Buffer.alloc(W * H * 4);
@@ -25,13 +24,11 @@ for (let x = 70; x <= 130; x++) {
   const y = Math.round(140 + 18 * Math.sin(((x - 70) / 60) * Math.PI));
   for (let t = -3; t <= 3; t++) set(x, y + t, 150, 70, 70);
 }
-
 const raw = Buffer.alloc(H * (1 + W * 4));
 for (let y = 0; y < H; y++) {
   raw[y * (1 + W * 4)] = 0;
   px.copy(raw, y * (1 + W * 4) + 1, y * W * 4, (y + 1) * W * 4);
 }
-
 const crcTable = Array.from({ length: 256 }, (_, n) => {
   let c = n;
   for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
