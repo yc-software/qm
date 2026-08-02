@@ -62,7 +62,7 @@ const DEFAULT_CODEX_MODEL_IDS: readonly string[] = ["gpt-5.6-sol", "gpt-5.6-terr
 
 function defaultModelIdsForHarness(harnessId: string): readonly string[] {
   if (harnessId === "codex") return DEFAULT_CODEX_MODEL_IDS;
-  if (harnessId === "claude") return DEFAULT_PICKER_MODEL_IDS;
+  if (harnessId === "claude" || harnessId === "cma") return DEFAULT_PICKER_MODEL_IDS;
   return [...DEFAULT_PICKER_MODEL_IDS, ...DEFAULT_CODEX_MODEL_IDS];
 }
 
@@ -71,6 +71,7 @@ const HARNESS_LABELS: Record<string, string> = {
   opencode: "OpenCode",
   codex: "Codex",
   claude: "Claude Code",
+  cma: "Claude Managed Agents",
   mock: "Mock",
 };
 
@@ -178,7 +179,7 @@ export function effortLabel(level: EffortLevel): string {
 }
 
 export function harnessSupportsEffort(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "codex" || harnessId === "claude";
+  return harnessId === "pi" || harnessId === "codex" || harnessId === "claude" || harnessId === "cma";
 }
 
 export function harnessSupportsFastMode(harnessId: string): boolean {

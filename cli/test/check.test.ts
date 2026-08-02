@@ -47,6 +47,21 @@ function check(d: { dir: string; config: QmConfig }): ReturnType<typeof runCheck
   return runChecks(d.config, d.dir, join(d.dir, "sandbox"), { report: false });
 }
 
+test("HARNESS=cma without an environment id fails config checks before any deploy", () => {
+  const bad = deployment(() => {}, { env: { core: { HARNESS: "cma" } } });
+  const good = deployment(() => {}, { env: { core: { HARNESS: "cma", CMA_ENVIRONMENT_ID: "env_1" } } });
+  try {
+    assert.throws(
+      () => check(bad),
+      (e: Error) => /env\.core\.CMA_ENVIRONMENT_ID/.test(e.message),
+    );
+    assert.doesNotThrow(() => check(good));
+  } finally {
+    rmSync(bad.dir, { recursive: true, force: true });
+    rmSync(good.dir, { recursive: true, force: true });
+  }
+});
+
 test("a valid sandbox layer passes and returns the parsed tools + skills", () => {
   const d = deployment((dir) => {
     writeTool(dir, "example-tool", {

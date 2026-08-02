@@ -14,7 +14,6 @@ import {
   codexReplayCallId,
   codexTaskTitle,
   codexTokenUsageUpdate,
-  codexToolContext,
   codexTurnInputText,
   createCodexHarness,
   prepareCodexHome,
@@ -164,14 +163,6 @@ process.stdin.resume();
   chmodSync(path, 0o755);
   return path;
 }
-
-test("Codex forwards external-content screening into its native tool bridge", () => {
-  const screenExternalContent: NonNullable<HarnessTurnInput["screenExternalContent"]> = async () => ({
-    decision: "auto",
-  });
-  const ref = codexToolContext({ screenExternalContent } as HarnessTurnInput);
-  assert.equal(ref.screenExternalContent, screenExternalContent);
-});
 
 test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-test-"));

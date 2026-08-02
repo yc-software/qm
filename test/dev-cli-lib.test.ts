@@ -315,8 +315,8 @@ test("OpenCode config is strict, pinned, and inherits the Pi model", () => {
     "claude-opus-4-8",
   );
   assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_BIN: "/bin/claude" }).claudeBinPath, "/bin/claude");
-  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use mock, pi, opencode, codex, or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use mock, pi, opencode, codex, or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use pi, opencode, codex, claude, cma, or mock/);
+  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use pi, opencode, codex, claude, cma, or mock/);
 });
 
 test("envSha is order-independent and value-sensitive", () => {

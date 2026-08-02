@@ -1,9 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPiTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/pi-tools.ts";
+import {
+  createPiTools,
+  pauseStampAfterToolCall,
+  turnToolContext,
+  type ToolContextRef,
+} from "../src/harness/pi-tools.ts";
+import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
 import type { EntryType, SessionEntry } from "../src/types.ts";
+
+test("turn tool context forwards external-content screening into the tool bridge", () => {
+  const screenExternalContent: NonNullable<HarnessTurnInput["screenExternalContent"]> = async () => ({
+    decision: "auto",
+  });
+  const ref = turnToolContext({ screenExternalContent } as HarnessTurnInput);
+  assert.equal(ref.screenExternalContent, screenExternalContent);
+});
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {

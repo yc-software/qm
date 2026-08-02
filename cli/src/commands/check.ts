@@ -1,11 +1,16 @@
 import { existsSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { assertNodeEngine, emailTransportPreflight, flySandboxTokenPreflight } from "../preflight.ts";
+import {
+  assertNodeEngine,
+  cmaEnvironmentPreflight,
+  emailTransportPreflight,
+  flySandboxTokenPreflight,
+} from "../preflight.ts";
 import { readEnvFile } from "../util.ts";
 import { CliError, errMessage, header, note, ok, step, warn } from "../log.ts";
 import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
-import { mockHarnessWarning, sandboxPinPending, type QmConfig } from "../config.ts";
+import { configuredHarness, mockHarnessWarning, sandboxPinPending, type QmConfig } from "../config.ts";
 import { computedSecrets, runtimeSecretNames, type ComputedSecret } from "../secrets.ts";
 import { isVirtualService, runnableServices } from "../services.ts";
 import { serviceEnvironment } from "../backends/aws.ts";
@@ -32,6 +37,9 @@ export function runChecks(
   configErrors.push(...provider.validateConfig(config, plugins));
   if (provider.requiresSandboxApp && !config.sandbox?.app?.trim()) {
     configError("contract sandbox.app: a Fly agent-computer app is required for docker and fly targets");
+  }
+  if (configuredHarness(config) === "cma" && !config.env.core?.CMA_ENVIRONMENT_ID?.trim()) {
+    configError("contract env.core.CMA_ENVIRONMENT_ID: HARNESS=cma needs a self-hosted CMA environment id");
   }
   for (const skill of config.skills) {
     const path = resolve(configDir, skill);
@@ -179,6 +187,7 @@ export async function runCheckCommand(
   const secrets = readEnvFile(envFile ?? join(configDir, ".env"));
   await flySandboxTokenPreflight(config, secrets);
   await emailTransportPreflight(config, secrets);
+  await cmaEnvironmentPreflight(config, secrets);
   note("");
   ok("check passed — config, sandbox layer, and plugins are valid.");
 }

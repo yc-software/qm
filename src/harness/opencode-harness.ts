@@ -17,7 +17,14 @@ import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
-import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
+import {
+  bridgedTools,
+  coreToolOptions,
+  turnToolContext,
+  turnToolOptions,
+  type BridgedTool,
+  type ToolContextRef,
+} from "./pi-tools.ts";
 import { reconstructMessagesFromHistory } from "./replay.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -56,13 +63,6 @@ export function openCodeHarnessConfigOptions(config: Config): OpenCodeHarnessOpt
   };
 }
 
-type BridgedTool = {
-  name: string;
-  description: string;
-  parameters: unknown;
-  execute(callId: string, args: unknown): Promise<{ content?: Array<{ type?: string; text?: string }> }>;
-};
-
 type LlmCapture = { sessionId: string; step: number; model: string; request: unknown; at: number };
 
 type ActiveTurn = {
@@ -89,26 +89,6 @@ type Runtime = {
   bridgeUrl: string;
   close(): Promise<void>;
 };
-
-function toolOptions(opts: OpenCodeHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
-  return {
-    scratchExec: opts.scratchExec,
-    ownerAuthExec: opts.ownerAuthExec,
-    reachExec: opts.reachExec,
-    controlTools: opts.controlTools,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    ...(turn
-      ? { readOnly: turn.readOnly, surfaceTools: turn.surfaceTools, surfaceName: turn.surfaceName }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
-}
-
-function asTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {
-  return createPiTools(ref, options) as unknown as BridgedTool[];
-}
 
 export function bridgeToolName(name: string): string {
   if (name === "execute") return "workspace_execute";
@@ -424,8 +404,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
   const active = new Map<string, ActiveTurn>();
   const definitionRef: ToolContextRef = { current: null };
   const definitionTools = [
-    ...asTools(definitionRef, toolOptions(opts)),
-    ...asTools(definitionRef, { ...toolOptions(opts), surfaceTools: false }),
+    ...bridgedTools(definitionRef, turnToolOptions(opts)),
+    ...bridgedTools(definitionRef, { ...turnToolOptions(opts), surfaceTools: false }),
   ];
   const definitions = [
     ...new Map(
@@ -789,21 +769,10 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
       return { reply: "", stopped: true };
     }
-    const ref: ToolContextRef = {
-      current: turn.tools,
-      pendingApprovals: [],
-      pausedOnApproval: false,
-      silentRequested: false,
-      pollFire: Boolean(turn.pollFire),
-      emit: turn.emit,
-      scopeLabel: turn.scopeLabel,
-      orgScopeId: turn.orgScopeId,
-      screenExternalContent: turn.screenExternalContent,
-      toolApprovalGate: turn.toolApprovalGate,
-    };
+    const ref = turnToolContext(turn);
     const controller = new AbortController();
     ref.abortSignal = controller.signal;
-    const tools = asTools(ref, toolOptions(opts, turn));
+    const tools = bridgedTools(ref, turnToolOptions(opts, turn));
     const userEntry = await turn.emit({
       type: "user",
       payload: {

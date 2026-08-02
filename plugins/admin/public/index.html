@@ -6256,6 +6256,10 @@
         const harnessDefault = r.data.harnessDefault || "pi";
         const harnessOptions = r.data.harnessOptions || [harnessDefault];
         const modelsByHarness = r.data.modelsByHarness || {};
+        const harnessLabel = (id) =>
+          ({ pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code", cma: "Claude Managed Agents" })[
+            id
+          ] || id;
         const approvedHarnesses =
           Array.isArray(r.data.approvedHarnesses) && r.data.approvedHarnesses.length
             ? r.data.approvedHarnesses
@@ -6269,7 +6273,7 @@
           approvedHarnesses.forEach((id) => {
             const o = document.createElement("option");
             o.value = id;
-            o.textContent = { pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" }[id] || id;
+            o.textContent = harnessLabel(id);
             harness.appendChild(o);
           });
           harness.value = approvedHarnesses.includes(current.harnessId) ? current.harnessId : approvedHarnesses[0];
@@ -6305,7 +6309,7 @@
             cb.value = id;
             cb.checked = approvedHarnesses.includes(id);
             const span = document.createElement("span");
-            span.textContent = { pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" }[id] || id;
+            span.textContent = harnessLabel(id);
             row.appendChild(cb);
             row.appendChild(span);
             list.appendChild(row);

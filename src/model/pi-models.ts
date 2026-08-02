@@ -6,7 +6,13 @@ const getModel = getBuiltinModel as unknown as (provider: string, id: string) =>
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-5.6-sol";
 export const THINKING_LEVELS = ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"] as const;
-export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
+
+export function harnessEffort(level: string | undefined): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
+  return level === "low" || level === "medium" || level === "high" || level === "xhigh" || level === "max"
+    ? level
+    : undefined;
+}
+export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "cma", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
@@ -170,7 +176,7 @@ export function modelSupportedByHarness(id: string | undefined, harness: string)
   if (!id) return false;
   if (harness === "pi" || harness === "opencode" || harness === "mock") return Boolean(resolveModel(id));
   const provider = resolveModel(id)?.provider;
-  if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
+  if (harness === "claude" || harness === "cma") return provider === "anthropic" || /^claude-/i.test(id);
   if (harness === "codex") return provider === "openai" || /^(?:gpt-|o\d|codex|openai\/)/i.test(id);
   return false;
 }
@@ -218,6 +224,7 @@ export function modelProviderAvailabilityFor(
   if (harness === "pi") return managedKeys;
   if (harness === "opencode") return { ...configKeys, openrouter: false };
   if (harness === "codex") return configKeys;
+  if (harness === "cma") return { ...configKeys, openai: false, openrouter: false };
   return ALL_PROVIDERS_AVAILABLE;
 }
 
