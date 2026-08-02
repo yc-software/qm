@@ -429,6 +429,43 @@ export async function updateRuntimeConfig(
   });
 }
 
+export interface SurfaceConfig {
+  orgLocale?: string;
+  locales?: Array<{ id: string; name: string }>;
+}
+
+export async function fetchSurfaceConfig(): Promise<SurfaceConfig | null> {
+  try {
+    return await api<SurfaceConfig>("/api/surface-config");
+  } catch (e) {
+    swallow("web-ui: fetch surface config", e);
+    return null;
+  }
+}
+
+export interface LocalePreference {
+  scopeId: string;
+  locale: string | null;
+  orgLocale: string | null;
+}
+
+export async function fetchLocalePreference(scopeId?: string | null): Promise<LocalePreference | null> {
+  try {
+    const query = scopeId ? `?scopeId=${encodeURIComponent(scopeId)}` : "";
+    return await api<LocalePreference>(`/api/locale${query}`);
+  } catch (e) {
+    swallow("web-ui: fetch locale preference", e);
+    return null;
+  }
+}
+
+export async function updateLocalePreference(scopeId: string | null, locale: string | null): Promise<LocalePreference> {
+  return api<LocalePreference>("/api/locale", {
+    method: "PUT",
+    body: JSON.stringify({ locale, ...(scopeId ? { scopeId } : {}) }),
+  });
+}
+
 export type WorkObserver = (work: WorkBlock) => void;
 
 let liveRun: { runId: string } | null = null;

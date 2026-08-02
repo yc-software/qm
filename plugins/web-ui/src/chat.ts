@@ -111,6 +111,7 @@ import {
   resizeComposer,
 } from "./composer";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
+import { t } from "./i18n.ts";
 
 installMarkdownSanitizer();
 
@@ -323,7 +324,7 @@ function startProactiveOpenerIfNew(
     try {
       await agent.continue();
     } catch (err) {
-      if (agent === chatState.agent) composerState.error = errMessage(err, "Could not start the conversation.");
+      if (agent === chatState.agent) composerState.error = errMessage(err, t("Could not start the conversation."));
     } finally {
       if (agent === chatState.agent) {
         agent.streamFn = normalStreamFn;
@@ -416,7 +417,7 @@ async function approveCommand(agent: Agent, decision: ApprovalDecision): Promise
     await runApprovalTurn(chatState.threadRef, agent, decision, currentTurnOptions, chatState.onWork ?? undefined);
   } catch (err) {
     if (agent === chatState.agent) {
-      composerState.error = err instanceof Error ? err.message : "Could not send the approval.";
+      composerState.error = err instanceof Error ? err.message : t("Could not send the approval.");
       drawActiveChat(agent);
     }
   } finally {
@@ -514,7 +515,7 @@ async function resumeTrackedRun(
     await agent.continue();
   } catch (err) {
     if (agent === chatState.agent)
-      composerState.error = err instanceof Error ? err.message : "Could not reconnect to the running task.";
+      composerState.error = err instanceof Error ? err.message : t("Could not reconnect to the running task.");
   } finally {
     if (agent === chatState.agent) {
       agent.streamFn = normalStreamFn;
@@ -616,19 +617,18 @@ export function mountReadOnly(
           <div class="readonly-banner">
             ${
               surfaceOf(s) === "slack"
-                ? html`This conversation lives in Slack. Replies happen
-                  there.${
+                ? html`${t("This conversation lives in Slack. Replies happen there.")}${
                     sessionSlackUrl(s)
                       ? html` <a
                           class="readonly-banner-link"
                           href=${sessionSlackUrl(s)!}
                           target="_blank"
                           rel="noreferrer"
-                          >Open in Slack</a
+                          >${t("Open in Slack")}</a
                         >`
                       : nothing
                   }`
-                : "This conversation is read-only here."
+                : t("This conversation is read-only here.")
             }
           </div>
           ${backgroundActivityStrip()}
@@ -642,7 +642,7 @@ export function mountReadOnly(
                         @click=${async (e: Event) => {
                           const btn = e.currentTarget as HTMLButtonElement;
                           btn.disabled = true;
-                          btn.textContent = "Loading earlier messages\u2026";
+                          btn.textContent = t("Loading earlier messages…");
                           try {
                             const page = await fetchTranscript(
                               s.id,
@@ -666,16 +666,16 @@ export function mountReadOnly(
                             });
                           } catch {
                             btn.disabled = false;
-                            btn.textContent = "Show earlier messages";
+                            btn.textContent = t("Show earlier messages");
                           }
                         }}
                       >
-                        Show earlier messages
+                        ${t("Show earlier messages")}
                       </button>
                     </div>`
                   : nothing
               }
-              ${messages.length ? messages.map((m, i) => chatMessage(m, i)) : html`<div class="empty compact">No readable messages in this conversation.</div>`}
+              ${messages.length ? messages.map((m, i) => chatMessage(m, i)) : html`<div class="empty compact">${t("No readable messages in this conversation.")}</div>`}
             </div>
           </section>
         </div>
@@ -696,9 +696,9 @@ function welcomeGreeting(): TemplateResult {
       <div class="assistant-body">
         <div class="streaming-text">
           ${markdown(
-            "Hi — I'm your AI teammate 👋\n\n" +
-              "I run tasks on a computer of my own and work across your connected tools — Slack, Google Workspace, GitHub, Linear, and the open web — and I remember what we work on together.\n\n" +
-              "Want to get set up? Tell me your name and what you're working on, and I'll take it from there — or just ask me anything to dive straight in.",
+            t(
+              "Hi — I'm your AI teammate 👋\n\nI run tasks on a computer of my own and work across your connected tools — Slack, Google Workspace, GitHub, Linear, and the open web — and I remember what we work on together.\n\nWant to get set up? Tell me your name and what you're working on, and I'll take it from there — or just ask me anything to dive straight in.",
+            ),
           )}
         </div>
       </div>
@@ -719,7 +719,7 @@ function earlierNotice(agent: Agent): TemplateResult {
       ?disabled=${chatState.loadingEarlier || agent.state.isStreaming}
       @click=${() => void loadEarlierMessages()}
     >
-      ${chatState.loadingEarlier ? "Loading earlier messages…" : "Show earlier messages"}
+      ${chatState.loadingEarlier ? t("Loading earlier messages…") : t("Show earlier messages")}
     </button>
   </div>`;
 }
@@ -782,7 +782,7 @@ function paneGlance(agent: Agent, messages: AgentMessage[], tier: "card" | "stri
   const snippet = last ? messageText(last).trim() : "";
   if (tier === "strip") {
     return html`
-      <button type="button" class="pane-strip" title="Expand this pane" @click=${() => requestPaneExpand()}>
+      <button type="button" class="pane-strip" title=${t("Expand this pane")} @click=${() => requestPaneExpand()}>
         <span class="pane-strip-text">${now ?? snippet}</span>
         ${icon(Maximize2, 13)}
       </button>
@@ -790,18 +790,18 @@ function paneGlance(agent: Agent, messages: AgentMessage[], tier: "card" | "stri
   }
   return html`
     <section class="pane-card" aria-live="polite">
-      ${now ? html`<div class="pane-card-now"><span class="pane-card-now-label">Now</span><span class="pane-card-now-text">${now}</span></div>` : nothing}
+      ${now ? html`<div class="pane-card-now"><span class="pane-card-now-label">${t("Now")}</span><span class="pane-card-now-text">${now}</span></div>` : nothing}
       ${snippet ? html`<div class="pane-card-last">${snippet}</div>` : nothing}
     </section>
   `;
 }
 
 function paneNowLine(agent: Agent): string | null {
-  if (activePendingApprovals().length) return "Needs your approval";
+  if (activePendingApprovals().length) return t("Needs your approval");
   if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     const summary = liveWorkSummary(work);
-    if (!summary) return "Thinking…";
+    if (!summary) return t("Thinking…");
     return summary.detail ? `${summary.label} — ${summary.detail}` : summary.label;
   }
   return null;
@@ -835,7 +835,7 @@ export function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: bo
         ${
           composerState.dragging
             ? html`<div class="drop-overlay">
-                <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
+                <div class="drop-overlay-card">${icon(Files, 30)}<span>${t("Drop files or folders to attach")}</span></div>
               </div>`
             : nothing
         }
@@ -904,9 +904,9 @@ function contextBanner(): TemplateResult | typeof nothing {
   const glyph = chatState.scopeId?.startsWith("group:") ? Users : Hash;
   return html`<div
     class="context-banner"
-    title="This chat runs in the ${label} context — the agent works with that context's files and memory, separate from your personal context."
+    title=${t("This chat runs in the {label} context — the agent works with that context's files and memory, separate from your personal context.", { label })}
   >
-    ${icon(glyph, 13)}<span><strong>${label}</strong> context</span>
+    ${icon(glyph, 13)}<span>${t("{label} context", { label })}</span>
   </div>`;
 }
 
@@ -915,14 +915,14 @@ function chatHeader(title: string | TemplateResult, detail: string, readOnly: bo
     <header class="chat-topbar">
       <div class="chat-heading">
         <div class="chat-title">${title}</div>
-        <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
+        <div class="chat-subtitle">${readOnly ? t("Read-only") : detail}</div>
       </div>
       <div class="topbar-actions">
         ${
           chatState.sessionId && can("admin")
             ? html`<a
                 class="icon-btn subtle"
-                title="View session log (admin)"
+                title=${t("View session log (admin)")}
                 href=${adminSessionLogUrl(chatState.sessionId, chatState.scopeId ?? `org:${appState.me?.org ?? ""}`)}
                 target="_blank"
                 rel="noreferrer"
@@ -932,7 +932,7 @@ function chatHeader(title: string | TemplateResult, detail: string, readOnly: bo
         }
         <button
           class="icon-btn subtle"
-          title="Refresh conversations"
+          title=${t("Refresh conversations")}
           @click=${() => void refreshSessions({ refreshContexts: true })}
         >
           ${icon(RefreshCw, 17)}
@@ -1013,7 +1013,7 @@ function chatMessage(message: AgentMessage, index: number, isStreaming = false):
     const steered = Boolean((message as { steered?: boolean }).steered);
     return html`
       <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
-        ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
+        ${steered ? html`<div class="steer-label">↪ ${t("steered the running task")}</div>` : nothing}
         <div class="message-bubble user-bubble">
           ${markdown(messageText(message))}
           ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
@@ -1041,7 +1041,7 @@ function chatMessage(message: AgentMessage, index: number, isStreaming = false):
           ${showWork ? workBlock(work, isStreaming) : nothing} ${assistantContent(msg, isStreaming, showWork)}
           ${assistantFileList(deliveredFiles)}
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
-          ${msg.stopReason === "aborted" ? html`<div class="stopped-note">${icon(Ban, 13)}<span>Stopped</span></div>` : nothing}
+          ${msg.stopReason === "aborted" ? html`<div class="stopped-note">${icon(Ban, 13)}<span>${t("Stopped")}</span></div>` : nothing}
           ${isStreaming ? nothing : messageMeta(msg, index)}
         </div>
       </article>
@@ -1063,8 +1063,8 @@ function messageMeta(message: AgentMessage, index: number): TemplateResult | typ
           ? html`<button
               class="msg-copy"
               type="button"
-              title="Copy"
-              aria-label="Copy message"
+              title=${t("Copy")}
+              aria-label=${t("Copy message")}
               @click=${(e: Event) => void copyMessage(text, e.currentTarget as HTMLButtonElement)}
             >
               ${icon(Copy, 13)}
@@ -1076,8 +1076,8 @@ function messageMeta(message: AgentMessage, index: number): TemplateResult | typ
           ? html`<button
               class="msg-copy msg-fork"
               type="button"
-              title="Fork conversation from here"
-              aria-label="Fork conversation from here"
+              title=${t("Fork conversation from here")}
+              aria-label=${t("Fork conversation from here")}
               @click=${() => void forkFromMessage(index)}
             >
               ${icon(GitFork, 13)}
@@ -1119,7 +1119,7 @@ async function forkFromMessage(index: number): Promise<void> {
     await refreshSessions({ silent: true });
     renderList();
   } catch (err) {
-    composerState.error = errMessage(err, "Could not fork the conversation.");
+    composerState.error = errMessage(err, t("Could not fork the conversation."));
     drawActiveChat();
   }
 }
@@ -1164,19 +1164,19 @@ function withReturnTo(url: string): string {
 function connectorWidget(link: ConnectorLink): TemplateResult {
   const name =
     CONNECTOR_NAMES[link.provider] ??
-    (link.provider ? link.provider[0]!.toUpperCase() + link.provider.slice(1) : "your account");
+    (link.provider ? link.provider[0]!.toUpperCase() + link.provider.slice(1) : t("your account"));
   if (link.provider && connectedConnectors.has(link.provider)) {
     return html`<div class="connector-widget connected" role="status">
       <span class="connector-widget-icon">${icon(Check, 18)}</span>
       <span class="connector-widget-text"
-        ><strong>Connected ${name}</strong><small>Authorized — its tools work here now</small></span
+        ><strong>${t("Connected {name}", { name })}</strong><small>${t("Authorized — its tools work here now")}</small></span
       >
     </div>`;
   }
   return html`<a class="connector-widget" href=${withReturnTo(link.url)} target="_blank" rel="noreferrer">
     <span class="connector-widget-icon">${icon(Plug, 18)}</span>
     <span class="connector-widget-text"
-      ><strong>Connect ${name}</strong><small>Authorize access in a new tab</small></span
+      ><strong>${t("Connect {name}", { name })}</strong><small>${t("Authorize access in a new tab")}</small></span
     >
     ${icon(ChevronRight, 16)}
   </a>`;
@@ -1199,7 +1199,7 @@ function assistantContent(message: AssistantMessage, isStreaming = false, hasWor
     if (chunk.type === "thinking" && chunk.thinking.trim()) {
       parts.push(
         html`<details class="thinking">
-          <summary>${sheenLabel("Thinking", isStreaming)}</summary>
+          <summary>${sheenLabel(t("Thinking"), isStreaming)}</summary>
           ${markdown(chunk.thinking)}
         </details>`,
       );
@@ -1255,7 +1255,7 @@ function messageText(message: AgentMessage): string {
 }
 
 function typingRow(): TemplateResult {
-  return html`<div class="thinking-placeholder">${sheenLabel("Thinking", true)}</div>`;
+  return html`<div class="thinking-placeholder">${sheenLabel(t("Thinking"), true)}</div>`;
 }
 
 function syncWorkTicker(): void {
@@ -1375,7 +1375,7 @@ async function refreshBackgroundDetail(): Promise<void> {
     bgPanel.error = "";
   } catch (e) {
     if (seq !== bgPanel.fetchSeq) return;
-    bgPanel.error = errMessage(e, "Failed to load background activity.");
+    bgPanel.error = errMessage(e, t("Failed to load background activity."));
   } finally {
     if (seq === bgPanel.fetchSeq) {
       bgPanel.loading = false;
@@ -1436,9 +1436,9 @@ async function pollJobOutput(processId: string): Promise<void> {
 
 function timeLeft(expiresAt: number): string {
   const mins = Math.round((expiresAt - Date.now()) / 60_000);
-  if (mins <= 0) return "expiring";
-  if (mins < 60) return `${mins}m left`;
-  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`;
+  if (mins <= 0) return t("expiring");
+  if (mins < 60) return t("{mins}m left", { mins });
+  return t("{hours}h {mins}m left", { hours: Math.floor(mins / 60), mins: String(mins % 60).padStart(2, "0") });
 }
 
 function backgroundActivityStrip(): TemplateResult | typeof nothing {
@@ -1453,10 +1453,10 @@ function backgroundActivityStrip(): TemplateResult | typeof nothing {
         type="button"
         class="bg-activity-strip"
         aria-expanded=${String(bgPanel.open)}
-        title=${bgPanel.open ? "Hide background activity" : "Work continuing on the agent's computer — click to inspect"}
+        title=${bgPanel.open ? t("Hide background activity") : t("Work continuing on the agent's computer — click to inspect")}
         @click=${toggleBackgroundPanel}
       >
-        ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
+        ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? t("Background activity")}</span>
         <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
       </button>
       ${bgPanel.open ? backgroundPanelBody() : nothing}
@@ -1467,10 +1467,10 @@ function backgroundActivityStrip(): TemplateResult | typeof nothing {
 function backgroundPanelBody(): TemplateResult {
   const d = bgPanel.detail;
   const empty = d && d.jobs.length === 0 && d.watches.length === 0;
-  return html`<div class="bg-panel" role="region" aria-label="Background activity">
+  return html`<div class="bg-panel" role="region" aria-label=${t("Background activity")}>
     ${bgPanel.error ? html`<div class="bg-panel-note">${bgPanel.error}</div>` : nothing}
-    ${!d && bgPanel.loading ? html`<div class="bg-panel-note">Loading…</div>` : nothing}
-    ${empty && !bgPanel.error ? html`<div class="bg-panel-note">Nothing running here anymore.</div>` : nothing}
+    ${!d && bgPanel.loading ? html`<div class="bg-panel-note">${t("Loading…")}</div>` : nothing}
+    ${empty && !bgPanel.error ? html`<div class="bg-panel-note">${t("Nothing running here anymore.")}</div>` : nothing}
     ${d ? d.jobs.map((j) => backgroundJobRow(j)) : nothing} ${d ? d.watches.map((w) => backgroundWatchRow(w)) : nothing}
   </div>`;
 }
@@ -1478,38 +1478,47 @@ function backgroundPanelBody(): TemplateResult {
 function backgroundJobRow(j: SessionBackgroundView["jobs"][number]): TemplateResult {
   const open = bgPanel.openJob === j.processId;
   const out = bgPanel.output.get(j.processId);
-  const status =
-    out?.state === "exited" ? `exited${out.exitCode !== undefined ? ` (${out.exitCode})` : ""}` : timeLeft(j.expiresAt);
+  let status = timeLeft(j.expiresAt);
+  if (out?.state === "exited") {
+    status = out.exitCode !== undefined ? t("exited ({code})", { code: out.exitCode }) : t("exited");
+  }
   return html`
     <div class="bg-row ${open ? "open" : ""}">
       <button
         type="button"
         class="bg-row-head"
         aria-expanded=${String(open)}
-        title=${open ? "Hide output" : "Show live output"}
+        title=${open ? t("Hide output") : t("Show live output")}
         @click=${() => toggleJobOutput(j.processId)}
       >
         ${icon(Terminal, 13)}
         <code class="bg-row-cmd">${j.command}</code>
-        <span class="bg-row-meta">started ${relTime(j.startedAt)} · ${status}</span>
+        <span class="bg-row-meta">${t("started {time} · {status}", { time: relTime(j.startedAt), status })}</span>
         <span class="bg-row-toggle">${icon(ChevronRight, 13)}</span>
       </button>
-      ${open ? html`<pre class="bg-row-output">${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
+      ${open ? html`<pre class="bg-row-output">${out ? out.text || t("(no output yet)") : t("Loading output…")}</pre>` : nothing}
     </div>
   `;
 }
 
 function backgroundWatchRow(w: SessionBackgroundView["watches"][number]): TemplateResult {
-  const what = w.pattern ? `output matching /${w.pattern}/` : "any new output";
+  const what = w.pattern ? t("output matching /{pattern}/", { pattern: w.pattern }) : t("any new output");
   const note = w.instructions?.trim();
   return html`
     <div class="bg-row watch">
       <div class="bg-row-head static">
         ${icon(Radar, 13)}
-        <span class="bg-row-cmd">Watch — wakes on ${what}${note ? ` · “${note}”` : ""}</span>
+        <span class="bg-row-cmd">${t("Watch — wakes on {what}", { what })}${note ? ` · “${note}”` : ""}</span>
         <span class="bg-row-meta"
-          >armed ${relTime(w.createdAt)}${w.lastFiredAt ? ` · last fired ${relTime(w.lastFiredAt)}` : ""} ·
-          ${timeLeft(w.expiresAt)}</span
+          >${
+            w.lastFiredAt
+              ? t("armed {armed} · last fired {fired} · {left}", {
+                  armed: relTime(w.createdAt),
+                  fired: relTime(w.lastFiredAt),
+                  left: timeLeft(w.expiresAt),
+                })
+              : t("armed {armed} · {left}", { armed: relTime(w.createdAt), left: timeLeft(w.expiresAt) })
+          }</span
         >
       </div>
     </div>
@@ -1524,7 +1533,7 @@ function liveWorkDock(agent: Agent): TemplateResult | typeof nothing {
   const expandable = Boolean(summary?.detail);
   const expanded = expandable && liveWorkExpanded;
   let title = "";
-  if (expandable) title = liveWorkExpanded ? "Show less" : "Show more";
+  if (expandable) title = liveWorkExpanded ? t("Show less") : t("Show more");
   return html`
     <section class="live-work-dock ${expanded ? "expanded" : ""}" aria-live="polite">
       <button
@@ -1537,7 +1546,7 @@ function liveWorkDock(agent: Agent): TemplateResult | typeof nothing {
       >
         ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
         <span class="live-work-label"
-          >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
+          >${summary ? summary.label : sheenLabel(thinkingLabel(work), true)}</span
         >
         ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
         ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
@@ -1556,10 +1565,10 @@ function liveWorkSummary(work: WorkBlock): { icon: IconNode; label: string; deta
     const active = activeToolRow(work);
     const call = (active?.call?.payload ?? {}) as ToolPayload;
     const tool = call.tool ?? "";
-    const verb = active ? (TOOL_META[tool] ?? UNKNOWN_TOOL).active : null;
+    const verb = active ? (toolMeta()[tool] ?? unknownToolMeta()).active : null;
     return {
       icon: RefreshCw,
-      label: verb ? `${verb} interrupted — resuming…` : "Interrupted — resuming…",
+      label: verb ? t("{verb} interrupted — resuming…", { verb }) : t("Interrupted — resuming…"),
       detail: active ? toolDetail(tool, call, (active.result?.payload ?? {}) as ToolPayload) : "",
     };
   }
@@ -1580,11 +1589,11 @@ function activeToolSummary(row: ToolRowModel, work: WorkBlock): { icon: IconNode
   const call = (row.call?.payload ?? {}) as ToolPayload;
   const result = (row.result?.payload ?? {}) as ToolPayload;
   const tool = call.tool ?? result.tool ?? "unknown";
-  const meta = TOOL_META[tool] ?? UNKNOWN_TOOL;
+  const meta = toolMeta()[tool] ?? unknownToolMeta();
   const secs = elapsedSeconds(row.call?.createdAt) || workSeconds(work);
   return {
     icon: meta.icon,
-    label: secs > 0 ? `${meta.active} for ${secs}s` : meta.active,
+    label: secs > 0 ? t("{active} for {secs}s", { active: meta.active, secs }) : meta.active,
     detail: toolDetail(tool, call, result),
   };
 }
@@ -1600,16 +1609,17 @@ function workSeconds(work: WorkBlock): number {
   return Math.max(0, Math.round((end - work.startedAt) / 1000));
 }
 
-function usedToolsSuffix(work: WorkBlock): string {
+function thinkingLabel(work: WorkBlock): string {
   const n = work.activity.filter((a) => a.type === "tool_call").length;
-  return n > 0 ? ` (used ${n} tool${n === 1 ? "" : "s"})` : "";
+  if (n === 0) return t("Thinking");
+  return n === 1 ? t("Thinking (used {n} tool)", { n }) : t("Thinking (used {n} tools)", { n });
 }
 
 function workLabel(work: WorkBlock): string {
-  if (work.stale && (work.status === "thinking" || work.status === "working")) return "Interrupted — resuming…";
-  if (work.status === "thinking") return "Thinking";
+  if (work.stale && (work.status === "thinking" || work.status === "working")) return t("Interrupted — resuming…");
+  if (work.status === "thinking") return t("Thinking");
   const secs = workSeconds(work);
-  return work.status === "working" ? `Working for ${secs}s` : `Worked for ${secs}s`;
+  return work.status === "working" ? t("Working for {secs}s", { secs }) : t("Worked for {secs}s", { secs });
 }
 
 function workBlock(work: WorkBlock, isStreaming: boolean): TemplateResult {
@@ -1663,9 +1673,9 @@ function workBlock(work: WorkBlock, isStreaming: boolean): TemplateResult {
 
 function segmentSummaryLabel(items: TimelineItem[], work: WorkBlock): string {
   const tools = items.filter((it) => it.kind === "tool").length;
-  if (tools > 0) return `${tools} tool call${tools === 1 ? "" : "s"}`;
+  if (tools > 0) return tools === 1 ? t("{n} tool call", { n: tools }) : t("{n} tool calls", { n: tools });
   const secs = workSeconds(work);
-  return work.status === "failed" ? `Failed after ${secs}s` : `Worked for ${secs}s`;
+  return work.status === "failed" ? t("Failed after {secs}s", { secs }) : t("Worked for {secs}s", { secs });
 }
 
 export function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
@@ -1673,11 +1683,11 @@ export function approvalSummaryView(a: PendingApproval, expanded = false): Templ
   const truncated = a.command.includes("\n") || a.command.length > 80;
   return html`
     <div class="approval-head">
-      <span class="approval-title">Approval needed</span>
+      <span class="approval-title">${t("Approval needed")}</span>
       ${a.reason ? html`<span class="approval-reason-badge">${a.reason}</span>` : nothing}
     </div>
     ${a.summary ? html`<div class="approval-summary-line">${a.summary}</div>` : nothing}
-    ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">Why</span>${a.purpose}</div>` : nothing}
+    ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">${t("Why")}</span>${a.purpose}</div>` : nothing}
     ${
       expanded
         ? html`<code class="approval-cmd approval-cmd-full">${a.command}</code>`
@@ -1686,7 +1696,7 @@ export function approvalSummaryView(a: PendingApproval, expanded = false): Templ
     ${
       a.matched
         ? html`<div class="approval-match">
-            <span class="approval-match-label">Triggered by</span
+            <span class="approval-match-label">${t("Triggered by")}</span
             ><code class="approval-match-snippet">${a.matched}</code>
           </div>`
         : nothing
@@ -1694,7 +1704,7 @@ export function approvalSummaryView(a: PendingApproval, expanded = false): Templ
     ${
       !expanded && truncated
         ? html`<details class="approval-full">
-            <summary>Show full command</summary>
+            <summary>${t("Show full command")}</summary>
             <code class="approval-cmd">${a.command}</code>
           </details>`
         : nothing
@@ -1731,27 +1741,36 @@ function messageRow(activity: ToolActivity): TemplateResult {
   return html`<div class="work-message">${markdown(text)}</div>`;
 }
 
-const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
-  execute: { icon: Terminal, active: "Running command", done: "Ran command", attempted: "Tried command" },
-  read: { icon: FileText, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
-  write: { icon: Pencil, active: "Writing file", done: "Wrote file", attempted: "Tried writing file" },
-  publish: { icon: Rocket, active: "Publishing", done: "Published", attempted: "Tried publishing" },
-  recall: { icon: Brain, active: "Searching memory", done: "Searched memory", attempted: "Tried searching memory" },
-  memory: { icon: Brain, active: "Using memory", done: "Used memory", attempted: "Tried using memory" },
-  history: {
-    icon: ScrollText,
-    active: "Searching history",
-    done: "Searched history",
-    attempted: "Tried searching history",
-  },
-  background: {
-    icon: Terminal,
-    active: "Managing process",
-    done: "Managed process",
-    attempted: "Tried managing process",
-  },
-};
-const UNKNOWN_TOOL = { icon: Wrench, active: "Working", done: "Finished step", attempted: "Tried step" };
+function toolMeta(): Record<string, { icon: IconNode; active: string; done: string; attempted: string }> {
+  return {
+    execute: { icon: Terminal, active: t("Running command"), done: t("Ran command"), attempted: t("Tried command") },
+    read: { icon: FileText, active: t("Reading file"), done: t("Read file"), attempted: t("Tried reading file") },
+    write: { icon: Pencil, active: t("Writing file"), done: t("Wrote file"), attempted: t("Tried writing file") },
+    publish: { icon: Rocket, active: t("Publishing"), done: t("Published"), attempted: t("Tried publishing") },
+    recall: {
+      icon: Brain,
+      active: t("Searching memory"),
+      done: t("Searched memory"),
+      attempted: t("Tried searching memory"),
+    },
+    memory: { icon: Brain, active: t("Using memory"), done: t("Used memory"), attempted: t("Tried using memory") },
+    history: {
+      icon: ScrollText,
+      active: t("Searching history"),
+      done: t("Searched history"),
+      attempted: t("Tried searching history"),
+    },
+    background: {
+      icon: Terminal,
+      active: t("Managing process"),
+      done: t("Managed process"),
+      attempted: t("Tried managing process"),
+    },
+  };
+}
+function unknownToolMeta(): { icon: IconNode; active: string; done: string; attempted: string } {
+  return { icon: Wrench, active: t("Working"), done: t("Finished step"), attempted: t("Tried step") };
+}
 
 function firstLine(s: string, max = 72): string {
   const line = s.split("\n")[0] ?? "";
@@ -1774,16 +1793,22 @@ function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): strin
     case "recall":
     case "history": {
       const q = call.query ?? result.query ?? "";
-      return result.count !== undefined ? `${q} · ${result.count} result${result.count === 1 ? "" : "s"}` : q;
+      if (result.count === undefined) return q;
+      return result.count === 1
+        ? t("{q} · {n} result", { q, n: result.count })
+        : t("{q} · {n} results", { q, n: result.count });
     }
     case "memory": {
       const action = call.action ?? result.action ?? "";
       const q = call.query ?? result.query ?? "";
       let detail = q;
       if (result.count !== undefined) {
-        detail = `${q} · ${result.count} result${result.count === 1 ? "" : "s"}`;
+        detail =
+          result.count === 1
+            ? t("{q} · {n} result", { q, n: result.count })
+            : t("{q} · {n} results", { q, n: result.count });
       } else if (result.added !== undefined) {
-        detail = `${result.added} saved`;
+        detail = t("{n} saved", { n: result.added });
       }
       return [action, detail].filter(Boolean).join(" ");
     }
@@ -1803,24 +1828,24 @@ function toolRow(row: ToolRowModel, status: WorkBlock["status"], stale = false):
     return html`<div class="tool-row tool-approval">
       <span class="tool-icon">${icon(Wrench, 15)}</span>
       <span class="tool-label"
-        >Approval needed${p.reason ? html` <span class="tool-detail">${firstLine(p.reason, 90)}</span>` : nothing}</span
+        >${t("Approval needed")}${p.reason ? html` <span class="tool-detail">${firstLine(p.reason, 90)}</span>` : nothing}</span
       >
     </div>`;
   }
   const call = (row.call?.payload ?? {}) as ToolPayload;
   const result = (row.result?.payload ?? {}) as ToolPayload;
   const tool = call.tool ?? result.tool ?? "unknown";
-  const meta = TOOL_META[tool] ?? UNKNOWN_TOOL;
+  const meta = toolMeta()[tool] ?? unknownToolMeta();
   const kind = toolRowKind(row, status);
   let label = meta.attempted;
-  if (kind === "approval") label = "Approval needed";
-  else if (kind === "running") label = stale ? `${meta.active} — interrupted` : meta.active;
+  if (kind === "approval") label = t("Approval needed");
+  else if (kind === "running") label = stale ? t("{active} — interrupted", { active: meta.active }) : meta.active;
   else if (kind === "ok") label = meta.done;
   let why = "";
   if (kind === "approval") why = firstLine(result.reason ?? "", 90);
   else if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
   const base = kind === "approval" ? "" : toolDetail(tool, call, result);
-  const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
+  const attempts = row.attempts && row.attempts > 1 ? t("{n} attempts", { n: row.attempts }) : "";
   const detail = [base, why, attempts].filter(Boolean).join(" · ");
   const classes = ["tool-row", `tool-${kind}`].join(" ");
   const head = html`<span class="tool-icon">${icon(meta.icon, 15)}</span>
@@ -1839,7 +1864,7 @@ function execOutputCard(result: ToolPayload): TemplateResult {
   return html`<div class="code-card">
     <div class="code-card-head"><span class="code-card-lang">bash</span></div>
     <pre class="code-card-body">${out}</pre>
-    <div class="code-card-foot">exit ${result.code ?? 0}${result.timedOut ? " · timed out" : ""}</div>
+    <div class="code-card-foot">${result.timedOut ? t("exit {code} · timed out", { code: result.code ?? 0 }) : t("exit {code}", { code: result.code ?? 0 })}</div>
   </div>`;
 }
 

@@ -34,6 +34,7 @@ const server = createServer(built.app, {
   providerKeys: providerKeysPresent(config),
   modelCredentials: built.modelCredentials,
   ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
+  ...(config.orgLocale ? { orgLocale: config.orgLocale } : {}),
   harnessId: config.harness,
   connectorTokens: built.connectorTokens,
   slackInstallation: built.slackInstallation,

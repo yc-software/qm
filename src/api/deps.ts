@@ -4,6 +4,7 @@ import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
 import type { ConsentLinkStore } from "../connectors/consent-link.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
+import type { Locale } from "../i18n/locale.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import type { EgressAuditSink } from "../admin/egress-audit-sink.ts";
@@ -82,6 +83,7 @@ export interface ServerDeps {
   modelCredentials?: ModelCredentialStore;
   modelCredentialFetch?: typeof fetch;
   brandingDefault?: { accent?: string; mark?: string; selfLabel?: string };
+  orgLocale?: Locale;
   harnessId?: string;
   admin?: AdminService;
   rateLimiter?: RateLimiter;

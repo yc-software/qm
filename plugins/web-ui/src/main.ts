@@ -1,6 +1,6 @@
 import "dockview-core/dist/styles/dockview.css";
 import "./shell.css";
-import { bootSafely } from "./shell";
+import { bootSafely, closeLangMenu } from "./shell";
 import { closeFormMenus } from "./ui";
 import { drawActiveChat } from "./chat";
 import { composerState, slashQuery } from "./composer";
@@ -24,6 +24,7 @@ document.addEventListener("click", (e) => {
     renderList();
   }
   closeDeployMenu(target);
+  closeLangMenu(target);
   if (redrawChat) drawActiveChat();
 });
 
@@ -41,6 +42,7 @@ document.addEventListener("keydown", (e) => {
   closeOpenSessionMenu();
   changed = closeDeployMenu(null, true) || changed;
   changed = closeFormMenus() || changed;
+  changed = closeLangMenu(null) || changed;
   if (changed) drawActiveChat();
 });
 

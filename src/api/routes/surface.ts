@@ -15,6 +15,7 @@ import {
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
+import { isLocale, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES } from "../../i18n/locale.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { pipeToResponse, sendJson } from "../http.ts";
@@ -892,6 +893,8 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     ...(managedKeys ? { modelProviderConfigured: Object.values(managedKeys).some(Boolean) } : {}),
     externalSlackParticipants,
     ...(Object.keys(resolvedBranding).length ? { branding: resolvedBranding } : {}),
+    ...(deps.orgLocale ? { orgLocale: deps.orgLocale } : {}),
+    locales: SUPPORTED_LOCALES.map((id) => ({ id, name: LOCALE_NATIVE_NAMES[id] })),
   });
 }
 
@@ -1016,6 +1019,36 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
+}
+
+async function getScopeLocale(ctx: ApiCtx): Promise<void> {
+  if (!ctx.deps.config) return sendJson(ctx.res, 404, { error: "not_found" });
+  const target = await runtimeTarget(ctx);
+  if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
+  const stored = await ctx.deps.config.getLocaleDurable(target.scope);
+  return sendJson(ctx.res, 200, {
+    scopeId: target.scope,
+    locale: stored,
+    orgLocale: ctx.deps.orgLocale ?? null,
+  });
+}
+
+async function putScopeLocale(ctx: ApiCtx): Promise<void> {
+  if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (ctx.capability && ctx.capability.liveActor !== true)
+    return sendJson(ctx.res, 403, { error: "live_actor_required" });
+  const target = await runtimeTarget(ctx);
+  if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
+  const value: unknown = ctx.body.locale;
+  if (value !== null && !isLocale(value)) return sendJson(ctx.res, 400, { error: "unsupported_locale" });
+  await ctx.deps.config.setLocaleLatest(target.scope, value);
+  audit(ctx.deps, {
+    principalId: target.actorId,
+    action: "locale.update",
+    resource: "locale",
+    scopeLabel: target.scope,
+  });
+  return sendJson(ctx.res, 200, { scopeId: target.scope, locale: value });
 }
 
 async function webuiModelEnabled(ctx: ApiCtx, modelId: string): Promise<boolean> {
@@ -1170,6 +1203,8 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
   { method: "GET", path: "/v1/runtime-config", auth: "either", handle: getRuntimeConfig },
   { method: "PUT", path: "/v1/runtime-config", auth: "either", handle: putRuntimeConfig },
+  { method: "GET", path: "/v1/locale", auth: "either", handle: getScopeLocale },
+  { method: "PUT", path: "/v1/locale", auth: "either", handle: putScopeLocale },
   { method: "GET", path: "/v1/soul", auth: "either", handle: getSoul },
   { method: "POST", path: "/v1/soul", auth: "either", handle: postSoul },
 ];

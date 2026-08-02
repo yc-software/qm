@@ -6,7 +6,7 @@ const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "u
 
 test("scope-default buttons render only after the model selection is toggled off the default", () => {
   assert.match(composer, /const modelToggled = !runtimePending && selectedModel\.value !== defaultModelValue\(\)/);
-  assert.match(composer, /\$\{\s*modelToggled\s*\? html`[\s\S]{0,800}?>\s*Make default\s*<\/button>/);
+  assert.match(composer, /\$\{\s*modelToggled\s*\? html`[\s\S]{0,800}?\$\{t\("Make default"\)\}\s*<\/button>/);
   assert.match(composer, /\$\{\s*modelToggled && activeRuntimeConfig\?\.scopeOverride/);
 });
 

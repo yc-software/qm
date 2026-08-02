@@ -7,6 +7,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { isHarnessId, modelSupportedByHarness } from "../model/pi-models.ts";
+import type { Locale } from "../i18n/locale.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
 import {
@@ -92,6 +93,10 @@ export interface OrgBranding {
 export interface PersistedBranding {
   scopeId: ScopeId;
   branding: OrgBranding;
+}
+export interface PersistedLocale {
+  scopeId: ScopeId;
+  locale: Locale;
 }
 export interface PersistedBrowseMaxSteps {
   scopeId: ScopeId;
@@ -181,6 +186,8 @@ export interface ScopedConfigStore {
   getBranding(id: ScopeId): OrgBranding | null;
   setBranding(id: ScopeId, branding: OrgBranding | null): void;
   getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
+  setLocaleLatest(id: ScopeId, locale: Locale | null): Promise<void>;
+  getLocaleDurable(id: ScopeId): Promise<Locale | null>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): void;
   getBrowseModel(id: ScopeId): string | null;
@@ -216,6 +223,7 @@ export function createMemoryConfigStore(
     webuiModels?: DurableMap<PersistedWebuiModels>;
     peopleDirectoryUrls?: DurableMap<PersistedPeopleDirectoryUrl>;
     branding?: DurableMap<PersistedBranding>;
+    locales?: DurableMap<PersistedLocale>;
     browseMaxSteps?: DurableMap<PersistedBrowseMaxSteps>;
     browseModels?: DurableMap<PersistedBrowseModel>;
     turnWallClocks?: DurableMap<PersistedTurnWallClock>;
@@ -258,6 +266,7 @@ export function createMemoryConfigStore(
   const webuiModelStore = opts.webuiModels ?? createMemoryMap<PersistedWebuiModels>();
   const peopleDirectoryUrlStore = opts.peopleDirectoryUrls ?? createMemoryMap<PersistedPeopleDirectoryUrl>();
   const brandingStore = opts.branding ?? createMemoryMap<PersistedBranding>();
+  const localeStore = opts.locales ?? createMemoryMap<PersistedLocale>();
   const browseMaxStepsStore = opts.browseMaxSteps ?? createMemoryMap<PersistedBrowseMaxSteps>();
   const browseModelStore = opts.browseModels ?? createMemoryMap<PersistedBrowseModel>();
   const turnWallClockStore = opts.turnWallClocks ?? createMemoryMap<PersistedTurnWallClock>();
@@ -764,6 +773,13 @@ export function createMemoryConfigStore(
       }
     },
     getBrandingDurable: async (id) => (await brandingStore.get(id))?.branding ?? null,
+    async setLocaleLatest(id, locale) {
+      await writeQueue(`locale:${id}`, async () => {
+        if (locale === null) await localeStore.delete(id);
+        else await localeStore.put(id, { scopeId: id, locale });
+      });
+    },
+    getLocaleDurable: async (id) => (await localeStore.get(id))?.locale ?? null,
     getBrowseMaxSteps: (id) => browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps(id, steps) {
       if (steps === null) {

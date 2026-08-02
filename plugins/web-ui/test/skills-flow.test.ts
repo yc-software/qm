@@ -23,7 +23,7 @@ test("focused create/edit flows leave list search and filters untouched on open 
 });
 
 test("closing a focused flow clears an unfinished edit loading notice", () => {
-  assert.match(bodyOf("startEdit"), /skillsNotice = "Loading skill instructions…"/);
+  assert.match(bodyOf("startEdit"), /skillsNotice = t\("Loading skill instructions…"\)/);
   assert.match(bodyOf("closeFocusedFlow"), /skillsNotice = ""/);
 });
 
@@ -68,7 +68,7 @@ test("edit loading and successful saves always move focus to a surviving control
     bodyOf("restoreFocusedFlow"),
     /skillId\s*\?\s*\(?matchingEdit \?\? search \?\? create\)?\s*:\s*\(?create \?\? search\)?/,
   );
-  assert.match(bodyOf("editorPane"), /editError \? "Instructions unavailable\." : "Loading instructions…"/);
+  assert.match(bodyOf("editorPane"), /editError \? t\("Instructions unavailable\."\) : t\("Loading instructions…"\)/);
   assert.equal(source.match(/shouldBlockRepeatedPublishClick\(reviewed, event\.detail\)/g)?.length, 2);
 });
 

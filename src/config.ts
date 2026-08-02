@@ -19,6 +19,7 @@ import {
   type ModelProvider,
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
+import { isLocale, SUPPORTED_LOCALES, type Locale } from "./i18n/locale.ts";
 
 export interface Config {
   production: boolean;
@@ -35,6 +36,7 @@ export interface Config {
   deployProvider: "docker" | "aws";
   egressServiceHosts?: string[];
   brandingDefault?: { accent?: string; mark?: string; selfLabel?: string };
+  orgLocale?: Locale;
   modelId?: string;
   opencodeModel?: string;
   codexModel?: string;
@@ -447,6 +449,15 @@ function numEnvStrict(name: string, value: string | undefined): number | undefin
   return parsed;
 }
 
+function orgLocaleEnvStrict(value: string | undefined): Locale | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const locale = value.trim();
+  if (isLocale(locale)) return locale;
+  throw new Error(
+    `ORG_LOCALE=${JSON.stringify(value)} is not recognized — use ${SUPPORTED_LOCALES.join(", ")}, or unset it.`,
+  );
+}
+
 function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
   const clean = (v: string | undefined): string =>
     (v ?? "").replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029<>]/g, "").trim();
@@ -713,6 +724,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     ...(orgBrandingFromEnv(env) ? { brandingDefault: orgBrandingFromEnv(env) } : {}),
+    ...(orgLocaleEnvStrict(env.ORG_LOCALE) ? { orgLocale: orgLocaleEnvStrict(env.ORG_LOCALE) } : {}),
     ...(env.PI_MODEL ? { modelId: env.PI_MODEL } : {}),
     ...(env.OPENCODE_MODEL || env.PI_MODEL ? { opencodeModel: env.OPENCODE_MODEL || env.PI_MODEL } : {}),
     ...(env.CODEX_MODEL ? { codexModel: env.CODEX_MODEL } : {}),

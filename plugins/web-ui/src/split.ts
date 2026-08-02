@@ -34,6 +34,7 @@ import {
   type SplitEdge,
 } from "./split-layout";
 import { deepLinkPath, UI_BASE } from "./deep-link";
+import { t } from "./i18n.ts";
 import { icon } from "./ui";
 import { appState } from "./shell-state";
 import { renderSidebarTop, switchView, syncUrlFromState } from "./shell";
@@ -119,7 +120,7 @@ function buildDock(): DockviewApi {
     if (e.getData() === undefined) return;
     if (api.groups.length >= MAX_TILES && dropAddsTile(nativeDrop(api, e))) {
       e.preventDefault();
-      canvasToast(`${MAX_TILES} tiles is the limit — drop it on a tab strip instead`);
+      canvasToast(t("{count} tiles is the limit — drop it on a tab strip instead", { count: MAX_TILES }));
     }
   };
   api.onWillDrop(holdTileCap);
@@ -224,7 +225,7 @@ function addPane(
     id: uid(),
     component: "pane",
     tabComponent: "pane",
-    title: params.sessionId ? "Conversation" : "New session",
+    title: params.sessionId ? t("Conversation") : t("New session"),
     params: { ...params },
     ...(position ? { position } : {}),
   });
@@ -359,7 +360,7 @@ function focusExistingPane(sessionId: string, exceptPaneId?: string): boolean {
   if (!dup) return false;
   if (dup.id !== exceptPaneId) {
     dup.api.setActive();
-    canvasToast("Already open in a pane");
+    canvasToast(t("Already open in a pane"));
   }
   return true;
 }
@@ -377,14 +378,15 @@ function openInPane(paneId: string, sessionId: string, threadRef: string): void 
 
 function roomForAnotherPane(): boolean {
   if ((dockApi?.panels.length ?? 0) < MAX_PANES) return true;
-  canvasToast(`${MAX_PANES} conversations is all one canvas holds — close one first`);
+  canvasToast(t("{count} conversations is all one canvas holds — close one first", { count: MAX_PANES }));
   return false;
 }
 
 function splitPane(paneId: string, edge: SplitEdge, params: PaneParams): void {
   if (!dockApi || !roomForAnotherPane()) return;
   if (dockApi.groups.length >= MAX_TILES) {
-    if (tabIntoPane(paneId, params)) canvasToast(`${MAX_TILES} tiles is the limit — opened as a tab`);
+    if (tabIntoPane(paneId, params))
+      canvasToast(t("{count} tiles is the limit — opened as a tab", { count: MAX_TILES }));
     return;
   }
   const fresh = addPane(params, { referencePanel: paneId, direction: edgeToDirection(edge) });
@@ -453,7 +455,7 @@ function reconcileAfterClose(): void {
 
 async function maximizePane(params: PaneParams): Promise<void> {
   if (!params.sessionId) {
-    canvasToast("Start the chat first, then open it full screen");
+    canvasToast(t("Start the chat first, then open it full screen"));
     return;
   }
   const find = (): CoreSession | undefined => sessionsState.list.find((s) => s.id === params.sessionId);
@@ -466,7 +468,7 @@ async function maximizePane(params: PaneParams): Promise<void> {
     }
     session = find();
     if (!session) {
-      canvasToast("Still syncing this conversation — try again in a moment");
+      canvasToast(t("Still syncing this conversation — try again in a moment"));
       return;
     }
   }
@@ -534,9 +536,9 @@ function zoneTpl(edge: DropEdge, label: string, onDrop: () => void): TemplateRes
 
 function zonesTpl(act: (edge: DropEdge) => () => void): TemplateResult {
   return html`
-    ${zoneTpl("center", "Open here", act("center"))} ${zoneTpl("left", "Split left", act("left"))}
-    ${zoneTpl("right", "Split right", act("right"))} ${zoneTpl("top", "Split up", act("top"))}
-    ${zoneTpl("bottom", "Split down", act("bottom"))}
+    ${zoneTpl("center", t("Open here"), act("center"))} ${zoneTpl("left", t("Split left"), act("left"))}
+    ${zoneTpl("right", t("Split right"), act("right"))} ${zoneTpl("top", t("Split up"), act("top"))}
+    ${zoneTpl("bottom", t("Split down"), act("bottom"))}
   `;
 }
 
@@ -608,7 +610,7 @@ export function notifySessionsChanged(): void {
 
 function refreshHeaders(): void {
   headerSignature = computeHeaderSignature();
-  for (const t of paneTabs) t.draw();
+  for (const tab of paneTabs) tab.draw();
   for (const c of paneContents.values()) c.syncTitle();
 }
 
@@ -620,8 +622,8 @@ function paneSession(panel: IDockviewPanel): CoreSession | undefined {
 function paneTitle(panel: IDockviewPanel): string {
   const session = paneSession(panel);
   if (session) return sessionTitle(session);
-  if (panelParams(panel).sessionId) return "Conversation";
-  return "New session";
+  if (panelParams(panel).sessionId) return t("Conversation");
+  return t("New session");
 }
 
 function paneIsWorking(panel: IDockviewPanel): boolean {
@@ -668,7 +670,7 @@ class PaneContent implements IContentRenderer {
     this.panelId = p.api.id;
     this.panel = p.containerApi.getPanel(p.api.id) ?? null;
     this.frame.dataset.paneId = this.panelId;
-    this.frame.title = this.panel ? paneTitle(this.panel) : "Conversation pane";
+    this.frame.title = this.panel ? paneTitle(this.panel) : t("Conversation pane");
     this.frame.src = paneSrc((p.params ?? {}) as PaneParams);
     paneContents.set(this.panelId, this);
     this.syncZones();
@@ -724,8 +726,8 @@ class PaneTab implements ITabRenderer {
     this.element.title = title;
     render(
       html`
-        ${working ? html`<span class="working-dot" ${ref(syncWorkingPulse)} title="Agent is working"></span>` : nothing}
-        ${awaiting ? html`<span class="awaiting-dot" title="Waiting for your reply" aria-label="Waiting for your reply"></span>` : nothing}
+        ${working ? html`<span class="working-dot" ${ref(syncWorkingPulse)} title=${t("Agent is working")}></span>` : nothing}
+        ${awaiting ? html`<span class="awaiting-dot" title=${t("Waiting for your reply")} aria-label=${t("Waiting for your reply")}></span>` : nothing}
         ${
           background
             ? html`<span class="bg-chip" title=${background.label} aria-label=${background.label}
@@ -739,8 +741,8 @@ class PaneTab implements ITabRenderer {
             ? html`<button
                 class="icon-btn subtle split-tab-close"
                 type="button"
-                title="Close pane"
-                aria-label="Close pane"
+                title=${t("Close pane")}
+                aria-label=${t("Close pane")}
                 @click=${(e: Event) => {
                   e.stopPropagation();
                   closePanels([panel]);
@@ -785,7 +787,7 @@ class GroupActions implements IHeaderActionsRenderer {
     const maximized = props.api.isMaximized();
     const buttons: { label: string; glyph: TemplateResult | SVGElement; cls?: string; run: () => void }[] = [
       {
-        label: "Split this pane with a new session",
+        label: t("Split this pane with a new session"),
         glyph: icon(Plus, 15),
         run: () => {
           const p = activePanel();
@@ -793,12 +795,12 @@ class GroupActions implements IHeaderActionsRenderer {
         },
       },
       {
-        label: maximized ? "Restore to grid (Esc)" : "Focus this pane over the grid",
+        label: maximized ? t("Restore to grid (Esc)") : t("Focus this pane over the grid"),
         glyph: icon(maximized ? Shrink : Expand, 14),
         run: () => (maximized ? props.api.exitMaximized() : props.api.maximize()),
       },
       {
-        label: "Open full screen",
+        label: t("Open full screen"),
         glyph: icon(Maximize2, 14),
         run: () => {
           const p = activePanel();
@@ -806,7 +808,7 @@ class GroupActions implements IHeaderActionsRenderer {
         },
       },
       {
-        label: "Close pane",
+        label: t("Close pane"),
         glyph: icon(X, 15),
         cls: " split-group-close",
         run: () => {

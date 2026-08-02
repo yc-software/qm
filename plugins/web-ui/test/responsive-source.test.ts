@@ -19,7 +19,7 @@ test("mobile shell follows the visual viewport and device safe areas", () => {
 
 test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(shell, /class="new-chat[\s\S]{0,200}closeSidebarOnNarrowView\(\);/);
-  assert.match(shell, /class="sidebar-scrim"[^>]+aria-label="Close sidebar"[^>]+@click=\$\{toggleSidebar\}/);
+  assert.match(shell, /class="sidebar-scrim"[^>]+aria-label=\$\{t\("Close sidebar"\)\}[^>]+@click=\$\{toggleSidebar\}/);
   assert.match(shell, /main\.inert = modal/);
   assert.match(
     css,
@@ -97,7 +97,7 @@ test("touch layouts expose row actions and preserve readable composer choices", 
   assert.match(compactCss, /\.composer-right \.model-control \{\s*flex: 1 1 96px;/);
   assert.match(compactCss, /\.pane-refresh \{\s*width: 44px;\s*height: 44px;\s*flex-basis: 44px;/);
   assert.match(compactCss, /\.project-create-button \{\s*width: 44px;\s*height: 44px;/);
-  assert.match(contexts, /project-create-button"\s+type="button"\s+aria-label="New project"/);
+  assert.match(contexts, /project-create-button"\s+type="button"\s+aria-label=\$\{t\("New project"\)\}/);
   assert.match(
     compactCss,
     /\.chat-scroll \{\s*padding-right: max\(var\(--chat-pad\), env\(safe-area-inset-right\)\);\s*padding-left: max\(var\(--chat-pad\), env\(safe-area-inset-left\)\)/,

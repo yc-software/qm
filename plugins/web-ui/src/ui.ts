@@ -1,5 +1,6 @@
 import { html, type TemplateResult } from "lit";
 import { createElement, type IconNode } from "lucide";
+import { t } from "./i18n.ts";
 
 export function brandName(): string {
   if (typeof document === "undefined") return "QM";
@@ -31,10 +32,10 @@ export function initials(s: string): string {
 
 export function relTime(ms: number): string {
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
+  if (s < 60) return t("just now");
+  if (s < 3600) return t("{n}m ago", { n: Math.floor(s / 60) });
+  if (s < 86400) return t("{n}h ago", { n: Math.floor(s / 3600) });
+  return t("{n}d ago", { n: Math.floor(s / 86400) });
 }
 
 export function formatBytes(bytes: number): string {
