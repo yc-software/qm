@@ -409,3 +409,15 @@ test("baseModelProviders constrains the base model only when a provider is decla
     "with no declaration the shipped default stands, so upgrading never moves a deployment's model or its billing",
   );
 });
+
+test("provider base urls are read from env and normalized", () => {
+  assert.deepEqual(loadConfig({}).providerBaseUrls, {});
+  assert.deepEqual(
+    loadConfig({
+      ANTHROPIC_BASE_URL: "https://gateway.example.com/",
+      OPENAI_BASE_URL: "  https://oai.example.com/v1//  ",
+    }).providerBaseUrls,
+    { anthropic: "https://gateway.example.com", openai: "https://oai.example.com/v1" },
+  );
+  assert.deepEqual(loadConfig({ OPENROUTER_BASE_URL: "   " }).providerBaseUrls, {});
+});

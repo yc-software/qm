@@ -13,6 +13,7 @@ import {
   MODEL_PROVIDERS,
   SELECTABLE_BASE_MODELS,
   contextTokenBudgetForModel,
+  setProviderBaseUrls,
 } from "../src/model/pi-models.ts";
 
 test("every selectable base model resolves against the pi-ai registry", () => {
@@ -173,5 +174,33 @@ test("context token budget is half of each model's real input room", () => {
   for (const m of SELECTABLE_BASE_MODELS) {
     const budget = contextTokenBudgetForModel(m.id);
     assert.ok(budget !== undefined && budget >= 60_000, `${m.id} budget ${budget} suspiciously small`);
+  }
+});
+
+test("a configured provider base url replaces the vendor endpoint, including for cloned models", () => {
+  const gateway = "https://gateway.example.com";
+  try {
+    assert.equal(getRequiredModel("claude-opus-4-8").baseUrl, "https://api.anthropic.com");
+    assert.equal(getRequiredModel("claude-opus-5").baseUrl, "https://api.anthropic.com");
+
+    setProviderBaseUrls({ anthropic: gateway });
+
+    assert.equal(getRequiredModel("claude-opus-4-8").baseUrl, gateway, "direct builtin follows the gateway");
+    assert.equal(getRequiredModel("claude-opus-5").baseUrl, gateway, "cloned model inherits the gateway");
+    assert.equal(getRequiredModel("claude-opus-5").id, "claude-opus-5", "the clone keeps its own id");
+    assert.ok(getRequiredModel("gpt-5.6-sol").baseUrl?.startsWith("https://api.openai.com"), "openai untouched");
+  } finally {
+    setProviderBaseUrls({});
+  }
+  assert.equal(getRequiredModel("claude-opus-5").baseUrl, "https://api.anthropic.com", "clearing restores the vendor");
+});
+
+test("each provider is redirected independently", () => {
+  try {
+    setProviderBaseUrls({ openai: "https://oai.example.com/v1" });
+    assert.equal(getRequiredModel("gpt-5.6-sol").baseUrl, "https://oai.example.com/v1");
+    assert.equal(getRequiredModel("claude-opus-5").baseUrl, "https://api.anthropic.com");
+  } finally {
+    setProviderBaseUrls({});
   }
 });

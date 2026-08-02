@@ -49,6 +49,7 @@ export interface Config {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  providerBaseUrls: Partial<Record<ModelProvider, string>>;
   modelProvider?: ModelProvider;
   piCaptureRequests: boolean;
   piSystemCacheSplit: boolean;
@@ -373,6 +374,21 @@ const DEFAULT_ORG_ID = "default-org";
 
 export function orgId(): string {
   return process.env.ORG_ID ?? DEFAULT_ORG_ID;
+}
+
+const PROVIDER_BASE_URL_ENV: Record<ModelProvider, string> = {
+  anthropic: "ANTHROPIC_BASE_URL",
+  openai: "OPENAI_BASE_URL",
+  openrouter: "OPENROUTER_BASE_URL",
+};
+
+export function providerBaseUrlsFromEnv(env: NodeJS.ProcessEnv): Partial<Record<ModelProvider, string>> {
+  const urls: Partial<Record<ModelProvider, string>> = {};
+  for (const provider of MODEL_PROVIDERS) {
+    const configured = env[PROVIDER_BASE_URL_ENV[provider]]?.trim().replace(/\/+$/, "");
+    if (configured) urls[provider] = configured;
+  }
+  return urls;
 }
 
 export function orgScope(): string {
@@ -727,6 +743,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
     ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
+    providerBaseUrls: providerBaseUrlsFromEnv(env),
     ...(modelProvider ? { modelProvider } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     piCaptureRequests: boolEnvStrict("PI_CAPTURE_REQUESTS", env.PI_CAPTURE_REQUESTS) ?? true,

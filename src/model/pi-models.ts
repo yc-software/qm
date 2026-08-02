@@ -20,6 +20,16 @@ export function isHarnessId(value: unknown): value is HarnessId {
   return typeof value === "string" && (HARNESS_IDS as readonly string[]).includes(value);
 }
 
+let configuredBaseUrls: Partial<Record<ModelProvider, string>> = {};
+
+export function setProviderBaseUrls(urls: Partial<Record<ModelProvider, string>>): void {
+  configuredBaseUrls = { ...urls };
+}
+
+export function providerBaseUrl(provider: ModelProvider): string | undefined {
+  return configuredBaseUrls[provider];
+}
+
 type PiModel = Model<Api>;
 
 interface ModelEntry {
@@ -103,10 +113,15 @@ export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }>
   (m) => m.base,
 ).map((m) => ({ id: m.id, name: m.name }));
 
+function atConfiguredBaseUrl(model: PiModel): PiModel {
+  const baseUrl = configuredBaseUrls[model.provider as ModelProvider];
+  return baseUrl && baseUrl !== model.baseUrl ? { ...model, baseUrl } : model;
+}
+
 function builtinModel(id: string): PiModel | undefined {
   for (const provider of MODEL_PROVIDERS) {
     const m = getModel(provider, id);
-    if (m) return m;
+    if (m) return atConfiguredBaseUrl(m);
   }
   return undefined;
 }
