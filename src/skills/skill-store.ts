@@ -213,15 +213,19 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
 
     async visibleFor(orderedScopes) {
       const inScope = new Set(orderedScopes);
-      const names = [
-        ...new Set(
-          (await skills.all())
-            .filter((s) => s.status === "published" && inScope.has(s.scopeId) && isSafeSkillName(s.manifest.name))
-            .map((s) => s.manifest.name),
-        ),
-      ];
-      const resolved = await Promise.all(names.map((n) => this.resolve(n, orderedScopes)));
-      return resolved.filter((r): r is SkillResolution & { skill: Skill } => r.skill !== null);
+      const all = (await skills.all()).filter(
+        (s) => s.status === "published" && inScope.has(s.scopeId) && isSafeSkillName(s.manifest.name),
+      );
+      const names = [...new Set(all.map((s) => s.manifest.name))];
+      return names
+        .map((name) => {
+          const published = orderedScopes
+            .map((sc) => all.find((s) => s.manifest.name === name && s.scopeId === sc))
+            .filter((s): s is Skill => Boolean(s));
+          const [skill, ...shadowed] = published;
+          return skill ? { skill, shadowed } : null;
+        })
+        .filter((r): r is SkillResolution & { skill: Skill } => r !== null);
     },
 
     async promote(id, targetScopeId) {
