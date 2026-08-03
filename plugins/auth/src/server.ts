@@ -102,6 +102,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   const now = deps.now ?? Date.now;
   const notify = deps.onBackgroundTask ?? ((task: Promise<void>) => void task.catch(() => undefined));
   const formAction = `${cfg.publicPath}/authorize`;
+  const localeContinuation = "/auth/login?continue=1";
   const linkTtlMinutes = Math.max(1, Math.round(cfg.linkTtlS / 60));
   let inFlightSends = 0;
   const background = (task: () => Promise<void>): void => {
@@ -183,7 +184,13 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     return sendHtml(
       res,
       200,
-      emailFormPage({ locale, brandName: cfg.brandName, action: formAction, requestToken: sealed.token }),
+      emailFormPage({
+        locale,
+        brandName: cfg.brandName,
+        action: formAction,
+        returnTo: localeContinuation,
+        requestToken: sealed.token,
+      }),
     );
   }
 
@@ -244,6 +251,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
           locale,
           brandName: cfg.brandName,
           action: formAction,
+          returnTo: localeContinuation,
           requestToken: sealed.token,
           problem: authMessage(locale, "error.invalidEmail"),
         }),

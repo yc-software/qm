@@ -50,17 +50,22 @@ test("a Japanese authorize request keeps Japanese through the signed request, pa
   assert.match(h.mailer.sent[0]!.html, /<html lang="ja">/);
 });
 
-test("the English start page offers only a safe locale restart without email or request secrets", async (t) => {
+test("the language switch continues the authorize request without email or signed request secrets", async (t) => {
   const h = await startHarness();
   t.after(() => h.close());
-  const page = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
+  const query = authorizeQuery();
+  const page = await fetch(`${h.base}/authorize?${query}`);
   const html = await page.text();
   assert.match(html, /<html lang="en">/);
   const picker = /<form[^>]+id="language-form"[\s\S]*?<\/form>/.exec(html)?.[0];
   assert.ok(picker, "the safe authorization start page should carry a language form");
   assert.match(picker, /action="\/locale"/);
   assert.match(picker, /method="post"/);
-  assert.match(picker, /name="returnTo" value="\/auth\/login"/);
+  const encodedReturnTo = /name="returnTo" value="([^"]+)"/.exec(picker)?.[1];
+  assert.ok(encodedReturnTo);
+  const continuation = new URL(encodedReturnTo.replaceAll("&amp;", "&"), h.cfg.issuer);
+  assert.equal(`${continuation.pathname}${continuation.search}`, "/auth/login?continue=1");
+  assert.doesNotMatch(encodedReturnTo, /state|nonce|code_challenge|redirect_uri/);
   assert.doesNotMatch(picker, /name="(?:email|request)"/);
   assert.doesNotMatch(picker, /admin@example\.com|eyJ/);
 });

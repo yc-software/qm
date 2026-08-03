@@ -126,6 +126,7 @@ export function emailFormPage(o: {
   locale: Locale;
   brandName: string;
   action: string;
+  returnTo: string;
   requestToken: string;
   email?: string;
   problem?: string;
@@ -145,7 +146,7 @@ export function emailFormPage(o: {
         <button class="btn" type="submit">${escapeHtml(authMessage(o.locale, "signIn.submit"))}</button>
       </form>
       <form id="language-form" action="/locale" method="post" class="language-form">
-        <input type="hidden" name="returnTo" value="/auth/login">
+        <input type="hidden" name="returnTo" value="${escapeHtml(o.returnTo)}">
         <label for="locale">${escapeHtml(authMessage(o.locale, "language.label"))}</label>
         <select id="locale" name="locale">
           <option value="en"${o.locale === "en" ? " selected" : ""}>${escapeHtml(authMessage(o.locale, "language.english"))}</option>

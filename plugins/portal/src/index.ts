@@ -1203,7 +1203,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 }
 
 function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
-  const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN);
+  const returnTo =
+    url.searchParams.get("continue") === "1"
+      ? (openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo ?? "/")
+      : sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN);
   const localSession = localDevSession(req, Date.now(), true);
   if (localSession) {
     setSession(res, [
