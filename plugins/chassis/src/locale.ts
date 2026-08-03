@@ -4,15 +4,16 @@ export const LOCALE_COOKIE = "qm_locale";
 export const LOCALE_HEADER = "x-qm-locale";
 export const DEFAULT_LOCALE_ENV = "QM_DEFAULT_LOCALE";
 
-const localeTag =
-  /^(en|ja)(?:-(?:[a-z]{2,8}|[0-9][a-z0-9]{3}))*(?:-[0-9a-wyz](?:-[a-z0-9]{2,8})+)*(?:-x(?:-[a-z0-9]{1,8})+)?$/;
 const qvalue = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
 
 export function normalizeLocale(value: unknown): Locale | null {
   if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  const match = normalized.match(localeTag);
-  return (match?.[1] as Locale | undefined) ?? null;
+  try {
+    const language = new Intl.Locale(value.trim()).language;
+    return language === "en" || language === "ja" ? language : null;
+  } catch {
+    return null;
+  }
 }
 
 export function acceptLanguageLocale(value: string | readonly string[] | undefined): Locale | null {
@@ -22,9 +23,9 @@ export function acceptLanguageLocale(value: string | readonly string[] | undefin
     const [tag, ...parameters] = entry.trim().split(";");
     const locale = normalizeLocale(tag);
     if (!locale) continue;
-    const qualityValue = parameters.find((parameter) => /^\s*q\s*=/i.test(parameter));
-    const qualityMatch = qualityValue?.match(/^\s*q=(?<value>[^\s;]+)\s*$/i);
-    if (qualityValue !== undefined && (!qualityMatch || !qvalue.test(qualityMatch.groups?.value ?? ""))) continue;
+    if (parameters.length > 1) continue;
+    const qualityMatch = parameters[0]?.match(/^\s*q\s*=\s*(?<value>[^\s;]+)\s*$/i);
+    if (parameters.length === 1 && (!qualityMatch || !qvalue.test(qualityMatch.groups?.value ?? ""))) continue;
     const quality = Number(qualityMatch?.groups?.value ?? "1");
     if (quality === 0) continue;
     if (!selected || quality > selected.quality || (quality === selected.quality && index < selected.index)) {

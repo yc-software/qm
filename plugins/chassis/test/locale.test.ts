@@ -9,11 +9,15 @@ import {
   resolveLocale,
 } from "../src/locale.ts";
 
-test("locale normalization accepts only Japanese and English", () => {
+test("locale normalization accepts structurally valid Japanese and English tags", () => {
   assert.equal(normalizeLocale("ja-JP"), "ja");
   assert.equal(normalizeLocale("en-US"), "en");
+  assert.equal(normalizeLocale("en-419"), "en");
+  assert.equal(normalizeLocale("en-abc12"), "en");
   assert.equal(normalizeLocale("en-a-extended"), "en");
   assert.equal(normalizeLocale("ja-x-private"), "ja");
+  assert.equal(normalizeLocale("en-US-u-ca-gregory"), "en");
+  assert.equal(normalizeLocale("en-US-GB"), null);
   assert.equal(normalizeLocale("en-a"), null);
   assert.equal(normalizeLocale("ja-x"), null);
   assert.equal(normalizeLocale("fr"), null);
@@ -38,6 +42,9 @@ test("Accept-Language honors quality weights", () => {
   assert.equal(acceptLanguageLocale("ja;q=01, en;q=0.9"), "en");
   assert.equal(acceptLanguageLocale("ja;q=0.1234, en;q=0.1"), "en");
   assert.equal(acceptLanguageLocale("ja;q=1.001, en;q=0.9"), "en");
+  assert.equal(acceptLanguageLocale("ja;q, en;q=0.5"), "en");
+  assert.equal(acceptLanguageLocale("ja;foo=bar, en;q=0.5"), "en");
+  assert.equal(acceptLanguageLocale("ja;q=0.4;q=0, en;q=0.3"), "en");
 });
 
 test("message interpolation and catalog audit are deterministic", () => {

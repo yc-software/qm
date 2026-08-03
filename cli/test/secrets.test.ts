@@ -121,6 +121,24 @@ test("a plugin secret lands plain on the plugin's own workload, nowhere else", (
   assert.deepEqual([...secretDestinations(secret).keys()], ["linear"]);
 });
 
+test("managed locale names never become secret destinations from unsafe config", () => {
+  const config = makeConfig({
+    services: ["core", "slack"],
+    secretEnv: { slack: { QM_DEFAULT_LOCALE: "LOCALE_STORE", SLACK_AUX_BOT_TOKEN: "SLACK_AUX_BOT_TOKEN" } },
+    plugins: [
+      {
+        name: "linear",
+        image: "ghcr.io/x:1",
+        secrets: [{ name: "QM_DEFAULT_LOCALE" }, { name: "PLUG_TOKEN" }],
+      },
+    ],
+  });
+  assert.deepEqual(runtimeSecretNames("core", secretByName(config, "LOCALE_STORE")), []);
+  assert.deepEqual(runtimeSecretNames("linear", secretByName(config, "QM_DEFAULT_LOCALE")), []);
+  assert.deepEqual(runtimeSecretNames("core", secretByName(config, "SLACK_AUX_BOT_TOKEN")), ["SLACK_AUX_BOT_TOKEN"]);
+  assert.deepEqual(runtimeSecretNames("linear", secretByName(config, "PLUG_TOKEN")), ["PLUG_TOKEN"]);
+});
+
 test("discovered source plugins (absent from config.plugins) get CORE_SIGNING_SECRET routed to them", () => {
   const config = makeConfig();
   const signing = secretByName(config, "CORE_SIGNING_SECRET");

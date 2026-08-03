@@ -1,4 +1,4 @@
-import { isVirtualService, type DeclaredServiceName } from "./services.ts";
+import { DEFAULT_LOCALE_ENV, isVirtualService, type DeclaredServiceName } from "./services.ts";
 import type { ModelProvider, QmConfig } from "./config.ts";
 
 type SecretCondition =
@@ -512,6 +512,7 @@ export function secretDestinations(
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   const add = (workload: string, name: string): void => {
+    if (name === DEFAULT_LOCALE_ENV) return;
     out.set(workload, (out.get(workload) ?? new Set()).add(name));
   };
   for (const service of secret.services) {
