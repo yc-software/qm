@@ -1,0 +1,34 @@
+Feature request: per-user model subscriptions via OAuth connectors (Anthropic + OpenAI).
+
+Context: QM's harnesses each have a subscription-auth path that is today
+org-centralized:
+
+- The Claude harness passes CLAUDE_CODE_OAUTH_TOKEN through to the Claude Code
+  subprocess (src/harness/claude-harness.ts), enabling billing against a
+  Claude Pro/Max subscription. The token is sourced from the core process
+  environment (src/config.ts) — one subscription identity per deployment.
+- The Codex harness runs on OPENAI_API_KEY because the Codex CLI cannot do
+  browser OAuth in a container; ChatGPT Plus/Pro subscriptions authenticate
+  via OAuth, so per-user OpenAI subscriptions are unreachable the same way.
+
+Organizations rolling QM out to a team often already pay for individual
+Claude Pro/Max and ChatGPT Plus/Pro seats. The centralized model leaves two
+bad options: everyone shares one person's subscription (rate limits and all),
+or the org buys API credits for usage employees already have.
+
+Ask: make Anthropic and OpenAI first-class keychain connectors alongside the
+existing OAuth connectors (Google, Slack, Notion, Linear, Dropbox, GitHub, X).
+A user completes the provider's OAuth flow from the keychain page; the
+connector stores the scoped token in the existing encrypted credential store;
+each harness resolves its subscription credential per-scope from the keychain,
+falling back to the core-env token / base-model API key when the scope has
+none. The org default path remains for scopes without a connected
+subscription.
+
+This appears architecturally consistent: per-scope credential storage,
+grant-scoped secret injection into sandbox env, and user-initiated OAuth flows
+all exist today — the connectors would reuse them rather than introduce new
+machinery. The gaps are the provider definitions, per-scope token resolution
+in claude-harness and codex-harness, and the keychain UI entries.
+
+Happy to test against a live team deployment.
