@@ -57,6 +57,7 @@ test("cold start: the FIRST shell render already carries accent, mark, and self-
 test("the vite template carries the self-label anchor the server injects into", () => {
   const template = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   assert.match(template, /<meta name="brand-self-label" content="QM"\s*\/?>/);
+  assert.match(template, /<meta name="qm-locale" content="en"\s*\/?>/);
 });
 
 test("brandName() reads the injected self-label and falls back to the product name", async () => {

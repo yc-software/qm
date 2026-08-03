@@ -20,6 +20,7 @@ import {
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
+import { LOCALE_HEADER, resolveLocale, type Locale } from "../../chassis/src/locale.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -31,6 +32,7 @@ import {
 const PORT = portFromEnv(8096);
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
+const DEFAULT_LOCALE = process.env.QM_DEFAULT_LOCALE;
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
 const COOKIE_AUTH = !CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY;
@@ -59,6 +61,26 @@ async function brandIndexHtml(html: string): Promise<string> {
   const branded = injectBranding(html, branding);
   const label = branding.selfLabel?.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return label ? branded.replace(/<title>[^<]*<\/title>/, () => `<title>${label} · Web</title>`) : branded;
+}
+
+export function localeOf(req: IncomingMessage): Locale {
+  return resolveLocale({
+    explicit: req.headers[LOCALE_HEADER],
+    defaultLocale: DEFAULT_LOCALE,
+    acceptLanguage: req.headers["accept-language"],
+  });
+}
+
+export async function renderIndexHtml(html: string, selected: Locale): Promise<string> {
+  const branded = await brandIndexHtml(html);
+  const withLocale = branded.replace(/<html\b([^>]*)>/i, (tag, attributes: string) => {
+    if (/\slang\s*=/i.test(attributes)) return tag.replace(/\slang\s*=\s*(["'])[^"']*\1/i, ` lang="${selected}"`);
+    return `<html lang="${selected}"${attributes}>`;
+  });
+  const meta = `<meta name="qm-locale" content="${selected}" />`;
+  const localeMeta = /<meta\s+name=(["'])qm-locale\1\s+content=(["'])[^"']*\2\s*\/?\s*>/i;
+  if (localeMeta.test(withLocale)) return withLocale.replace(localeMeta, meta);
+  return withLocale.replace(/<head\b[^>]*>/i, (head) => `${head}${meta}`);
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
@@ -169,6 +191,10 @@ function relay(res: ServerResponse, r: { status: number; text: string }): void {
 function sendHtml(res: ServerResponse, status: number, html: string): void {
   res.writeHead(status, withSecurityHeaders({ "content-type": "text/html; charset=utf-8" }));
   res.end(html);
+}
+
+function localizedHtmlHeaders(headers: Record<string, string>): Record<string, string> {
+  return withSecurityHeaders({ ...headers, vary: "x-qm-locale, accept-language" });
 }
 
 const SSE_CORE_POLL_MS = 100;
@@ -597,7 +623,7 @@ async function uploadFileFromRequest(
   return void res.end(registered.text);
 }
 
-async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
+async function serveStatic(req: IncomingMessage, res: ServerResponse, urlPath: string): Promise<void> {
   const rel = normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, "");
   let filePath = join(DIST, rel);
   if (!filePath.startsWith(DIST)) return void json(res, 403, { error: "forbidden" });
@@ -612,12 +638,12 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
     }
   }
   if (filePath.endsWith("index.html")) {
-    const branded = await brandIndexHtml(readFileSync(filePath, "utf8"));
+    const localized = await renderIndexHtml(readFileSync(filePath, "utf8"), localeOf(req));
     res.writeHead(
       200,
-      withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }),
+      localizedHtmlHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }),
     );
-    return void res.end(branded);
+    return void res.end(localized);
   }
   const type = CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream";
   res.writeHead(
@@ -644,7 +670,7 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     if (!existsSync(filePath)) return false;
     html = readFileSync(filePath, "utf8");
   }
-  const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+  const headers = localizedHtmlHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   headers["content-security-policy"] = SPA_CSP.replace(
     "frame-ancestors 'self'",
     `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`,
@@ -652,7 +678,7 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
   delete headers["x-frame-options"];
   res.removeHeader("x-frame-options");
   res.writeHead(200, headers);
-  res.end(await brandIndexHtml(html));
+  res.end(await renderIndexHtml(html, localeOf(req)));
   return true;
 }
 
@@ -704,7 +730,9 @@ async function serveVite(req: IncomingMessage, res: ServerResponse, path: string
   let html = readFileSync(join(ROOT, "index.html"), "utf8");
   html = html.replace("%BASE_URL%favicon.svg", "favicon.svg");
   html = await vite.transformIndexHtml(req.url ?? "/", html);
-  sendHtml(res, 200, await brandIndexHtml(html));
+  const localized = await renderIndexHtml(html, localeOf(req));
+  res.writeHead(200, localizedHtmlHeaders({ "content-type": "text/html; charset=utf-8" }));
+  res.end(localized);
   return true;
 }
 
@@ -1878,7 +1906,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (method === "GET") {
     if (await serveVite(req, res, path)) return;
-    return await serveStatic(res, path === "/" ? "/index.html" : path);
+    return await serveStatic(req, res, path === "/" ? "/index.html" : path);
   }
 
   json(res, 404, { error: "not found" });

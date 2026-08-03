@@ -72,6 +72,7 @@ import { renderSkills } from "./skills";
 import { contextsState, ensureContexts, renderContexts, resetContextsState } from "./contexts";
 import { appState, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
+import { locale, t } from "./i18n";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let authMode: AuthMode = "portal";
@@ -430,7 +431,7 @@ export function mountShell(): void {
   if (embedMode) {
     render(
       html`<div class="layout embed-layout">
-        <section class="main" id="main"><div class="empty">Loading…</div></section>
+        <section class="main" id="main"><div class="empty">${t("loading")}</div></section>
       </div>`,
       appEl as HTMLElement,
     );
@@ -449,7 +450,7 @@ export function mountShell(): void {
     html`
       ${banner ?? nothing}
       <div class="layout ${sidebarOpen ? "" : "sidebar-closed"} ${banner ? "bannered" : ""}">
-        <aside class="sidebar" aria-label="Navigation" @keydown=${onSidebarKeydown}>
+        <aside class="sidebar" aria-label=${t("navigation")} @keydown=${onSidebarKeydown}>
           <div class="brand">
             <div class="brand-lockup">${brandMark()}<span class="brand-name">${brandName()}</span></div>
             <button
@@ -469,11 +470,25 @@ export function mountShell(): void {
               <span class="avatar">${initials(appState.me?.user ?? "?")}</span>
               <span class="user-name">${appState.me?.user ?? ""}</span>
             </div>
+            <form class="language-form" action="/locale" method="post">
+              <label class="sr-only" for="web-ui-locale">${t("language")}</label>
+              <select
+                id="web-ui-locale"
+                name="locale"
+                aria-label=${t("language")}
+                .value=${locale()}
+                @change=${(event: Event) => (event.currentTarget as HTMLSelectElement).form?.requestSubmit()}
+              >
+                <option value="en">${t("english")}</option>
+                <option value="ja">${t("japanese")}</option>
+              </select>
+              <input type="hidden" name="returnTo" .value=${`${location.pathname}${location.search}${location.hash}`} />
+            </form>
             <a class="icon-btn subtle" href=${ADMIN_HOME_URL} title="Back to admin" aria-label="Back to admin"
               >${icon(ArrowLeft, 17)}</a
             >
             <theme-toggle></theme-toggle>
-            <button class="icon-btn subtle" title="Sign out" aria-label="Sign out" @click=${signOut}>
+            <button class="icon-btn subtle" title=${t("signOut")} aria-label=${t("signOut")} @click=${signOut}>
               ${icon(LogOut, 17)}
             </button>
           </div>

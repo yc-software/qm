@@ -1,11 +1,14 @@
 import "dockview-core/dist/styles/dockview.css";
 import "./shell.css";
+import { locale } from "./i18n";
 import { bootSafely } from "./shell";
 import { closeFormMenus } from "./ui";
 import { drawActiveChat } from "./chat";
 import { composerState, slashQuery } from "./composer";
 import { closeOpenSessionMenu, renderList, sessionsState } from "./sessions";
 import { closeDeployMenu } from "./deploys";
+
+document.documentElement.lang = locale();
 
 document.addEventListener("click", (e) => {
   const target = e.target as Element | null;

@@ -893,6 +893,22 @@ body.resizing-sidebar {
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
+.language-form {
+  display: flex;
+  flex: 0 1 88px;
+  min-width: 0;
+}
+.language-form select {
+  min-width: 0;
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+}
 .user-pill {
   display: flex;
   align-items: center;
@@ -4027,6 +4043,22 @@ body.resizing-sidebar {
   .recent-project-new-chat {
     width: 44px;
     height: 44px;
+  }
+  .language-form select {
+    min-height: 44px;
+  }
+  .language-form {
+    flex-basis: 72px;
+  }
+  .sidebar-footer {
+    gap: 4px;
+  }
+  .sidebar-footer .user-pill {
+    flex: 0 0 auto;
+    padding-inline: 3px;
+  }
+  .sidebar-footer .user-name {
+    display: none;
   }
   .new-chat,
   .navrow,
