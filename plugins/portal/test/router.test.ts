@@ -10,6 +10,7 @@ let consentResult: Record<string, unknown> = {
   status: "authorize",
   authorizeUrl: "https://accounts.google.test/o/oauth2?x=1",
 };
+let selfConnectResult: Record<string, unknown> = {};
 let failSecretDrop = false;
 let lastImpersonateIdentity: string | null = null;
 let agentApiRequests = 0;
@@ -48,6 +49,10 @@ const upstream = createServer((req: IncomingMessage, res) => {
     lastConsentClicker = (req.headers["x-consent-clicker"] as string | undefined) ?? null;
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify(consentResult));
+  }
+  if (typeof req.url === "string" && req.url.startsWith("/v1/connectors/oauth/google/start?")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify(selfConnectResult));
   }
   if (typeof req.url === "string" && req.url.startsWith("/v1/keychain/drops/") && failSecretDrop) {
     return void res.destroy();
@@ -361,22 +366,26 @@ test("new human path /connect/redeem/:id: session-gated; with session forwards t
 test("connector expiry and wrong-recipient pages use the request locale", async () => {
   try {
     consentResult = { status: "expired" };
-    const expired = await fetch(`${base}/connect/redeem/expired-link?provider=google`, {
+    const expiredToken = "expired-bearer-link-id";
+    const expired = await fetch(`${base}/connect/redeem/${expiredToken}?provider=google`, {
       headers: { cookie: `${sessionCookie("eve@acme")}; qm_locale=ja`, accept: "text/html" },
     });
     assert.equal(expired.status, 200);
     const expiredPage = await expired.text();
     assert.match(expiredPage, /<html lang="ja">/);
     assert.match(expiredPage, /接続リンクの有効期限が切れています/);
+    assert.doesNotMatch(expiredPage, new RegExp(expiredToken));
 
     consentResult = { status: "wrong_recipient", provider: "google", clickerConnected: false };
-    const wrong = await fetch(`${base}/connect/redeem/wrong-user?provider=google`, {
+    const wrongToken = "wrong-recipient-bearer-link-id";
+    const wrong = await fetch(`${base}/connect/redeem/${wrongToken}?provider=google`, {
       headers: { cookie: `${sessionCookie("eve@acme")}; qm_locale=ja`, accept: "text/html" },
     });
     assert.equal(wrong.status, 200);
     const wrongPage = await wrong.text();
     assert.match(wrongPage, /このリンクは別の利用者向けです/);
-    assert.match(wrongPage, /name="returnTo" value="\/connect\/redeem\/wrong-user\?provider=google"/);
+    assert.doesNotMatch(wrongPage, new RegExp(wrongToken));
+    assert.match(wrongPage, /name="returnTo" value="\/"/);
   } finally {
     consentResult = { status: "authorize", authorizeUrl: "https://accounts.google.test/o/oauth2?x=1" };
   }
@@ -395,6 +404,21 @@ test("new human path /connect/:provider/self-connect: session-gated; with sessio
     200,
     "reaches core (the mock returns no authorizeUrl, so the portal renders a page rather than 404ing)",
   );
+});
+
+test("self-connect renders only the localized safe failure instead of a Core detail", async () => {
+  selfConnectResult = { message: "provider client_secret missing for internal deployment" };
+  try {
+    const response = await fetch(`${base}/connect/google/self-connect`, {
+      headers: { cookie: `${sessionCookie("eve@acme")}; qm_locale=ja`, accept: "text/html" },
+    });
+    assert.equal(response.status, 200);
+    const page = await response.text();
+    assert.match(page, /接続を開始できませんでした。このアプリは設定されていない可能性があります。/);
+    assert.doesNotMatch(page, /provider client_secret missing/);
+  } finally {
+    selfConnectResult = {};
+  }
 });
 
 test("new human path /drop/:id: form GET reaches the core /v1 drop form with x-drop-owner; POST /drop/:id never redirects (no session → 401, cross-origin → 403)", async () => {

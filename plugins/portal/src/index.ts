@@ -667,6 +667,7 @@ async function handleSecretDrop(
     ...signedHeaders(CORE_SIGNING_SECRET, isPost ? "POST" : "GET", path, rawBody),
     "x-drop-owner": o.session.sub,
     "x-drop-owner-org": o.session.org,
+    [LOCALE_HEADER]: o.locale,
   };
   let r: Response;
   try {
@@ -701,16 +702,12 @@ async function handleSelfConnect(
   );
   try {
     const r = await fetch(`${CORE}${path}`, { headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path) });
-    const data = (await r.json().catch(() => ({}))) as { authorizeUrl?: string; message?: string };
+    const data = (await r.json().catch(() => ({}))) as { authorizeUrl?: string };
     if (data.authorizeUrl) {
       res.writeHead(302, { location: data.authorizeUrl, "cache-control": "no-store" });
       return void res.end();
     }
-    return sendHtml(
-      res,
-      200,
-      connectErrorHtml(o.locale, data.message ?? portalMessage(o.locale, "connect.startFailed"), o.returnTo),
-    );
+    return sendHtml(res, 200, connectErrorHtml(o.locale, portalMessage(o.locale, "connect.startFailed"), o.returnTo));
   } catch {
     return sendHtml(
       res,
@@ -1034,7 +1031,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       corePath: `/v1/connectors/oauth/consent/redeem/${redeem[1]}${url.search}`,
       session,
       locale: requestLocale,
-      returnTo: currentPath,
+      returnTo: "/",
     });
   }
   const selfConnect = /^\/connect\/([^/]+)\/self-connect$/.exec(pathname);

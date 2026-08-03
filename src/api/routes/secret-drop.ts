@@ -8,6 +8,7 @@ import { escapeHtml, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination } from "./shared.ts";
 import { swallow } from "../../util/errors.ts";
+import { LOCALE_HEADER, normalizeLocale, type Locale } from "../../../plugins/chassis/src/locale.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
 
@@ -15,6 +16,59 @@ const PAGE_STYLE = 'style="font-family:system-ui;max-width:32rem;margin:4rem aut
 
 const MAX_DROP_FIELDS = 8;
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const DROP_MESSAGES = {
+  en: {
+    expiredTitle: "Secret drop",
+    expiredHeading: "This link has expired",
+    expiredBody: "Secret-drop links are single-use. Ask the agent for a fresh one.",
+    wrongTitle: "Not your link",
+    wrongHeading: "This link is for someone else",
+    wrongBody:
+      "This credential request was created for a different teammate. If it was meant for you, sign in as yourself and open it again.",
+    formTitle: "Provide a credential",
+    credential: "credential",
+    login: "login",
+    purpose: "The agent asked for this so it can:",
+    requested: "requested",
+    placeholder: "Paste the secret here",
+    submit: "Submit securely",
+    security:
+      "What you enter goes straight to the keychain over TLS and is encrypted at rest. It is never shown in chat. This link works once.",
+    success: "Received — you can close this tab and return to the conversation.",
+    error: "Could not save (the link may have expired, been used, or was missing a field).",
+  },
+  ja: {
+    expiredTitle: "認証情報の登録",
+    expiredHeading: "このリンクは期限切れです",
+    expiredBody: "認証情報の登録リンクは一度だけ使用できます。エージェントに新しいリンクを依頼してください。",
+    wrongTitle: "利用者が異なります",
+    wrongHeading: "このリンクは別の利用者向けです",
+    wrongBody:
+      "この認証情報の登録依頼は別の利用者向けに作成されています。自分向けの場合は、自分のアカウントでサインインしてもう一度開いてください。",
+    formTitle: "認証情報を入力",
+    credential: "認証情報",
+    login: "ログイン情報",
+    purpose: "エージェントは次の目的でこの情報を求めています:",
+    requested: "依頼日",
+    placeholder: "認証情報を貼り付けてください",
+    submit: "安全に送信",
+    security:
+      "入力内容はTLSを通じてキーチェーンへ直接送信され、保存時に暗号化されます。チャットには表示されません。このリンクは一度だけ使用できます。",
+    success: "受け取りました。このタブを閉じて会話に戻れます。",
+    error: "保存できませんでした。リンクが期限切れ、使用済み、または入力不足の可能性があります。",
+  },
+} as const;
+
+type DropMessageKey = keyof (typeof DROP_MESSAGES)["en"];
+
+function dropMessage(locale: Locale, key: DropMessageKey): string {
+  return DROP_MESSAGES[locale][key];
+}
+
+function dropLocale(ctx: ApiCtx): Locale {
+  return normalizeLocale(ctx.req.headers[LOCALE_HEADER]) ?? "en";
+}
 
 function parseDropFields(raw: unknown): SecretDropField[] | undefined | "invalid" {
   if (raw === undefined) return undefined;
@@ -33,14 +87,17 @@ function parseDropFields(raw: unknown): SecretDropField[] | undefined | "invalid
   return out;
 }
 
-function formFields(fields?: SecretDropField[]): Array<{ key: string | null; label: string; secret: boolean }> {
+function formFields(
+  locale: Locale,
+  fields?: SecretDropField[],
+): Array<{ key: string | null; label: string; secret: boolean }> {
   if (fields?.length) return fields.map((f) => ({ key: f.key, label: f.label ?? f.key, secret: f.secret !== false }));
-  return [{ key: null, label: "Paste the secret here", secret: true }];
+  return [{ key: null, label: dropMessage(locale, "placeholder"), secret: true }];
 }
 
-function dropNotYoursHtml(): string {
-  return `<!doctype html><meta charset=utf-8><title>Not your link</title><body ${PAGE_STYLE}>
-<h2>This link is for someone else</h2><p>This credential request was created for a different teammate. If it was meant for you, sign in as yourself and open it again.</p></body>`;
+function dropNotYoursHtml(locale: Locale): string {
+  return `<!doctype html><html lang="${locale}"><head><meta charset=utf-8><title>${dropMessage(locale, "wrongTitle")}</title></head><body ${PAGE_STYLE}>
+<h2>${dropMessage(locale, "wrongHeading")}</h2><p>${dropMessage(locale, "wrongBody")}</p></body></html>`;
 }
 
 function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord): Promise<boolean> {
@@ -67,18 +124,19 @@ async function dropLinkTokenOk(ctx: ApiCtx, dropId: string, rec: SecretDropRecor
 }
 
 function dropFormHtml(
+  locale: Locale,
   dropId: string,
   rec: { service: string; purpose: string; fields?: SecretDropField[]; createdAt?: number } | null,
 ): string {
   if (!rec) {
-    return `<!doctype html><meta charset=utf-8><title>Secret drop</title><body ${PAGE_STYLE}>
-<h2>This link has expired</h2><p>Secret-drop links are single-use. Ask the agent for a fresh one.</p></body>`;
+    return `<!doctype html><html lang="${locale}"><head><meta charset=utf-8><title>${dropMessage(locale, "expiredTitle")}</title></head><body ${PAGE_STYLE}>
+<h2>${dropMessage(locale, "expiredHeading")}</h2><p>${dropMessage(locale, "expiredBody")}</p></body></html>`;
   }
   const service_ = escapeHtml(rec.service);
   const purpose_ = escapeHtml(rec.purpose);
   const requested_ = rec.createdAt ? escapeHtml(new Date(rec.createdAt).toISOString().slice(0, 10)) : "";
   const id_ = JSON.stringify(dropId);
-  const fields = formFields(rec.fields);
+  const fields = formFields(locale, rec.fields);
   const multi = fields.length > 1 || fields[0]!.key !== null;
   const inputs = fields
     .map(
@@ -87,17 +145,26 @@ function dropFormHtml(
     )
     .join("\n");
   const keys = JSON.stringify(fields.map((f) => f.key));
-  return `<!doctype html><meta charset=utf-8><title>Provide a credential</title><body ${PAGE_STYLE}>
-<h2>Provide your ${service_} ${multi ? "login" : "credential"}</h2>
-<p style="color:#555">The agent asked for this so it can: <b>${purpose_}</b>${requested_ ? ` <span style="color:#999">(requested ${requested_})</span>` : ""}</p>
+  const heading =
+    locale === "ja"
+      ? `${service_}の${dropMessage(locale, multi ? "login" : "credential")}を入力`
+      : `Provide your ${service_} ${dropMessage(locale, multi ? "login" : "credential")}`;
+  const requested = requested_
+    ? ` <span style="color:#999">${locale === "ja" ? `（${dropMessage(locale, "requested")} ${requested_}）` : `(${dropMessage(locale, "requested")} ${requested_})`}</span>`
+    : "";
+  const success = JSON.stringify(dropMessage(locale, "success"));
+  const error = JSON.stringify(dropMessage(locale, "error"));
+  return `<!doctype html><html lang="${locale}"><head><meta charset=utf-8><title>${dropMessage(locale, "formTitle")}</title></head><body ${PAGE_STYLE}>
+<h2>${heading}</h2>
+<p style="color:#555">${dropMessage(locale, "purpose")} <b>${purpose_}</b>${requested}</p>
 <form id=f>
 ${inputs}
-<button id=go style="font-size:1rem;padding:.6rem 1.2rem;margin-top:.2rem">Submit securely</button>
+<button id=go style="font-size:1rem;padding:.6rem 1.2rem;margin-top:.2rem">${dropMessage(locale, "submit")}</button>
 </form>
 <p id=done></p>
-<p style="color:#888;font-size:.85rem">What you enter goes straight to the keychain over TLS and is encrypted at rest. It is never shown in chat. This link works once.</p>
-<script>const f=document.getElementById('f'),keys=${keys};f.onsubmit=async(e)=>{e.preventDefault();const inputs=[...f.querySelectorAll('input')];const go=document.getElementById('go');go.disabled=true;let body;if(keys.length===1&&keys[0]===null){body={secret:inputs[0].value};}else{const values={};inputs.forEach((el,i)=>{values[keys[i]]=el.value;});body={values};}const r=await fetch('/drop/'+encodeURIComponent(${id_})+location.search,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});inputs.forEach(el=>el.value='');if(r.ok){f.remove();document.getElementById('done').textContent='Received — you can close this tab and return to the conversation.';}else{document.getElementById('done').textContent='Could not save (the link may have expired, been used, or was missing a field).';go.disabled=false;}};</script>
-</body>`;
+<p style="color:#888;font-size:.85rem">${dropMessage(locale, "security")}</p>
+<script>const f=document.getElementById('f'),keys=${keys};f.onsubmit=async(e)=>{e.preventDefault();const inputs=[...f.querySelectorAll('input')];const go=document.getElementById('go');go.disabled=true;let body;if(keys.length===1&&keys[0]===null){body={secret:inputs[0].value};}else{const values={};inputs.forEach((el,i)=>{values[keys[i]]=el.value;});body={values};}const r=await fetch('/drop/'+encodeURIComponent(${id_})+location.search,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});inputs.forEach(el=>el.value='');if(r.ok){f.remove();document.getElementById('done').textContent=${success};}else{document.getElementById('done').textContent=${error};go.disabled=false;}};</script>
+</body></html>`;
 }
 
 async function mintDrop(ctx: ApiCtx): Promise<void> {
@@ -178,18 +245,19 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
 
 async function dropForm(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, req } = ctx;
+  const locale = dropLocale(ctx);
   const peeked = deps.secretDrops ? await deps.secretDrops.peek(params.id!) : ({ ok: false } as const);
   if (!peeked.ok) {
     res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
-    return void res.end(dropFormHtml(params.id!, null));
+    return void res.end(dropFormHtml(locale, params.id!, null));
   }
   if (!(await dropLinkTokenOk(ctx, params.id!, peeked.rec))) {
     res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
-    return void res.end(dropFormHtml(params.id!, null));
+    return void res.end(dropFormHtml(locale, params.id!, null));
   }
   if (!samePerson(req.headers["x-drop-owner"] as string | undefined, peeked.rec.ownerId)) {
     res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
-    return void res.end(dropNotYoursHtml());
+    return void res.end(dropNotYoursHtml(locale));
   }
   const rec = {
     service: peeked.rec.service,
@@ -198,7 +266,7 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
     createdAt: peeked.rec.createdAt,
   };
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(dropFormHtml(params.id!, rec));
+  res.end(dropFormHtml(locale, params.id!, rec));
 }
 
 async function redeemDrop(ctx: ApiCtx): Promise<void> {
