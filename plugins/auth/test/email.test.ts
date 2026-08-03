@@ -8,6 +8,7 @@ const cfg = readConfig(testEnv());
 
 test("the sign-in email carries the link once in both alternatives and never a bare secret", () => {
   const message = renderSignInEmail({
+    locale: "en",
     to: "admin@example.com",
     brandName: "qm",
     link: "https://agent.example.test/idp/verify?token=abc.def.ghi",
@@ -21,6 +22,7 @@ test("the sign-in email carries the link once in both alternatives and never a b
 
 test("the link is HTML-escaped so a crafted token cannot break out of the anchor", () => {
   const message = renderSignInEmail({
+    locale: "en",
     to: "admin@example.com",
     brandName: "<script>",
     link: 'https://x.test/verify?token=a"><script>alert(1)</script>',
@@ -68,9 +70,18 @@ test("header injection through the subject or recipient is neutralised", () => {
   );
 });
 
-test("a non-ASCII subject is RFC 2047 encoded", () => {
-  const raw = renderMessage(cfg, { to: "a@b.test", subject: "Se connecter à qm", text: "x", html: "<p>x</p>" });
-  assert.match(raw, /\r\nSubject: =\?UTF-8\?B\?[A-Za-z0-9+/=]+\?=\r\n/);
+test("the Japanese sign-in subject is RFC 2047 encoded", () => {
+  const message = renderSignInEmail({
+    locale: "ja",
+    to: "a@b.test",
+    brandName: "qm",
+    link: "https://agent.example.test/idp/verify#token=abc",
+    ttlMinutes: 15,
+  });
+  const raw = renderMessage(cfg, message);
+  const encoded = /\r\nSubject: =\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=\r\n/.exec(raw)?.[1];
+  assert.ok(encoded);
+  assert.equal(Buffer.from(encoded, "base64").toString("utf8"), "qmにサインイン");
 });
 
 test("the Resend transport reports the provider's message id and surfaces refusals", async () => {

@@ -1,4 +1,5 @@
 import type { SmtpTlsMode } from "./smtp.ts";
+import { defaultLocale, normalizeLocale, type Locale } from "../../chassis/src/locale.ts";
 
 type EmailTransportKind = "resend" | "smtp";
 
@@ -34,6 +35,8 @@ export interface AuthConfig {
   sendLimitPerIp: number;
   coreApiUrl: string;
   coreSigningSecret: string | undefined;
+  defaultLocale: Locale;
+  defaultLocaleConfigured: boolean;
 }
 
 const PLACEHOLDER = /^(replace-me|placeholder|changeme|todo)$/i;
@@ -114,6 +117,8 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
     sendLimitPerIp: numberFrom(env.AUTH_SEND_LIMIT_PER_IP, 20),
     coreApiUrl: (env.CORE_API_URL ?? "http://localhost:8080").replace(/\/$/, ""),
     coreSigningSecret: env.CORE_SIGNING_SECRET,
+    defaultLocale: defaultLocale(env.QM_DEFAULT_LOCALE),
+    defaultLocaleConfigured: normalizeLocale(env.QM_DEFAULT_LOCALE) !== null,
   };
 }
 

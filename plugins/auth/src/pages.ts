@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { escapeHtml } from "../../chassis/src/http.ts";
+import type { Locale } from "../../chassis/src/locale.ts";
+import { authMessage } from "./messages.ts";
 
 const CONFIRM_SCRIPT = `(function () {
   var key = "qm.signin.token";
@@ -72,6 +74,13 @@ const STYLE = `<style>
   .help{ color:var(--muted); font-size:12.5px; margin:20px 0 0; }
   .who{ display:block; margin:0 auto 22px; font-size:13px; color:var(--text); background:var(--secondary);
     border:1px solid var(--border); border-radius:var(--radius-md); padding:11px 14px; word-break:break-word; }
+  .language-form{ margin-top:22px; padding-top:18px; border-top:1px solid var(--border);
+    grid-template-columns:1fr auto; align-items:end; }
+  .language-form label{ grid-column:1/-1; }
+  .language-form select{ min-height:38px; padding:0 10px; font:inherit; color:var(--text); background:var(--bg);
+    border:1px solid var(--border); border-radius:var(--radius-md); }
+  .language-form button{ min-height:38px; padding:0 14px; font:inherit; font-weight:600; color:var(--text);
+    background:var(--secondary); border:1px solid var(--border); border-radius:var(--radius-md); cursor:pointer; }
 </style>`;
 
 const MAIL_ICON = `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>`;
@@ -80,6 +89,7 @@ const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><pat
 const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
 
 function page(o: {
+  locale: Locale;
   title: string;
   brandName: string;
   icon: string;
@@ -90,7 +100,7 @@ function page(o: {
   help: string;
 }): string {
   return `<!doctype html>
-<html lang="en">
+<html lang="${o.locale}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -113,6 +123,7 @@ ${STYLE}
 }
 
 export function emailFormPage(o: {
+  locale: Locale;
   brandName: string;
   action: string;
   requestToken: string;
@@ -120,70 +131,88 @@ export function emailFormPage(o: {
   problem?: string;
 }): string {
   return page({
-    title: "Sign in",
+    locale: o.locale,
+    title: authMessage(o.locale, "signIn.title"),
     brandName: o.brandName,
     icon: MAIL_ICON,
-    heading: `Sign in to ${o.brandName}`,
-    msg: "Enter your work email and we'll send you a one-time sign-in link.",
-    body: `${o.problem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
+    heading: authMessage(o.locale, "signIn.heading", { brand: o.brandName }),
+    msg: authMessage(o.locale, "signIn.message"),
+    body: `${o.problem ? `<p class="reason"><strong>${escapeHtml(authMessage(o.locale, "signIn.tryAgain"))}</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
         <input type="hidden" name="request" value="${escapeHtml(o.requestToken)}">
-        <label for="email">Email address</label>
+        <label for="email">${escapeHtml(authMessage(o.locale, "signIn.emailLabel"))}</label>
         <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required autofocus
-          spellcheck="false" maxlength="254" placeholder="you@example.com" value="${escapeHtml(o.email ?? "")}">
-        <button class="btn" type="submit">Email me a sign-in link</button>
+          spellcheck="false" maxlength="254" placeholder="${escapeHtml(authMessage(o.locale, "signIn.emailPlaceholder"))}" value="${escapeHtml(o.email ?? "")}">
+        <button class="btn" type="submit">${escapeHtml(authMessage(o.locale, "signIn.submit"))}</button>
+      </form>
+      <form id="language-form" action="/locale" method="post" class="language-form">
+        <input type="hidden" name="returnTo" value="/auth/login">
+        <label for="locale">${escapeHtml(authMessage(o.locale, "language.label"))}</label>
+        <select id="locale" name="locale">
+          <option value="en"${o.locale === "en" ? " selected" : ""}>${escapeHtml(authMessage(o.locale, "language.english"))}</option>
+          <option value="ja"${o.locale === "ja" ? " selected" : ""}>${escapeHtml(authMessage(o.locale, "language.japanese"))}</option>
+        </select>
+        <button type="submit">${escapeHtml(authMessage(o.locale, "language.change"))}</button>
       </form>`,
-    help: "Only addresses your administrator has allowed can sign in.",
+    help: authMessage(o.locale, "signIn.help"),
   });
 }
 
-export function linkSentPage(o: { brandName: string; email: string; ttlMinutes: number }): string {
+export function linkSentPage(o: { locale: Locale; brandName: string; email: string; ttlMinutes: number }): string {
   return page({
-    title: "Check your email",
+    locale: o.locale,
+    title: authMessage(o.locale, "sent.title"),
     brandName: o.brandName,
     icon: SENT_ICON,
-    heading: "Check your email",
-    msg: `If that address can sign in, a one-time link is on its way. Open it in this browser — it works once and expires in ${o.ttlMinutes} minutes.`,
+    heading: authMessage(o.locale, "sent.heading"),
+    msg: authMessage(o.locale, "sent.message", { minutes: o.ttlMinutes }),
     body: `<p class="who">${escapeHtml(o.email)}</p>`,
-    help: "Nothing after a minute or two? Check spam, then ask your administrator whether the address is allowed.",
+    help: authMessage(o.locale, "sent.help"),
   });
 }
 
-export function confirmSignInPage(o: { brandName: string; action: string }): string {
+export function confirmSignInPage(o: { locale: Locale; brandName: string; action: string }): string {
   return page({
-    title: "Finish signing in",
+    locale: o.locale,
+    title: authMessage(o.locale, "confirm.title"),
     brandName: o.brandName,
     icon: LOCK_ICON,
-    heading: `Finish signing in to ${o.brandName}`,
-    msg: "Confirm below to complete sign-in. Your link is spent the moment you confirm, so do it in the browser you want to be signed in to.",
-    body: `<p class="reason" id="no-token" hidden><strong>Nothing to confirm</strong>This page did not receive a sign-in link. Open the link from your email directly, in a browser with JavaScript enabled, or ask for a fresh one.</p>
-      <noscript><p class="reason"><strong>JavaScript required</strong>The last step of sign-in reads your link out of the page address so it never reaches a server log. Enable JavaScript for this page, then reopen the link.</p></noscript>
+    heading: authMessage(o.locale, "confirm.heading", { brand: o.brandName }),
+    msg: authMessage(o.locale, "confirm.message"),
+    body: `<p class="reason" id="no-token" hidden><strong>${escapeHtml(authMessage(o.locale, "confirm.missingTitle"))}</strong>${escapeHtml(authMessage(o.locale, "confirm.missingBody"))}</p>
+      <noscript><p class="reason"><strong>${escapeHtml(authMessage(o.locale, "confirm.javascriptTitle"))}</strong>${escapeHtml(authMessage(o.locale, "confirm.javascriptBody"))}</p></noscript>
       <form method="post" action="${escapeHtml(o.action)}">
         <input type="hidden" name="token" id="token" value="">
-        <button class="btn" type="submit" id="confirm">Sign in</button>
+        <button class="btn" type="submit" id="confirm">${escapeHtml(authMessage(o.locale, "confirm.submit"))}</button>
       </form>
       <script>${CONFIRM_SCRIPT}</script>`,
-    help: "Didn't ask to sign in? Close this page — nothing happens until you confirm.",
+    help: authMessage(o.locale, "confirm.help"),
   });
 }
 
 export function problemPage(o: {
+  locale: Locale;
   brandName: string;
   heading: string;
   msg: string;
   detail?: string;
   retryUrl?: string;
 }): string {
-  const detail = o.detail ? `<p class="reason"><strong>Details</strong>${escapeHtml(o.detail)}</p>` : "";
-  const retry = o.retryUrl ? `<a class="btn" href="${escapeHtml(o.retryUrl)}">Request a new sign-in link</a>` : "";
+  const detail = o.detail
+    ? `<p class="reason"><strong>${escapeHtml(authMessage(o.locale, "problem.details"))}</strong>${escapeHtml(o.detail)}</p>`
+    : "";
+  const retry = o.retryUrl
+    ? `<a class="btn" href="${escapeHtml(o.retryUrl)}">${escapeHtml(authMessage(o.locale, "problem.retry"))}</a>`
+    : "";
   const body = `${detail}${retry}`;
   return page({
-    title: "Sign-in problem",
+    locale: o.locale,
+    title: authMessage(o.locale, "problem.title"),
     brandName: o.brandName,
     icon: ALERT_ICON,
     warn: true,
     heading: o.heading,
     msg: o.msg,
     ...(body ? { body } : {}),
-    help: "If this keeps happening, contact your administrator.",
+    help: authMessage(o.locale, "problem.help"),
   });
 }

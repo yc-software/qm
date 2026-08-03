@@ -8,6 +8,8 @@ import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type Auth
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 import { renderSignInEmail, type Mailer } from "./email.ts";
 import { confirmSignInPage, emailFormPage, linkSentPage, problemPage, CONFIRM_PAGE_CSP, PAGE_CSP } from "./pages.ts";
+import { LOCALE_HEADER, normalizeLocale, resolveLocale, type Locale } from "../../chassis/src/locale.ts";
+import { authMessage, type AuthMessageKey } from "./messages.ts";
 
 const MAX_FORM_BYTES = 8 * 1024;
 const ID_TOKEN_TTL_S = 300;
@@ -77,26 +79,21 @@ function basicCredentials(header: string | undefined): { id: string; secret: str
 function readAuthorizeRequest(
   cfg: AuthConfig,
   params: URLSearchParams,
-): { request: AuthRequest } | { problem: string } {
+): { request: AuthRequest } | { problem: AuthMessageKey } {
   const clientId = params.get("client_id") ?? "";
   const redirectUri = params.get("redirect_uri") ?? "";
-  if (!clientId || !safeEqual(clientId, cfg.clientId))
-    return { problem: "This sign-in request is for an unknown application." };
-  if (!redirectUri || !safeEqual(redirectUri, cfg.redirectUri))
-    return { problem: "This sign-in request would return you to an address that is not registered." };
-  if ((params.get("response_type") ?? "") !== "code")
-    return { problem: "Only the authorization-code flow is supported." };
-  if ((params.get("code_challenge_method") ?? "") !== "S256")
-    return { problem: "This sign-in request must use PKCE with S256." };
+  if (!clientId || !safeEqual(clientId, cfg.clientId)) return { problem: "error.unknownApplication" };
+  if (!redirectUri || !safeEqual(redirectUri, cfg.redirectUri)) return { problem: "error.unregisteredRedirect" };
+  if ((params.get("response_type") ?? "") !== "code") return { problem: "error.authorizationCodeOnly" };
+  if ((params.get("code_challenge_method") ?? "") !== "S256") return { problem: "error.pkceS256Required" };
   const codeChallenge = params.get("code_challenge") ?? "";
-  if (!/^[A-Za-z0-9\-_]{43}$/.test(codeChallenge))
-    return { problem: "This sign-in request carries a malformed PKCE challenge." };
+  if (!/^[A-Za-z0-9\-_]{43}$/.test(codeChallenge)) return { problem: "error.malformedPkce" };
   const state = params.get("state") ?? "";
   const nonce = params.get("nonce") ?? "";
-  if (!state || state.length > 512) return { problem: "This sign-in request is missing its state." };
-  if (!nonce || nonce.length > 512) return { problem: "This sign-in request is missing its nonce." };
+  if (!state || state.length > 512) return { problem: "error.missingState" };
+  if (!nonce || nonce.length > 512) return { problem: "error.missingNonce" };
   const scope = params.get("scope") ?? "openid";
-  if (!scope.split(/\s+/).includes("openid")) return { problem: "This sign-in request must ask for the openid scope." };
+  if (!scope.split(/\s+/).includes("openid")) return { problem: "error.openidRequired" };
   return { request: { clientId, redirectUri, state, nonce, codeChallenge, scope } };
 }
 
@@ -120,8 +117,34 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     );
   };
 
-  const problem = (res: ServerResponse, status: number, heading: string, msg: string, detail?: string): void =>
-    sendHtml(res, status, problemPage({ brandName: cfg.brandName, heading, msg, ...(detail ? { detail } : {}) }));
+  const localeOf = (req: IncomingMessage): Locale =>
+    resolveLocale({
+      explicit: req.headers[LOCALE_HEADER],
+      defaultLocale: cfg.defaultLocaleConfigured ? cfg.defaultLocale : undefined,
+      acceptLanguage: req.headers["accept-language"],
+    });
+
+  const signedLocale = (request: AuthRequest): Locale => normalizeLocale(request.locale) ?? cfg.defaultLocale;
+
+  const problem = (
+    res: ServerResponse,
+    status: number,
+    locale: Locale,
+    heading: AuthMessageKey,
+    msg: AuthMessageKey,
+    detail?: string,
+  ): void =>
+    sendHtml(
+      res,
+      status,
+      problemPage({
+        locale,
+        brandName: cfg.brandName,
+        heading: authMessage(locale, heading),
+        msg: authMessage(locale, msg),
+        ...(detail ? { detail } : {}),
+      }),
+    );
 
   const signInUrl = ((): string | undefined => {
     try {
@@ -131,38 +154,42 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     }
   })();
 
-  const staleLink = (res: ServerResponse): void =>
+  const staleLink = (res: ServerResponse, locale: Locale): void =>
     sendHtml(
       res,
       400,
       problemPage({
+        locale,
         brandName: cfg.brandName,
-        heading: "This sign-in link no longer works",
-        msg: "Sign-in links work once and expire quickly. Request a fresh one and open it right away.",
+        heading: authMessage(locale, "error.staleLinkHeading"),
+        msg: authMessage(locale, "error.staleLinkMessage"),
         ...(signInUrl ? { retryUrl: signInUrl } : {}),
       }),
     );
 
-  async function authorizeForm(res: ServerResponse, params: URLSearchParams): Promise<void> {
+  async function authorizeForm(req: IncomingMessage, res: ServerResponse, params: URLSearchParams): Promise<void> {
+    const locale = localeOf(req);
     const parsed = readAuthorizeRequest(cfg, params);
     if ("problem" in parsed)
       return problem(
         res,
         400,
-        "This sign-in link isn't valid",
-        "Start again from the page you were trying to reach.",
-        parsed.problem,
+        locale,
+        "error.invalidRequestHeading",
+        "error.invalidRequestMessage",
+        authMessage(locale, parsed.problem),
       );
-    const sealed = await signer.sealRequest(parsed.request, cfg.requestTtlS, now());
+    const sealed = await signer.sealRequest({ ...parsed.request, locale }, cfg.requestTtlS, now());
     return sendHtml(
       res,
       200,
-      emailFormPage({ brandName: cfg.brandName, action: formAction, requestToken: sealed.token }),
+      emailFormPage({ locale, brandName: cfg.brandName, action: formAction, requestToken: sealed.token }),
     );
   }
 
   async function sendLink(request: AuthRequest, email: string, ip: string): Promise<void> {
     const nowMs = now();
+    const locale = signedLocale(request);
     const within = async (kind: string, value: string, limit: number): Promise<boolean> =>
       withinRateLimit(claims, { secret: cfg.tokenSecret, kind, value, limit, windowS: cfg.sendWindowS, nowMs });
     if (!emailAllowed(cfg, email)) {
@@ -177,11 +204,11 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       console.warn("[auth] sign-in link suppressed: per-mailbox rate limit reached");
       return;
     }
-    const sealed = await signer.sealLink({ ...request, email }, cfg.linkTtlS, nowMs);
+    const sealed = await signer.sealLink({ ...request, locale, email }, cfg.linkTtlS, nowMs);
     const link = `${cfg.issuer}/verify#token=${encodeURIComponent(sealed.token)}`;
     try {
       const receipt = await mailer.send(
-        renderSignInEmail({ to: email, brandName: cfg.brandName, link, ttlMinutes: linkTtlMinutes }),
+        renderSignInEmail({ locale, to: email, brandName: cfg.brandName, link, ttlMinutes: linkTtlMinutes }),
       );
       console.log(`[auth] sign-in link sent to ${email} (${receipt})`);
     } catch (e) {
@@ -190,73 +217,69 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   }
 
   async function authorizeSubmit(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const incomingLocale = localeOf(req);
     let raw: string;
     try {
       raw = await readBody(req, MAX_FORM_BYTES);
     } catch (e) {
       if (e instanceof PayloadTooLargeError)
-        return problem(res, 413, "That didn't work", "The sign-in form sent more data than we accept.");
+        return problem(res, 413, incomingLocale, "error.failedHeading", "error.formTooLarge");
       throw e;
     }
     const form = new URLSearchParams(raw);
     const request = await signer.openRequest(form.get("request") ?? "", now());
     if (!request) {
-      return problem(
-        res,
-        400,
-        "This sign-in page expired",
-        "Sign-in pages are only valid for a short while. Start again from the page you were trying to reach.",
-      );
+      return problem(res, 400, incomingLocale, "error.expiredPageHeading", "error.expiredPageMessage");
     }
+    const locale = signedLocale(request);
     const email = normalizeEmail(form.get("email") ?? "");
     if (!validEmail(email)) {
-      const sealed = await signer.sealRequest(request, cfg.requestTtlS, now());
+      const sealed = await signer.sealRequest({ ...request, locale }, cfg.requestTtlS, now());
       return sendHtml(
         res,
         400,
         emailFormPage({
+          locale,
           brandName: cfg.brandName,
           action: formAction,
           requestToken: sealed.token,
-          problem: "That doesn't look like an email address.",
+          problem: authMessage(locale, "error.invalidEmail"),
         }),
       );
     }
     const ip = clientIpOf(req);
-    sendHtml(res, 200, linkSentPage({ brandName: cfg.brandName, email, ttlMinutes: linkTtlMinutes }));
+    sendHtml(res, 200, linkSentPage({ locale, brandName: cfg.brandName, email, ttlMinutes: linkTtlMinutes }));
     background(() => sendLink(request, email, ip));
   }
 
-  function confirmVerify(res: ServerResponse): void {
+  function confirmVerify(req: IncomingMessage, res: ServerResponse): void {
+    const locale = localeOf(req);
     return sendHtml(
       res,
       200,
-      confirmSignInPage({ brandName: cfg.brandName, action: `${cfg.publicPath}/verify` }),
+      confirmSignInPage({ locale, brandName: cfg.brandName, action: `${cfg.publicPath}/verify` }),
       CONFIRM_PAGE_CSP,
     );
   }
 
   async function verify(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const incomingLocale = localeOf(req);
     let raw: string;
     try {
       raw = await readBody(req, MAX_FORM_BYTES);
     } catch {
-      return problem(res, 413, "That didn't work", "The sign-in form sent more data than we accept.");
+      return problem(res, 413, incomingLocale, "error.failedHeading", "error.formTooLarge");
     }
     const opened = await signer.openLink(new URLSearchParams(raw).get("token") ?? "", now());
-    if (!opened) return staleLink(res);
-    if (!(await claimOnce(claims, `link:${opened.jti}`, opened.expiresAtMs))) return staleLink(res);
+    if (!opened) return staleLink(res, incomingLocale);
     const { claims: link } = opened;
+    const locale = signedLocale(link);
+    if (!(await claimOnce(claims, `link:${opened.jti}`, opened.expiresAtMs))) return staleLink(res, locale);
     if (!safeEqual(link.clientId, cfg.clientId) || !safeEqual(link.redirectUri, cfg.redirectUri)) {
-      return problem(
-        res,
-        400,
-        "This sign-in link no longer works",
-        "The sign-in configuration changed after this link was sent. Start again.",
-      );
+      return problem(res, 400, locale, "error.staleLinkHeading", "error.changedConfigMessage");
     }
     if (!emailAllowed(cfg, link.email)) {
-      return problem(res, 403, "This address can't sign in", "Your administrator has not allowed this email address.");
+      return problem(res, 403, locale, "error.disallowedHeading", "error.disallowedMessage");
     }
     const code = await signer.sealCode(
       {
@@ -379,9 +402,9 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       return void res.end(JSON.stringify({ keys: [signingKey.publicJwk] }));
     }
     if (method === "GET" && path === "/.well-known/openid-configuration") return discovery(res);
-    if (method === "GET" && path === "/authorize") return authorizeForm(res, url.searchParams);
+    if (method === "GET" && path === "/authorize") return authorizeForm(req, res, url.searchParams);
     if (method === "POST" && path === "/authorize") return authorizeSubmit(req, res);
-    if (method === "GET" && path === "/verify") return confirmVerify(res);
+    if (method === "GET" && path === "/verify") return confirmVerify(req, res);
     if (method === "POST" && path === "/verify") return verify(req, res);
     if (method === "POST" && path === "/token") return token(req, res);
     if ((method === "GET" || method === "POST") && path === "/userinfo") return userinfo(req, res);

@@ -127,6 +127,18 @@ test("the issuer path drives the public form action", () => {
   assert.equal(readConfig(testEnv({ AUTH_ISSUER: "https://agent.example.test" })).publicPath, "");
 });
 
+test("the deployment locale is normalized without hiding whether it was configured", () => {
+  const absent = readConfig(testEnv());
+  assert.equal(absent.defaultLocale, "en");
+  assert.equal(absent.defaultLocaleConfigured, false);
+  const japanese = readConfig(testEnv({ QM_DEFAULT_LOCALE: "ja-JP" }));
+  assert.equal(japanese.defaultLocale, "ja");
+  assert.equal(japanese.defaultLocaleConfigured, true);
+  const invalid = readConfig(testEnv({ QM_DEFAULT_LOCALE: "not-a-locale" }));
+  assert.equal(invalid.defaultLocale, "en");
+  assert.equal(invalid.defaultLocaleConfigured, false);
+});
+
 test("`node src/index.ts` refuses to boot on a placeholder configuration and serves /healthz once fixed", async () => {
   const base = {
     ...process.env,

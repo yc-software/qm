@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
+import { normalizeLocale, type Locale } from "../../chassis/src/locale.ts";
 
 export type TokenPurpose = "request" | "link" | "code" | "access";
 
@@ -11,6 +12,7 @@ export interface AuthRequest {
   nonce: string;
   codeChallenge: string;
   scope: string;
+  locale?: Locale;
 }
 
 export interface LinkClaims extends AuthRequest {
@@ -180,12 +182,14 @@ function requestClaims(request: AuthRequest): Record<string, unknown> {
     no: request.nonce,
     cc: request.codeChallenge,
     sc: request.scope,
+    ...(request.locale ? { lo: request.locale } : {}),
   };
 }
 
 function readRequest(payload: JWTPayload): AuthRequest | null {
-  const { cid, ru, st, no, cc, sc } = payload as Record<string, unknown>;
+  const { cid, ru, st, no, cc, sc, lo } = payload as Record<string, unknown>;
   if ([cid, ru, st, no, cc, sc].some((value) => typeof value !== "string" || !value)) return null;
+  const locale = normalizeLocale(lo);
   return {
     clientId: cid as string,
     redirectUri: ru as string,
@@ -193,6 +197,7 @@ function readRequest(payload: JWTPayload): AuthRequest | null {
     nonce: no as string,
     codeChallenge: cc as string,
     scope: sc as string,
+    ...(locale ? { locale } : {}),
   };
 }
 
