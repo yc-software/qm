@@ -861,6 +861,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (pathname === "/locale") {
     if (method !== "POST") return json(res, 405, { error: "method_not_allowed" });
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+    const contentType = req.headers["content-type"];
+    if (
+      typeof contentType !== "string" ||
+      contentType.split(";", 1)[0]?.trim().toLowerCase() !== "application/x-www-form-urlencoded"
+    ) {
+      return json(res, 415, { error: "unsupported_media_type" });
+    }
     let body: string;
     try {
       body = await readBody(req, 1024);

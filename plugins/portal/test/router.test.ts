@@ -111,7 +111,7 @@ test("locale preference is validated, durable, and safely redirected", async () 
     headers: {
       origin: PUBLIC,
       "sec-fetch-site": "same-origin",
-      "content-type": "application/x-www-form-urlencoded",
+      "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
     },
     body: new URLSearchParams({ locale: "ja", returnTo: "/admin/?tab=users" }),
   });
@@ -122,6 +122,18 @@ test("locale preference is validated, durable, and safely redirected", async () 
   assert.match(response.headers.get("set-cookie") ?? "", /SameSite=Lax/);
   assert.match(response.headers.get("set-cookie") ?? "", /Path=\//);
   assert.match(response.headers.get("set-cookie") ?? "", /Max-Age=31536000/);
+});
+
+test("locale preference requires form-urlencoded content", async () => {
+  for (const contentType of ["text/plain", "application/json"]) {
+    const response = await fetch(`${base}/locale`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { origin: PUBLIC, "content-type": contentType },
+      body: "locale=ja",
+    });
+    assert.equal(response.status, 415, contentType);
+  }
 });
 
 test("locale preference rejects invalid values and cross-origin writes", async () => {
@@ -224,10 +236,17 @@ test("admin tier (derived gate): non-admin sub is 403 before the upstream; admin
   assert.equal(deniedHtml.status, 403);
   assert.match(await deniedHtml.text(), /admin access/i);
 
-  const ok = await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U-admin") } });
+  const ok = await fetch(`${base}/admin/api/me`, {
+    headers: {
+      cookie: `${sessionCookie("U-admin")}; qm_locale=ja`,
+      "accept-language": "en-US",
+      "x-qm-locale": "en",
+    },
+  });
   assert.equal(ok.status, 200);
-  const body = (await ok.json()) as { cookie: string };
+  const body = (await ok.json()) as { cookie: string; headers: Record<string, string> };
   assert.equal(body.cookie, "admin=U-admin");
+  assert.equal(body.headers["x-qm-locale"], "ja");
 });
 
 test("admin gate fails closed for an unknown sub (whoami false ⇒ 403)", async () => {

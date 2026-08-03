@@ -37,6 +37,42 @@ test("/d/ proxy attaches the endpoint's proxyHeaders — the internal path authe
   }
 });
 
+test("/d/ source-auth preserves only a validated Portal locale", async () => {
+  const seenLocales: Array<string | undefined> = [];
+  const upstream = createHttpServer((req, res) => {
+    seenLocales.push(req.headers["x-qm-locale"] as string | undefined);
+    res.end("upstream-ok");
+  });
+  upstream.listen(0);
+  const upstreamPort = (upstream.address() as AddressInfo).port;
+  const secret = "deployment-locale-source-auth-secret";
+  const server = createServer(appWith({ host: "127.0.0.1", port: upstreamPort }), { signingSecret: secret });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  try {
+    for (const [path, locale] of [
+      ["/d/some-id/valid", "ja"],
+      ["/d/some-id/invalid", "forged"],
+    ] as const) {
+      const principal = "U1";
+      const timestamp = Math.floor(Date.now() / 1000);
+      const response = await fetch(`${base}${path}`, {
+        headers: {
+          "x-as-principal": principal,
+          "x-qm-locale": locale,
+          "x-timestamp": String(timestamp),
+          "x-signature": signRequest(secret, timestamp, `GET\n${path}\n${principal}`),
+        },
+      });
+      assert.equal(response.status, 200);
+    }
+    assert.deepEqual(seenLocales, ["ja", undefined]);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => upstream.close(() => r()));
+  }
+});
+
 test("/d/ proxy multiplexes concurrent requests over one HTTP/2 session", async () => {
   let sessionCount = 0;
   const sessions = new Set<ServerHttp2Session>();

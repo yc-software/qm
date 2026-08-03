@@ -75,13 +75,20 @@ function httpGet(
 
 test("subdomain ingress: portal sign-in admits the owner, denies strangers, bounces the signed-out", async () => {
   let upstreamCookie: string | undefined = "unset";
+  let upstreamLocale: string | undefined;
   let upstreamUrl = "";
   const upstream = createHttpServer((req, res) => {
     upstreamCookie = req.headers.cookie as string | undefined;
+    upstreamLocale = req.headers["x-qm-locale"] as string | undefined;
     upstreamUrl = req.url ?? "";
     res.writeHead(200, {
       "content-type": "text/plain",
-      "set-cookie": ["portal_session=evil; Domain=example.com; Path=/", "dpl_access=evil", "app_pref=ok"],
+      "set-cookie": [
+        "portal_session=evil; Domain=example.com; Path=/",
+        "dpl_access=evil",
+        "qm_locale=ja; Domain=example.com; Path=/",
+        "app_pref=ok",
+      ],
     });
     res.end("UPSTREAM OK");
   });
@@ -155,10 +162,13 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     const owner = await httpGet(port, "/consultants?x=1", {
       Host: host,
       Accept: "text/html",
-      Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
+      "Accept-Language": "en-US",
+      "X-Qm-Locale": "en",
+      Cookie: `portal_session=${mintPortalSession("alice@example.com")}; qm_locale=ja`,
     });
     assert.equal(owner.status, 200, "the signed-in owner reaches the app with no capability link");
     assert.equal(owner.body, "UPSTREAM OK");
+    assert.equal(upstreamLocale, "ja", "the domain cookie overrides a forged locale header");
     assert.equal(upstreamCookie, undefined, "the portal session cookie never reaches the app");
     assert.equal(upstreamUrl, "/consultants?x=1", "the app sees the clean URL");
     const ownerSetCookies = ([] as string[]).concat(owner.headers["set-cookie"] ?? []);
@@ -167,6 +177,39 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       ["app_pref=ok"],
       "an app cannot set or clear the gateway's cookies on the visitor",
     );
+
+    await httpGet(port, "/consultants", {
+      Host: host,
+      Accept: "text/html",
+      "Accept-Language": "en-US",
+      "X-Qm-Locale": "ja",
+      Cookie: `portal_session=${mintPortalSession("alice@example.com")}; qm_locale=fr`,
+    });
+    assert.equal(upstreamLocale, "en", "an invalid cookie falls back to Accept-Language");
+
+    await httpGet(port, "/consultants", {
+      Host: host,
+      Accept: "text/html",
+      "Accept-Language": "ja-JP",
+      "X-Qm-Locale": "en",
+      Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
+    });
+    assert.equal(upstreamLocale, "ja", "Accept-Language is used without a locale cookie");
+
+    const originalDefaultLocale = process.env.QM_DEFAULT_LOCALE;
+    process.env.QM_DEFAULT_LOCALE = "ja";
+    try {
+      await httpGet(port, "/consultants", {
+        Host: host,
+        Accept: "text/html",
+        "X-Qm-Locale": "ja",
+        Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
+      });
+      assert.equal(upstreamLocale, "en", "English is the direct-ingress fallback even with a configured default");
+    } finally {
+      if (originalDefaultLocale === undefined) delete process.env.QM_DEFAULT_LOCALE;
+      else process.env.QM_DEFAULT_LOCALE = originalDefaultLocale;
+    }
 
     const stranger = await httpGet(port, "/consultants", {
       Host: host,

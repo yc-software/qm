@@ -77,10 +77,17 @@ test("no display name on the session means no name cookie is forwarded", async (
 });
 
 test("deployment proxy binds source auth and portal identity to the signed-in principal", async () => {
-  const r = await fetch(`${base}/d/app/hello?x=1`, { headers: { cookie: sessionCookie("U1") } });
+  const r = await fetch(`${base}/d/app/hello?x=1`, {
+    headers: {
+      cookie: `${sessionCookie("U1")}; qm_locale=ja`,
+      "accept-language": "en-US",
+      "x-qm-locale": "en",
+    },
+  });
   const body = (await r.json()) as { url: string; headers: Record<string, string> };
   assert.equal(body.url, "/d/app/hello?x=1");
   assert.equal(body.headers["x-as-principal"], "U1");
+  assert.equal(body.headers["x-qm-locale"], "ja");
   assert.match(body.headers["x-signature"] ?? "", /^v0=/);
   assert.equal(
     verifyPortalIdentity(body.headers["x-portal-identity"] ?? "", "proxy-errors-test-identity-secret", Date.now())?.p,

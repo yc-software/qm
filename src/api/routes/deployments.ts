@@ -22,6 +22,13 @@ import { mintDeployOwnerToken, verifyDeployGitAccess, verifyDeployOwnerToken } f
 import { EDIT_WIDGET_JS, EDIT_WIDGET_PATH_PREFIX, editWidgetTag } from "../../deploy/edit-widget.ts";
 import { portalSessionSub } from "../../deploy/viewer-session.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+import {
+  LOCALE_COOKIE,
+  LOCALE_HEADER,
+  normalizeLocale,
+  resolveLocale,
+  type Locale,
+} from "../../../plugins/chassis/src/locale.ts";
 
 function isDeployInput(b: unknown): b is DeployInput {
   return (
@@ -67,7 +74,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     }
   }
   const reach = await app.reachDeployment(id, principal);
-  return proxyReach(ctx, reach, subPath);
+  return proxyReach(ctx, reach, subPath, normalizeLocale(req.headers[LOCALE_HEADER]) ?? undefined);
 }
 
 function adminDeploymentProxyParts(pathname: string): { id: string; subPath: string } | null {
@@ -123,8 +130,16 @@ const GATEWAY_AUTH_HEADERS = [
   "x-as-principal",
   "x-admin-actor",
   "x-agent-capability",
+  LOCALE_HEADER,
   PORTAL_IDENTITY_HEADER,
 ];
+
+const GATEWAY_COOKIE_NAMES = new Set(["dpl_access", "dpl_owner", "portal_session", LOCALE_COOKIE]);
+
+function gatewayOwnedCookie(value: string): boolean {
+  const equals = value.indexOf("=");
+  return GATEWAY_COOKIE_NAMES.has(value.slice(0, equals < 0 ? value.length : equals).trim().toLowerCase());
+}
 
 const PROXY_BUFFER_MAX_BYTES = 10_000_000;
 
@@ -158,7 +173,7 @@ function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string
   const kept = String(out.cookie ?? "")
     .split(";")
     .map((part) => part.trim())
-    .filter((part) => part && !/^(?:dpl_access|dpl_owner|portal_session)\s*=/.test(part));
+    .filter((part) => part && !gatewayOwnedCookie(part));
   if (kept.length) out.cookie = kept.join("; ");
   else delete out.cookie;
   return out;
@@ -177,7 +192,7 @@ function gatewaySafeResponseHeaders(
   const cookies = out["set-cookie"];
   if (cookies) {
     const values = Array.isArray(cookies) ? cookies : [cookies];
-    const kept = values.filter((cookie) => !/^\s*(?:dpl_access|dpl_owner|portal_session)\s*=/i.test(cookie));
+    const kept = values.filter((cookie) => !gatewayOwnedCookie(cookie));
     if (kept.length) out["set-cookie"] = kept;
     else delete out["set-cookie"];
   }
@@ -376,6 +391,7 @@ async function proxyReach(
   ctx: BaseCtx,
   reach: Awaited<ReturnType<App["reachDeployment"]>>,
   subPath: string,
+  locale?: Locale,
   inject?: string,
 ): Promise<void> {
   const { req, res, deps, url, method } = ctx;
@@ -402,6 +418,7 @@ async function proxyReach(
     ...forwardableHeaders(req),
     host: hostHeader,
     ...reach.endpoint.proxyHeaders,
+    ...(locale ? { [LOCALE_HEADER]: locale } : {}),
   };
   if (inject) headers["accept-encoding"] = "identity";
   if (/(?:^|,)\s*chunked\s*$/i.test(String(req.headers["transfer-encoding"] ?? ""))) {
@@ -478,6 +495,10 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
+  const locale = resolveLocale({
+    explicit: cookieValue(req.headers.cookie, LOCALE_COOKIE),
+    acceptLanguage: req.headers["accept-language"],
+  });
   const safePathname =
     pathname.startsWith("/") && !pathname.startsWith("//") && !/[\\\x00-\x1f]/.test(pathname) ? pathname : "/";
   const staleAccess = url.searchParams.has("access");
@@ -543,7 +564,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       return true;
     }
     const reach = await app.reachDeployment(slug, "", { bypassAcl: true });
-    await proxyReach(ctx, reach, pathname, inject);
+    await proxyReach(ctx, reach, pathname, locale, inject);
     return true;
   }
   const sessionSecret = deps.deployAppsSessionSecret;
@@ -601,7 +622,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     cleanUrlRedirect();
     return true;
   }
-  await proxyReach(ctx, reach, pathname);
+  await proxyReach(ctx, reach, pathname, locale);
   return true;
 }
 
