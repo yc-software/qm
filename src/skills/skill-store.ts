@@ -106,9 +106,7 @@ function publishedByScopeAndName(all: Skill[]): Map<string, Skill> {
 
 function resolveFromIndex(index: Map<string, Skill>, name: string, orderedScopes: ScopeId[]): SkillResolution {
   if (!isSafeSkillName(name)) return { skill: null, shadowed: [] };
-  const published = orderedScopes
-    .map((sc) => index.get(`${sc}\u0000${name}`))
-    .filter((s): s is Skill => Boolean(s));
+  const published = orderedScopes.map((sc) => index.get(`${sc}\u0000${name}`)).filter((s): s is Skill => Boolean(s));
   const [skill, ...shadowed] = published;
   return { skill: skill ?? null, shadowed };
 }
