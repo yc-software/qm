@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   acceptLanguageLocale,
   catalogProblems,
-  defaultLocale,
   formatMessage,
   normalizeLocale,
   resolveLocale,
