@@ -128,8 +128,11 @@ test("anonymous sessions are refused the connect and secret-drop flows", async (
   const visit = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
   const cookie = sessionCookieOf(visit);
   for (const path of ["/connect/redeem/tok123", "/connect/google/self-connect", "/drop/tok123/form"]) {
-    const r = await fetch(`${base}${path}`, { headers: { ...HTML, cookie } });
+    const r = await fetch(`${base}${path}`, { headers: { ...HTML, cookie: `${cookie}; qm_locale=ja` } });
     assert.equal(r.status, 403, `${path} must refuse anon sessions`);
+    const page = await r.text();
+    assert.match(page, /<html lang="ja">/);
+    assert.match(page, /Playgroundでは利用できません/);
   }
   const drop = await fetch(`${base}/drop/tok123`, {
     method: "POST",
@@ -183,9 +186,14 @@ test("boot refuses playground configurations that leak or brick", () => {
 
 test("mints beyond the per-IP budget are refused, and refusal sets no cookie", async () => {
   let last: Response | null = null;
-  for (let i = 0; i < 10; i++) last = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
+  for (let i = 0; i < 10; i++) {
+    last = await fetch(`${base}/`, { headers: { ...HTML, cookie: "qm_locale=ja" }, redirect: "manual" });
+  }
   assert.equal(last!.status, 429);
   assert.equal(last!.headers.getSetCookie().length, 0);
+  const page = await last!.text();
+  assert.match(page, /<html lang="ja">/);
+  assert.match(page, /Playgroundは混み合っています/);
 
   refuseClaims = true;
   try {

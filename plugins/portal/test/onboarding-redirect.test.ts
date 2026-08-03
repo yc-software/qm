@@ -58,11 +58,13 @@ test("unconfigured deployment: admin HTML navigation to web-ui redirects to admi
 
 test("unconfigured deployment: non-admin HTML navigation gets a not-set-up page, not a bare 403", async () => {
   const r = await fetch(`${base}/`, {
-    headers: { accept: "text/html", cookie: sessionCookie("U-member") },
+    headers: { accept: "text/html", cookie: `${sessionCookie("U-member")}; qm_locale=ja` },
     redirect: "manual",
   });
   assert.equal(r.status, 503);
-  assert.match(await r.text(), /isn&#39;t set up yet/);
+  const page = await r.text();
+  assert.match(page, /<html lang="ja">/);
+  assert.match(page, /初期設定が完了していません/);
 });
 
 test("unconfigured deployment: web-ui JSON requests still proxy through untouched", async () => {

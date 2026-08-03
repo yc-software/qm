@@ -42,6 +42,7 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 import { errMessage } from "../../chassis/src/errors.ts";
 import { json, escapeHtml, PayloadTooLargeError, readBody, serveEmojiFavicon } from "../../chassis/src/http.ts";
 import { LOCALE_COOKIE, LOCALE_HEADER, normalizeLocale, resolveLocale, type Locale } from "../../chassis/src/locale.ts";
+import { portalMessage } from "./messages.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -403,25 +404,45 @@ const CARD_STYLE = `<style>
   .btn.ghost:hover{ background:var(--secondary); color:var(--text); }
   .btn:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:2px; }
   .help{ color:var(--muted); font-size:12.5px; margin:20px 0 0; }
+  .language-picker{ display:flex; align-items:center; justify-content:center; gap:7px; margin:20px 0 0; color:var(--muted); }
+  .language-picker button{ border:0; background:none; color:var(--muted); cursor:pointer; padding:2px; font:inherit; }
+  .language-picker button[aria-current="true"]{ color:var(--text); font-weight:600; }
   @media (prefers-reduced-motion:reduce){ *{ transition:none !important; } }
 </style>`;
 
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
 const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
 
-function cardPage(o: {
-  title: string;
-  heading: string;
-  msg: string;
-  icon: string;
-  warn?: boolean;
-  wide?: boolean;
-  extra?: string;
-  actions: string;
-  help: string;
-}): string {
+export function localePicker(locale: Locale, returnTo: string): string {
+  const sanitized = sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN);
+  const currentPath = sanitized.startsWith("/") && !sanitized.startsWith("//") ? sanitized : "/";
+  const japaneseCurrent = locale === "ja" ? ' aria-current="true"' : "";
+  const englishCurrent = locale === "en" ? ' aria-current="true"' : "";
+  return `<form class="language-picker" action="/locale" method="post" aria-label="${escapeHtml(portalMessage(locale, "language.label"))}">
+        <input type="hidden" name="returnTo" value="${escapeHtml(currentPath)}">
+        <button type="submit" name="locale" value="ja"${japaneseCurrent}>${escapeHtml(portalMessage(locale, "language.japanese"))}</button>
+        <span aria-hidden="true">/</span>
+        <button type="submit" name="locale" value="en"${englishCurrent}>${escapeHtml(portalMessage(locale, "language.english"))}</button>
+      </form>`;
+}
+
+function cardPage(
+  locale: Locale,
+  o: {
+    title: string;
+    heading: string;
+    msg: string;
+    icon: string;
+    warn?: boolean;
+    wide?: boolean;
+    extra?: string;
+    actions: string;
+    help: string;
+    returnTo: string;
+  },
+): string {
   return `<!doctype html>
-<html lang="en">
+<html lang="${locale}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -441,66 +462,71 @@ ${CARD_STYLE}
         ${o.actions}
       </div>
       <p class="help">${escapeHtml(o.help)}</p>
+      ${localePicker(locale, o.returnTo)}
     </section>
   </main>
 </body>
 </html>`;
 }
 
-export function signInErrorHtml(detail: string): string {
-  return cardPage({
-    title: "Sign-in failed",
-    heading: "We couldn't sign you in",
-    msg: "Your sign-in didn't complete. This is usually temporary — trying again resolves most cases.",
+export function signInErrorHtml(locale: Locale, detail: string, returnTo = "/"): string {
+  return cardPage(locale, {
+    title: portalMessage(locale, "signIn.title"),
+    heading: portalMessage(locale, "signIn.heading"),
+    msg: portalMessage(locale, "signIn.message"),
     icon: ALERT_ICON,
     warn: true,
-    extra: `<p class="reason"><strong>Details</strong>${escapeHtml(detail)}</p>`,
-    actions: `<a class="btn primary" href="/auth/login">Try signing in again</a>
-        <a class="btn ghost" href="/">Back to start</a>`,
-    help: "Still stuck? Make sure you're a member of the approved workspace, then contact your admin.",
+    extra: `<p class="reason"><strong>${escapeHtml(portalMessage(locale, "signIn.details"))}</strong>${escapeHtml(detail)}</p>`,
+    actions: `<a class="btn primary" href="/auth/login">${escapeHtml(portalMessage(locale, "signIn.retry"))}</a>
+        <a class="btn ghost" href="/">${escapeHtml(portalMessage(locale, "signIn.back"))}</a>`,
+    help: portalMessage(locale, "signIn.help"),
+    returnTo,
   });
 }
 
-export function nonAdminDeniedHtml(o: { sub: string; org: string }): string {
-  return cardPage({
-    title: "No admin access",
-    heading: "You don't have admin access",
-    msg: "The Admin area is limited to governance admins. Your account is signed in and verified — it just isn't granted admin rights.",
+export function nonAdminDeniedHtml(locale: Locale, o: { sub: string; org: string }, returnTo = "/admin/"): string {
+  return cardPage(locale, {
+    title: portalMessage(locale, "admin.deniedTitle"),
+    heading: portalMessage(locale, "admin.deniedHeading"),
+    msg: portalMessage(locale, "admin.deniedMessage"),
     icon: LOCK_ICON,
     wide: true,
     extra: `<div class="note">
-        <span class="who">Signed in as <b>${escapeHtml(o.sub)}</b> &middot; ${escapeHtml(o.org)}</span>
-        <p>Admin rights come from your organization's admin grants. If you need access, ask an existing admin to grant it.</p>
+        <span class="who">${escapeHtml(portalMessage(locale, "admin.signedInAs"))} <b>${escapeHtml(o.sub)}</b> &middot; ${escapeHtml(o.org)}</span>
+        <p>${escapeHtml(portalMessage(locale, "admin.deniedNote"))}</p>
       </div>`,
-    actions: `<a class="btn primary" href="/">Back to your surfaces</a>
-        <a class="btn ghost" href="/admin/">Try again</a>
-        <a class="btn ghost" href="/">Open the assistant instead</a>`,
-    help: "You can keep using every surface available to your account.",
+    actions: `<a class="btn primary" href="/">${escapeHtml(portalMessage(locale, "admin.backToSurfaces"))}</a>
+        <a class="btn ghost" href="/admin/">${escapeHtml(portalMessage(locale, "admin.tryAgain"))}</a>
+        <a class="btn ghost" href="/">${escapeHtml(portalMessage(locale, "admin.openAssistant"))}</a>`,
+    help: portalMessage(locale, "admin.deniedHelp"),
+    returnTo,
   });
 }
 
-export function notConfiguredHtml(): string {
-  return cardPage({
-    title: "Not set up yet",
-    heading: "This deployment isn't set up yet",
-    msg: "An admin still needs to finish setup by adding a model API key. Until then the assistant can't answer.",
+export function notConfiguredHtml(locale: Locale, returnTo = "/"): string {
+  return cardPage(locale, {
+    title: portalMessage(locale, "setup.title"),
+    heading: portalMessage(locale, "setup.heading"),
+    msg: portalMessage(locale, "setup.message"),
     icon: ALERT_ICON,
     warn: true,
-    actions: `<a class="btn primary" href="/">Try again</a>`,
-    help: "Ask your admin to complete onboarding in the Admin area.",
+    actions: `<a class="btn primary" href="/">${escapeHtml(portalMessage(locale, "setup.tryAgain"))}</a>`,
+    help: portalMessage(locale, "setup.help"),
+    returnTo,
   });
 }
 
-export function adminUnavailableHtml(): string {
-  return cardPage({
-    title: "Admin temporarily unavailable",
-    heading: "Admin is temporarily unavailable",
-    msg: "We couldn't check your admin access right now. This is usually temporary — trying again resolves most cases.",
+export function adminUnavailableHtml(locale: Locale, returnTo = "/admin/"): string {
+  return cardPage(locale, {
+    title: portalMessage(locale, "admin.unavailableTitle"),
+    heading: portalMessage(locale, "admin.unavailableHeading"),
+    msg: portalMessage(locale, "admin.unavailableMessage"),
     icon: ALERT_ICON,
     warn: true,
-    actions: `<a class="btn primary" href="/admin/">Try again</a>
-        <a class="btn ghost" href="/">Back to your surfaces</a>`,
-    help: "If this keeps happening, the admin service may be down — contact your admin.",
+    actions: `<a class="btn primary" href="/admin/">${escapeHtml(portalMessage(locale, "admin.tryAgain"))}</a>
+        <a class="btn ghost" href="/">${escapeHtml(portalMessage(locale, "admin.backToSurfaces"))}</a>`,
+    help: portalMessage(locale, "admin.unavailableHelp"),
+    returnTo,
   });
 }
 
@@ -515,42 +541,51 @@ const connectStyle = (): string => `<style>
   .btn{ display:inline-block; font-weight:600; min-height:40px; line-height:40px; padding:0 18px;
     border:1px solid var(--brand); border-radius:var(--radius-md); background:var(--brand); color:#fff; text-decoration:none; }
   a.muted{ color:var(--muted); display:inline-block; margin-top:14px; }
+  .language-picker{ display:flex; align-items:center; justify-content:center; gap:7px; margin:22px 0 0; color:var(--muted); }
+  .language-picker button{ border:0; background:none; color:var(--muted); cursor:pointer; padding:2px; font:inherit; }
+  .language-picker button[aria-current="true"]{ color:var(--text); font-weight:600; }
 </style>`;
 
-function connectPage(o: { title: string; body: string; action?: string }): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+function connectPage(locale: Locale, o: { title: string; body: string; action?: string; returnTo: string }): string {
+  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(o.title)} · Portal</title>${connectStyle()}</head>
-<body><div class="card"><h1>${escapeHtml(o.title)}</h1><p>${escapeHtml(o.body)}</p>${o.action ?? ""}</div></body></html>`;
+<body><div class="card"><h1>${escapeHtml(o.title)}</h1><p>${escapeHtml(o.body)}</p>${o.action ?? ""}${localePicker(locale, o.returnTo)}</div></body></html>`;
 }
 
-function providerLabel(provider: string): string {
+function providerLabel(locale: Locale, provider: string): string {
   if (provider === "google") return "Google";
-  return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "this app";
+  return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : portalMessage(locale, "connect.appFallback");
 }
 
-export function connectErrorHtml(detail: string): string {
-  return connectPage({ title: "Can't connect", body: detail });
+export function connectErrorHtml(locale: Locale, detail: string, returnTo = "/connectors"): string {
+  return connectPage(locale, { title: portalMessage(locale, "connect.errorTitle"), body: detail, returnTo });
 }
 
-export function connectWrongRecipientHtml(o: { provider: string; alreadyConnected: boolean }): string {
-  const prov = providerLabel(o.provider);
+export function connectWrongRecipientHtml(
+  locale: Locale,
+  o: { provider: string; alreadyConnected: boolean },
+  returnTo = "/connectors",
+): string {
+  const prov = providerLabel(locale, o.provider);
   if (o.alreadyConnected) {
-    return connectPage({
-      title: `You've already connected ${prov}`,
-      body: `This link was meant for a different teammate, and your ${prov} is already connected — there's nothing to do here.`,
-      action: `<a class="muted" href="/connectors">Manage your connections</a>`,
+    return connectPage(locale, {
+      title: portalMessage(locale, "connect.alreadyTitle", { provider: prov }),
+      body: portalMessage(locale, "connect.alreadyBody", { provider: prov }),
+      action: `<a class="muted" href="/connectors">${escapeHtml(portalMessage(locale, "connect.manage"))}</a>`,
+      returnTo,
     });
   }
-  return connectPage({
-    title: "This link was for someone else",
-    body: `This connect link was created for a different teammate. Want to connect your own ${prov} instead?`,
-    action: `<a class="btn" href="/connect/${encodeURIComponent(o.provider)}/self-connect">Connect my ${escapeHtml(prov)}</a>`,
+  return connectPage(locale, {
+    title: portalMessage(locale, "connect.wrongTitle"),
+    body: portalMessage(locale, "connect.wrongBody", { provider: prov }),
+    action: `<a class="btn" href="/connect/${encodeURIComponent(o.provider)}/self-connect">${escapeHtml(portalMessage(locale, "connect.connectMine", { provider: prov }))}</a>`,
+    returnTo,
   });
 }
 
 async function handleConsentRedeem(
   res: ServerResponse,
-  o: { corePath: string; session: SessionClaims },
+  o: { corePath: string; session: SessionClaims; locale: Locale; returnTo: string },
 ): Promise<void> {
   const path = withSourceAuthNonce(o.corePath, CORE_SIGNING_SECRET);
   const headers = {
@@ -566,29 +601,33 @@ async function handleConsentRedeem(
     return sendHtml(
       res,
       502,
-      connectErrorHtml("We couldn't reach the connection service. Please try the link again in a moment."),
+      connectErrorHtml(o.locale, portalMessage(o.locale, "connect.serviceUnavailable"), o.returnTo),
     );
   }
   switch (data.status) {
     case "authorize":
       if (!data.authorizeUrl)
-        return sendHtml(res, 502, connectErrorHtml("The connection service returned an unexpected response."));
+        return sendHtml(
+          res,
+          502,
+          connectErrorHtml(o.locale, portalMessage(o.locale, "connect.unexpected"), o.returnTo),
+        );
       res.writeHead(302, { location: data.authorizeUrl, "cache-control": "no-store" });
       return void res.end();
     case "wrong_recipient":
       return sendHtml(
         res,
         200,
-        connectWrongRecipientHtml({ provider: data.provider ?? "", alreadyConnected: !!data.clickerConnected }),
+        connectWrongRecipientHtml(
+          o.locale,
+          { provider: data.provider ?? "", alreadyConnected: !!data.clickerConnected },
+          o.returnTo,
+        ),
       );
     case "expired":
-      return sendHtml(res, 200, connectErrorHtml("This connect link has expired — ask the agent for a fresh one."));
+      return sendHtml(res, 200, connectErrorHtml(o.locale, portalMessage(o.locale, "connect.expired"), o.returnTo));
     default:
-      return sendHtml(
-        res,
-        200,
-        connectErrorHtml("This connect link is invalid or was already used — ask the agent for a fresh one."),
-      );
+      return sendHtml(res, 200, connectErrorHtml(o.locale, portalMessage(o.locale, "connect.invalid"), o.returnTo));
   }
 }
 
@@ -612,7 +651,7 @@ function readRequestBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<st
 async function handleSecretDrop(
   req: IncomingMessage,
   res: ServerResponse,
-  o: { method: string; corePath: string; session: SessionClaims },
+  o: { method: string; corePath: string; session: SessionClaims; locale: Locale; returnTo: string },
 ): Promise<void> {
   const isPost = o.method === "POST";
   let rawBody = "";
@@ -642,11 +681,7 @@ async function handleSecretDrop(
         error: "unreachable",
         message: "couldn't reach the credential service — try again in a moment",
       });
-    return sendHtml(
-      res,
-      502,
-      '<!doctype html><meta charset=utf-8><body style="font-family:system-ui;max-width:32rem;margin:4rem auto"><h2>Service unavailable</h2><p>Try the link again in a moment.</p></body>',
-    );
+    return sendHtml(res, 502, secretDropUnavailableHtml(o.locale, o.returnTo));
   }
   const bodyText = await r.text();
   const ct = r.headers.get("content-type") ?? (isPost ? "application/json" : "text/html; charset=utf-8");
@@ -654,7 +689,10 @@ async function handleSecretDrop(
   return void res.end(bodyText);
 }
 
-async function handleSelfConnect(res: ServerResponse, o: { provider: string; session: SessionClaims }): Promise<void> {
+async function handleSelfConnect(
+  res: ServerResponse,
+  o: { provider: string; session: SessionClaims; locale: Locale; returnTo: string },
+): Promise<void> {
   const redirectUri = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(o.provider)}/callback`;
   const qs = new URLSearchParams({ principalId: o.session.sub, redirectUri, returnTo: "/connectors" });
   const path = withSourceAuthNonce(
@@ -671,13 +709,13 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
     return sendHtml(
       res,
       200,
-      connectErrorHtml(data.message ?? "We couldn't start the connection. This app may not be configured."),
+      connectErrorHtml(o.locale, data.message ?? portalMessage(o.locale, "connect.startFailed"), o.returnTo),
     );
   } catch {
     return sendHtml(
       res,
       502,
-      connectErrorHtml("We couldn't reach the connection service. Please try again in a moment."),
+      connectErrorHtml(o.locale, portalMessage(o.locale, "connect.serviceUnavailableShort"), o.returnTo),
     );
   }
 }
@@ -761,26 +799,36 @@ export function mintBucketOf(ip: string): string {
   return `${prefix}::/64`;
 }
 
-export function playgroundBusyHtml(): string {
-  return cardPage({
-    title: "Playground is busy",
-    heading: "The playground is busy",
-    msg: "We couldn't start a fresh playground session for you right now. Waiting a little while and reloading resolves most cases.",
+export function playgroundBusyHtml(locale: Locale, returnTo = "/"): string {
+  return cardPage(locale, {
+    title: portalMessage(locale, "playground.busyTitle"),
+    heading: portalMessage(locale, "playground.busyHeading"),
+    msg: portalMessage(locale, "playground.busyMessage"),
     icon: ALERT_ICON,
     warn: true,
-    actions: `<a class="btn primary" href="/">Try again</a>`,
-    help: "Playground sessions are limited per visitor to keep the demo responsive for everyone.",
+    actions: `<a class="btn primary" href="/">${escapeHtml(portalMessage(locale, "playground.tryAgain"))}</a>`,
+    help: portalMessage(locale, "playground.busyHelp"),
+    returnTo,
   });
 }
 
-export function playgroundRestrictedHtml(): string {
-  return cardPage({
-    title: "Not available in the playground",
-    heading: "Not available in the playground",
-    msg: "Connecting accounts and dropping secrets are disabled for anonymous playground sessions — clearing your cookie would orphan real credentials.",
+export function playgroundRestrictedHtml(locale: Locale, returnTo = "/"): string {
+  return cardPage(locale, {
+    title: portalMessage(locale, "playground.restrictedTitle"),
+    heading: portalMessage(locale, "playground.restrictedHeading"),
+    msg: portalMessage(locale, "playground.restrictedMessage"),
     icon: LOCK_ICON,
-    actions: `<a class="btn primary" href="/">Back to the playground</a>`,
-    help: "Sign in with a real account at /auth/login to use this link.",
+    actions: `<a class="btn primary" href="/">${escapeHtml(portalMessage(locale, "playground.back"))}</a>`,
+    help: portalMessage(locale, "playground.restrictedHelp"),
+    returnTo,
+  });
+}
+
+export function secretDropUnavailableHtml(locale: Locale, returnTo = "/"): string {
+  return connectPage(locale, {
+    title: portalMessage(locale, "secret.unavailableTitle"),
+    body: portalMessage(locale, "secret.unavailableBody"),
+    returnTo,
   });
 }
 
@@ -844,6 +892,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const rawTarget = req.url ?? "/";
   const url = new URL(rawTarget, "http://portal.local");
   const pathname = url.pathname;
+  const requestLocale = localeOf(req);
+  const currentPath = `${pathname}${url.search}`;
 
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
@@ -914,7 +964,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       res,
       { baseUrl: AUTH_BROKER_UPSTREAM, path: brokerPath, search: url.search },
       FORWARD_BROKER_HEADERS,
-      { "x-qm-client-ip": clientIpOf(req), [LOCALE_HEADER]: localeOf(req) },
+      { "x-qm-client-ip": clientIpOf(req), [LOCALE_HEADER]: requestLocale },
     );
   }
 
@@ -979,17 +1029,24 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const redeem = /^\/connect\/redeem\/([^/]+)$/.exec(pathname);
   if (method === "GET" && redeem) {
     if (!session) return consentBounce();
-    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml());
+    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml(requestLocale, currentPath));
     return handleConsentRedeem(res, {
       corePath: `/v1/connectors/oauth/consent/redeem/${redeem[1]}${url.search}`,
       session,
+      locale: requestLocale,
+      returnTo: currentPath,
     });
   }
   const selfConnect = /^\/connect\/([^/]+)\/self-connect$/.exec(pathname);
   if (method === "GET" && selfConnect) {
     if (!session) return consentBounce();
-    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml());
-    return handleSelfConnect(res, { provider: decodeURIComponent(selfConnect[1] ?? ""), session });
+    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml(requestLocale, currentPath));
+    return handleSelfConnect(res, {
+      provider: decodeURIComponent(selfConnect[1] ?? ""),
+      session,
+      locale: requestLocale,
+      returnTo: currentPath,
+    });
   }
 
   if (isOAuthPublicPassthrough(method, pathname)) {
@@ -999,11 +1056,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const dropForm = /^\/drop\/([^/]+)\/form$/.exec(pathname);
   if (method === "GET" && dropForm) {
     if (!session) return consentBounce();
-    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml());
+    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml(requestLocale, pathname));
     return handleSecretDrop(req, res, {
       method,
       corePath: `/v1/keychain/drops/${dropForm[1]}/form${url.search}`,
       session,
+      locale: requestLocale,
+      returnTo: pathname,
     });
   }
   const dropSubmit = /^\/drop\/([^/]+)$/.exec(pathname);
@@ -1020,6 +1079,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       method,
       corePath: `/v1/keychain/drops/${dropSubmit[1]}${url.search}`,
       session,
+      locale: requestLocale,
+      returnTo: pathname,
     });
   }
 
@@ -1052,7 +1113,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (method === "GET" && wantsHtml(req)) {
       if (PLAYGROUND) {
         session = await mintPlaygroundSession(req, res);
-        if (!session) return sendHtml(res, 429, playgroundBusyHtml());
+        if (!session) return sendHtml(res, 429, playgroundBusyHtml(requestLocale, currentPath));
       } else {
         const returnTo = encodeURIComponent(`${pathname}${url.search}`);
         res.writeHead(302, { location: `/auth/login?returnTo=${returnTo}` });
@@ -1079,7 +1140,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       subPath,
       search: url.search,
       principal: session.sub,
-      locale: localeOf(req),
+      locale: requestLocale,
       signingSecret: CORE_SIGNING_SECRET,
       ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
     });
@@ -1088,13 +1149,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const key = surfaceKey as string;
   if (key === "admin") {
     if (session.anon) {
-      if (wantsHtml(req)) return sendHtml(res, 403, nonAdminDeniedHtml({ sub: session.sub, org: session.org }));
+      if (wantsHtml(req))
+        return sendHtml(
+          res,
+          403,
+          nonAdminDeniedHtml(requestLocale, { sub: session.sub, org: session.org }, currentPath),
+        );
       return json(res, 403, { error: "forbidden", message: "admin access required" });
     }
     const probe = await adminProbe(session.sub);
     if (!probe.isAdmin) {
       if (wantsHtml(req)) {
-        const page = probe.failed ? adminUnavailableHtml() : nonAdminDeniedHtml({ sub: session.sub, org: session.org });
+        const page = probe.failed
+          ? adminUnavailableHtml(requestLocale, currentPath)
+          : nonAdminDeniedHtml(requestLocale, { sub: session.sub, org: session.org }, currentPath);
         return sendHtml(res, 403, page);
       }
       return json(res, 403, { error: "forbidden", message: "admin access required" });
@@ -1108,7 +1176,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         res.writeHead(302, { location: "/admin/onboarding", "cache-control": "no-store" });
         return void res.end();
       }
-      return sendHtml(res, 503, notConfiguredHtml());
+      return sendHtml(res, 503, notConfiguredHtml(requestLocale, currentPath));
     }
   }
 
@@ -1130,7 +1198,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     search: url.search,
     cookieName: COOKIE_FOR[key]!,
     principal,
-    locale: localeOf(req),
+    locale: requestLocale,
     ...(!impersonator && session.name ? { displayName: session.name } : {}),
     ...(impersonator ? { impersonator } : {}),
     ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
@@ -1162,19 +1230,23 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
 }
 
 async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const locale = localeOf(req);
   const fail = (detail: string): void => {
     setSession(res, [clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES)]);
-    sendHtml(res, 400, signInErrorHtml(detail));
+    sendHtml(res, 400, signInErrorHtml(locale, detail, url.pathname));
   };
 
-  if (url.searchParams.get("error")) return fail(`identity provider returned: ${url.searchParams.get("error") ?? ""}`);
+  if (url.searchParams.get("error")) {
+    return fail(portalMessage(locale, "signIn.identityProvider", { error: url.searchParams.get("error") ?? "" }));
+  }
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
 
   const tmp = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now());
-  if (!tmp) return fail("login session expired — please try again");
-  if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
-  if (!consumeState(tmp.state)) return fail("login already used — please try again");
+  if (!tmp) return fail(portalMessage(locale, "signIn.expired"));
+  if (!code || !stateParam || !safeEqual(stateParam, tmp.state))
+    return fail(portalMessage(locale, "signIn.invalidState"));
+  if (!consumeState(tmp.state)) return fail(portalMessage(locale, "signIn.alreadyUsed"));
 
   let sub: string;
   let name = "";

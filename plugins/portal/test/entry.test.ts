@@ -6,7 +6,13 @@ test("`node src/index.ts` (relative entry, like Docker) binds the port and serve
   const PORT = "18097";
   const child = spawn(process.execPath, ["src/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT, PORTAL_PUBLIC_URL: `http://localhost:${PORT}`, NODE_ENV: "test" },
+    env: {
+      ...process.env,
+      PORT,
+      PORTAL_PUBLIC_URL: `http://localhost:${PORT}`,
+      QM_DEFAULT_LOCALE: "ja",
+      NODE_ENV: "test",
+    },
     stdio: "ignore",
   });
   try {
@@ -24,6 +30,11 @@ test("`node src/index.ts` (relative entry, like Docker) binds the port and serve
       }
     }
     assert.ok(ok, "portal entry should bind the port and answer /healthz");
+    const callback = await fetch(`http://localhost:${PORT}/auth/callback?code=x&state=y`);
+    assert.equal(callback.status, 400);
+    const page = await callback.text();
+    assert.match(page, /<html lang="ja">/);
+    assert.match(page, /サインインできませんでした/);
   } finally {
     child.kill("SIGKILL");
   }
