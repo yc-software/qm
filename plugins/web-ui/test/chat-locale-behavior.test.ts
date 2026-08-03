@@ -68,7 +68,8 @@ const vite = await createViteTestServer();
 const { render } = await vite.ssrLoadModule("lit");
 const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
 const { openSession, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
-const { contextsState, scopeChip } = await vite.ssrLoadModule("/src/contexts.ts");
+const { contextsState, renderContexts, scopeChip } = await vite.ssrLoadModule("/src/contexts.ts");
+const { ambientPolicyState } = await vite.ssrLoadModule("/src/ambient-policy.ts");
 const { chatState, drawActiveChat, newChat } = await vite.ssrLoadModule("/src/chat.ts");
 const { renderCronsPage } = await vite.ssrLoadModule("/src/crons.ts");
 
@@ -117,7 +118,7 @@ test("Japanese chat context banners name projects, channels, and group DMs accur
 
   const cases = [
     {
-      context: { scopeId: "group:project-alpha", name: "Alpha", kind: "project" as const },
+      context: { scopeId: "project:synthetic-1", name: "Alpha", kind: "project" as const },
       label: "Alphaプロジェクト",
       hint: "このチャットはAlphaプロジェクトで実行されます。",
     },
@@ -151,7 +152,7 @@ test("Japanese scope chips identify personal, project, channel, and group DM des
   contextsState.list = [
     { scopeId: "personal:alice", kind: "personal", name: null, sessionCount: 0, lastActivityAt: null },
     {
-      scopeId: "group:project-alpha",
+      scopeId: "project:synthetic-1",
       kind: "group",
       name: "mpdm-alice--bob-1",
       sessionCount: 0,
@@ -161,7 +162,7 @@ test("Japanese scope chips identify personal, project, channel, and group DM des
         name: "Alpha",
         ownerId: "alice",
         memberIds: ["alice"],
-        scopeId: "group:project-alpha",
+        scopeId: "project:synthetic-1",
         members: [{ principalId: "alice", displayName: "Alice" }],
       },
     },
@@ -170,7 +171,7 @@ test("Japanese scope chips identify personal, project, channel, and group DM des
   ];
   const cases = [
     ["personal:alice", "個人: 個人プロジェクト", "個人プロジェクト"],
-    ["group:project-alpha", "プロジェクト: Alpha", "Alpha"],
+    ["project:synthetic-1", "プロジェクト: Alpha", "Alpha"],
     ["channel:C123", "チャンネル: #general", "general"],
     ["group:G123", "グループDM: Alice, Bob", "Alice, Bob"],
   ] as const;
@@ -197,7 +198,7 @@ test("opening a project conversation loads context metadata before choosing its 
   contextsResponse = {
     contexts: [
       {
-        scopeId: "group:project-loaded",
+        scopeId: "project:synthetic-loaded",
         kind: "group",
         name: "mpdm-alice--bob-1",
         sessionCount: 1,
@@ -207,7 +208,7 @@ test("opening a project conversation loads context metadata before choosing its 
           name: "Alpha",
           ownerId: "alice",
           memberIds: ["alice"],
-          scopeId: "group:project-loaded",
+          scopeId: "project:synthetic-loaded",
           members: [{ principalId: "alice", displayName: "Alice" }],
         },
       },
@@ -218,7 +219,7 @@ test("opening a project conversation loads context metadata before choosing its 
     await openSession({
       id: "",
       type: "group",
-      scopeId: "group:project-loaded",
+      scopeId: "project:synthetic-loaded",
       threadRef: "web:alice:project-loaded",
       createdAt: 1,
       channelName: "mpdm-alice--bob-1",
@@ -227,6 +228,57 @@ test("opening a project conversation loads context metadata before choosing its 
     assert.ok(banner);
     assert.equal(banner.textContent?.trim(), "Alphaプロジェクト");
   } finally {
+    contextsResponse = { contexts: [] };
+  }
+});
+
+test("Japanese context details name channels and group DMs without calling them projects", async () => {
+  selectLocale("ja");
+  const cases = [
+    {
+      context: {
+        scopeId: "channel:C-general",
+        kind: "channel",
+        name: "general",
+        sessionCount: 0,
+        lastActivityAt: null,
+      },
+      noun: "チャンネル",
+    },
+    {
+      context: { scopeId: "group:G-team", kind: "group", name: "Alice, Bob", sessionCount: 0, lastActivityAt: null },
+      noun: "グループDM",
+    },
+  ] as const;
+  appState.currentView = "contexts";
+
+  try {
+    for (const { context, noun } of cases) {
+      contextsResponse = { contexts: [context] };
+      contextsState.selected = context.scopeId;
+      contextsState.resourcesScope = context.scopeId;
+      contextsState.resources = { files: [], crons: [], deployments: [], skills: [], manageable: true };
+      ambientPolicyState.scope = context.scopeId;
+      ambientPolicyState.loading = false;
+      await renderContexts();
+
+      assert.match(appState.mainEl.querySelector(".context-sub")?.textContent ?? "", new RegExp(`この${noun}`));
+      assert.equal(
+        appState.mainEl.querySelector(".context-project-empty h2")?.textContent,
+        `この${noun}は作業を開始できます`,
+      );
+      assert.equal(appState.mainEl.querySelector(".context-settings")?.getAttribute("aria-label"), `${noun}の設定`);
+      assert.equal(
+        appState.mainEl.querySelector(".ambient-policy .context-panel-copy")?.textContent,
+        `この${noun}でエージェントが気付き、対応する内容を設定します。`,
+      );
+    }
+  } finally {
+    appState.currentView = "chats";
+    contextsState.selected = null;
+    contextsState.resourcesScope = null;
+    contextsState.resources = null;
+    ambientPolicyState.scope = null;
     contextsResponse = { contexts: [] };
   }
 });

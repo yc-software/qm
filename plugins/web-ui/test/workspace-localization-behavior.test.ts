@@ -49,8 +49,8 @@ test("successful ambient-policy saves show a completed status in English and Jap
         },
       });
       const scope = `group:${selected}`;
-      const redraw = () => render(policy.ambientPolicySection(scope), root);
-      await policy.loadAmbientPolicy(scope, redraw);
+      const redraw = () => render(policy.ambientPolicySection(scope, "Group DM behavior"), root);
+      await policy.loadAmbientPolicy(scope, redraw, "Could not load group DM behavior.");
       policy.ambientPolicyState.dirty = true;
       redraw();
       root.querySelector<HTMLButtonElement>(".ambient-policy-actions .btn.primary")!.click();

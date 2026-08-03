@@ -55,7 +55,11 @@ export function resetAmbientPolicy(): void {
   ambientPolicyState.newBotName = "";
 }
 
-export async function loadAmbientPolicy(scopeId: string, onChange: () => void): Promise<void> {
+export async function loadAmbientPolicy(
+  scopeId: string,
+  onChange: () => void,
+  loadFailedMessage: string,
+): Promise<void> {
   redraw = onChange;
   if (!ambientPolicyApplies(scopeId) || ambientPolicyState.scope === scopeId) return;
   resetAmbientPolicy();
@@ -75,7 +79,7 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
     ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
   } catch (e) {
     if (seq !== loadSeq) return;
-    ambientPolicyState.notice = errMessage(e, t("ambient.loadFailed"));
+    ambientPolicyState.notice = errMessage(e, loadFailedMessage);
     ambientPolicyState.noticeKind = "error";
   } finally {
     if (seq === loadSeq) {
@@ -211,7 +215,7 @@ function botModeLabel(mode: BotMode): string {
   return t("ambient.mode.user");
 }
 
-export function ambientPolicySection(scopeId: string): TemplateResult | typeof nothing {
+export function ambientPolicySection(scopeId: string, description: string): TemplateResult | typeof nothing {
   if (!ambientPolicyApplies(scopeId)) return nothing;
   if (ambientPolicyState.scope !== scopeId) return nothing;
   if (ambientPolicyState.loading)
@@ -224,7 +228,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
       <div class="context-panel-heading">
         <div>
           <h2 class="context-panel-title" id="ambient-policy-title">${t("ambient.title")}</h2>
-          <p class="context-panel-copy">${t("ambient.choose")}</p>
+          <p class="context-panel-copy">${description}</p>
         </div>
       </div>
       <label class="ambient-field" for="ambient-enabled">

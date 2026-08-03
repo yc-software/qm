@@ -42,7 +42,7 @@ test("policy styles use the shell theme contract", () => {
 
 test("the scope homepage puts work before settings and consolidates the empty project", () => {
   assert.match(contexts, /context-workspace-main[^]*?<aside\s+class="context-settings"/);
-  assert.match(contexts, /t\("context\.readyTitle"\)/);
+  assert.match(contexts, /t\("context\.readyTitleFor", \{ kind: kindLabel \}\)/);
   assert.match(contexts, /if\s*\(\s*r\.files\.length === 0[^]*?return nothing;/);
 });
 

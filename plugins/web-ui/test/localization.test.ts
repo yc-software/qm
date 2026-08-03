@@ -47,7 +47,7 @@ test("project and shared-context controls use their specific Japanese terms", ()
   assert.equal(webMessage("ja", "navigation.contexts"), "プロジェクト");
   assert.equal(webMessage("ja", "context.personal"), "個人プロジェクト");
   assert.equal(webMessage("ja", "context.shared"), "共有プロジェクト");
-  assert.equal(webMessage("ja", "context.settings"), "プロジェクトの設定");
+  assert.equal(webMessage("ja", "context.settingsFor"), "{kind}の設定");
   assert.equal(webMessage("ja", "context.all"), "すべてのプロジェクト");
   assert.equal(webMessage("ja", "chat.contextLabelProject"), "{context}プロジェクト");
   assert.equal(webMessage("ja", "chat.contextLabelChannel"), "{context}");

@@ -910,9 +910,13 @@ function contextMessageKeys(kind: ChatContextKind): { label: WebMessageKey; hint
 }
 
 function contextBanner(): TemplateResult | typeof nothing {
-  const label = sharedContextLabel(chatState.scopeId, chatState.contextName);
   const kind = chatState.contextKind;
-  if (!label || !kind) return nothing;
+  if (!kind) return nothing;
+  const label =
+    kind === "project"
+      ? chatState.contextName?.trim() || t("context.project")
+      : sharedContextLabel(chatState.scopeId, chatState.contextName);
+  if (!label) return nothing;
   const keys = contextMessageKeys(kind);
   let glyph = Hash;
   if (kind === "project") glyph = Folder;

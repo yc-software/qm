@@ -182,12 +182,21 @@ export async function renderContexts(): Promise<void> {
     contextsState.resourcesScope !== contextsState.selected
   ) {
     void loadScopeResources(contextsState.selected);
-    void loadAmbientPolicy(contextsState.selected, drawContexts);
+    const context = contextsState.list.find((item) => item.scopeId === contextsState.selected)!;
+    const kind = contextKindLabel(contextMeta(context).kind);
+    void loadAmbientPolicy(contextsState.selected, drawContexts, t("ambient.loadFailedFor", { kind }));
   }
   drawContexts();
 }
 
 type ScopeChipKind = ChatContextKind | "personal";
+
+function contextKindLabel(kind: ScopeChipKind): string {
+  if (kind === "project") return t("context.kindProject");
+  if (kind === "channel") return t("context.kindChannel");
+  if (kind === "group") return t("context.kindGroup");
+  return t("context.kindPersonal");
+}
 
 function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconNode; kind: ScopeChipKind } {
   if (c.project) {
@@ -435,7 +444,8 @@ function contextCard(c: CoreContext): TemplateResult {
 }
 
 function detailTpl(c: CoreContext): TemplateResult {
-  const { title, sub, glyph } = contextMeta(c);
+  const { title, sub, glyph, kind } = contextMeta(c);
+  const kindLabel = contextKindLabel(kind);
   const sessions = sessionsIn(c.scopeId);
   const hasSettings = Boolean(c.project) || ambientPolicyApplies(c.scopeId);
   const completelyEmpty = sessions.length === 0 && scopeResourcesEmpty(c.scopeId);
@@ -451,7 +461,9 @@ function detailTpl(c: CoreContext): TemplateResult {
             ${title}
             ${c.isPrivate ? html`<span class="context-lock" title=${t("context.privateChannel")}>${icon(Lock, 14)}</span>` : nothing}
           </h1>
-          <div class="context-sub">${c.project ? sub : `${sub} ${t("context.separateResources")}`}</div>
+          <div class="context-sub">
+            ${c.project ? sub : `${sub} ${t("context.separateResourcesFor", { kind: kindLabel })}`}
+          </div>
         </div>
         <div class="context-detail-actions">
           ${
@@ -473,8 +485,8 @@ function detailTpl(c: CoreContext): TemplateResult {
               ? html`
                   <section class="context-panel context-project-empty">
                     <span class="context-glyph large" aria-hidden="true">${icon(glyph, 22)}</span>
-                    <h2>${t("context.readyTitle")}</h2>
-                    <p>${t("context.readyBody")}</p>
+                    <h2>${t("context.readyTitleFor", { kind: kindLabel })}</h2>
+                    <p>${t("context.readyBodyFor", { kind: kindLabel })}</p>
                   </section>
                 `
               : html`
@@ -491,17 +503,15 @@ function detailTpl(c: CoreContext): TemplateResult {
                         : html`<div class="context-inline-empty">${t("context.noConversations")}</div>`
                     }
                   </section>
-                  ${resourceSections(c.scopeId)}
+                  ${resourceSections(c)}
                 `
           }
         </div>
         ${
           hasSettings
-            ? html`<aside
-                class="context-settings"
-                aria-label=${c.project ? t("context.projectSettings") : t("context.settings")}
-              >
-                ${c.project ? projectMembersSection(c) : nothing} ${ambientPolicySection(c.scopeId)}
+            ? html`<aside class="context-settings" aria-label=${t("context.settingsFor", { kind: kindLabel })}>
+                ${c.project ? projectMembersSection(c) : nothing}
+                ${ambientPolicySection(c.scopeId, t("ambient.chooseFor", { kind: kindLabel }))}
               </aside>`
             : nothing
         }
@@ -646,13 +656,16 @@ function memberPicker(context: CoreContext): TemplateResult {
   `;
 }
 
-function resourceSections(scopeId: string): TemplateResult | typeof nothing {
+function resourceSections(context: CoreContext): TemplateResult | typeof nothing {
+  const scopeId = context.scopeId;
   if (contextsState.resourcesScope !== scopeId) return html``;
   if (contextsState.resourcesNotice) return html`<div class="status">${contextsState.resourcesNotice}</div>`;
   const r = contextsState.resources;
   if (!r) {
     return contextsState.resourcesLoading
-      ? html`<div class="empty compact">${t("context.resourcesLoading")}</div>`
+      ? html`<div class="empty compact">
+          ${t("context.resourcesLoadingFor", { kind: contextKindLabel(contextMeta(context).kind) })}
+        </div>`
       : html``;
   }
   if (r.files.length === 0 && r.crons.length === 0 && r.deployments.length === 0 && r.skills.length === 0) {
@@ -1198,7 +1211,12 @@ async function loadScopeResources(scopeId: string): Promise<void> {
     };
   } catch (e) {
     if (stale()) return;
-    contextsState.resourcesNotice = errMessage(e, t("context.resourcesLoadFailed"));
+    const context = contextsState.list.find((item) => item.scopeId === scopeId);
+    const kind = context ? contextMeta(context).kind : "project";
+    contextsState.resourcesNotice = errMessage(
+      e,
+      t("context.resourcesLoadFailedFor", { kind: contextKindLabel(kind) }),
+    );
   } finally {
     if (!stale()) {
       contextsState.resourcesLoading = false;
@@ -1241,7 +1259,9 @@ function selectContext(scopeId: string | null): void {
   drawContexts();
   if (scopeId) {
     void loadScopeResources(scopeId);
-    void loadAmbientPolicy(scopeId, drawContexts);
+    const context = contextsState.list.find((item) => item.scopeId === scopeId);
+    const kind = context ? contextKindLabel(contextMeta(context).kind) : t("context.kindProject");
+    void loadAmbientPolicy(scopeId, drawContexts, t("ambient.loadFailedFor", { kind }));
   }
 }
 
