@@ -213,6 +213,18 @@ async function fileSha256(file: globalThis.File): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+export async function uploadFailureMessage(response: Response): Promise<string> {
+  const text = await response.text();
+  const fallback = t("file.uploadFailed", { status: response.status });
+  try {
+    const parsed = JSON.parse(text) as { message?: string; error?: string } & SigninRequired;
+    if (response.status === 401) reportSigninRequired(parsed);
+    return parsed.message ?? parsed.error ?? fallback;
+  } catch {
+    return text.trim() || fallback;
+  }
+}
+
 async function uploadOne(file: globalThis.File): Promise<void> {
   const scope = filesScope ?? personalScopeId();
   const q = new URLSearchParams();
@@ -225,16 +237,7 @@ async function uploadOne(file: globalThis.File): Promise<void> {
     body: file,
   });
   if (!r.ok) {
-    const text = await r.text();
-    let message = t("file.uploadFailed");
-    try {
-      const parsed = JSON.parse(text) as { message?: string; error?: string } & SigninRequired;
-      if (r.status === 401) reportSigninRequired(parsed);
-      message = parsed.message ?? parsed.error ?? message;
-    } catch {
-      if (text.trim()) message = text.trim();
-    }
-    throw new Error(message);
+    throw new Error(await uploadFailureMessage(r));
   }
 }
 
@@ -253,7 +256,7 @@ async function uploadFiles(files: globalThis.File[]): Promise<void> {
     filesNotice = t("file.uploadedCount", { count: picked.length, unit: t(picked.length === 1 ? "file.unit.one" : "file.unit.other") });
     await loadFiles(appState.viewRenderSeq);
   } catch (e) {
-    filesNotice = `${uploaded ? t("file.uploadedProgress", { uploaded, count: picked.length }) : ""}${errMessage(e, t("file.uploadFailed"))}`;
+    filesNotice = `${uploaded ? t("file.uploadedProgress", { uploaded, count: picked.length }) : ""}${errMessage(e, t("file.uploadFailedUnknown"))}`;
     if (uploaded) await loadFiles(appState.viewRenderSeq);
     else drawFiles();
   } finally {

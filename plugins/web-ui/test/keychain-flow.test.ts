@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { isActiveGrant, isExpiredCredential, KeychainOperations, keychainSummary } from "../src/keychain-state.ts";
+import {
+  connectorDisconnectImpact,
+  credentialDeleteImpact,
+  isActiveGrant,
+  isExpiredCredential,
+  KeychainOperations,
+  keychainSummary,
+} from "../src/keychain-state.ts";
 
 const connectorsSource = readFileSync(new URL("../src/connectors.ts", import.meta.url), "utf8");
 const shellSource = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
@@ -159,4 +166,19 @@ test("keychain actions keep secondary weight and compact mobile sizing", () => {
   assert.match(connectorsSource, /\$\{available \? html`<button class="btn" type="button"/);
   assert.doesNotMatch(shellCssSource, /\.kc-hero-actions \.btn\s*\{\s*flex:\s*1;/);
   assert.doesNotMatch(shellCssSource, /sidebar-closed \.kc-hero-copy/);
+});
+
+test("credential grant impacts pluralize English and format counts without changing Japanese nouns", () => {
+  assert.equal(credentialDeleteImpact(1, "Launch", "en"), "It will immediately revoke 1 active grant: Launch.");
+  assert.equal(credentialDeleteImpact(2, "Launch", "en"), "It will immediately revoke 2 active grants: Launch.");
+  assert.equal(credentialDeleteImpact(1_200, "Launch", "en"), "It will immediately revoke 1,200 active grants: Launch.");
+  assert.equal(credentialDeleteImpact(1, "Launch", "ja"), "有効なアクセス許可1件をすぐに取り消します: Launch。");
+  assert.equal(credentialDeleteImpact(2, "Launch", "ja"), "有効なアクセス許可2件をすぐに取り消します: Launch。");
+  assert.equal(credentialDeleteImpact(1_200, "Launch", "ja"), "有効なアクセス許可1,200件をすぐに取り消します: Launch。");
+  assert.equal(connectorDisconnectImpact(1, "en"), "It will also stop 1 active credential grant for this account.");
+  assert.equal(connectorDisconnectImpact(2, "en"), "It will also stop 2 active credential grants for this account.");
+  assert.equal(connectorDisconnectImpact(1_200, "en"), "It will also stop 1,200 active credential grants for this account.");
+  assert.equal(connectorDisconnectImpact(1, "ja"), "このアカウントの有効な認証情報アクセス許可1件も停止します。");
+  assert.equal(connectorDisconnectImpact(2, "ja"), "このアカウントの有効な認証情報アクセス許可2件も停止します。");
+  assert.equal(connectorDisconnectImpact(1_200, "ja"), "このアカウントの有効な認証情報アクセス許可1,200件も停止します。");
 });

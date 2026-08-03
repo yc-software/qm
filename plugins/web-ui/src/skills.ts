@@ -19,6 +19,7 @@ import {
   groupSkills,
   isArchivedSkill,
   skillEmptyState,
+  skillResultCount,
   statusCounts,
   type SkillStatusFilter,
 } from "./skill-registry";
@@ -26,7 +27,7 @@ import { listBackLink, listPageTpl } from "./list-page";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { SkillsRefreshSequence } from "./skills-refresh";
 import { SkillsMutationSequence } from "./skills-mutation";
-import { t } from "./i18n";
+import { locale, t } from "./i18n";
 
 let skillRows: SkillItem[] = [];
 let skillsNotice = "";
@@ -575,7 +576,7 @@ function drawSkills(loading = false): void {
           </div>
         </div>
         <div class="skill-result-count" aria-live="polite">
-          ${loading ? t("loading") : t("skill.resultCount", { skills: filtered.length, groups: groups.length })}
+          ${loading ? t("loading") : skillResultCount(filtered.length, groups.length, locale())}
         </div>
         ${skillsNotice ? html`<div class="status">${skillsNotice}</div>` : nothing}`,
       rows,

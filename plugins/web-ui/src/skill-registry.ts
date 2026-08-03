@@ -1,4 +1,7 @@
 import type { SkillItem } from "./composer";
+import type { Locale } from "../../chassis/src/locale.ts";
+import { messageForCount } from "./i18n.ts";
+import { webMessage } from "./messages.ts";
 
 export type SkillStatusFilter = "active" | "archived" | "all";
 
@@ -82,4 +85,11 @@ export function skillEmptyState(total: number, visible: number, loading: boolean
 export function statusCounts(skills: readonly SkillItem[]): { active: number; archived: number; all: number } {
   const archived = skills.filter(isArchivedSkill).length;
   return { active: skills.length - archived, archived, all: skills.length };
+}
+
+export function skillResultCount(skills: number, groups: number, selected: Locale): string {
+  return webMessage(selected, "skill.resultCount", {
+    skills: messageForCount(selected, skills, "skill.count.one", "skill.count.other"),
+    groups: messageForCount(selected, groups, "skill.groupCount.one", "skill.groupCount.other"),
+  });
 }

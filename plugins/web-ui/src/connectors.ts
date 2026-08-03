@@ -7,6 +7,8 @@ import { appState, replacePanePreservingFocus } from "./shell";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { locale, t } from "./i18n";
 import {
+  connectorDisconnectImpact,
+  credentialDeleteImpact,
   isActiveGrant,
   isExpiredCredential,
   keychainAccessModeLabel,
@@ -647,7 +649,11 @@ async function deleteCredential(credential: KeychainCredential): Promise<void> {
     (grant) => grant.credentialId === credential.id && isActiveGrant(grant, credential),
   );
   const impact = active.length
-    ? t("connector.deleteImpact", { count: active.length, scopes: active.map((grant) => scopeName(grant.audienceScopeId)).join(", ") })
+    ? credentialDeleteImpact(
+        active.length,
+        active.map((grant) => scopeName(grant.audienceScopeId)).join(", "),
+        locale(),
+      )
     : "";
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
@@ -789,9 +795,7 @@ async function revokeConnector(provider: string): Promise<void> {
   const active = keychainGrants.filter(
     (grant) => credentialIds.has(grant.credentialId) && isActiveGrant(grant, credentialsById.get(grant.credentialId)),
   );
-  const impact = active.length
-    ? t("connector.disconnectImpact", { count: active.length })
-    : "";
+  const impact = active.length ? connectorDisconnectImpact(active.length, locale()) : "";
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
     title: t("connector.disconnectTitle", { name: CONNECTOR_LABELS[provider]?.name ?? provider }),

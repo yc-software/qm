@@ -1,4 +1,5 @@
 import type { Locale } from "../../chassis/src/locale.ts";
+import { messageForCount } from "./i18n.ts";
 import { webMessage } from "./messages.ts";
 
 export interface KeychainGrantState {
@@ -57,6 +58,14 @@ export function keychainSummary(
       credentials.filter((credential) => isExpiredCredential(credential, at)).length +
       asks.length,
   };
+}
+
+export function credentialDeleteImpact(count: number, scopes: string, selected: Locale): string {
+  return messageForCount(selected, count, "connector.deleteImpact.one", "connector.deleteImpact.other", { scopes });
+}
+
+export function connectorDisconnectImpact(count: number, selected: Locale): string {
+  return messageForCount(selected, count, "connector.disconnectImpact.one", "connector.disconnectImpact.other");
 }
 
 export interface KeychainMutation {

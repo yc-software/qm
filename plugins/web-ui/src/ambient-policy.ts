@@ -122,7 +122,7 @@ async function save(): Promise<void> {
     }));
     ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
     ambientPolicyState.dirty = false;
-    ambientPolicyState.notice = t("ambient.save");
+    ambientPolicyState.notice = t("ambient.saved");
     ambientPolicyState.noticeKind = "saved";
   } catch (e) {
     ambientPolicyState.notice = errMessage(e, t("ambient.saveFailed"));

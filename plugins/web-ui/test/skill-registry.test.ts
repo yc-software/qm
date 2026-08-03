@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SkillItem } from "../src/composer.ts";
-import { filterSkillGroups, filterSkills, groupSkills, skillEmptyState, statusCounts } from "../src/skill-registry.ts";
+import {
+  filterSkillGroups,
+  filterSkills,
+  groupSkills,
+  skillEmptyState,
+  skillResultCount,
+  statusCounts,
+} from "../src/skill-registry.ts";
 
 function skill(overrides: Partial<SkillItem> = {}): SkillItem {
   return {
@@ -92,4 +99,13 @@ test("empty-state decisions distinguish loading, a filtered miss, and a truly em
   assert.equal(skillEmptyState(4, 0, false), "filtered");
   assert.equal(skillEmptyState(0, 0, false), "empty");
   assert.equal(skillEmptyState(4, 2, false), "none");
+});
+
+test("skill result counts pluralize English and format numbers without changing Japanese nouns", () => {
+  assert.equal(skillResultCount(1, 1, "en"), "1 skill in 1 group");
+  assert.equal(skillResultCount(2, 2, "en"), "2 skills in 2 groups");
+  assert.equal(skillResultCount(1_200, 2_300, "en"), "1,200 skills in 2,300 groups");
+  assert.equal(skillResultCount(1, 1, "ja"), "スキル1件、グループ1件");
+  assert.equal(skillResultCount(2, 2, "ja"), "スキル2件、グループ2件");
+  assert.equal(skillResultCount(1_200, 2_300, "ja"), "スキル1,200件、グループ2,300件");
 });
