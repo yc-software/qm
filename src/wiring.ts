@@ -1352,6 +1352,12 @@ export function buildApp(
       );
       await Promise.all(workers.map((w) => w.releaseInFlight()));
       drain.stop();
+      if (sessions.close) {
+        await Promise.race([
+          sessions.close(),
+          sleep(config.shutdownDrainMs).then(() => Promise.reject(new Error("session store close timed out"))),
+        ]).catch(swallowAs("wiring: session store close failed", undefined));
+      }
       runs.close?.();
       void runSignals.close?.();
       void sessionStateBus.close?.();

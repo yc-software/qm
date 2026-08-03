@@ -323,6 +323,9 @@ interface AddParticipantOptions {
 }
 
 export interface SessionStore {
+  health?(): Promise<void>;
+  close?(): Promise<void>;
+
   getOrCreateByThread(
     threadRef: string,
     type: SessionType,

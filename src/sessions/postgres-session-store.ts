@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, type PoolClient } from "../persistence/pg-pool.ts";
 import { jsonbSafeStringify } from "../util/text.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
 import type {
@@ -149,7 +149,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                   ELSE NULL END
         FROM (SELECT safe_json(replace(${col}, '\\u0000', '')) AS j) _)`;
 
-  const { pool, q } = createPgPool(connectionString, [
+  const db = createPgPool(connectionString, [
     `CREATE OR REPLACE FUNCTION safe_json(t text) RETURNS json
         LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $safe_json$
         BEGIN RETURN t::json; EXCEPTION WHEN others THEN RETURN NULL; END $safe_json$`,
@@ -243,9 +243,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       WHERE s.messages IS NULL
          OR ${lastActivityExpr("s")} > (EXTRACT(EPOCH FROM now()) * 1000)::bigint - 172800000`,
   ]);
+  const { q } = db;
 
   const withLease = async <T>(lease: Lease, invalidMsg: string, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
-    withPgTransaction(await pool(), async (client) => {
+    db.transaction(async (client) => {
       const held = await client.query("SELECT token FROM session_leases WHERE session_id = $1 FOR UPDATE", [
         lease.sessionId,
       ]);
@@ -289,6 +290,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   };
 
   return {
+    async health(): Promise<void> {
+      await db.query("SELECT 1", [], 1_000);
+    },
+
+    async close(): Promise<void> {
+      await db.close();
+    },
+
     async getOrCreateByThread(threadRef, type, scopeId, channelName, surface): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
@@ -574,7 +583,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async deleteSession(sessionId): Promise<void> {
-      await withPgTransaction(await pool(), async (client) => {
+      await db.transaction(async (client) => {
         await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);

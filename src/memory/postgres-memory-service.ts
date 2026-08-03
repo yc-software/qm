@@ -1,4 +1,4 @@
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { foldCapture, normalizeReplace, queryBullets, recallBody, type MemoryService } from "./memory-service.ts";
 
 const SCHEMA = [
@@ -16,7 +16,8 @@ const SCHEMA = [
 ];
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {
-  const { q, pool } = createPgPool(connectionString, SCHEMA);
+  const db = createPgPool(connectionString, SCHEMA);
+  const { q } = db;
 
   async function currentBody(scopeId: string): Promise<string> {
     const rows = await q("SELECT body FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1", [scopeId]);
@@ -39,19 +40,14 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
     author: string | undefined,
     op: string,
   ): Promise<boolean> {
-    const client = await (await pool()).connect();
-    try {
-      await client.query("BEGIN");
+    return db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('memory'), hashtext($1))", [scopeId]);
       const head = await client.query(
         "SELECT body, seq FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1",
         [scopeId],
       );
       const seq = Number(head.rows[0]?.seq ?? 0);
-      if (seq !== expectedSeq) {
-        await client.query("ROLLBACK");
-        return false;
-      }
+      if (seq !== expectedSeq) return false;
       const next = normalizeReplace(content);
       if (next !== String(head.rows[0]?.body ?? "")) {
         await client.query(
@@ -59,14 +55,8 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
           [scopeId, seq + 1, op, next, author ?? null, Date.now()],
         );
       }
-      await client.query("COMMIT");
       return true;
-    } catch (e) {
-      await client.query("ROLLBACK");
-      throw e;
-    } finally {
-      client.release();
-    }
+    });
   }
 
   async function append(
@@ -76,7 +66,7 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
     author: string | undefined,
     derive: (existing: string) => { body: string } | null,
   ): Promise<void> {
-    await withPgTransaction(await pool(), async (client) => {
+    await db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('memory'), hashtext($1))", [scopeId]);
       const head = await client.query(
         "SELECT body, seq FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1",

@@ -1,6 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createHash } from "node:crypto";
-import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, type PoolClient } from "../persistence/pg-pool.ts";
 import type { PrincipalType } from "../types.ts";
 import { personKey } from "./person.ts";
 import {
@@ -138,7 +138,8 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
 }
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
-  const { q, pool } = createPgPool(connectionString, SCHEMA);
+  const db = createPgPool(connectionString, SCHEMA);
+  const { q } = db;
   const orgId = configOrgId();
 
   async function pick<T>(
@@ -184,7 +185,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     hash: string,
     write: (client: PoolClient) => Promise<void>,
   ): Promise<void> {
-    await withPgTransaction(await pool(), async (client) => {
+    await db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
       const sync = await client.query(`SELECT ${hashCol} FROM directory_sync WHERE org_id = $1`, [orgId]);
       if (sync.rows[0]?.[hashCol] === hash) return;
@@ -334,7 +335,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async upsertGroup(groupId, principalIds) {
       const ids = [...new Set(principalIds.filter(Boolean))];
       if (!groupId || !ids.length) return;
-      await withPgTransaction(await pool(), async (client) => {
+      await db.transaction(async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);
         await client.query(

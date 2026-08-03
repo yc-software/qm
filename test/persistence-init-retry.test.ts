@@ -21,6 +21,7 @@ function flakyPgPool(failures: number): PgPool {
     pool: () => Promise.reject(new Error("not backed by a real pool")),
     query,
     q: async (text, params) => (await query(text, params ?? [])).rows,
+    transaction: () => Promise.reject(new Error("not backed by a real pool")),
     close: async () => {},
   };
 }
@@ -65,10 +66,12 @@ test("pg pool: a failed init is retried with a fresh attempt (rejection not cach
   await pg.close();
 });
 
-test("pg pool: an idle-client 'error' is logged, not fatal", { skip }, async () => {
+test("pg pool: an idle-client error retires the pool without becoming fatal", { skip }, async () => {
   const pg = createPgPool(URL!, ["SELECT 1"]);
   const pool = await pg.pool();
   assert.doesNotThrow(() => pool.emit("error", new Error("backend died")));
-  assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }], "pool keeps serving queries");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.notEqual(await pg.pool(), pool, "the next checkout creates a healthy pool");
+  assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }]);
   await pg.close();
 });
