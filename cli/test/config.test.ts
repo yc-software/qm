@@ -62,6 +62,12 @@ test("required fields: orgId, target, services (must include core), valid servic
     const { config } = loadConfigAt(path);
     assert.deepEqual(config.services, ["core", "web-ui", "admin", "portal"]);
   });
+  withConfig({ unknownField: "bad" }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /unknown top-level field "unknownField"/),
+  );
+  withConfig({ org_id: "acme" }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /unknown top-level field "org_id"/),
+  );
 });
 
 test("apiUrl must be an http(s) origin URL; the trailing slash is stripped", () => {

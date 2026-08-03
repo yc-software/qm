@@ -478,9 +478,41 @@ export function readConfigOrgId(path: string): string | undefined {
   }
 }
 
+const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
+  "contract",
+  "orgId",
+  "publicUrl",
+  "apiUrl",
+  "target",
+  "model",
+  "modelProvider",
+  "basePort",
+  "services",
+  "plugins",
+  "skills",
+  "env",
+  "secretEnv",
+  "securityScreen",
+  "vms",
+  "imageOverrides",
+  "sandbox",
+  "appPrefix",
+  "region",
+  "flyOrg",
+  "imageFrom",
+  "deployAppPrefix",
+  "aws",
+]);
+
 function validate(raw: unknown, path: string): QmConfig {
   if (!isPlainObject(raw)) throw new CliError(`${path}: expected a JSON object`);
   const o = raw;
+
+  for (const key of Object.keys(o)) {
+    if (!VALID_TOP_LEVEL_KEYS.has(key)) {
+      throw new CliError(`${path}: unknown top-level field ${JSON.stringify(key)}`);
+    }
+  }
 
   const contract = o["contract"];
   if (contract !== CONTRACT_VERSION) {
