@@ -350,3 +350,29 @@ test("an expired consent link reports an expiry status", async () => {
     await srv.close();
   }
 });
+
+test("redeem rejects unsafe return paths stored before validation", async () => {
+  const srv = start(async () => {
+    throw new Error("must not exchange");
+  });
+  try {
+    for (const returnTo of ["/a/..//evil.test/x", "/%2e%2e//evil.test/x"]) {
+      const { linkId } = await srv.built.consentLinks.mint({
+        principalId: "U1",
+        provider: "google",
+        accountType: "default",
+        redirectUri: `${srv.base}/v1/connectors/oauth/google/callback`,
+        returnTo,
+      });
+      const res = await redeem(srv.base, `/v1/connectors/oauth/consent/redeem/${linkId}`, "U1");
+      assert.equal(res.status, 200);
+      const decision = (await res.json()) as { status: string; authorizeUrl: string };
+      assert.equal(decision.status, "authorize");
+      const sealed = new URL(decision.authorizeUrl).searchParams.get("state") ?? "";
+      const state = await openOAuthState(sealed, { secret: SECRET });
+      assert.equal(state.returnTo, undefined, returnTo);
+    }
+  } finally {
+    await srv.close();
+  }
+});

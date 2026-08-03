@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
+import { PROVIDERS, sealOAuthState, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
@@ -121,6 +121,36 @@ test("OAuth callback contains return paths that normalize into scheme-relative U
       const authorization = new URL(((await started.json()) as { authorizeUrl: string }).authorizeUrl);
       const state = authorization.searchParams.get("state");
       assert.ok(state);
+      const callbackPath = `/v1/connectors/oauth/google/callback?code=code-123&state=${encodeURIComponent(state)}`;
+      const callback = await fetch(`${srv.base}${callbackPath}`, { redirect: "manual" });
+      assert.equal(callback.status, 200, returnTo);
+      assert.equal(callback.headers.get("location"), null, returnTo);
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
+test("OAuth callback rejects unsafe return paths from states issued before validation", async () => {
+  const srv = start(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ access_token: "at-google", refresh_token: "rt-google", expires_in: 3600 }),
+  }));
+  try {
+    const redirectUri = `${srv.base}/v1/connectors/oauth/google/callback`;
+    for (const returnTo of ["/a/..//evil.test/x", "/%2e%2e//evil.test/x"]) {
+      const state = await sealOAuthState(
+        {
+          provider: "google",
+          principalId: "U1",
+          redirectUri,
+          returnTo,
+          clientRef: "env:google",
+          orgId: "default-org",
+        },
+        { secret: SECRET },
+      );
       const callbackPath = `/v1/connectors/oauth/google/callback?code=code-123&state=${encodeURIComponent(state)}`;
       const callback = await fetch(`${srv.base}${callbackPath}`, { redirect: "manual" });
       assert.equal(callback.status, 200, returnTo);

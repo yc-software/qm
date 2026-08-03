@@ -167,8 +167,9 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     if (state.consentLinkId && deps.consentLinks) {
       await deps.consentLinks.redeem(state.consentLinkId).catch(() => null);
     }
-    if (state.returnTo) {
-      const dest = new URL(state.returnTo, "http://localhost");
+    const returnTo = safeReturnTo(state.returnTo ?? null);
+    if (returnTo) {
+      const dest = new URL(returnTo, "http://localhost");
       dest.searchParams.set("connector", oauthRoute.provider);
       dest.searchParams.set("status", "connected");
       return sendRedirect(res, `${dest.pathname}${dest.search}${dest.hash}`);
@@ -229,7 +230,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
         message: "redirectUri is not registered for this client",
       });
     }
-    const returnTo = safeReturnTo(url.searchParams.get("returnTo")) ?? rec.returnTo;
+    const returnTo = safeReturnTo(url.searchParams.get("returnTo")) ?? safeReturnTo(rec.returnTo ?? null);
     const codeVerifier = PROVIDERS[rec.provider]?.pkce ? generateCodeVerifier() : undefined;
     const state = await sealOAuthState(
       {
