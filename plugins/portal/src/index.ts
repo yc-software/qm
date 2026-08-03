@@ -1026,7 +1026,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const redeem = /^\/connect\/redeem\/([^/]+)$/.exec(pathname);
   if (method === "GET" && redeem) {
     if (!session) return consentBounce();
-    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml(requestLocale, currentPath));
+    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml(requestLocale, "/"));
     return handleConsentRedeem(res, {
       corePath: `/v1/connectors/oauth/consent/redeem/${redeem[1]}${url.search}`,
       session,

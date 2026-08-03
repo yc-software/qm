@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { deriveKey, seal, openSession, type SessionClaims } from "../src/session.ts";
+
+const PORTAL_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const claimed = new Set<string>();
 let claimCalls = 0;
@@ -127,7 +130,20 @@ test("sliding renewal preserves the anon flag", async () => {
 test("anonymous sessions are refused the connect and secret-drop flows", async () => {
   const visit = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
   const cookie = sessionCookieOf(visit);
-  for (const path of ["/connect/redeem/tok123", "/connect/google/self-connect", "/drop/tok123/form"]) {
+  const linkId = "anon-bearer-link-id";
+  const connectorPath = `/connect/redeem/${linkId}?provider=google&state=private-query`;
+  const connector = await fetch(`${base}${connectorPath}`, {
+    headers: { ...HTML, cookie: `${cookie}; qm_locale=ja` },
+  });
+  assert.equal(connector.status, 403);
+  const connectorPage = await connector.text();
+  assert.match(connectorPage, /<html lang="ja">/);
+  assert.match(connectorPage, /Playgroundでは利用できません/);
+  assert.doesNotMatch(connectorPage, new RegExp(linkId));
+  assert.doesNotMatch(connectorPage, /provider=google|private-query/);
+  assert.match(connectorPage, /name="returnTo" value="\/"/);
+
+  for (const path of ["/connect/google/self-connect", "/drop/tok123/form"]) {
     const r = await fetch(`${base}${path}`, { headers: { ...HTML, cookie: `${cookie}; qm_locale=ja` } });
     assert.equal(r.status, 403, `${path} must refuse anon sessions`);
     const page = await r.text();
@@ -166,7 +182,7 @@ test("boot refuses playground configurations that leak or brick", () => {
   delete baseEnv.PORTAL_PLAYGROUND_MINTS_PER_IP;
   delete baseEnv.PORTAL_PLAYGROUND_MINT_WINDOW_S;
   const boot = (env: NodeJS.ProcessEnv) =>
-    spawnSync(process.execPath, ["--input-type=module", "-e", command], { cwd: process.cwd(), env, encoding: "utf8" });
+    spawnSync(process.execPath, ["--input-type=module", "-e", command], { cwd: PORTAL_ROOT, env, encoding: "utf8" });
   assert.equal(boot(baseEnv).status, 0);
   const bad: Array<[NodeJS.ProcessEnv, RegExp]> = [
     [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "0" }, /between 1 and 64/],
