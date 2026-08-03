@@ -217,12 +217,18 @@ export function readEnvFile(path: string): Map<string, string> {
   const out = new Map<string, string>();
   if (!existsSync(path)) return out;
   for (const raw of readFileSync(path, "utf8").split("\n")) {
-    const line = raw.trim();
+    let line = raw.trim();
     if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) line = line.slice(7).trimStart();
     const eq = line.indexOf("=");
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
-    if (isEnvVarName(key)) out.set(key, line.slice(eq + 1));
+    if (!isEnvVarName(key)) continue;
+    let val = line.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    out.set(key, val);
   }
   return out;
 }

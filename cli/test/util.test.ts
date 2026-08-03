@@ -41,16 +41,20 @@ test("canonicalJson sorts keys and matches JSON.stringify's undefined semantics"
   }
 });
 
-test("readEnvFile preserves hashes in unquoted values", (t) => {
+test("readEnvFile preserves hashes in unquoted values and strips export/quotes", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = join(dir, ".env");
-  writeFileSync(file, "# ignored\nTOKEN=abc#def\nURL=https://host/path#fragment\n");
+  writeFileSync(
+    file,
+    '# ignored\nTOKEN=abc#def\nURL="https://host/path#fragment"\nexport SECRET=\'mysecret\'\n',
+  );
   assert.deepEqual(
     [...readEnvFile(file)],
     [
       ["TOKEN", "abc#def"],
       ["URL", "https://host/path#fragment"],
+      ["SECRET", "mysecret"],
     ],
   );
 });
