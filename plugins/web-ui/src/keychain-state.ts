@@ -1,3 +1,6 @@
+import type { Locale } from "../../chassis/src/locale.ts";
+import { webMessage } from "./messages.ts";
+
 export interface KeychainGrantState {
   credentialId: string;
   status: string;
@@ -8,6 +11,12 @@ export interface KeychainCredentialState {
   id: string;
   kind?: string;
   expiresAt?: number;
+}
+
+export function keychainAccessModeLabel(mode: string, selected: Locale): string {
+  if (mode === "standing") return webMessage(selected, "connector.standing");
+  if (mode === "once" || mode === "one-time") return webMessage(selected, "connector.oneTime");
+  return mode;
 }
 
 export function isExpiredCredential(credential: KeychainCredentialState, at = Date.now()): boolean {

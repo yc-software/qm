@@ -38,6 +38,10 @@ test("pasteChipLabel formats character counts", () => {
   assert.equal(pasteChipLabel(123_456), "Pasted text · 123k chars");
 });
 
+test("pasteChipLabel localizes the label and numeric count", () => {
+  assert.equal(pasteChipLabel(4200, "ja"), "貼り付けたテキスト・4,200文字");
+});
+
 test("insertIntoDraft appends to an empty draft without padding", () => {
   assert.deepEqual(insertIntoDraft("", "pasted", null), { draft: "pasted", cursor: 6 });
 });

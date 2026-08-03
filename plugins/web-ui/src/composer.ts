@@ -367,7 +367,7 @@ export function composerForm(agent: Agent): TemplateResult {
                                 @click=${() => openPasteView(a.id, agent)}
                               >
                                 ${icon(FileText, 14)}
-                                <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
+                                <span>${pasteChipLabel(a.extractedText?.length ?? 0, locale())}</span>
                               </button>
                             `
                           : html`${icon(Paperclip, 14)}<span>${a.fileName}</span>`

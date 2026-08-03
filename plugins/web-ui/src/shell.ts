@@ -557,9 +557,9 @@ export function renderSidebarTop(): void {
           navWorkspaceOpen,
           toggleNavWorkspace,
           html`
-            ${navRow("contexts", ICON.contexts, t("nav.projects"))} ${navRow("chats", ICON.chats, t("nav.chats"))}
-            ${navRow("files", ICON.files, t("nav.files"))} ${navRow("crons", ICON.crons, t("nav.crons"))}
-            ${navRow("keychain", ICON.keychain, t("nav.keychain"))} ${navRow("deploys", ICON.deploys, t("nav.apps"))}
+            ${navRow("contexts", ICON.contexts, t("navigation.contexts"))} ${navRow("chats", ICON.chats, t("nav.chats"))}
+            ${navRow("files", ICON.files, t("nav.files"))} ${navRow("crons", ICON.crons, t("navigation.crons"))}
+            ${navRow("keychain", ICON.keychain, t("navigation.keychain"))} ${navRow("deploys", ICON.deploys, t("nav.apps"))}
             ${navRow("memory", ICON.memory, t("nav.memory"))} ${navRow("skills", ICON.skills, t("nav.skills"))}
           `,
         )}

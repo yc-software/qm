@@ -61,6 +61,16 @@ test("calendar schedule without a core-provided next fire degrades to last/never
   assert.match(cronRunSummary({ ...cron, lastFiredAt: Date.UTC(2026, 0, 1, 17) }), /^last /);
 });
 
+test("cron labels and dates use the requested page locale", () => {
+  const cron = {
+    schedule: { everyMs: 60 * 60 * 1000 },
+    enabled: true,
+    createdAt: Date.UTC(2026, 0, 1, 0),
+  };
+  assert.equal(cronScheduleSummary(cron, "ja"), "1時間ごと");
+  assert.match(cronRunSummary(cron, Date.UTC(2026, 0, 1, 0), "ja"), /^実行予定 /);
+});
+
 test("calendar schedule honors a core-provided next fire timestamp", () => {
   const nextFireAt = Date.UTC(2026, 0, 5, 17);
   assert.equal(

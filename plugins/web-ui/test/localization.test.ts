@@ -43,6 +43,38 @@ test("chat, session, composer, and approval controls have Japanese labels", () =
   assert.equal(webMessage("ja", "approval.allowOnce"), "今回のみ許可");
 });
 
+test("workspace feature controls have Japanese labels", () => {
+  assert.equal(webMessage("ja", "navigation.contexts"), "領域");
+  assert.equal(webMessage("ja", "context.personal"), "個人領域");
+  assert.equal(webMessage("ja", "context.shared"), "共有領域");
+  assert.equal(webMessage("ja", "navigation.crons"), "定期実行");
+  assert.equal(webMessage("ja", "navigation.connectors"), "外部サービス連携");
+  assert.equal(webMessage("ja", "navigation.keychain"), "認証情報");
+  assert.equal(webMessage("ja", "file.upload"), "アップロード");
+  assert.equal(webMessage("ja", "deployment.publish"), "公開");
+  assert.equal(webMessage("ja", "memory.search"), "記憶を検索");
+  assert.equal(webMessage("ja", "skill.install"), "スキルを追加");
+});
+
+test("workspace localization preserves the established English navigation", () => {
+  assert.equal(webMessage("en", "navigation.contexts"), "Projects");
+  assert.equal(webMessage("en", "navigation.crons"), "Crons");
+  assert.equal(webMessage("en", "navigation.keychain"), "Keychain");
+  assert.equal(webMessage("en", "context.personal"), "Personal");
+});
+
+test("missing live app URLs have a localized fallback", () => {
+  assert.equal(webMessage("ja", "deployment.noLiveUrl"), "このアプリの公開URLがありません。");
+});
+
+test("memory and skill workflows have Japanese labels", () => {
+  assert.equal(webMessage("ja", "memory.saveChanges"), "変更を保存");
+  assert.equal(webMessage("ja", "memory.discardRefresh"), "破棄して更新");
+  assert.equal(webMessage("ja", "skill.new"), "新しいスキル");
+  assert.equal(webMessage("ja", "skill.publishChange"), "変更を公開");
+  assert.equal(webMessage("ja", "skill.clearFilters"), "絞り込みを解除");
+});
+
 test("browser translation reads the normalized page locale", () => {
   const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
   Object.defineProperty(globalThis, "document", {

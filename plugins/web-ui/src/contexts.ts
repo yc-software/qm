@@ -38,6 +38,7 @@ import type { CronView } from "./crons";
 import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron-format";
 import { restoreDialogFocus } from "./dialog-focus";
 import { ambientPolicyApplies, ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./ambient-policy";
+import { locale, t } from "./i18n";
 
 interface ScopeFile {
   id: string;
@@ -170,7 +171,7 @@ export async function renderContexts(): Promise<void> {
     if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
   } catch (e) {
     if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
-    contextsNotice = errMessage(e, "Failed to load contexts.");
+    contextsNotice = errMessage(e, t("context.loadFailed"));
   }
   contextsLoading = false;
   if (
@@ -189,23 +190,23 @@ function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconN
     const memberCount = projectPeople(c).length;
     return {
       title: c.project.name,
-      sub: `${memberCount} ${memberCount === 1 ? "member" : "members"}`,
+      sub: t("context.memberCount", { count: memberCount, unit: t(memberCount === 1 ? "context.member.one" : "context.member.other") }),
       glyph: Folder,
     };
   }
   if (c.kind === "personal") {
-    return { title: "Personal", sub: "Just you — your web chats and DMs with the agent live here.", glyph: User };
+    return { title: t("context.personal"), sub: t("context.personalDescription"), glyph: User };
   }
   if (c.kind === "group") {
     return {
-      title: sharedContextLabel(c.scopeId, c.name) ?? "Group DM",
-      sub: "Shared with everyone in this group conversation.",
+      title: sharedContextLabel(c.scopeId, c.name) ?? t("context.groupDm"),
+      sub: t("context.groupDescription"),
       glyph: Users,
     };
   }
   return {
-    title: sharedContextLabel(c.scopeId, c.name) ?? "Channel",
-    sub: "Shared with everyone in this channel.",
+    title: sharedContextLabel(c.scopeId, c.name) ?? t("context.channelFallback"),
+    sub: t("context.channelDescription"),
     glyph: Hash,
   };
 }
@@ -233,19 +234,19 @@ function metaForScope(scopeId: string | null, fallbackName?: string | null): { t
   const shared = sharedContextLabel(scopeId, fallbackName ?? null);
   if (shared) return { title: shared, glyph: scopeId?.startsWith("group:") ? Users : Hash };
   if (scopeId?.startsWith("personal:") && scopeId !== personalScopeId())
-    return { title: "Shared personal space", glyph: User };
-  return { title: fallbackName?.trim() || "Personal", glyph: User };
+    return { title: t("context.sharedPersonal"), glyph: User };
+  return { title: fallbackName?.trim() || t("context.personalFallback"), glyph: User };
 }
 
 export function scopeChip(scopeId: string | null, fallbackName?: string | null): TemplateResult {
   const { title, glyph } = metaForScope(scopeId, fallbackName);
-  return html`<span class="scope-chip" title=${`In ${title}`}
+  return html`<span class="scope-chip" title=${t("context.scopeChip", { title })}
     >${icon(glyph, 12)}<span>${title.replace(/^#/, "")}</span></span
   >`;
 }
 
 export function scopeFilterControl(current: string | null, onSelect: (scopeId: string | null) => void): TemplateResult {
-  const label = current ? metaForScope(current).title : "All contexts";
+  const label = current ? metaForScope(current).title : t("context.all");
   const option = (scopeId: string | null, text: string, glyph: IconNode) => {
     const active = (current ?? null) === scopeId;
     return html`
@@ -268,11 +269,11 @@ export function scopeFilterControl(current: string | null, onSelect: (scopeId: s
   return html`
     <div class="menu-control form-menu-control scope-filter">
       <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" @click=${toggleFormMenu}>
-        ${icon(ListFilter, 14)}<span class="menu-label">Filter by: ${label}</span>${icon(ChevronDown, 14)}
+        ${icon(ListFilter, 14)}<span class="menu-label">${t("context.filterBy", { context: label })}</span>${icon(ChevronDown, 14)}
       </button>
       <div class="menu-popover" role="menu" hidden>
-        <div class="menu-title">Filter by context</div>
-        ${option(null, "All contexts", Boxes)}
+        <div class="menu-title">${t("context.filterByContext")}</div>
+        ${option(null, t("context.all"), Boxes)}
         ${contextsState.list.map((c) => option(c.scopeId, contextMeta(c).title, contextMeta(c).glyph))}
       </div>
     </div>
@@ -299,7 +300,7 @@ function drawContexts(): void {
 }
 
 function gridTpl(): TemplateResult {
-  const status = contextsNotice || (contextsLoading && contextsState.list.length === 0 ? "Loading projects…" : "");
+  const status = contextsNotice || (contextsLoading && contextsState.list.length === 0 ? t("context.loadingProjects") : "");
   const q = contextsQuery.trim().toLowerCase();
   const matches = (context: CoreContext) => {
     const meta = contextMeta(context);
@@ -321,19 +322,19 @@ function gridTpl(): TemplateResult {
   if (projects.length) projectList = html`<div class="grid project-grid">${projects.map(contextCard)}</div>`;
   else if (!contextsLoading) {
     projectList = html`<div class="empty compact project-empty">
-      ${projectsFiltered ? "No projects match your search." : "No projects yet."}
+      ${projectsFiltered ? t("context.emptySearch") : t("context.emptyProjects")}
     </div>`;
   }
   return html`
     <div class="project-grid-content">
       <div class="pane-head">
-        <h1 class="pane-title">Projects</h1>
+        <h1 class="pane-title">${t("context.projects")}</h1>
         <div class="project-head-actions">
           <button
             class="pane-refresh"
             type="button"
-            aria-label="Refresh projects"
-            title="Refresh projects"
+            aria-label=${t("context.refreshProjects")}
+            title=${t("context.refreshProjects")}
             @click=${() => void renderContexts()}
           >
             ${icon(RefreshCw, 17)}
@@ -341,22 +342,22 @@ function gridTpl(): TemplateResult {
           <button
             class="btn primary project-create-button"
             type="button"
-            aria-label="New project"
-            title="New project"
+            aria-label=${t("context.newProject")}
+            title=${t("context.newProject")}
             @click=${openCreateProject}
           >
-            ${icon(FolderPlus, 15)}<span>New project</span>
+            ${icon(FolderPlus, 15)}<span>${t("context.newProject")}</span>
           </button>
         </div>
       </div>
       <div class="list-toolbar project-toolbar">
         <label class="list-search"
-          ><span class="sr-only">Search projects</span
+          ><span class="sr-only">${t("context.searchProjects")}</span
           ><input
             data-focus-key="contexts-search"
             type="search"
-            aria-label="Search projects"
-            placeholder="Search projects…"
+            aria-label=${t("context.searchProjects")}
+            placeholder=${t("context.searchProjects")}
             .value=${contextsQuery}
             @input=${(event: InputEvent) => {
               contextsQuery = (event.currentTarget as HTMLInputElement).value;
@@ -364,7 +365,7 @@ function gridTpl(): TemplateResult {
             }}
         /></label>
         <label class="list-select"
-          ><span>Show</span
+          ><span>${t("context.show")}</span
           ><select
             .value=${contextsWorkspaceFilter}
             @change=${(event: Event) => {
@@ -373,8 +374,8 @@ function gridTpl(): TemplateResult {
               drawContexts();
             }}
           >
-            <option value="active">Active only</option>
-            <option value="all">Everything</option>
+            <option value="active">${t("context.activeOnly")}</option>
+            <option value="all">${t("context.everything")}</option>
           </select></label
         >
       </div>
@@ -386,8 +387,11 @@ function gridTpl(): TemplateResult {
 
 function contextCard(c: CoreContext): TemplateResult {
   const { title, sub, glyph } = contextMeta(c);
-  const count = c.sessionCount === 1 ? "1 conversation" : `${c.sessionCount} conversations`;
-  let access = "shared";
+  const count = t("context.conversationCount", {
+    count: c.sessionCount,
+    unit: t(c.sessionCount === 1 ? "context.conversation.one" : "context.conversation.other"),
+  });
+  let access: "shared" | "owned" | "private" = "shared";
   if (c.project && isProjectOwner(c)) access = "owned";
   else if (c.kind === "personal") access = "private";
   return html`
@@ -395,11 +399,11 @@ function contextCard(c: CoreContext): TemplateResult {
       <div class="card-head">
         <span class="context-glyph">${icon(glyph, 17)}</span>
         <h2 class="card-title">${title}</h2>
-        ${c.isPrivate ? html`<span class="context-lock" title="Private channel">${icon(Lock, 13)}</span>` : nothing}
-        <span class="badge">${access}</span>
+        ${c.isPrivate ? html`<span class="context-lock" title=${t("context.privateChannel")}>${icon(Lock, 13)}</span>` : nothing}
+        <span class="badge">${t(`context.access.${access}`)}</span>
       </div>
       <div class="card-meta context-card-sub">${sub}</div>
-      <div class="card-meta">${count}${c.lastActivityAt ? ` · active ${relTime(c.lastActivityAt)}` : ""}</div>
+      <div class="card-meta">${count}${c.lastActivityAt ? ` · ${t("context.activeAt", { time: relTime(c.lastActivityAt) })}` : ""}</div>
     </button>
   `;
 }
@@ -412,29 +416,29 @@ function detailTpl(c: CoreContext): TemplateResult {
   return html`
     <div class="context-detail">
       <button class="context-back" type="button" @click=${() => selectContext(null)}>
-        ${icon(ArrowLeft, 15)}<span>Projects</span>
+        ${icon(ArrowLeft, 15)}<span>${t("context.projects")}</span>
       </button>
       <div class="context-detail-head">
         <span class="context-glyph large">${icon(glyph, 22)}</span>
         <div class="context-detail-titles">
           <h1 class="pane-title">
             ${title}
-            ${c.isPrivate ? html`<span class="context-lock" title="Private channel">${icon(Lock, 14)}</span>` : nothing}
+            ${c.isPrivate ? html`<span class="context-lock" title=${t("context.privateChannel")}>${icon(Lock, 14)}</span>` : nothing}
           </h1>
           <div class="context-sub">
-            ${c.project ? sub : `${sub} The agent's files and memory here are separate from your other contexts.`}
+            ${c.project ? sub : `${sub} ${t("context.separateResources")}`}
           </div>
         </div>
         <div class="context-detail-actions">
           ${
             c.project
               ? html`<button class="btn context-add-member" type="button" @click=${() => toggleMemberPicker(c)}>
-                  ${icon(UserPlus, 15)}<span>Add people</span>
+                  ${icon(UserPlus, 15)}<span>${t("context.addPeople")}</span>
                 </button>`
               : nothing
           }
           <button class="btn primary context-new-chat" type="button" @click=${() => startChatIn(c)}>
-            ${icon(Plus, 15)}<span>New chat</span>
+            ${icon(Plus, 15)}<span>${t("context.newChat")}</span>
           </button>
         </div>
       </div>
@@ -445,23 +449,20 @@ function detailTpl(c: CoreContext): TemplateResult {
               ? html`
                   <section class="context-panel context-project-empty">
                     <span class="context-glyph large" aria-hidden="true">${icon(glyph, 22)}</span>
-                    <h2>This project is ready for work</h2>
-                    <p>
-                      Start a conversation with New chat. Files, automations, and other work created there will stay
-                      scoped to this project.
-                    </p>
+                    <h2>${t("context.readyTitle")}</h2>
+                    <p>${t("context.readyBody")}</p>
                   </section>
                 `
               : html`
                   <section class="context-panel context-conversations" aria-labelledby="context-conversations-title">
                     <div class="context-panel-heading">
-                      <h2 class="context-panel-title" id="context-conversations-title">Conversations</h2>
+                      <h2 class="context-panel-title" id="context-conversations-title">${t("context.conversations")}</h2>
                       ${sessions.length ? html`<span class="context-panel-count">${sessions.length}</span>` : nothing}
                     </div>
                     ${
                       sessions.length
                         ? html`<div class="context-session-list">${sessions.map((s) => contextSessionRow(s))}</div>`
-                        : html`<div class="context-inline-empty">No conversations yet.</div>`
+                        : html`<div class="context-inline-empty">${t("context.noConversations")}</div>`
                     }
                   </section>
                   ${resourceSections(c.scopeId)}
@@ -470,7 +471,7 @@ function detailTpl(c: CoreContext): TemplateResult {
         </div>
         ${
           hasSettings
-            ? html`<aside class="context-settings" aria-label=${c.project ? "Project settings" : "Context settings"}>
+            ? html`<aside class="context-settings" aria-label=${c.project ? t("context.projectSettings") : t("context.settings")}>
                 ${c.project ? projectMembersSection(c) : nothing} ${ambientPolicySection(c.scopeId)}
               </aside>`
             : nothing
@@ -497,7 +498,7 @@ function isProjectOwner(context: CoreContext): boolean {
 }
 
 function memberLabel(context: CoreContext, principalId: string): string {
-  if (principalId === appState.me?.user) return "You";
+  if (principalId === appState.me?.user) return t("context.you");
   return context.project?.members.find((member) => member.principalId === principalId)?.displayName || principalId;
 }
 
@@ -507,7 +508,7 @@ function projectMembersSection(context: CoreContext): TemplateResult {
   return html`
     <section class="context-panel project-members" aria-labelledby="project-people-title">
       <div class="context-panel-heading">
-        <h2 class="context-panel-title" id="project-people-title">People</h2>
+        <h2 class="context-panel-title" id="project-people-title">${t("context.members")}</h2>
         <span class="context-panel-count">${projectPeople(context).length}</span>
       </div>
       <div class="project-member-list">
@@ -517,14 +518,14 @@ function projectMembersSection(context: CoreContext): TemplateResult {
             <div class="project-member-row">
               <span class="project-member-avatar" aria-hidden="true">${initials(label)}</span>
               <span class="project-member-name">${label}</span>
-              ${principalId === project.ownerId ? html`<span class="badge">Owner</span>` : nothing}
+              ${principalId === project.ownerId ? html`<span class="badge">${t("context.owner")}</span>` : nothing}
               ${
                 isProjectOwner(context) && principalId !== project.ownerId
                   ? html`<button
                       class="project-icon-button danger"
                       type="button"
-                      aria-label=${`Remove ${label}`}
-                      title=${`Remove ${label}`}
+                      aria-label=${t("context.removePerson", { person: label })}
+                      title=${t("context.removePerson", { person: label })}
                       ?disabled=${contextsState.memberSearching || contextsState.memberBusy}
                       @click=${() => void removeProjectMember(context, principalId)}
                     >
@@ -549,15 +550,15 @@ function memberPicker(context: CoreContext): TemplateResult {
   let emptyNote = "";
   if (idle && contextsState.memberSearchedQuery && matches.length === 0) {
     emptyNote = contextsState.memberMatches.length
-      ? "Everyone matching is already in this project."
-      : `No matches for “${contextsState.memberSearchedQuery}”.`;
+      ? t("context.everyoneAlreadyAdded")
+      : t("context.noPeopleMatches", { query: contextsState.memberSearchedQuery });
   }
   let memberStatus = emptyNote;
-  if (contextsState.memberSearching) memberStatus = "Searching…";
-  else if (contextsState.memberBusy) memberStatus = "Working…";
+  if (contextsState.memberSearching) memberStatus = t("context.searching");
+  else if (contextsState.memberBusy) memberStatus = t("context.working");
   return html`
     <form class="project-member-picker" @submit=${(event: SubmitEvent) => void searchProjectMembers(event, context)}>
-      <label for="project-member-search">Add people</label>
+      <label for="project-member-search">${t("context.addPeople")}</label>
       <div class="project-member-search-row">
         ${icon(Search, 16)}
         <input
@@ -567,7 +568,7 @@ function memberPicker(context: CoreContext): TemplateResult {
           type="search"
           autocomplete="off"
           maxlength="80"
-          placeholder="Search by name or handle"
+          placeholder=${t("context.searchPeople")}
           .value=${contextsState.memberQuery}
           ?disabled=${contextsState.memberBusy}
           @input=${(event: InputEvent) => {
@@ -578,8 +579,8 @@ function memberPicker(context: CoreContext): TemplateResult {
         <button
           class="project-icon-button"
           type="submit"
-          aria-label="Search"
-          title="Search"
+          aria-label=${t("context.search")}
+          title=${t("context.search")}
           ?disabled=${contextsState.memberSearching || contextsState.memberBusy}
         >
           ${icon(Search, 15)}
@@ -587,8 +588,8 @@ function memberPicker(context: CoreContext): TemplateResult {
         <button
           class="project-icon-button"
           type="button"
-          aria-label="Close"
-          title="Close"
+          aria-label=${t("context.close")}
+          title=${t("context.close")}
           ?disabled=${contextsState.memberBusy}
           @click=${closeMemberPicker}
         >
@@ -622,7 +623,7 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
   const r = contextsState.resources;
   if (!r) {
     return contextsState.resourcesLoading
-      ? html`<div class="empty compact">Loading this context's files, crons, apps and skills…</div>`
+      ? html`<div class="empty compact">${t("context.resourcesLoading")}</div>`
       : html``;
   }
   if (r.files.length === 0 && r.crons.length === 0 && r.deployments.length === 0 && r.skills.length === 0) {
@@ -630,11 +631,12 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
   }
   const manage = r.manageable;
   return html`
-    ${r.files.length ? resourceGroup("Files", r.files.map(fileRow)) : nothing}
+    ${r.files.length ? resourceGroup(t("context.files"), "files", r.files.map(fileRow)) : nothing}
     ${
       r.skills.length
         ? resourceGroup(
-            "Skills",
+            t("context.skills"),
+            "skills",
             r.skills.map((s) => skillRow(s, manage)),
           )
         : nothing
@@ -642,12 +644,13 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
     ${
       r.crons.length
         ? resourceGroup(
-            "Crons",
+            t("navigation.crons"),
+            "crons",
             r.crons.map((c) => cronRow(c, manage)),
           )
         : nothing
     }
-    ${r.deployments.length ? resourceGroup("Apps", r.deployments.map(deploymentRow)) : nothing}
+    ${r.deployments.length ? resourceGroup(t("context.apps"), "deploys", r.deployments.map(deploymentRow)) : nothing}
   `;
 }
 
@@ -656,7 +659,7 @@ const resourceBusy = new Set<string>();
 async function manageCron(id: string, action: "enable" | "disable" | "delete"): Promise<void> {
   const key = `cron:${id}`;
   if (resourceBusy.has(key)) return;
-  if (action === "delete" && !confirm("Delete this cron? This can't be undone.")) return;
+  if (action === "delete" && !confirm(t("context.deleteCronConfirm"))) return;
   resourceBusy.add(key);
   drawContexts();
   try {
@@ -665,7 +668,7 @@ async function manageCron(id: string, action: "enable" | "disable" | "delete"): 
     const scope = contextsState.resourcesScope;
     if (scope) await loadScopeResources(scope);
   } catch (e) {
-    contextsState.resourcesNotice = errMessage(e, "Couldn't update that cron.");
+    contextsState.resourcesNotice = errMessage(e, t("context.cronUpdateFailed"));
   } finally {
     resourceBusy.delete(key);
     drawContexts();
@@ -675,7 +678,7 @@ async function manageCron(id: string, action: "enable" | "disable" | "delete"): 
 async function deleteScopeSkill(id: string): Promise<void> {
   const key = `skill:${id}`;
   if (resourceBusy.has(key)) return;
-  if (!confirm("Delete this skill? This can't be undone.")) return;
+  if (!confirm(t("context.deleteSkillConfirm"))) return;
   resourceBusy.add(key);
   drawContexts();
   try {
@@ -683,15 +686,14 @@ async function deleteScopeSkill(id: string): Promise<void> {
     const scope = contextsState.resourcesScope;
     if (scope) await loadScopeResources(scope);
   } catch (e) {
-    contextsState.resourcesNotice = errMessage(e, "Couldn't delete that skill.");
+    contextsState.resourcesNotice = errMessage(e, t("context.skillDeleteFailed"));
   } finally {
     resourceBusy.delete(key);
     drawContexts();
   }
 }
 
-function resourceGroup(label: string, rows: TemplateResult[]): TemplateResult {
-  const view = label === "Apps" ? "deploys" : label.toLowerCase();
+function resourceGroup(label: string, view: "files" | "skills" | "crons" | "deploys", rows: TemplateResult[]): TemplateResult {
   const scope = contextsState.resourcesScope;
   const supportsScopeLink = view === "files" || view === "deploys";
   const href = `${UI_BASE}/${encodeURIComponent(view)}${scope && supportsScopeLink ? `?scope=${encodeURIComponent(scope)}` : ""}`;
@@ -699,7 +701,7 @@ function resourceGroup(label: string, rows: TemplateResult[]): TemplateResult {
     <section class="context-panel context-resource-group">
       <div class="context-panel-heading context-resource-heading">
         <h2 class="context-panel-title">${label}</h2>
-        <a href=${href}>View all</a>
+        <a href=${href}>${t("context.viewAll")}</a>
       </div>
       <div class="context-session-list">${rows}</div>
     </section>
@@ -720,7 +722,7 @@ function fileRow(f: ScopeFile): TemplateResult {
                 href=${withBase(`/api/files/${encodeURIComponent(f.id)}/content`)}
                 target="_blank"
                 rel="noreferrer"
-                >Open</a
+                >${t("file.open")}</a
               >`
             : nothing
         }
@@ -730,17 +732,17 @@ function fileRow(f: ScopeFile): TemplateResult {
 }
 
 function cronRow(c: CronView, manage = false): TemplateResult {
-  let status = "disabled";
-  if (c.archived) status = "archived";
-  else if (c.enabled) status = "enabled";
+  let status = t("context.status.disabled");
+  if (c.archived) status = t("context.status.archived");
+  else if (c.enabled) status = t("context.status.enabled");
   const busy = resourceBusy.has(`cron:${c.id}`);
   return html`
     <div class="context-session-row context-resource-row">
       <span class="context-session-title">${c.title ?? actionSnippet(c.message ?? c.action ?? "")}</span>
       <span class="context-session-meta">
-        <span class="badge">${cronScheduleSummary(c)}</span>
+        <span class="badge">${cronScheduleSummary(c, locale())}</span>
         <span class="badge">${status}</span>
-        <span title=${cronRunSummaryTitle(c)}>${cronRunSummary(c)}</span>
+        <span title=${cronRunSummaryTitle(c, locale())}>${cronRunSummary(c, Date.now(), locale())}</span>
         ${
           manage && !c.archived
             ? html`
@@ -750,7 +752,7 @@ function cronRow(c: CronView, manage = false): TemplateResult {
                   ?disabled=${busy}
                   @click=${() => void manageCron(c.id, c.enabled ? "disable" : "enable")}
                 >
-                  ${c.enabled ? "Disable" : "Enable"}
+                  ${c.enabled ? t("cron.disable") : t("cron.enable")}
                 </button>
                 <button
                   class="context-resource-action danger"
@@ -758,7 +760,7 @@ function cronRow(c: CronView, manage = false): TemplateResult {
                   ?disabled=${busy}
                   @click=${() => void manageCron(c.id, "delete")}
                 >
-                  Delete
+                  ${t("file.delete")}
                 </button>
               `
             : nothing
@@ -784,7 +786,7 @@ function skillRow(s: ScopeSkill, manage = false): TemplateResult {
                 ?disabled=${busy}
                 @click=${() => void deleteScopeSkill(s.id)}
               >
-                Delete
+                ${t("file.delete")}
               </button>`
             : nothing
         }
@@ -800,7 +802,7 @@ function deploymentRow(d: ScopeDeployment): TemplateResult {
       <span class="context-session-meta">
         <span class="badge">v${d.currentVersion}</span>
         <span class="badge">${d.status}</span>
-        <span class="badge">${d.permission === "write" ? "manage" : "read"}</span>
+        <span class="badge">${d.permission === "write" ? t("context.permission.manage") : t("context.permission.read")}</span>
       </span>
     </div>
   `;
@@ -841,26 +843,26 @@ function createProjectDialog(): TemplateResult | typeof nothing {
       <form @submit=${(event: SubmitEvent) => void createProject(event)}>
         <div class="project-dialog-head">
           <span class="context-glyph large">${icon(FolderPlus, 21)}</span>
-          <div><h2 id="project-dialog-title">New project</h2></div>
+          <div><h2 id="project-dialog-title">${t("context.newProject")}</h2></div>
           <button
             class="project-icon-button"
             type="button"
-            aria-label="Close new project"
-            title="Close"
+            aria-label=${t("context.close")}
+            title=${t("context.close")}
             @click=${closeCreateProject}
           >
             ${icon(X, 16)}
           </button>
         </div>
         <label class="project-name-field" for="project-name">
-          <span>Name</span>
+          <span>${t("context.projectName")}</span>
           <input
             id="project-name"
             data-focus-key="project-name"
             name="name"
             maxlength="200"
             autocomplete="off"
-            placeholder="launch cohort"
+            placeholder=${t("context.projectPlaceholder")}
             .value=${contextsState.createName}
             ?disabled=${contextsState.createSaving}
             @input=${(event: InputEvent) => {
@@ -872,10 +874,10 @@ function createProjectDialog(): TemplateResult | typeof nothing {
         <div class="form-error" aria-live="polite">${contextsState.createError}</div>
         <div class="project-dialog-actions">
           <button class="btn" type="button" @click=${closeCreateProject}>
-            ${contextsState.createSaving ? "Close" : "Cancel"}
+            ${contextsState.createSaving ? t("context.close") : t("cron.cancel")}
           </button>
           <button class="btn primary" type="submit" ?disabled=${contextsState.createSaving}>
-            ${icon(FolderPlus, 15)}<span>${contextsState.createSaving ? "Creating…" : "Create project"}</span>
+            ${icon(FolderPlus, 15)}<span>${contextsState.createSaving ? t("context.creating") : t("context.createProject")}</span>
           </button>
         </div>
       </form>
@@ -943,7 +945,7 @@ async function createProject(event: SubmitEvent): Promise<void> {
   if (contextsState.createSaving) return;
   const name = contextsState.createName.trim();
   if (!name) {
-    contextsState.createError = "Enter a project name.";
+    contextsState.createError = t("context.projectNameRequired");
     drawContexts();
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#project-name")?.focus());
     return;
@@ -955,7 +957,7 @@ async function createProject(event: SubmitEvent): Promise<void> {
   try {
     const project = projectFromResponse(await api("/api/projects", { method: "POST", body: JSON.stringify({ name }) }));
     if (resetSeq !== contextsResetSeq) return;
-    if (!project) throw new Error("Core returned an invalid project");
+    if (!project) throw new Error(t("context.invalidProject"));
     const loaded = contextsState.loaded;
     let context = upsertProject(project);
     if (!loaded) {
@@ -974,7 +976,7 @@ async function createProject(event: SubmitEvent): Promise<void> {
   } catch (error) {
     if (seq !== createProjectSeq || resetSeq !== contextsResetSeq) return;
     contextsState.createSaving = false;
-    contextsState.createError = errMessage(error, "Couldn't create that project.");
+    contextsState.createError = errMessage(error, t("context.createFailed"));
     drawContexts();
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#project-name")?.focus());
   }
@@ -1041,7 +1043,7 @@ async function searchProjectMembers(event: SubmitEvent, context: CoreContext): P
   if (query.length < 2) {
     contextsState.memberMatches = [];
     contextsState.memberSearchedQuery = "";
-    contextsState.memberError = "Enter at least two characters.";
+    contextsState.memberError = t("context.memberQueryRequired");
     drawContexts();
     return;
   }
@@ -1063,7 +1065,7 @@ async function runMemberSearch(context: CoreContext, query: string): Promise<voi
   } catch (error) {
     if (searchSeq !== memberSearchSeq || contextsState.memberProjectId !== projectId) return;
     contextsState.memberSearchedQuery = "";
-    contextsState.memberError = errMessage(error, "Couldn't search for people.");
+    contextsState.memberError = errMessage(error, t("context.peopleSearchFailed"));
   } finally {
     if (searchSeq === memberSearchSeq) {
       contextsState.memberSearching = false;
@@ -1088,14 +1090,14 @@ async function addProjectMember(context: CoreContext, member: DirectoryMatch): P
     });
     if (resetSeq !== contextsResetSeq) return;
     const project = projectFromResponse(response);
-    if (!project) throw new Error("Core returned an invalid project");
+    if (!project) throw new Error(t("context.invalidProject"));
     upsertProject(project);
     contextsState.memberQuery = "";
     contextsState.memberMatches = [];
     contextsState.memberSearchedQuery = "";
   } catch (error) {
     if (resetSeq !== contextsResetSeq) return;
-    contextsState.memberError = errMessage(error, "Couldn't add that person.");
+    contextsState.memberError = errMessage(error, t("context.addPersonFailed"));
   } finally {
     if (resetSeq === contextsResetSeq) {
       contextsState.memberBusy = false;
@@ -1107,7 +1109,7 @@ async function addProjectMember(context: CoreContext, member: DirectoryMatch): P
 async function removeProjectMember(context: CoreContext, principalId: string): Promise<void> {
   if (!context.project || contextsState.memberBusy) return;
   const label = memberLabel(context, principalId);
-  if (!window.confirm(`Remove ${label} from ${context.name || "this project"}?`)) return;
+  if (!window.confirm(t("context.removePersonConfirm", { person: label, project: context.name || t("context.project") }))) return;
   const resetSeq = contextsResetSeq;
   memberSearchSeq++;
   cancelMemberSearchTimer();
@@ -1122,11 +1124,11 @@ async function removeProjectMember(context: CoreContext, principalId: string): P
     );
     if (resetSeq !== contextsResetSeq) return;
     const project = projectFromResponse(response);
-    if (!project) throw new Error("Core returned an invalid project");
+    if (!project) throw new Error(t("context.invalidProject"));
     upsertProject(project);
   } catch (error) {
     if (resetSeq !== contextsResetSeq) return;
-    contextsState.memberError = errMessage(error, "Couldn't remove that person.");
+    contextsState.memberError = errMessage(error, t("context.removePersonFailed"));
   } finally {
     if (resetSeq === contextsResetSeq) {
       contextsState.memberBusy = false;
@@ -1156,7 +1158,7 @@ async function loadScopeResources(scopeId: string): Promise<void> {
     };
   } catch (e) {
     if (stale()) return;
-    contextsState.resourcesNotice = errMessage(e, "Failed to load this context's resources.");
+    contextsState.resourcesNotice = errMessage(e, t("context.resourcesLoadFailed"));
   } finally {
     if (!stale()) {
       contextsState.resourcesLoading = false;
@@ -1173,7 +1175,7 @@ function contextSessionRow(s: CoreSession): TemplateResult {
       <span class="context-session-title">${groupDmTitle(s)}</span>
       <span class="context-session-meta">
         ${surface === "slack" ? html`<span class="surface surface-slack">${slackLogo(13)}</span>` : html`<span class="badge">${surface}</span>`}
-        ${readOnly ? html`<span class="ro-lock" title="Read-only — replies happen on the original surface">${icon(Lock, 12)}</span>` : nothing}
+        ${readOnly ? html`<span class="ro-lock" title=${t("context.readOnlyReplies")}>${icon(Lock, 12)}</span>` : nothing}
         <span>${relTime(activityOf(s))}</span>
       </span>
     </button>

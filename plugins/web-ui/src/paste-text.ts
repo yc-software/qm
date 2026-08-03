@@ -23,12 +23,12 @@ export function base64ToText(content: string): string {
   return new TextDecoder().decode(base64ToBytes(content));
 }
 
-export function pasteChipLabel(charCount: number): string {
-  const k = charCount / 1000;
-  let count = `${Math.round(k)}k`;
-  if (charCount < 1000) count = `${charCount}`;
-  else if (k < 9.95) count = `${k.toFixed(1)}k`;
-  return `Pasted text · ${count} chars`;
+export function pasteChipLabel(charCount: number, selected: Locale = "en"): string {
+  const count =
+    selected === "en" && charCount >= 1000
+      ? `${new Intl.NumberFormat(selected, { maximumFractionDigits: charCount < 9950 ? 1 : 0 }).format(charCount / 1000)}k`
+      : new Intl.NumberFormat(selected).format(charCount);
+  return webMessage(selected, "paste.chars", { count });
 }
 
 export function insertIntoDraft(draft: string, text: string, cursor: number | null): { draft: string; cursor: number } {
@@ -40,3 +40,5 @@ export function insertIntoDraft(draft: string, text: string, cursor: number | nu
   const caret = before.length + lead.length + text.length;
   return { draft: before + lead + text + trail + after, cursor: caret };
 }
+import { type Locale } from "../../chassis/src/locale.ts";
+import { webMessage } from "./messages.ts";

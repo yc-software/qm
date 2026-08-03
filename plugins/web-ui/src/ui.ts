@@ -1,6 +1,8 @@
 import { html, type TemplateResult } from "lit";
 import { createElement, type IconNode } from "lucide";
 import { locale, t } from "./i18n.ts";
+import type { Locale } from "../../chassis/src/locale.ts";
+import { webMessage } from "./messages.ts";
 
 export function brandName(): string {
   if (typeof document === "undefined") return "QM";
@@ -30,11 +32,10 @@ export function initials(s: string): string {
   return (two || "?").toUpperCase();
 }
 
-export function relTime(ms: number, now = Date.now()): string {
-  if (!Number.isFinite(ms) || !Number.isFinite(now)) return t("time.justNow");
+export function relTime(ms: number, now = Date.now(), selected: Locale = locale()): string {
+  if (!Number.isFinite(ms) || !Number.isFinite(now)) return webMessage(selected, "time.justNow");
   const seconds = Math.max(0, Math.floor((now - ms) / 1000));
-  if (seconds < 60) return t("time.justNow");
-  const selected = locale();
+  if (seconds < 60) return webMessage(selected, "time.justNow");
   const formatter = new Intl.RelativeTimeFormat(selected, {
     numeric: "always",
     style: selected === "ja" ? "narrow" : "long",

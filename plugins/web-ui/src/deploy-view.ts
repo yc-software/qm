@@ -1,3 +1,5 @@
+import { t } from "./i18n.ts";
+
 interface DeploymentVersionView {
   version: number;
   createdAt: number;
@@ -92,9 +94,9 @@ export function deploymentTab(d: DeploymentView, viewer: string | undefined): De
 }
 
 export function deploymentTabEmptyMessage(tab: DeploymentTab): string {
-  if (tab === "shared") return "No apps shared with you.";
-  if (tab === "archived") return "Nothing archived.";
-  return "No apps in Yours.";
+  if (tab === "shared") return t("deployment.emptyShared");
+  if (tab === "archived") return t("deployment.emptyArchived");
+  return t("deployment.emptyYours");
 }
 
 export function filterDeployments(
@@ -124,7 +126,7 @@ export function filterDeployments(
 
 export function friendlyPrincipal(principal: string | undefined): string {
   const local = (principal ?? "").split("@")[0]!.trim();
-  if (!local) return "Unknown owner";
+  if (!local) return t("deployment.unknownOwner");
   return local
     .split(/[._-]+/)
     .filter(Boolean)

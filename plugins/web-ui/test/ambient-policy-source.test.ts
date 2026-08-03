@@ -16,12 +16,12 @@ test("policy edits redraw immediately and preserve focused text controls", () =>
   assert.match(policy, /data-focus-key=\$\{`ambient-hours-\$\{i\}`\}/);
 });
 
-test("policy controls use product language and persistent accessible labels", () => {
-  for (const label of ["Ignore", "Batch updates", "Act immediately", "Treat like a person"])
-    assert.match(policy, new RegExp(label));
+test("policy controls use localized product language and persistent accessible labels", () => {
+  for (const key of ["ambient.botName", "ambient.remove", "ambient.addBot", "ambient.save"])
+    assert.match(policy, new RegExp(`t\\("${key}"\\)`));
   assert.match(policy, /<label class="ambient-field" for="ambient-orders">/);
   assert.match(policy, /aria-describedby="ambient-orders-hint"/);
-  assert.match(policy, /aria-label="Bot name"/);
+  assert.match(policy, /aria-label=\$\{t\("ambient\.botName"\)\}/);
   assert.match(policy, /required/);
 });
 
@@ -42,7 +42,7 @@ test("policy styles use the shell theme contract", () => {
 
 test("the scope homepage puts work before settings and consolidates the empty project", () => {
   assert.match(contexts, /context-workspace-main[^]*?<aside class="context-settings"/);
-  assert.match(contexts, /This project is ready for work/);
+  assert.match(contexts, /t\("context\.readyTitle"\)/);
   assert.match(contexts, /if\s*\(\s*r\.files\.length === 0[^]*?return nothing;/);
 });
 

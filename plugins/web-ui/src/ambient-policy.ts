@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
+import { t } from "./i18n";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export type BotMode = (typeof BOT_MODES)[number];
@@ -74,7 +75,7 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
     ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
   } catch (e) {
     if (seq !== loadSeq) return;
-    ambientPolicyState.notice = errMessage(e, "Couldn't load this scope's standing orders.");
+    ambientPolicyState.notice = errMessage(e, t("ambient.loadFailed"));
     ambientPolicyState.noticeKind = "error";
   } finally {
     if (seq === loadSeq) {
@@ -121,10 +122,10 @@ async function save(): Promise<void> {
     }));
     ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
     ambientPolicyState.dirty = false;
-    ambientPolicyState.notice = "Saved.";
+    ambientPolicyState.notice = t("ambient.save");
     ambientPolicyState.noticeKind = "saved";
   } catch (e) {
-    ambientPolicyState.notice = errMessage(e, "Couldn't save — try again.");
+    ambientPolicyState.notice = errMessage(e, t("ambient.saveFailed"));
     ambientPolicyState.noticeKind = "error";
   } finally {
     ambientPolicyState.saving = false;
@@ -136,7 +137,7 @@ function addBot(): void {
   const name = ambientPolicyState.newBotName.trim();
   if (!name) return;
   if (ambientPolicyState.bots.some((b) => b.name.toLowerCase() === name.toLowerCase())) {
-    ambientPolicyState.notice = `“${name}” is already in the ledger.`;
+    ambientPolicyState.notice = t("ambient.alreadyAdded", { name });
     ambientPolicyState.noticeKind = "error";
     redraw();
     return;
@@ -146,20 +147,13 @@ function addBot(): void {
   markDirty();
 }
 
-const BOT_MODE_LABELS: Record<BotMode, string> = {
-  ignore: "Ignore",
-  rollup: "Batch updates",
-  action: "Act immediately",
-  user: "Treat like a person",
-};
-
 function botRow(b: BotPolicyView, i: number): TemplateResult {
   return html`
     <div class="ambient-bot-row">
       <span class="ambient-bot-name">${b.name}</span>
       <select
         class="ambient-bot-mode"
-        aria-label=${`Handling for ${b.name}`}
+        aria-label=${t("ambient.handling", { name: b.name })}
         ?disabled=${ambientPolicyState.saving}
         @change=${(e: Event) => {
           const mode = (e.currentTarget as HTMLSelectElement).value as BotMode;
@@ -167,18 +161,18 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
           markDirty();
         }}
       >
-        ${BOT_MODES.map((m) => html`<option value=${m} ?selected=${m === b.mode}>${BOT_MODE_LABELS[m]}</option>`)}
+        ${BOT_MODES.map((m) => html`<option value=${m} ?selected=${m === b.mode}>${botModeLabel(m)}</option>`)}
       </select>
       ${
         b.mode === "rollup"
           ? html`<label class="ambient-bot-hours"
-              >every
+              >${t("ambient.batchEvery")}
               <input
                 type="number"
                 min="1"
                 step="1"
                 data-focus-key=${`ambient-hours-${i}`}
-                aria-label=${`Batch interval for ${b.name} in hours`}
+                aria-label=${t("ambient.batchInterval", { name: b.name })}
                 .value=${String(b.rollupHours ?? 24)}
                 ?disabled=${ambientPolicyState.saving}
                 @input=${(e: InputEvent) => {
@@ -189,15 +183,15 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
                   markDirty();
                 }}
               />
-              h</label
+              ${t("ambient.hours")}</label
             >`
           : nothing
       }
       <button
         class="project-icon-button danger"
         type="button"
-        aria-label=${`Remove ${b.name} from the ledger`}
-        title="Remove"
+        aria-label=${t("ambient.removeBot", { name: b.name })}
+        title=${t("ambient.remove")}
         ?disabled=${ambientPolicyState.saving}
         @click=${() => {
           ambientPolicyState.bots = ambientPolicyState.bots.filter((_, j) => j !== i);
@@ -210,27 +204,33 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
   `;
 }
 
+function botModeLabel(mode: BotMode): string {
+  if (mode === "ignore") return t("ambient.mode.ignore");
+  if (mode === "rollup") return t("ambient.mode.rollup");
+  if (mode === "action") return t("ambient.mode.action");
+  return t("ambient.mode.user");
+}
+
 export function ambientPolicySection(scopeId: string): TemplateResult | typeof nothing {
   if (!ambientPolicyApplies(scopeId)) return nothing;
   if (ambientPolicyState.scope !== scopeId) return nothing;
   if (ambientPolicyState.loading)
     return html`<section class="context-panel ambient-policy" aria-labelledby="ambient-policy-title">
-      <h2 class="context-panel-title" id="ambient-policy-title">Agent behavior</h2>
-      <div class="context-panel-loading">Loading…</div>
+      <h2 class="context-panel-title" id="ambient-policy-title">${t("ambient.title")}</h2>
+      <div class="context-panel-loading">${t("ambient.loading")}</div>
     </section>`;
   return html`
     <section class="context-panel ambient-policy" aria-labelledby="ambient-policy-title">
       <div class="context-panel-heading">
         <div>
-          <h2 class="context-panel-title" id="ambient-policy-title">Agent behavior</h2>
-          <p class="context-panel-copy">Choose what this project should notice and act on.</p>
+          <h2 class="context-panel-title" id="ambient-policy-title">${t("ambient.title")}</h2>
+          <p class="context-panel-copy">${t("ambient.choose")}</p>
         </div>
       </div>
       <label class="ambient-field" for="ambient-enabled">
-        <span class="ambient-field-label">Ambient behavior</span>
+        <span class="ambient-field-label">${t("ambient.behavior")}</span>
         <span class="ambient-policy-hint"
-          >When off, the agent never acts on overheard messages here — it only responds to direct @mentions. Default: on
-          only when standing orders (or an action-mode bot) are set below — otherwise mention-only.</span
+          >${t("ambient.behaviorHint")}</span
         >
       </label>
       <select
@@ -245,15 +245,15 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
         }}
       >
         <option value="default" ?selected=${ambientPolicyState.ambientEnabled === null}>
-          Default (on when standing orders are set)
+          ${t("ambient.default")}
         </option>
-        <option value="on" ?selected=${ambientPolicyState.ambientEnabled === true}>On</option>
-        <option value="off" ?selected=${ambientPolicyState.ambientEnabled === false}>Off</option>
+        <option value="on" ?selected=${ambientPolicyState.ambientEnabled === true}>${t("ambient.on")}</option>
+        <option value="off" ?selected=${ambientPolicyState.ambientEnabled === false}>${t("ambient.off")}</option>
       </select>
       <label class="ambient-field" for="ambient-orders">
-        <span class="ambient-field-label">Standing orders</span>
+        <span class="ambient-field-label">${t("ambient.standingOrders")}</span>
         <span class="ambient-policy-hint" id="ambient-orders-hint"
-          >Plain-language guidance for proactive work. Leave empty to respond only when addressed.</span
+          >${t("ambient.ordersHint")}</span
         >
       </label>
       <textarea
@@ -262,7 +262,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
         class="ambient-orders"
         rows="4"
         aria-describedby="ambient-orders-hint"
-        placeholder="For example: Flag anything that could delay the launch."
+        placeholder=${t("ambient.ordersPlaceholder")}
         .value=${ambientPolicyState.orders}
         ?disabled=${ambientPolicyState.saving}
         @input=${(e: InputEvent) => {
@@ -271,10 +271,10 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
         }}
       ></textarea>
       <div class="ambient-field-heading">
-        <h3>Automated posters</h3>
-        <p class="ambient-policy-hint">Control how messages from bots and integrations wake the agent.</p>
+        <h3>${t("ambient.posters")}</h3>
+        <p class="ambient-policy-hint">${t("ambient.postersHint")}</p>
       </div>
-      ${ambientPolicyState.bots.length ? html`<div class="ambient-bot-list">${ambientPolicyState.bots.map((b, i) => botRow(b, i))}</div>` : html`<div class="empty compact">No bots added. All bot posts are treated as activity.</div>`}
+      ${ambientPolicyState.bots.length ? html`<div class="ambient-bot-list">${ambientPolicyState.bots.map((b, i) => botRow(b, i))}</div>` : html`<div class="empty compact">${t("ambient.none")}</div>`}
       <form
         class="ambient-bot-add"
         @submit=${(e: SubmitEvent) => {
@@ -286,9 +286,9 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           data-focus-key="ambient-bot-name"
           type="text"
           maxlength="120"
-          aria-label="Bot name"
+          aria-label=${t("ambient.botName")}
           required
-          placeholder="Bot name"
+          placeholder=${t("ambient.botName")}
           .value=${ambientPolicyState.newBotName}
           ?disabled=${ambientPolicyState.saving}
           @input=${(e: InputEvent) => {
@@ -296,7 +296,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
             redraw();
           }}
         />
-        <button class="btn" type="submit" ?disabled=${ambientPolicyState.saving}>Add bot</button>
+        <button class="btn" type="submit" ?disabled=${ambientPolicyState.saving}>${t("ambient.addBot")}</button>
       </form>
       <div class="ambient-policy-actions">
         <button
@@ -305,7 +305,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           ?disabled=${!ambientPolicyState.dirty || ambientPolicyState.saving}
           @click=${() => void save()}
         >
-          ${ambientPolicyState.saving ? "Saving…" : "Save"}
+          ${ambientPolicyState.saving ? t("ambient.saving") : t("ambient.save")}
         </button>
         ${
           ambientPolicyState.notice

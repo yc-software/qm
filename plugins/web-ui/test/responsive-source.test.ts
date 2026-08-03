@@ -100,7 +100,7 @@ test("touch layouts expose row actions and preserve readable composer choices", 
   assert.match(compactCss, /\.composer-right \.model-control \{\s*flex: 1 1 96px;/);
   assert.match(compactCss, /\.pane-refresh \{\s*width: 44px;\s*height: 44px;\s*flex-basis: 44px;/);
   assert.match(compactCss, /\.project-create-button \{\s*width: 44px;\s*height: 44px;/);
-  assert.match(contexts, /project-create-button"\s+type="button"\s+aria-label="New project"/);
+  assert.match(contexts, /project-create-button"\s+type="button"\s+aria-label=\$\{t\("context\.newProject"\)\}/);
   assert.match(
     compactCss,
     /\.chat-scroll \{\s*padding-right: max\(var\(--chat-pad\), env\(safe-area-inset-right\)\);\s*padding-left: max\(var\(--chat-pad\), env\(safe-area-inset-left\)\)/,
