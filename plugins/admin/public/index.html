@@ -4833,24 +4833,26 @@
         b.onclick = () => openWebUiAs(target);
         return b;
       }
-      const fmtTime = (ts) => new Date(ts).toLocaleString();
+      const INTL_LOCALE = document.documentElement.lang.toLowerCase().startsWith("ja") ? "ja-JP" : "en-US";
+      const fmtTime = (ts) => new Date(ts).toLocaleString(INTL_LOCALE);
       const sameLocalDate = (a, b) =>
         a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-      const fmtClock = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const fmtClock = (d) => d.toLocaleTimeString(INTL_LOCALE, { hour: "numeric", minute: "2-digit" });
+      const fmtDate = (d, options) => d.toLocaleDateString(INTL_LOCALE, options);
+      const fmtNumber = (n) => Number(n).toLocaleString(INTL_LOCALE);
       function relTime(ts) {
         if (!ts) return "—";
         const d = new Date(ts);
         const now = new Date();
         const mins = Math.floor((now.getTime() - d.getTime()) / 60000);
         if (mins >= 0 && mins < 1) return t("time.now");
-        if (mins >= 0 && mins < 60)
-          return t(mins === 1 ? "time.minute" : "time.minutes", { count: mins.toLocaleString() });
+        if (mins >= 0 && mins < 60) return t(mins === 1 ? "time.minute" : "time.minutes", { count: fmtNumber(mins) });
         if (sameLocalDate(d, now)) return t("time.today", { time: fmtClock(d) });
         const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
         if (sameLocalDate(d, yesterday)) return t("time.yesterday", { time: fmtClock(d) });
         return (
-          d.toLocaleDateString(
-            [],
+          fmtDate(
+            d,
             d.getFullYear() === now.getFullYear()
               ? { month: "short", day: "numeric" }
               : { month: "short", day: "numeric", year: "numeric" },
@@ -5011,9 +5013,9 @@
       }
       function sessionCountsLabel(sessions, background) {
         const parts = [];
-        if (sessions) parts.push(t("history.conversationCount", { count: Number(sessions).toLocaleString() }));
-        if (background) parts.push(Number(background).toLocaleString() + " background");
-        return parts.join(" · ") || "no conversations";
+        if (sessions) parts.push(t("history.conversationCount", { count: fmtNumber(sessions) }));
+        if (background) parts.push(t("history.backgroundCount", { count: fmtNumber(background) }));
+        return parts.join(" · ") || t("history.noConversations");
       }
       function linkedStacked(href, primary, secondary) {
         const d = stacked(primary, secondary);
@@ -5163,7 +5165,7 @@
           uploadStatusMessage(
             status,
             t("files.uploading", {
-              count: picked.length.toLocaleString(),
+              count: fmtNumber(picked.length),
               files: t(picked.length === 1 ? "files.file" : "files.files"),
             }),
             "saving",
@@ -5189,7 +5191,7 @@
             uploadStatusMessage(
               status,
               t("files.uploaded", {
-                count: picked.length.toLocaleString(),
+                count: fmtNumber(picked.length),
                 files: t(picked.length === 1 ? "files.file" : "files.files"),
               }),
               "ok",
@@ -5199,8 +5201,8 @@
           } catch (err) {
             const partial = uploaded
               ? t("files.uploadedPartial", {
-                  uploaded: uploaded.toLocaleString(),
-                  count: picked.length.toLocaleString(),
+                  uploaded: fmtNumber(uploaded),
+                  count: fmtNumber(picked.length),
                 })
               : "";
             uploadStatusMessage(
@@ -5734,7 +5736,7 @@
             const b = document.createElement("button");
             b.type = "button";
             b.className = "shell-tab" + (tab.active ? " active" : "");
-            b.textContent = tab.count != null ? tab.label + " " + Number(tab.count).toLocaleString() : tab.label;
+            b.textContent = tab.count != null ? tab.label + " " + fmtNumber(tab.count) : tab.label;
             b.onclick = tab.onClick;
             wrap.appendChild(b);
           });
@@ -5986,8 +5988,8 @@
         $("soul-draft").textContent =
           draft === soulSaved ? t("governance.noDraftChanges") : draft || t("governance.instructionsCleared");
         $("soul-size").textContent = t("governance.size", {
-          characters: draft.length.toLocaleString(),
-          tokens: Math.ceil(draft.length / 4).toLocaleString(),
+          characters: fmtNumber(draft.length),
+          tokens: fmtNumber(Math.ceil(draft.length / 4)),
         });
         $("soul-validation").textContent = draft.length >= 100000 ? t("common.maximumLength") : t("common.draftValid");
       }
@@ -7006,7 +7008,7 @@
         onboardingBadge(
           "onboarding-oauth-badge",
           configured.length
-            ? t("onboarding.configuredCount", { count: configured.length.toLocaleString() })
+            ? t("onboarding.configuredCount", { count: fmtNumber(configured.length) })
             : t("state.optional"),
           configured.length > 0,
           true,
@@ -7491,10 +7493,10 @@
       }
       const BOT_MODES = ["ignore", "rollup", "action", "user"];
       const BOT_MODE_LABELS = {
-        ignore: "ignore — never wakes the judge",
-        rollup: "rollup — batch, judge periodically",
-        action: "action — posts are triggers",
-        user: "user — read like a person",
+        ignore: "governance.botMode.ignore",
+        rollup: "governance.botMode.rollup",
+        action: "governance.botMode.action",
+        user: "governance.botMode.user",
       };
       function syncBotsEmpty() {
         $("ambient-bots-empty").classList.toggle("hidden", $("ambient-bots").children.length > 0);
@@ -7510,7 +7512,7 @@
         BOT_MODES.forEach((m) => {
           const o = document.createElement("option");
           o.value = m;
-          o.textContent = BOT_MODE_LABELS[m] || m;
+          o.textContent = BOT_MODE_LABELS[m] ? t(BOT_MODE_LABELS[m]) : m;
           sel.appendChild(o);
         });
         sel.value = policy?.mode || "ignore";
@@ -8123,7 +8125,7 @@
               { text: fmtMs(p.p50), cls: "num" },
               { text: fmtMs(p.p95), cls: "num" },
               { text: fmtMs(p.p99), cls: "num" },
-              { text: p.count ? Number(p.count).toLocaleString() : "—", cls: "num" },
+              { text: p.count ? fmtNumber(p.count) : "—", cls: "num" },
               nodeCell(sparkline(p.daily), "num"),
             ],
             (p) => go({ view: "metrics", scope, session: null, phase: p.phase }),
@@ -8135,10 +8137,10 @@
         if (tp.total)
           root.appendChild(
             statline([
-              (tp.total ?? 0) + " runs",
-              (tp.done ?? 0) + " done",
-              (tp.failed ?? 0) + " failed",
-              fmtPct(tp.failureRate) + " failure rate",
+              t("metrics.runCount", { count: fmtNumber(tp.total ?? 0) }),
+              t("metrics.doneCount", { count: fmtNumber(tp.done ?? 0) }),
+              t("metrics.failedCount", { count: fmtNumber(tp.failed ?? 0) }),
+              t("metrics.failureRate", { rate: fmtPct(tp.failureRate) }),
             ]),
           );
       }
@@ -8147,13 +8149,13 @@
         if (!c || !(c.samples || 0)) return;
         root.appendChild(
           statline([
-            (c.avgHitRatio == null ? "—" : fmtPct(c.avgHitRatio)) + " prompt-cache hit ratio",
-            (c.pooledHitRatio == null ? "—" : fmtPct(c.pooledHitRatio)) + " token-weighted",
-            (c.missRate == null ? "—" : fmtPct(c.missRate)) + " stable-prefix miss rate",
-            (c.missTurns || 0) + " miss turns",
-            (c.samples || 0) + " turns with cache data",
-            fmtTokens(c.cacheReadTotal || 0) + " read",
-            fmtTokens(c.cacheWriteTotal || 0) + " written",
+            t("metrics.promptCacheHitRatio", { rate: c.avgHitRatio == null ? "—" : fmtPct(c.avgHitRatio) }),
+            t("metrics.tokenWeighted", { rate: c.pooledHitRatio == null ? "—" : fmtPct(c.pooledHitRatio) }),
+            t("metrics.stablePrefixMissRate", { rate: c.missRate == null ? "—" : fmtPct(c.missRate) }),
+            t("metrics.missTurnCount", { count: fmtNumber(c.missTurns || 0) }),
+            t("metrics.cacheDataTurnCount", { count: fmtNumber(c.samples || 0) }),
+            t("metrics.cacheRead", { tokens: fmtTokens(c.cacheReadTotal || 0) }),
+            t("metrics.cacheWritten", { tokens: fmtTokens(c.cacheWriteTotal || 0) }),
           ]),
         );
       }
@@ -8179,14 +8181,12 @@
             nodeCell(
               stacked(
                 t("metrics.usedMachine"),
-                (b.warm || 0) +
-                  " on a warm machine (" +
-                  fmtMs(b.provisionWarm && b.provisionWarm.p50) +
-                  " median resume) · " +
-                  (b.cold || 0) +
-                  " booted cold (" +
-                  fmtMs(b.provisionCold && b.provisionCold.p50) +
-                  " median boot)",
+                t("metrics.machineUseSummary", {
+                  warm: fmtNumber(b.warm || 0),
+                  resume: fmtMs(b.provisionWarm && b.provisionWarm.p50),
+                  cold: fmtNumber(b.cold || 0),
+                  boot: fmtMs(b.provisionCold && b.provisionCold.p50),
+                }),
               ),
             ),
             { text: share(b.samples), cls: "num" },
@@ -8253,7 +8253,7 @@
           track.appendChild(bar);
           const n = document.createElement("span");
           n.className = "dist-count";
-          n.textContent = b.count ? Number(b.count).toLocaleString() : "";
+          n.textContent = b.count ? fmtNumber(b.count) : "";
           row.append(label, track, n);
           wrap.appendChild(row);
         });
@@ -8275,7 +8275,7 @@
         }
         root.appendChild(
           statline([
-            Number(p.count).toLocaleString() + " turns",
+            t("history.turnCount", { count: fmtNumber(p.count) }),
             fmtMs(p.p50) + " p50",
             fmtMs(p.p95) + " p95",
             fmtMs(p.p99) + " p99",
@@ -8287,7 +8287,7 @@
           .reverse()
           .map((r) => [
             { text: r.day, cls: "mono" },
-            { text: Number(r.count).toLocaleString(), cls: "num" },
+            { text: fmtNumber(r.count), cls: "num" },
             { text: fmtMs(r.p50), cls: "num" },
             { text: fmtMs(r.p95), cls: "num" },
             { text: fmtMs(r.p99), cls: "num" },
@@ -8333,7 +8333,7 @@
       function renderAudit(root, d) {
         const all = orgWideView();
         const events = d.events || [];
-        defaultShell({ count: t("history.eventCount", { count: events.length.toLocaleString() }) });
+        defaultShell({ count: t("history.eventCount", { count: fmtNumber(events.length) }) });
         const rows = events.map((e) => [
           { text: e.principalId, cls: "mono" },
           nodeCell(mutedText(e.action || "event", /revoke|delete|deny|fail/.test(String(e.action || "")) ? "err" : "")),
@@ -8414,7 +8414,7 @@
         if (errs.length > max) {
           const more = document.createElement("div");
           more.className = "subline";
-          more.textContent = t("errors.more", { count: (errs.length - max).toLocaleString() });
+          more.textContent = t("errors.more", { count: fmtNumber(errs.length - max) });
           box.appendChild(more);
         }
         return box;
@@ -8477,7 +8477,7 @@
         );
       }
       function cronName(c, previewAction = false) {
-        if (!c) return "Cron";
+        if (!c) return t("crons.cron");
         if (c.title || c.message) return c.title || c.message;
         if (previewAction && c.action) return firstLine(c.action, 96);
         return t("crons.cron") + " " + shortId(c.id);
@@ -8485,7 +8485,7 @@
       function wakeOriginLabel(trigger) {
         switch (String(trigger || "").toLowerCase()) {
           case "cron":
-            return "Cron";
+            return t("crons.cron");
           case "monitor":
             return t("crons.monitorWake");
           case "webhook":
@@ -8558,8 +8558,7 @@
         const minute = minutes.values.length === 1 ? minutes.values[0] : null;
         const hour = hours.values.length === 1 ? hours.values[0] : null;
         if (minute != null && hour != null && dom.any && months.any) {
-          const suffix = hour < 12 ? "AM" : "PM";
-          const time = (hour % 12 || 12) + ":" + String(minute).padStart(2, "0") + " " + suffix;
+          const time = fmtClock(new Date(2000, 0, 1, hour, minute));
           const days = Array.from({ length: 7 }, (_, day) => t("crons.day" + day));
           if (dow.any) return t("crons.dailyAt", { time });
           if (dow.values.join(",") === "1,2,3,4,5") return t("crons.weekdaysAt", { time });
@@ -8780,7 +8779,7 @@
           scopeWrap.appendChild(
             scopeIndexList(allCrons, {
               latestOf: lastRun,
-              countLabel: (count) => t("crons.count", { count: count.toLocaleString() }),
+              countLabel: (count) => t("crons.count", { count: fmtNumber(count) }),
               empty: t("crons.noCrons"),
               extra: { cron: null },
             }),
@@ -8810,7 +8809,7 @@
                   },
                   title: shortName(scope),
                 }),
-            count: t("crons.count", { count: crons.length.toLocaleString() }),
+            count: t("crons.count", { count: fmtNumber(crons.length) }),
             stats: [...(disabled ? [[disabled, "disabled"]] : []), ...(archived ? [[archived, "archived"]] : [])],
           },
           placeholder: index ? t("crons.searchAll") : t("crons.search"),
@@ -8863,7 +8862,7 @@
             label: "← " + VIEW_TITLE.crons,
             onClick: () => go({ view: "crons", scope, session: null, cron: null, page: 1 }),
           },
-          title: c ? firstLine(cronName(c, true), 90) : "Cron",
+          title: c ? firstLine(cronName(c, true), 90) : t("crons.cron"),
           context: c ? shortName(c.ownerScopeId) : "",
         });
         if (!c) {
@@ -8941,12 +8940,12 @@
               name: relTime(s.createdAt || s.lastActivity),
               preview: [
                 delivery,
-                t("history.turnCount", { count: Number(s.turns || 0).toLocaleString() }),
+                t("history.turnCount", { count: fmtNumber(s.turns || 0) }),
                 s.lastMessage || s.firstMessage || t("history.noMessages"),
               ]
                 .filter(Boolean)
                 .join(" · "),
-              time: t("history.entryCount", { count: Number(s.messages || 0).toLocaleString() }),
+              time: t("history.entryCount", { count: fmtNumber(s.messages || 0) }),
               cls: typeof s.delivered === "number" && !s.delivered ? "dim" : "",
               href: stateToUrl({ view: "history", scope: s.scopeId || scope, session: s.id }),
             };
@@ -8961,7 +8960,7 @@
           more.type = "button";
           more.className = "prompt-toggle";
           more.textContent = t("crons.allFires", {
-            count: t("history.fireCount", { count: Number(total).toLocaleString() }),
+            count: t("history.fireCount", { count: fmtNumber(total) }),
           });
           more.onclick = () =>
             go({ view: "history", scope, session: null, page: 1, historyKind: "cron", cron: cronId });
@@ -8974,7 +8973,7 @@
           (a, b) => (b.lastAccessAt || b.createdAt || 0) - (a.lastAccessAt || a.createdAt || 0),
         );
         const deployments = orgOwnView() ? allDeps.filter((dep) => scopeKind(dep.ownerScopeId) === "org") : allDeps;
-        const count = deployments.length ? t("deployments.count", { count: deployments.length.toLocaleString() }) : "";
+        const count = deployments.length ? t("deployments.count", { count: fmtNumber(deployments.length) }) : "";
         const previewOf = (dep) =>
           [
             titleCase(dep.status || "unknown"),
@@ -9009,7 +9008,7 @@
           scopeWrap.appendChild(
             scopeIndexList(allDeps, {
               latestOf: lastTouch,
-              countLabel: (count) => t("deployments.count", { count: count.toLocaleString() }),
+              countLabel: (count) => t("deployments.count", { count: fmtNumber(count) }),
               empty: t("deployments.noneYet"),
             }),
           );
@@ -9065,7 +9064,7 @@
       }
       function createdByCell(s) {
         if (s.pack) return { text: packRepoLabel(s.pack.url) || "pack " + shortId(s.pack.id, 8), cls: "mono" };
-        if (s.createdBy && s.createdBy.indexOf("system:") === 0) return { text: "built-in", cls: "subline" };
+        if (s.createdBy && s.createdBy.indexOf("system:") === 0) return { text: t("skills.builtIn"), cls: "subline" };
         return { text: s.createdBy || "—", cls: "mono" };
       }
 
@@ -9149,11 +9148,11 @@
           .sort((a, b) => lastUse(b) - lastUse(a) || (a.name || "").localeCompare(b.name || ""));
         const skills = orgOwnView() ? allSkills.filter((s) => scopeKind(s.ownerScopeId) === "org") : allSkills;
         const count =
-          skills.length.toLocaleString() +
+          fmtNumber(skills.length) +
           " " +
           t(skills.length === 1 ? "skills.skillSingular" : "skills.skillPlural") +
           (index && skills.length
-            ? " · " + new Set(skills.map((s) => s.ownerScopeId)).size.toLocaleString() + " " + t("common.scope")
+            ? " · " + fmtNumber(new Set(skills.map((s) => s.ownerScopeId)).size) + " " + t("common.scope")
             : "");
 
         const recordsByKey = new Map(groupSkillsByIdentity(allSkills).map((g) => [g.key, g.records]));
@@ -9171,7 +9170,7 @@
           scopeWrap.appendChild(
             scopeIndexList(allSkills, {
               latestOf: lastUse,
-              countLabel: (count) => t("skills.count", { count: count.toLocaleString() }),
+              countLabel: (count) => t("skills.count", { count: fmtNumber(count) }),
               empty: t("skills.none"),
             }),
           );
@@ -10219,7 +10218,7 @@
           );
         pageShell({
           title: VIEW_TITLE.memory,
-          count: written.length ? t("memory.notebookCount", { count: written.length.toLocaleString() }) : "",
+          count: written.length ? t("memory.notebookCount", { count: fmtNumber(written.length) }) : "",
           context: written.length && !hasTimestamps ? t("memory.sortedBySize") : "",
         });
         const list = denseList(
@@ -11404,7 +11403,7 @@
         }
         const typeLabel = (k) => {
           if (k === "dm") return "DM";
-          if (k === "cron_monologue" || k === "cron_wake" || k === "cron") return "Cron";
+          if (k === "cron_monologue" || k === "cron_wake" || k === "cron") return t("crons.cron");
           return titleCase(String(k).replaceAll("_", " "));
         };
         const modeLabel = historyModeLabel(historyKind);
@@ -11424,7 +11423,7 @@
             },
             title: cronName(d.cron?.cron || sessions[0]?.origin?.cron, true),
             context: scopeKind(scope) !== "org" ? shortName(scope) : "",
-            count: t("history.fireCount", { count: Number(total).toLocaleString() }),
+            count: t("history.fireCount", { count: fmtNumber(total) }),
           });
         } else {
           pageShell({
@@ -11454,9 +11453,9 @@
               const preview = document.createElement("span");
               preview.appendChild(
                 document.createTextNode(
-                  t("history.fireCount", { count: Number(c.sessions || 0).toLocaleString() }) +
+                  t("history.fireCount", { count: fmtNumber(c.sessions || 0) }) +
                     (typeof c.deliveredRuns === "number"
-                      ? " \u00b7 " + t("history.deliveredCount", { count: Number(c.deliveredRuns).toLocaleString() })
+                      ? " \u00b7 " + t("history.deliveredCount", { count: fmtNumber(c.deliveredRuns) })
                       : "") +
                     " \u00b7 " +
                     t("history.firstFired", { time: fmtHistoryCreated(c.createdAt, c.lastActivity) }),
@@ -11525,7 +11524,7 @@
             note.className = "statline";
             const toggle = document.createElement("a");
             toggle.href = "#";
-            toggle.textContent = t("history.errorsLogged", { count: Number(total).toLocaleString() });
+            toggle.textContent = t("history.errorsLogged", { count: fmtNumber(total) });
             note.appendChild(toggle);
             errNote.appendChild(note);
             let box = null;
@@ -11621,25 +11620,25 @@
           [t("users.conversation"), t("common.scope"), t("users.volume"), t("users.lastActivity")],
           convs,
           (s) => {
-            const latest = s.lastMessage || s.firstMessage || "(no messages yet)";
+            const latest = s.lastMessage || s.firstMessage || t("history.noMessagesYet");
             const started =
               s.firstMessage && s.firstMessage !== latest
                 ? "> " + s.firstMessage
-                : "created " + fmtHistoryCreated(s.createdAt, s.lastActivity);
+                : t("history.created", { time: fmtHistoryCreated(s.createdAt, s.lastActivity) });
             return [
               nodeCell(stacked(latest, started, "history-conversation"), "history-conversation-cell"),
               historyScopeCell(s.scopeId),
               nodeCell(
                 stacked(
-                  t("history.turnCount", { count: Number(s.userTurns || 0).toLocaleString() }),
-                  t("history.entryCount", { count: Number(s.messages || 0).toLocaleString() }),
+                  t("history.turnCount", { count: fmtNumber(s.userTurns || 0) }),
+                  t("history.entryCount", { count: fmtNumber(s.messages || 0) }),
                 ),
                 "num history-volume-cell",
               ),
               nodeCell(
                 stacked(
                   fmtHistoryTime(s.lastActivity),
-                  "created " + fmtHistoryCreated(s.createdAt, s.lastActivity),
+                  t("history.created", { time: fmtHistoryCreated(s.createdAt, s.lastActivity) }),
                   "history-activity",
                 ),
                 "history-activity-cell",
@@ -11657,7 +11656,7 @@
           nodeCell(stacked(f.name || fileName(f.path), f.path || "")),
           { text: fileKind(f.path || f.name), cls: "mono" },
           { text: fmtBytes(f.size || 0), cls: "num" },
-          nodeCell(mutedText(f.direction === "out" ? "agent" : "upload")),
+          nodeCell(mutedText(t(f.direction === "out" ? "users.fileSourceAgent" : "users.fileSourceUpload"))),
           { text: f.createdAt ? fmtTime(f.createdAt) : "—", cls: "num" },
           f.openable
             ? { action: { label: t("users.download"), run: () => downloadFile({ ...f, openable: true }) } }
@@ -11684,7 +11683,7 @@
           ),
           nodeCell(statusBadge(dep.status)),
           nodeCell(
-            stacked(dep.currentVersion || "—", (dep.versions || 0) + " version" + (dep.versions === 1 ? "" : "s")),
+            stacked(dep.currentVersion || "—", t("deployments.versionCount", { count: fmtNumber(dep.versions || 0) })),
           ),
           { text: dep.lastAccessAt ? fmtTime(dep.lastAccessAt) : "—", cls: "num" },
         ]);
@@ -11949,7 +11948,8 @@
         if (kind === "channel") return { icon: "#", name: nm || id, label: "#" + (nm || id) };
         if (kind === "dm") return { icon: "@", name: nm || id, label: nm || id };
         if (kind === "group") {
-          const g = nm || ((c.members || []).length ? c.members.length + " people" : id);
+          const g =
+            nm || ((c.members || []).length ? t("slack.peopleCount", { count: fmtNumber(c.members.length) }) : id);
           return { icon: "@", name: g, label: g };
         }
         return nm ? { icon: "#", name: nm, label: "#" + nm } : { icon: "#", name: id, label: id };
@@ -12254,7 +12254,7 @@
         if (cont) {
           const g = document.createElement("span");
           g.className = "sm-guttertime";
-          g.textContent = new Date(m.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+          g.textContent = fmtClock(new Date(m.createdAt));
           gutter.appendChild(g);
         } else {
           gutter.appendChild(slackAvatar(m));
@@ -12382,7 +12382,10 @@
                 return {
                   icon: meta.icon,
                   name: meta.name,
-                  preview: `${Number(c.messageCount).toLocaleString()} mirrored · ${(c.members || []).length} members`,
+                  preview: t("slack.mirrorSummary", {
+                    messages: fmtNumber(c.messageCount),
+                    members: fmtNumber((c.members || []).length),
+                  }),
                   time: relTime(c.updatedAt),
                   href: stateToUrl({ view: "slack", container: c.container }),
                 };
@@ -12455,7 +12458,7 @@
           sep.textContent =
             dayOf(m) === new Date().toDateString()
               ? t("slack.today")
-              : new Date(m.createdAt).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+              : fmtDate(new Date(m.createdAt), { month: "short", day: "numeric", year: "numeric" });
           return sep;
         };
 
@@ -13714,7 +13717,7 @@
       function fmtTokens(n) {
         if (!n) return t("context.tokens", { count: 0 });
         if (n < 20) return t("context.tokensUnder", { count: 20 });
-        if (n < 1000) return t("context.tokens", { count: n.toLocaleString() });
+        if (n < 1000) return t("context.tokens", { count: fmtNumber(n) });
         if (n < 1000000) return t("context.tokens", { count: (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" });
         return t("context.tokens", { count: (n / 1000000).toFixed(1) + "m" });
       }
@@ -14111,7 +14114,7 @@
           scopeWrap.appendChild(
             scopeIndexList(all, {
               latestOf: (f) => f.createdAt || 0,
-              countLabel: (count) => t("files.count", { count: count.toLocaleString() }),
+              countLabel: (count) => t("files.count", { count: fmtNumber(count) }),
               empty: t("files.noDocuments"),
             }),
           );
@@ -14143,7 +14146,7 @@
                 }),
             title: index ? VIEW_TITLE.files : shortName(scope),
             count: files.length
-              ? t("files.count", { count: files.length.toLocaleString() }) + (capped ? t("files.newestShown") : "")
+              ? t("files.count", { count: fmtNumber(files.length) }) + (capped ? t("files.newestShown") : "")
               : "",
           },
           placeholder: index ? t("files.searchAll") : t("files.search"),
