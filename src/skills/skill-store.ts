@@ -211,7 +211,6 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async resolve(name, orderedScopes) {
-      if (!isSafeSkillName(name)) return { skill: null, shadowed: [] };
       return resolveFromCatalog(await skills.all(), name, orderedScopes);
     },
 
