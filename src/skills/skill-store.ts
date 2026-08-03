@@ -94,10 +94,20 @@ function scopeKind(scopeId: ScopeId): string {
   return parseScopeId(scopeId).kind ?? scopeId;
 }
 
-function resolveFromCatalog(all: Skill[], name: string, orderedScopes: ScopeId[]): SkillResolution {
+function publishedByScopeAndName(all: Skill[]): Map<string, Skill> {
+  const index = new Map<string, Skill>();
+  for (const s of all) {
+    if (s.status !== "published") continue;
+    const key = `${s.scopeId}\u0000${s.manifest.name}`;
+    if (!index.has(key)) index.set(key, s);
+  }
+  return index;
+}
+
+function resolveFromIndex(index: Map<string, Skill>, name: string, orderedScopes: ScopeId[]): SkillResolution {
   if (!isSafeSkillName(name)) return { skill: null, shadowed: [] };
   const published = orderedScopes
-    .map((sc) => all.find((s) => s.status === "published" && s.manifest.name === name && s.scopeId === sc))
+    .map((sc) => index.get(`${sc}\u0000${name}`))
     .filter((s): s is Skill => Boolean(s));
   const [skill, ...shadowed] = published;
   return { skill: skill ?? null, shadowed };
@@ -211,11 +221,12 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async resolve(name, orderedScopes) {
-      return resolveFromCatalog(await skills.all(), name, orderedScopes);
+      return resolveFromIndex(publishedByScopeAndName(await skills.all()), name, orderedScopes);
     },
 
     async visibleFor(orderedScopes) {
       const all = await skills.all();
+      const index = publishedByScopeAndName(all);
       const inScope = new Set(orderedScopes);
       const names = [
         ...new Set(
@@ -225,7 +236,7 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
         ),
       ];
       return names
-        .map((n) => resolveFromCatalog(all, n, orderedScopes))
+        .map((n) => resolveFromIndex(index, n, orderedScopes))
         .filter((r): r is SkillResolution & { skill: Skill } => r.skill !== null);
     },
 
