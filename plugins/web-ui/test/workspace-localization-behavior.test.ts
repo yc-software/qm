@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { createViteTestServer } from "./vite-test-server.ts";
 
 test("successful ambient-policy saves show a completed status in English and Japanese", async () => {
   const dom = new JSDOM('<!doctype html><meta name="qm-locale" content="en"><div id="root"></div>', {
@@ -23,10 +23,8 @@ test("successful ambient-policy saves show a completed status in English and Jap
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
   const fetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
-  const vite = await createServer({
+  const vite = await createViteTestServer({
     root: fileURLToPath(new URL("..", import.meta.url)),
-    server: { middlewareMode: true, hmr: false },
-    appType: "custom",
   });
   try {
     const policy = await vite.ssrLoadModule("/src/ambient-policy.ts");
@@ -103,10 +101,8 @@ test("failed uploads preserve HTTP status fallbacks and server error text", asyn
     previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  const vite = await createServer({
+  const vite = await createViteTestServer({
     root: fileURLToPath(new URL("..", import.meta.url)),
-    server: { middlewareMode: true, hmr: false },
-    appType: "custom",
   });
   try {
     const files = await vite.ssrLoadModule("/src/files.ts");

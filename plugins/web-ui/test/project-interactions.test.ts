@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
 import type { CoreContext } from "../src/core-bridge.ts";
+import { createViteTestServer } from "./vite-test-server.ts";
 
 test("project interactions preserve focus and successful local mutations", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
@@ -79,7 +79,7 @@ test("project interactions preserve focus and successful local mutations", async
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${path}`);
   };
 
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await createViteTestServer();
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { contextsState, renderContexts } = await vite.ssrLoadModule("/src/contexts.ts");

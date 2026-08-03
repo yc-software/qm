@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { createViteTestServer } from "./vite-test-server.ts";
 
 test("list search uses its purpose as an accessible name", () => {
   const source = readFileSync(new URL("../src/list-page.ts", import.meta.url), "utf8");
@@ -41,10 +41,8 @@ test("list refresh control uses the page locale", async () => {
   );
   for (const [key, value] of Object.entries(globals))
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  const vite = await createServer({
+  const vite = await createViteTestServer({
     root: fileURLToPath(new URL("..", import.meta.url)),
-    server: { middlewareMode: true, hmr: false },
-    appType: "custom",
   });
   try {
     const [{ render }, { listPageTpl }] = await Promise.all([

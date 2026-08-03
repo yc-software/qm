@@ -5,10 +5,10 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer as createViteServer } from "vite";
 import { catalogProblems } from "../../chassis/src/locale.ts";
 import { locale, t } from "../src/i18n.ts";
 import { WEB_MESSAGES, webMessage } from "../src/messages.ts";
+import { createViteTestServer } from "./vite-test-server.ts";
 
 const core = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
@@ -150,11 +150,9 @@ test("language form submits the URL at submit time after history navigation", as
   for (const [key, value] of Object.entries(globals))
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
 
-  const vite = await createViteServer({
+  const vite = await createViteTestServer({
     root: WEB_ROOT,
     configFile: fileURLToPath(new URL("../vite.config.ts", import.meta.url)),
-    server: { middlewareMode: true, hmr: false },
-    appType: "custom",
   });
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
