@@ -21,6 +21,7 @@ test("relative time uses the page locale and keeps the just-now boundary", () =>
   try {
     assert.equal(relTime(now - 120_000, now), "2 minutes ago");
     assert.equal(relTime(now - 59_000, now), "just now");
+    assert.equal(relTime(now + 60_000, now), "just now");
   } finally {
     restore();
   }
@@ -28,6 +29,17 @@ test("relative time uses the page locale and keeps the just-now boundary", () =>
   try {
     assert.equal(relTime(now - 120_000, now), "2分前");
     assert.equal(relTime(now - 59_000, now), "たった今");
+  } finally {
+    restore();
+  }
+});
+
+test("relative time renders a safe fallback for non-finite timestamps", () => {
+  const restore = setPageLocale("en");
+  try {
+    assert.equal(relTime(Number.NaN, 2_000_000), "just now");
+    assert.equal(relTime(Number.POSITIVE_INFINITY, 2_000_000), "just now");
+    assert.equal(relTime(Number.NEGATIVE_INFINITY, 2_000_000), "just now");
   } finally {
     restore();
   }

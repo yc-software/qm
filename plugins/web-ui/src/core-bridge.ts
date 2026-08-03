@@ -3,6 +3,7 @@ import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model
 import type { Agent, AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { swallow } from "../../chassis/src/errors.ts";
 import { groupDmText } from "./group-dm-label.ts";
+import { t } from "./i18n.ts";
 import { base64ToBytes } from "./paste-text.ts";
 import { defaultEffortForModel, harnessSupportsEffort } from "./model-options.ts";
 
@@ -114,8 +115,8 @@ export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): 
 
 export function sharedContextLabel(scopeId: string | null, name: string | null): string | null {
   if (!scopeId) return null;
-  if (scopeId.startsWith("channel:")) return name ? `#${name.replace(/^#/, "")}` : "Shared channel";
-  if (scopeId.startsWith("group:")) return groupDmText(name) ?? name ?? "Group";
+  if (scopeId.startsWith("channel:")) return name ? `#${name.replace(/^#/, "")}` : t("context.sharedChannel");
+  if (scopeId.startsWith("group:")) return groupDmText(name) ?? name ?? t("context.group");
   return null;
 }
 
@@ -494,7 +495,7 @@ export async function runApprovalTurn(
   const stream = createAssistantMessageEventStream();
   await drive(stream, agent.state.model, threadRef, agent, getTurnOptions, signal, onWork, decision);
   const outcome = await stream.result();
-  if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
+  if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || t("chat.couldNotApprove"));
 }
 
 export function makeOpenerStreamFn(
@@ -564,7 +565,7 @@ async function drive(
     });
 
     if (submit.runId) {
-      await followRun(stream, partial, submit.runId, signal, notify);
+      await followRun(stream, partial, submit.runId, signal, notify, approval ? t("chat.couldNotApprove") : undefined);
       return;
     }
 
@@ -598,7 +599,7 @@ async function resumeDrive(
     stream.push({ type: "text_start", contentIndex: 0, partial });
     const st: Acc = { acc: "", lastProgressAt: now() };
     if (initialRun && applyRun(stream, partial, st, initialRun, notify) === "terminal") return;
-    await followRun(stream, partial, runId, signal, notify, st);
+    await followRun(stream, partial, runId, signal, notify, undefined, st);
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();
@@ -613,15 +614,16 @@ async function followRun(
   runId: string,
   signal?: AbortSignal,
   notify?: () => void,
+  failureFallback?: string,
   st: Acc = { acc: "", lastProgressAt: now() },
 ): Promise<void> {
   liveRun = { runId };
   try {
     if (signal?.aborted) return abortStream(stream, partial);
-    const viaSse = await streamRunViaSse(stream, partial, runId, st, signal, notify);
+    const viaSse = await streamRunViaSse(stream, partial, runId, st, signal, notify, failureFallback);
     if (viaSse === "done") return;
     if (signal?.aborted) return abortStream(stream, partial);
-    return await pollRun(stream, partial, runId, st, signal, notify);
+    return await pollRun(stream, partial, runId, st, signal, notify, failureFallback);
   } finally {
     if (liveRun?.runId === runId) liveRun = null;
   }
@@ -691,6 +693,7 @@ function applyRun(
   st: Acc,
   run: RunPoll,
   notify?: () => void,
+  failureFallback?: string,
 ): "open" | "terminal" {
   const work = (partial as AssistantWork).work;
   const beforeActivity = work?.activity.length ?? 0;
@@ -741,7 +744,7 @@ function applyRun(
     return "terminal";
   }
   if (!paused && !quiet && (run.status === "failed" || (res && res.status !== "ok"))) {
-    fail(stream, partial, res?.reason ?? "The agent run failed.");
+    fail(stream, partial, res?.reason ?? failureFallback ?? "The agent run failed.");
     return "terminal";
   }
   finish(stream, partial, st, st.acc);
@@ -755,6 +758,7 @@ export async function pollRun(
   st: Acc,
   signal?: AbortSignal,
   notify?: () => void,
+  failureFallback?: string,
 ): Promise<void> {
   let consecutiveFailures = 0;
   for (;;) {
@@ -771,7 +775,7 @@ export async function pollRun(
       await sleep(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), POLL_RETRY_MAX_MS));
       continue;
     }
-    if (applyRun(stream, partial, st, run, notify) === "terminal") return;
+    if (applyRun(stream, partial, st, run, notify, failureFallback) === "terminal") return;
     if (run.stale === true) st.staleSince ??= now();
     else st.staleSince = undefined;
     if (run.alive === true || (st.staleSince !== undefined && now() - st.staleSince < STALE_GRACE_MS))
@@ -828,6 +832,7 @@ function streamRunViaSse(
   st: Acc,
   signal?: AbortSignal,
   notify?: () => void,
+  failureFallback?: string,
 ): Promise<"done" | "fallback"> {
   return new Promise((resolve) => {
     if (typeof EventSource === "undefined") return resolve("fallback");
@@ -901,7 +906,7 @@ function streamRunViaSse(
     es.addEventListener("done", (e: MessageEvent) => {
       established = true;
       try {
-        applyRun(stream, partial, st, JSON.parse(e.data) as RunPoll, notify);
+        applyRun(stream, partial, st, JSON.parse(e.data) as RunPoll, notify, failureFallback);
         settle("done");
       } catch {
         settle("fallback");

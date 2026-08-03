@@ -31,6 +31,7 @@ export function initials(s: string): string {
 }
 
 export function relTime(ms: number, now = Date.now()): string {
+  if (!Number.isFinite(ms) || !Number.isFinite(now)) return t("time.justNow");
   const seconds = Math.max(0, Math.floor((now - ms) / 1000));
   if (seconds < 60) return t("time.justNow");
   const selected = locale();
