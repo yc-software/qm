@@ -84,7 +84,9 @@ function drawMemory(loading = false): void {
           >
             ${icon(Pencil, 15)} ${rawEditing ? t("memory.facts") : t("memory.edit")}
           </button>
-          <button class="btn" type="button" @click=${() => void toggleHistory()}>${icon(Clock3, 15)} ${t("memory.history")}</button>
+          <button class="btn" type="button" @click=${() => void toggleHistory()}>
+            ${icon(Clock3, 15)} ${t("memory.history")}
+          </button>
           <button
             class="pane-refresh"
             type="button"
@@ -98,9 +100,7 @@ function drawMemory(loading = false): void {
       </div>
       ${memoryNotice || loading ? html`<div class="status">${memoryNotice || t("memory.loading")}</div>` : nothing}
       <div class="memory-editor">
-        <p class="memory-help">
-          ${t("memory.help")}
-        </p>
+        <p class="memory-help">${t("memory.help")}</p>
         ${
           rawEditing
             ? html`<textarea
@@ -147,9 +147,7 @@ function drawMemory(loading = false): void {
                               </button>
                             </div>`,
                         )
-                      : html`<div class="empty-state">
-                          ${search ? t("memory.noMatches") : t("memory.empty")}
-                        </div>`
+                      : html`<div class="empty-state">${search ? t("memory.noMatches") : t("memory.empty")}</div>`
                   }
                 </div>`
         }
@@ -174,7 +172,9 @@ function drawMemory(loading = false): void {
                         (row, i) =>
                           html` <div class="memory-revision">
                             <div>
-                              <strong>${i === 0 ? t("memory.current") : t("memory.revision", { revision: row.revision })}</strong>
+                              <strong
+                                >${i === 0 ? t("memory.current") : t("memory.revision", { revision: row.revision })}</strong
+                              >
                               <div class="card-meta">
                                 ${fmtDate(row.at)} · ${row.author || t("memory.automaticCapture")} · ${row.operation}
                               </div>
@@ -276,9 +276,7 @@ async function saveMemory(): Promise<void> {
     }
   } catch (e) {
     memoryNotice =
-      e instanceof ApiError && e.status === 409
-        ? t("memory.changedElsewhere")
-        : errMessage(e, t("memory.saveFailed"));
+      e instanceof ApiError && e.status === 409 ? t("memory.changedElsewhere") : errMessage(e, t("memory.saveFailed"));
   } finally {
     memorySaving = false;
     drawMemory();

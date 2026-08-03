@@ -348,7 +348,8 @@ const en = {
   "context.privateChannel": "Private channel",
   "context.separateResources": "The agent's files and memory here are separate from your other contexts.",
   "context.readyTitle": "This project is ready for work",
-  "context.readyBody": "Start a conversation with New chat. Files, automations, and other work created there will stay scoped to this project.",
+  "context.readyBody":
+    "Start a conversation with New chat. Files, automations, and other work created there will stay scoped to this project.",
   "context.you": "You",
   "context.searching": "Searching…",
   "context.working": "Working…",
@@ -456,7 +457,8 @@ const en = {
   "cron.updated": "Scheduled task updated.",
   "cron.message": "Message",
   "cron.editWithAgent": "Edit behavior with agent",
-  "cron.createHelp": "Describe what you want the scheduled task to do, naming what it is for, like Gmail unread digest or GitLab CI watch.",
+  "cron.createHelp":
+    "Describe what you want the scheduled task to do, naming what it is for, like Gmail unread digest or GitLab CI watch.",
   "cron.createPlaceholder": "Every weekday at 9am, summarize my unread email and DM me the highlights.",
   "cron.askAgent": "Ask the agent to set it up",
   "cron.titlePlural": "Scheduled tasks",
@@ -479,7 +481,8 @@ const en = {
   "cron.status.archived": "Archived",
   "cron.untitled": "(untitled cron)",
   "cron.noLastRun": "Never",
-  "cron.createDescription": "Describe what you want scheduled — what to do, how often, and where the result should go. The agent sets it up and confirms in chat; it will ask if anything is unclear. It should give the scheduled task a short, distinctive title.",
+  "cron.createDescription":
+    "Describe what you want scheduled — what to do, how often, and where the result should go. The agent sets it up and confirms in chat; it will ask if anything is unclear. It should give the scheduled task a short, distinctive title.",
   "cron.deleteFailed": "Couldn't delete scheduled task.",
   "cron.sharedReadOnly": "Shared from {scope} — you can view it, but not change it.",
   "cron.runFailed": "Couldn't run scheduled task.",
@@ -489,10 +492,13 @@ const en = {
   "cron.enableFailed": "Couldn't enable scheduled task.",
   "cron.disableFailed": "Couldn't disable scheduled task.",
   "cron.deleteTitle": "Delete {title}?",
-  "cron.deleteImpact": "This permanently removes the schedule and its retained run history. Archive it instead if you may need it later.",
+  "cron.deleteImpact":
+    "This permanently removes the schedule and its retained run history. Archive it instead if you may need it later.",
   "cron.deletePermanently": "Delete permanently",
-  "cron.editHint.task": "To change the schedule, timezone, destination, or run mode, use the agent so it can validate the resulting behavior and permissions.",
-  "cron.editHint.message": "To change the message, schedule, timezone, destination, or run mode, use the agent so it can validate the resulting behavior and permissions.",
+  "cron.editHint.task":
+    "To change the schedule, timezone, destination, or run mode, use the agent so it can validate the resulting behavior and permissions.",
+  "cron.editHint.message":
+    "To change the message, schedule, timezone, destination, or run mode, use the agent so it can validate the resulting behavior and permissions.",
   "file.upload": "Upload",
   "file.download": "Download",
   "file.open": "Open",
@@ -567,7 +573,8 @@ const en = {
   "memory.facts": "Facts view",
   "memory.forget": "Forget this fact",
   "memory.subtitle": "Facts the agent carries into your conversations.",
-  "memory.help": "Edit the notebook directly. Switch to Facts view to search or remove individual facts. Saves are protected if the agent remembers something new while this page is open.",
+  "memory.help":
+    "Edit the notebook directly. Switch to Facts view to search or remove individual facts. Saves are protected if the agent remembers something new while this page is open.",
   "memory.searchPlaceholder": "Search remembered facts",
   "memory.captured": "Captured {date}",
   "memory.noMatches": "No remembered facts match this search.",
@@ -584,7 +591,8 @@ const en = {
   "memory.checkImpact": "Check impact",
   "memory.cancel": "Cancel",
   "memory.discardTitle": "Discard unsaved memory changes?",
-  "memory.discardBody": "Refreshing will replace this draft with the latest memory. Copy anything you want to keep before continuing.",
+  "memory.discardBody":
+    "Refreshing will replace this draft with the latest memory. Copy anything you want to keep before continuing.",
   "memory.discardRefresh": "Discard and refresh",
   "memory.saved": "Saved ✓",
   "memory.savedHistoryFailed": "Saved ✓ History could not refresh.",
@@ -592,12 +600,14 @@ const en = {
   "memory.saveFailed": "Failed to save memory.",
   "memory.historyLoadFailed": "Failed to load memory history.",
   "memory.restoreTitle": "Restore memory from {date}?",
-  "memory.restoreBody": "The selected notebook will become current. The version you have now remains available in history.",
+  "memory.restoreBody":
+    "The selected notebook will become current. The version you have now remains available in history.",
   "memory.restoreRevision": "Restore revision",
   "memory.restored": "Revision restored ✓",
   "memory.restoredHistoryFailed": "Revision restored ✓ History could not refresh.",
   "memory.restoreFailed": "Could not restore that revision.",
-  "memory.changedElsewhere": "Memory changed in another conversation. Your draft is still here; copy it if needed, then refresh to merge with the latest version.",
+  "memory.changedElsewhere":
+    "Memory changed in another conversation. Your draft is still here; copy it if needed, then refresh to merge with the latest version.",
   "skill.title": "Skills",
   "skill.install": "Add skill",
   "skill.edit": "Edit",
@@ -665,7 +675,8 @@ const en = {
   "skill.availablePersonal": "Available only to you",
   "skill.availableContext": "Available to {scope}",
   "skill.publishEditTitle": "Publish this change to {scope}?",
-  "skill.publishEditImpact": "Everyone in this context can invoke the updated instructions. Description {description}; instructions {instructions}.",
+  "skill.publishEditImpact":
+    "Everyone in this context can invoke the updated instructions. Description {description}; instructions {instructions}.",
   "skill.changed": "changed",
   "skill.unchanged": "unchanged",
   "skill.publishCreateTitle": "Publish /{name} to {scope}?",
@@ -673,7 +684,8 @@ const en = {
   "skill.archiveTitle": "Archive /{name}?",
   "skill.archivePersonalAudience": "you",
   "skill.archiveSharedAudience": "everyone in {scope}",
-  "skill.archiveImpact": "This version will stop being available to {audience}. If it overrides a broader /{name}, that version becomes effective. Its history and assets are kept, and you can restore it later.",
+  "skill.archiveImpact":
+    "This version will stop being available to {audience}. If it overrides a broader /{name}, that version becomes effective. Its history and assets are kept, and you can restore it later.",
   "skill.archiving": "Archiving…",
   "skill.saveFailed": "Failed to save skill.",
   "skill.createFailed": "Failed to create skill.",
@@ -722,7 +734,8 @@ const en = {
   "ambient.batchInterval": "Batch interval for {name} in hours",
   "ambient.hours": "h",
   "ambient.removeBot": "Remove {name} from the ledger",
-  "ambient.behaviorHint": "When off, the agent never acts on overheard messages here — it only responds to direct @mentions. Default: on only when standing orders (or an action-mode bot) are set below — otherwise mention-only.",
+  "ambient.behaviorHint":
+    "When off, the agent never acts on overheard messages here — it only responds to direct @mentions. Default: on only when standing orders (or an action-mode bot) are set below — otherwise mention-only.",
   "paste.text": "Pasted text",
   "paste.chars": "Pasted text · {count} chars",
   "connector.keychainTitle": "Credentials",
@@ -752,7 +765,8 @@ const en = {
   "connector.expiresLower": "expires {date}",
   "connector.activeAccess": "Active access",
   "connector.secureDrop": "Secure drop",
-  "connector.secretFormDescription": "The secret goes directly to your encrypted keychain. It never enters chat or this page.",
+  "connector.secretFormDescription":
+    "The secret goes directly to your encrypted keychain. It never enters chat or this page.",
   "connector.secureFormReady": "Secure form ready",
   "connector.openSecureFormDescription": "Open it in a new tab to enter the credential.",
   "connector.openSecureForm": "Open secure form",
@@ -799,19 +813,24 @@ const en = {
   "connector.scopeChannel": "Channel",
   "connector.scopeContext": "Context",
   "connector.googleHosts": "Gmail, Calendar, Drive, Sheets",
-  "connector.googleDescription": "Lets the agent read and act in your Gmail, Calendar, and Sheets on your behalf, and read your Drive (it can save new files there, but not edit your existing ones).",
+  "connector.googleDescription":
+    "Lets the agent read and act in your Gmail, Calendar, and Sheets on your behalf, and read your Drive (it can save new files there, but not edit your existing ones).",
   "connector.slackHosts": "Channels & messages",
-  "connector.slackDescription": "Lets the agent act in Slack as you — read your channels and post messages on your behalf. (To chat with the agent in Slack, just DM it — you don't need this.)",
+  "connector.slackDescription":
+    "Lets the agent act in Slack as you — read your channels and post messages on your behalf. (To chat with the agent in Slack, just DM it — you don't need this.)",
   "connector.notionHosts": "Pages & databases",
-  "connector.notionDescription": "Lets the agent read the Notion pages and databases you share with it (and edit them if you grant that access).",
+  "connector.notionDescription":
+    "Lets the agent read the Notion pages and databases you share with it (and edit them if you grant that access).",
   "connector.linearHosts": "Issues & projects",
   "connector.linearDescription": "Lets the agent read and update your Linear issues on your behalf.",
   "connector.githubHosts": "Repos, issues & PRs",
   "connector.githubDescription": "Lets the agent read and update your GitHub repos, issues, and PRs on your behalf.",
   "connector.dropboxHosts": "Files & folders",
-  "connector.dropboxDescription": "Lets the agent browse, download, and upload files in your Dropbox on your behalf, and manage shared links.",
+  "connector.dropboxDescription":
+    "Lets the agent browse, download, and upload files in your Dropbox on your behalf, and manage shared links.",
   "connector.xHosts": "Posts & profile",
-  "connector.xDescription": "Lets the agent read X and post, like, and follow as you — used when an action should come from your account rather than the org's.",
+  "connector.xDescription":
+    "Lets the agent read X and post, like, and follow as you — used when an action should come from your account rather than the org's.",
   "deployment.yours": "Yours",
   "deployment.shared": "Shared",
   "deployment.archived": "Archived",
@@ -821,7 +840,8 @@ const en = {
   "deployment.canManage": "Can manage",
   "deployment.canView": "Can view",
   "deployment.manageHint": "You own this app or have permission to manage it.",
-  "deployment.viewHint": "This app is shared with a context you can access. You can open and clone it, but not change it.",
+  "deployment.viewHint":
+    "This app is shared with a context you can access. You can open and clone it, but not change it.",
   "deployment.versionUnknown": "Version unknown",
   "deployment.versionPending": "v{live} live · v{pending} pending",
   "deployment.deployed": "Deployed {time}",
@@ -882,7 +902,8 @@ const en = {
   "deployment.settingsSaved": "{name} settings saved.",
   "deployment.couldNotSave": "Could not save app settings.",
   "deployment.archiveTitle": "Archive {name}?",
-  "deployment.archiveBody": "This takes the app offline immediately, so its current URL will stop working. Its source and version history are kept, and you can restore it later.",
+  "deployment.archiveBody":
+    "This takes the app offline immediately, so its current URL will stop working. Its source and version history are kept, and you can restore it later.",
   "deployment.archiveOffline": "Archive and take offline",
   "deployment.archiving": "Archiving deployment…",
   "deployment.archivedResult": "{name} is offline and archived.",
@@ -1251,7 +1272,8 @@ const ja: Record<keyof typeof en, string> = {
   "context.privateChannel": "非公開チャンネル",
   "context.separateResources": "この領域のエージェントのファイルと記憶は、他の領域とは分かれています。",
   "context.readyTitle": "このプロジェクトは作業を開始できます",
-  "context.readyBody": "新しいチャットで会話を始めてください。そこで作成したファイル、自動化、その他の作業はこのプロジェクト内に保存されます。",
+  "context.readyBody":
+    "新しいチャットで会話を始めてください。そこで作成したファイル、自動化、その他の作業はこのプロジェクト内に保存されます。",
   "context.you": "あなた",
   "context.searching": "検索中…",
   "context.working": "処理中…",
@@ -1359,7 +1381,8 @@ const ja: Record<keyof typeof en, string> = {
   "cron.updated": "定期実行を更新しました。",
   "cron.message": "メッセージ",
   "cron.editWithAgent": "エージェントと動作を編集",
-  "cron.createHelp": "定期実行で行う内容を、用途が分かるように入力してください。例: Gmail の未読メール要約、GitLab CI の監視。",
+  "cron.createHelp":
+    "定期実行で行う内容を、用途が分かるように入力してください。例: Gmail の未読メール要約、GitLab CI の監視。",
   "cron.createPlaceholder": "平日の午前9時に未読メールを要約し、重要な内容をDMで知らせてください。",
   "cron.askAgent": "エージェントに設定を依頼",
   "cron.titlePlural": "定期実行",
@@ -1382,7 +1405,8 @@ const ja: Record<keyof typeof en, string> = {
   "cron.status.archived": "アーカイブ済み",
   "cron.untitled": "（無題の定期実行）",
   "cron.noLastRun": "未実行",
-  "cron.createDescription": "実行したい内容、頻度、結果の送信先を入力してください。エージェントが設定し、チャットで完了を知らせます。不明な点があれば確認します。定期実行には短く区別しやすい名前を付けます。",
+  "cron.createDescription":
+    "実行したい内容、頻度、結果の送信先を入力してください。エージェントが設定し、チャットで完了を知らせます。不明な点があれば確認します。定期実行には短く区別しやすい名前を付けます。",
   "cron.deleteFailed": "定期実行を削除できませんでした。",
   "cron.sharedReadOnly": "{scope}から共有されています。閲覧はできますが、変更はできません。",
   "cron.runFailed": "定期実行を実行できませんでした。",
@@ -1392,10 +1416,13 @@ const ja: Record<keyof typeof en, string> = {
   "cron.enableFailed": "定期実行を有効にできませんでした。",
   "cron.disableFailed": "定期実行を無効にできませんでした。",
   "cron.deleteTitle": "{title}を削除しますか？",
-  "cron.deleteImpact": "スケジュールと保持されている実行履歴を完全に削除します。後で必要になる可能性がある場合は、アーカイブしてください。",
+  "cron.deleteImpact":
+    "スケジュールと保持されている実行履歴を完全に削除します。後で必要になる可能性がある場合は、アーカイブしてください。",
   "cron.deletePermanently": "完全に削除",
-  "cron.editHint.task": "スケジュール、タイムゾーン、送信先、実行方法を変更するには、エージェントを使ってください。動作と権限を確認したうえで変更します。",
-  "cron.editHint.message": "メッセージ、スケジュール、タイムゾーン、送信先、実行方法を変更するには、エージェントを使ってください。動作と権限を確認したうえで変更します。",
+  "cron.editHint.task":
+    "スケジュール、タイムゾーン、送信先、実行方法を変更するには、エージェントを使ってください。動作と権限を確認したうえで変更します。",
+  "cron.editHint.message":
+    "メッセージ、スケジュール、タイムゾーン、送信先、実行方法を変更するには、エージェントを使ってください。動作と権限を確認したうえで変更します。",
   "file.upload": "アップロード",
   "file.download": "ダウンロード",
   "file.open": "開く",
@@ -1470,7 +1497,8 @@ const ja: Record<keyof typeof en, string> = {
   "memory.facts": "事実一覧",
   "memory.forget": "この事実を削除",
   "memory.subtitle": "エージェントが会話で参照する事実です。",
-  "memory.help": "ノートを直接編集できます。事実一覧に切り替えると、個別の事実を検索・削除できます。この画面を開いている間にエージェントが新しい内容を記憶した場合も、保存内容は保護されます。",
+  "memory.help":
+    "ノートを直接編集できます。事実一覧に切り替えると、個別の事実を検索・削除できます。この画面を開いている間にエージェントが新しい内容を記憶した場合も、保存内容は保護されます。",
   "memory.searchPlaceholder": "記憶した事実を検索",
   "memory.captured": "記録日: {date}",
   "memory.noMatches": "検索条件に一致する記憶はありません。",
@@ -1487,7 +1515,8 @@ const ja: Record<keyof typeof en, string> = {
   "memory.checkImpact": "影響を確認",
   "memory.cancel": "キャンセル",
   "memory.discardTitle": "未保存の記憶の変更を破棄しますか？",
-  "memory.discardBody": "更新すると、この下書きは最新の記憶で置き換えられます。残したい内容は続行前にコピーしてください。",
+  "memory.discardBody":
+    "更新すると、この下書きは最新の記憶で置き換えられます。残したい内容は続行前にコピーしてください。",
   "memory.discardRefresh": "破棄して更新",
   "memory.saved": "保存しました ✓",
   "memory.savedHistoryFailed": "保存しました ✓ 変更履歴を更新できませんでした。",
@@ -1500,7 +1529,8 @@ const ja: Record<keyof typeof en, string> = {
   "memory.restored": "版を復元しました ✓",
   "memory.restoredHistoryFailed": "版を復元しました ✓ 変更履歴を更新できませんでした。",
   "memory.restoreFailed": "その版を復元できませんでした。",
-  "memory.changedElsewhere": "別の会話で記憶が変更されました。下書きはここに残っています。必要ならコピーしてから更新し、最新の内容と統合してください。",
+  "memory.changedElsewhere":
+    "別の会話で記憶が変更されました。下書きはここに残っています。必要ならコピーしてから更新し、最新の内容と統合してください。",
   "skill.title": "スキル",
   "skill.install": "スキルを追加",
   "skill.edit": "編集",
@@ -1568,7 +1598,8 @@ const ja: Record<keyof typeof en, string> = {
   "skill.availablePersonal": "自分だけが利用できます",
   "skill.availableContext": "{scope}で利用できます",
   "skill.publishEditTitle": "{scope}にこの変更を公開しますか？",
-  "skill.publishEditImpact": "この領域の全員が、更新後の手順を呼び出せます。説明は{description}、手順は{instructions}です。",
+  "skill.publishEditImpact":
+    "この領域の全員が、更新後の手順を呼び出せます。説明は{description}、手順は{instructions}です。",
   "skill.changed": "変更あり",
   "skill.unchanged": "変更なし",
   "skill.publishCreateTitle": "/{name}を{scope}に公開しますか？",
@@ -1576,7 +1607,8 @@ const ja: Record<keyof typeof en, string> = {
   "skill.archiveTitle": "/{name}をアーカイブしますか？",
   "skill.archivePersonalAudience": "あなた",
   "skill.archiveSharedAudience": "{scope}の全員",
-  "skill.archiveImpact": "この版は{audience}に利用できなくなります。より広い範囲の/{name}を上書きしている場合は、その版が有効になります。履歴とアセットは残り、後で復元できます。",
+  "skill.archiveImpact":
+    "この版は{audience}に利用できなくなります。より広い範囲の/{name}を上書きしている場合は、その版が有効になります。履歴とアセットは残り、後で復元できます。",
   "skill.archiving": "アーカイブ中…",
   "skill.saveFailed": "スキルを保存できませんでした。",
   "skill.createFailed": "スキルを作成できませんでした。",
@@ -1614,7 +1646,8 @@ const ja: Record<keyof typeof en, string> = {
   "ambient.mode.rollup": "まとめて通知",
   "ambient.mode.action": "すぐに対応する",
   "ambient.mode.user": "人からの投稿として扱う",
-  "ambient.ordersHint": "自動対応のための自然な言葉による指示です。空欄の場合は、直接呼びかけられたときだけ応答します。",
+  "ambient.ordersHint":
+    "自動対応のための自然な言葉による指示です。空欄の場合は、直接呼びかけられたときだけ応答します。",
   "ambient.ordersPlaceholder": "例: リリースが遅れるおそれのある内容を通知する。",
   "ambient.postersHint": "ボットや連携サービスの投稿で、エージェントを起動する方法を設定します。",
   "ambient.loadFailed": "この領域の常設の指示を読み込めませんでした。",
@@ -1625,7 +1658,8 @@ const ja: Record<keyof typeof en, string> = {
   "ambient.batchInterval": "{name}の通知間隔（時間）",
   "ambient.hours": "時間",
   "ambient.removeBot": "一覧から{name}を削除",
-  "ambient.behaviorHint": "無効にすると、エージェントはここで偶然見かけたメッセージには対応せず、直接の@メンションにだけ応答します。既定では、下の常設の指示または即時対応するボットがある場合にのみ有効です。",
+  "ambient.behaviorHint":
+    "無効にすると、エージェントはここで偶然見かけたメッセージには対応せず、直接の@メンションにだけ応答します。既定では、下の常設の指示または即時対応するボットがある場合にのみ有効です。",
   "paste.text": "貼り付けたテキスト",
   "paste.chars": "貼り付けたテキスト・{count}文字",
   "connector.keychainTitle": "認証情報",
@@ -1655,7 +1689,8 @@ const ja: Record<keyof typeof en, string> = {
   "connector.expiresLower": "有効期限 {date}",
   "connector.activeAccess": "有効なアクセス",
   "connector.secureDrop": "安全な入力フォーム",
-  "connector.secretFormDescription": "秘密情報は暗号化された認証情報保管庫へ直接送信されます。チャットやこの画面には入りません。",
+  "connector.secretFormDescription":
+    "秘密情報は暗号化された認証情報保管庫へ直接送信されます。チャットやこの画面には入りません。",
   "connector.secureFormReady": "安全なフォームの準備ができました",
   "connector.openSecureFormDescription": "新しいタブで開き、認証情報を入力してください。",
   "connector.openSecureForm": "安全なフォームを開く",
@@ -1702,19 +1737,24 @@ const ja: Record<keyof typeof en, string> = {
   "connector.scopeChannel": "チャンネル",
   "connector.scopeContext": "領域",
   "connector.googleHosts": "Gmail、Google Calendar、Google Drive、Google Sheets",
-  "connector.googleDescription": "エージェントがあなたに代わってGmail、Google Calendar、Google Sheetsの閲覧・操作と、Google Driveの閲覧を行えます。Google Driveには新しいファイルを保存できますが、既存のファイルは編集できません。",
+  "connector.googleDescription":
+    "エージェントがあなたに代わってGmail、Google Calendar、Google Sheetsの閲覧・操作と、Google Driveの閲覧を行えます。Google Driveには新しいファイルを保存できますが、既存のファイルは編集できません。",
   "connector.slackHosts": "チャンネルとメッセージ",
-  "connector.slackDescription": "エージェントがあなたとしてSlackのチャンネルを読み、メッセージを投稿できます。エージェントとSlackで会話するだけなら、DMで話しかければよく、この連携は不要です。",
+  "connector.slackDescription":
+    "エージェントがあなたとしてSlackのチャンネルを読み、メッセージを投稿できます。エージェントとSlackで会話するだけなら、DMで話しかければよく、この連携は不要です。",
   "connector.notionHosts": "ページとデータベース",
-  "connector.notionDescription": "共有したNotionのページとデータベースをエージェントが閲覧できます。アクセスを許可すれば編集もできます。",
+  "connector.notionDescription":
+    "共有したNotionのページとデータベースをエージェントが閲覧できます。アクセスを許可すれば編集もできます。",
   "connector.linearHosts": "課題とプロジェクト",
   "connector.linearDescription": "エージェントがあなたに代わってLinearの課題を閲覧・更新できます。",
   "connector.githubHosts": "リポジトリ、Issue、PR",
   "connector.githubDescription": "エージェントがあなたに代わってGitHubのリポジトリ、Issue、PRを閲覧・更新できます。",
   "connector.dropboxHosts": "ファイルとフォルダー",
-  "connector.dropboxDescription": "エージェントがあなたに代わってDropboxのファイルを閲覧、ダウンロード、アップロードし、共有リンクを管理できます。",
+  "connector.dropboxDescription":
+    "エージェントがあなたに代わってDropboxのファイルを閲覧、ダウンロード、アップロードし、共有リンクを管理できます。",
   "connector.xHosts": "投稿とプロフィール",
-  "connector.xDescription": "組織ではなくあなたのアカウントから行うべき操作で、エージェントがXの閲覧、投稿、いいね、フォローを行えます。",
+  "connector.xDescription":
+    "組織ではなくあなたのアカウントから行うべき操作で、エージェントがXの閲覧、投稿、いいね、フォローを行えます。",
   "deployment.yours": "自分のアプリ",
   "deployment.shared": "共有",
   "deployment.archived": "アーカイブ済み",
@@ -1785,7 +1825,8 @@ const ja: Record<keyof typeof en, string> = {
   "deployment.settingsSaved": "{name}の設定を保存しました。",
   "deployment.couldNotSave": "アプリの設定を保存できませんでした。",
   "deployment.archiveTitle": "{name}をアーカイブしますか？",
-  "deployment.archiveBody": "アプリはすぐに非公開になり、現在のURLでは開けなくなります。ソースとバージョン履歴は保持され、後から復元できます。",
+  "deployment.archiveBody":
+    "アプリはすぐに非公開になり、現在のURLでは開けなくなります。ソースとバージョン履歴は保持され、後から復元できます。",
   "deployment.archiveOffline": "アーカイブして非公開にする",
   "deployment.archiving": "アプリをアーカイブ中…",
   "deployment.archivedResult": "{name}を非公開にしてアーカイブしました。",

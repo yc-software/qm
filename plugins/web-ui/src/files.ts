@@ -201,7 +201,8 @@ function fileRow(f: FileRow) {
     <span class="file-row-icon">${icon(isImage ? Image : File, 17)}</span>
     <span class="list-row-title"><span>${f.name}</span><span class="file-row-type">${f.mimetype}</span></span>
     <span class="list-row-meta"
-      >${scopeChip(fileScope(f))}<span class="badge">${fileKindLabel(f.kind)}</span><span>${formatBytes(f.sizeBytes)}</span
+      >${scopeChip(fileScope(f))}<span class="badge">${fileKindLabel(f.kind)}</span
+      ><span>${formatBytes(f.sizeBytes)}</span
       ><span>${relTime(f.createdAt)}</span
       >${f.openable ? html`<a class="btn compact" href=${contentUrl} target="_blank" rel="noreferrer">${t("file.open")}</a>` : html`<span>${t("file.unavailable")}</span>`}</span
     >
@@ -245,7 +246,10 @@ async function uploadFiles(files: globalThis.File[]): Promise<void> {
   const picked = files.filter((f) => f.size >= 0);
   if (!picked.length || filesUploading) return;
   filesUploading = true;
-  filesNotice = t("file.uploadingCount", { count: picked.length, unit: t(picked.length === 1 ? "file.unit.one" : "file.unit.other") });
+  filesNotice = t("file.uploadingCount", {
+    count: picked.length,
+    unit: t(picked.length === 1 ? "file.unit.one" : "file.unit.other"),
+  });
   drawFiles();
   let uploaded = 0;
   try {
@@ -253,7 +257,10 @@ async function uploadFiles(files: globalThis.File[]): Promise<void> {
       await uploadOne(file);
       uploaded++;
     }
-    filesNotice = t("file.uploadedCount", { count: picked.length, unit: t(picked.length === 1 ? "file.unit.one" : "file.unit.other") });
+    filesNotice = t("file.uploadedCount", {
+      count: picked.length,
+      unit: t(picked.length === 1 ? "file.unit.one" : "file.unit.other"),
+    });
     await loadFiles(appState.viewRenderSeq);
   } catch (e) {
     filesNotice = `${uploaded ? t("file.uploadedProgress", { uploaded, count: picked.length }) : ""}${errMessage(e, t("file.uploadFailedUnknown"))}`;

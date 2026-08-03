@@ -110,9 +110,7 @@ test("failed uploads preserve HTTP status fallbacks and server error text", asyn
   });
   try {
     const files = await vite.ssrLoadModule("/src/files.ts");
-    const uploadFailureMessage = files.uploadFailureMessage as
-      | ((response: Response) => Promise<string>)
-      | undefined;
+    const uploadFailureMessage = files.uploadFailureMessage as ((response: Response) => Promise<string>) | undefined;
     assert.equal(typeof uploadFailureMessage, "function");
     const cases = [
       { locale: "en", status: 401, body: "", want: "Upload failed (401)." },

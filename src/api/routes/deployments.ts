@@ -138,7 +138,12 @@ const GATEWAY_COOKIE_NAMES = new Set(["dpl_access", "dpl_owner", "portal_session
 
 function gatewayOwnedCookie(value: string): boolean {
   const equals = value.indexOf("=");
-  return GATEWAY_COOKIE_NAMES.has(value.slice(0, equals < 0 ? value.length : equals).trim().toLowerCase());
+  return GATEWAY_COOKIE_NAMES.has(
+    value
+      .slice(0, equals < 0 ? value.length : equals)
+      .trim()
+      .toLowerCase(),
+  );
 }
 
 const PROXY_BUFFER_MAX_BYTES = 10_000_000;

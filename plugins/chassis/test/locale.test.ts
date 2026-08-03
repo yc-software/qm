@@ -1,12 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  acceptLanguageLocale,
-  catalogProblems,
-  formatMessage,
-  normalizeLocale,
-  resolveLocale,
-} from "../src/locale.ts";
+import { acceptLanguageLocale, catalogProblems, formatMessage, normalizeLocale, resolveLocale } from "../src/locale.ts";
 
 test("locale normalization accepts structurally valid Japanese and English tags", () => {
   assert.equal(normalizeLocale("ja-JP"), "ja");

@@ -198,8 +198,7 @@ function drawCronsPage(): void {
   if (all.length) rows.push(cronTabs(counts));
   if (cronTab === "yours") {
     rows.push(...yoursEnabled.map(({ c }) => cronPageRow(c, true)));
-    if (all.length && !yoursEnabled.length)
-      rows.push(cronEmptyRow(ownsAny ? t("cron.noActive") : t("cron.noneYours")));
+    if (all.length && !yoursEnabled.length) rows.push(cronEmptyRow(ownsAny ? t("cron.noActive") : t("cron.noneYours")));
     if (yoursDisabled.length) {
       rows.push(cronDisabledToggle(yoursDisabled.length));
       if (showDisabledCrons) rows.push(...yoursDisabled.map(({ c }) => cronPageRow(c, true)));
@@ -391,8 +390,12 @@ function openCron(c: CronView): void {
   cronActionNotice = "";
   const next = cronNextFire(c);
   let stateActions = html`
-    <button class="btn" @click=${() => void setCronEnabled(c.id, true)}>${icon(Play, 15)}<span>${t("cron.enable")}</span></button>
-    <button class="btn" @click=${() => void archiveCron(c.id, true)}>${icon(Archive, 15)}<span>${t("cron.archive")}</span></button>
+    <button class="btn" @click=${() => void setCronEnabled(c.id, true)}>
+      ${icon(Play, 15)}<span>${t("cron.enable")}</span>
+    </button>
+    <button class="btn" @click=${() => void archiveCron(c.id, true)}>
+      ${icon(Archive, 15)}<span>${t("cron.archive")}</span>
+    </button>
   `;
   if (c.archived) {
     stateActions = html`<button class="btn" @click=${() => void archiveCron(c.id, false)}>
@@ -400,11 +403,15 @@ function openCron(c: CronView): void {
     </button>`;
   } else if (c.enabled) {
     stateActions = html`
-      <button class="btn" @click=${() => void runCronNow(c.id)}>${icon(Play, 15)}<span>${t("cron.runNow")}</span></button>
+      <button class="btn" @click=${() => void runCronNow(c.id)}>
+        ${icon(Play, 15)}<span>${t("cron.runNow")}</span>
+      </button>
       <button class="btn" @click=${() => void setCronEnabled(c.id, false)}>
         ${icon(Pause, 15)}<span>${t("cron.disable")}</span>
       </button>
-      <button class="btn" @click=${() => void archiveCron(c.id, true)}>${icon(Archive, 15)}<span>${t("cron.archive")}</span></button>
+      <button class="btn" @click=${() => void archiveCron(c.id, true)}>
+        ${icon(Archive, 15)}<span>${t("cron.archive")}</span>
+      </button>
     `;
   }
   const host = document.createElement("div");
@@ -468,11 +475,15 @@ function openCron(c: CronView): void {
         }
         <div class="field">
           <label>${t("cron.nextRun")}</label>
-          <div class="value">${next != null ? new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "medium" }).format(next) : "—"}</div>
+          <div class="value">
+            ${next != null ? new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "medium" }).format(next) : "—"}
+          </div>
         </div>
         <div class="field">
           <label>${t("cron.lastFired")}</label>
-          <div class="value">${c.lastFiredAt ? new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "medium" }).format(c.lastFiredAt) : t("cron.noLastRun")}</div>
+          <div class="value">
+            ${c.lastFiredAt ? new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "medium" }).format(c.lastFiredAt) : t("cron.noLastRun")}
+          </div>
         </div>
         ${manageable ? cronRunHistory(c) : nothing}
         ${
@@ -502,7 +513,8 @@ function openCron(c: CronView): void {
 function cronRunHistory(c: CronView): TemplateResult {
   const runs = cronRuns.get(c.id);
   const heading = html`<div class="cron-run-heading">
-    <label>${t("cron.recentRuns")}</label><button class="btn" type="button" @click=${() => refreshCronRuns(c.id)}>${t("cron.refresh")}</button>
+    <label>${t("cron.recentRuns")}</label
+    ><button class="btn" type="button" @click=${() => refreshCronRuns(c.id)}>${t("cron.refresh")}</button>
   </div>`;
   if (!runs)
     return html`<div class="field">
@@ -522,7 +534,9 @@ function cronRunHistory(c: CronView): TemplateResult {
           html` <div class="cron-run-row">
             <div>
               <span class="badge">${run.status ?? "completed"}</span>
-              <span>${new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "medium" }).format(run.firedAt)}</span>
+              <span
+                >${new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "medium" }).format(run.firedAt)}</span
+              >
             </div>
             ${run.note ? html`<div class="cron-run-error">${run.note}</div>` : nothing}
             ${run.reply ? html`<div class="cron-run-reply">${clipWords(run.reply, 180)}</div>` : nothing}
@@ -623,9 +637,7 @@ function cronDialogTpl(dialog: { kind: "rename" | "delete"; cron: CronView }): T
         <div class="project-dialog-head">
           <div><h2 id="cron-delete-title">${t("cron.deleteTitle", { title: cronTitle(c) })}</h2></div>
         </div>
-        <p>
-          ${t("cron.deleteImpact")}
-        </p>
+        <p>${t("cron.deleteImpact")}</p>
         <div class="project-dialog-actions">
           <button class="btn" type="button" @click=${() => closeCronDialog(c)}>${t("cron.cancel")}</button>
           <button class="btn danger" type="button" @click=${() => void confirmDeleteCron(c.id)}>
@@ -739,16 +751,9 @@ function cronForm() {
     <form class="resource-form cron-form" @submit=${onCreateCron}>
       ${listBackLink(t("cron.titlePlural"), drawCronsPage)}
       <h2>${t("cron.create")}</h2>
-      <p class="hint">
-        ${t("cron.createDescription")}
-      </p>
+      <p class="hint">${t("cron.createDescription")}</p>
       <label>
-        <textarea
-          name="text"
-          rows="4"
-          placeholder=${t("cron.createPlaceholder")}
-          required
-        ></textarea>
+        <textarea name="text" rows="4" placeholder=${t("cron.createPlaceholder")} required></textarea>
       </label>
       <div class="form-error"></div>
       <div class="actions"><button class="btn primary" type="submit">${t("cron.askAgent")}</button></div>

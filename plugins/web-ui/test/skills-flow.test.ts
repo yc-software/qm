@@ -68,7 +68,10 @@ test("edit loading and successful saves always move focus to a surviving control
     bodyOf("restoreFocusedFlow"),
     /skillId\s*\?\s*\(?matchingEdit \?\? search \?\? create\)?\s*:\s*\(?create \?\? search\)?/,
   );
-  assert.match(bodyOf("editorPane"), /editError \? t\("skill\.instructionsUnavailable"\) : t\("skill\.loadingInstructions"\)/);
+  assert.match(
+    bodyOf("editorPane"),
+    /editError \? t\("skill\.instructionsUnavailable"\) : t\("skill\.loadingInstructions"\)/,
+  );
   assert.equal(source.match(/shouldBlockRepeatedPublishClick\(reviewed, event\.detail\)/g)?.length, 2);
 });
 

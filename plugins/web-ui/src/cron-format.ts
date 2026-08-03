@@ -29,11 +29,16 @@ function humanizeCronInterval(ms: number, selected: Locale): string {
 
 function intervalUnit(value: number, unit: string, selected: Locale, digits = 0): string {
   const number = new Intl.NumberFormat(selected, { maximumFractionDigits: digits }).format(value);
-  return webMessage(selected, `cron.unit.${unit}` as "cron.unit.w" | "cron.unit.d" | "cron.unit.h" | "cron.unit.m" | "cron.unit.s", { count: number });
+  return webMessage(
+    selected,
+    `cron.unit.${unit}` as "cron.unit.w" | "cron.unit.d" | "cron.unit.h" | "cron.unit.m" | "cron.unit.s",
+    { count: number },
+  );
 }
 
 export function cronScheduleSummary(c: CronTimingView, selected: Locale = "en"): string {
-  if (c.schedule.cron) return webMessage(selected, "cron.cron", { expression: c.schedule.cron.trim().replace(/\s+/g, " ") });
+  if (c.schedule.cron)
+    return webMessage(selected, "cron.cron", { expression: c.schedule.cron.trim().replace(/\s+/g, " ") });
   return c.schedule.everyMs != null
     ? webMessage(selected, "cron.every", { duration: humanizeCronInterval(c.schedule.everyMs, selected) })
     : webMessage(selected, "cron.oneTime");
@@ -64,9 +69,13 @@ export function cronNextFire(c: CronTimingView): number | null {
 export function cronRunSummary(c: CronTimingView, now = Date.now(), selected: Locale = "en"): string {
   const next = cronNextFire(c);
   const tz = c.schedule.cron ? calendarTimezone(c.schedule) : c.schedule.timezone;
-  if (next != null) return webMessage(selected, next <= now ? "cron.due" : "cron.next", { time: formatCronDateTime(next, now, tz, selected) });
+  if (next != null)
+    return webMessage(selected, next <= now ? "cron.due" : "cron.next", {
+      time: formatCronDateTime(next, now, tz, selected),
+    });
   if (c.lastFiredAt != null) return webMessage(selected, "cron.last", { time: relTime(c.lastFiredAt, now, selected) });
-  if (c.schedule.firstFireAt != null) return webMessage(selected, "cron.first", { time: formatCronDateTime(c.schedule.firstFireAt, now, tz, selected) });
+  if (c.schedule.firstFireAt != null)
+    return webMessage(selected, "cron.first", { time: formatCronDateTime(c.schedule.firstFireAt, now, tz, selected) });
   return webMessage(selected, "cron.neverFired");
 }
 
@@ -74,8 +83,12 @@ export function cronRunSummaryTitle(c: CronTimingView, selected: Locale = "en"):
   const tz = c.schedule.cron ? calendarTimezone(c.schedule) : c.schedule.timezone;
   const next = cronNextFire(c);
   if (next != null) return webMessage(selected, "cron.nextRunTitle", { time: formatTitleDateTime(next, tz, selected) });
-  if (c.lastFiredAt != null) return webMessage(selected, "cron.lastFiredTitle", { time: formatTitleDateTime(c.lastFiredAt, tz, selected) });
-  if (c.schedule.firstFireAt != null) return webMessage(selected, "cron.firstRunTitle", { time: formatTitleDateTime(c.schedule.firstFireAt, tz, selected) });
+  if (c.lastFiredAt != null)
+    return webMessage(selected, "cron.lastFiredTitle", { time: formatTitleDateTime(c.lastFiredAt, tz, selected) });
+  if (c.schedule.firstFireAt != null)
+    return webMessage(selected, "cron.firstRunTitle", {
+      time: formatTitleDateTime(c.schedule.firstFireAt, tz, selected),
+    });
   return webMessage(selected, "cron.neverFiredTitle");
 }
 

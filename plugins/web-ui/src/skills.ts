@@ -163,7 +163,10 @@ function startCreate(): void {
 }
 
 function skillMeta(s: SkillItem): string {
-  const source = s.source === "pack" ? t("skill.packSource", { source: s.pack?.upstreamName ?? t("skill.source") }) : t("skill.createdHere");
+  const source =
+    s.source === "pack"
+      ? t("skill.packSource", { source: s.pack?.upstreamName ?? t("skill.source") })
+      : t("skill.createdHere");
   return `${scopeLabel(s.scope)} · v${s.version ?? 1} · ${source}`;
 }
 
@@ -226,7 +229,8 @@ function skillGroup(name: string, skills: SkillItem[]): TemplateResult {
   return html`<section class="skill-group">
     <div class="skill-group-head">
       <h2 class="skill-group-name">
-        <code>/${name}</code>${skills.length > 1 ? html`<span>${t("skill.variants", { count: skills.length })}</span>` : nothing}
+        <code>/${name}</code
+        >${skills.length > 1 ? html`<span>${t("skill.variants", { count: skills.length })}</span>` : nothing}
       </h2>
       ${hasScopeVariants ? html`<span class="skill-precedence">${t("skill.precedence")}</span>` : nothing}
     </div>
@@ -264,7 +268,9 @@ function editorPane() {
       <div class="skill-form-heading">
         <div>
           <h1 class="pane-title">${t("skill.editTitle", { name: e.name })}</h1>
-          <p>${e.scopeId?.startsWith("personal:") ? t("skill.availablePersonal") : t("skill.availableContext", { scope: e.scopeId ?? t("context.settings") })}</p>
+          <p>
+            ${e.scopeId?.startsWith("personal:") ? t("skill.availablePersonal") : t("skill.availableContext", { scope: e.scopeId ?? t("context.settings") })}
+          </p>
         </div>
         <span class="badge">${t("skill.editing")}</span>
       </div>
@@ -463,7 +469,9 @@ function creatorPane() {
               </button>`
             : nothing
         }
-        <button class="btn" type="button" ?disabled=${creatingSaving} @click=${closeFocusedFlow}>${t("skill.cancel")}</button>
+        <button class="btn" type="button" ?disabled=${creatingSaving} @click=${closeFocusedFlow}>
+          ${t("skill.cancel")}
+        </button>
       </div>
     </form>
   `;
@@ -611,9 +619,10 @@ function closeArchiveDialog(): void {
 }
 
 function archiveDialog(skill: SkillItem): TemplateResult {
-  const audience = skill.scope === "personal"
-    ? t("skill.archivePersonalAudience")
-    : t("skill.archiveSharedAudience", { scope: skill.scopeId ?? skill.scope });
+  const audience =
+    skill.scope === "personal"
+      ? t("skill.archivePersonalAudience")
+      : t("skill.archiveSharedAudience", { scope: skill.scopeId ?? skill.scope });
   return html`<div
     class="project-dialog-backdrop"
     @click=${(event: MouseEvent) => event.target === event.currentTarget && closeArchiveDialog()}
@@ -629,9 +638,7 @@ function archiveDialog(skill: SkillItem): TemplateResult {
       <div class="project-dialog-head">
         <div><h2 id="skill-archive-title">${t("skill.archiveTitle", { name: skill.name })}</h2></div>
       </div>
-      <p id="skill-archive-impact">
-        ${t("skill.archiveImpact", { audience, name: skill.name })}
-      </p>
+      <p id="skill-archive-impact">${t("skill.archiveImpact", { audience, name: skill.name })}</p>
       <div class="project-dialog-actions actions">
         <button
           class="btn"

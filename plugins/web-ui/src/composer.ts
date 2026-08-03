@@ -327,13 +327,13 @@ export function composerForm(agent: Agent): TemplateResult {
           ? html`<div class="runtime-upgrade">
               <span
                 >${t("composer.orgRecommends", {
-                harness: modelOptionFor(
-                  `${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`,
-                ).harnessLabel,
-                model: modelOptionFor(
-                  `${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`,
-                ).buttonLabel,
-              })}</span
+                  harness: modelOptionFor(
+                    `${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`,
+                  ).harnessLabel,
+                  model: modelOptionFor(
+                    `${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`,
+                  ).buttonLabel,
+                })}</span
               >
               <button
                 type="button"

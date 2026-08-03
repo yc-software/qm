@@ -232,8 +232,11 @@ function credentialCard(c: KeychainCredential): TemplateResult {
                 (grant) =>
                   html` <div class="kc-access-row">
                     <div>
-                      <strong>${scopeName(grant.audienceScopeId)}</strong> · ${keychainAccessModeLabel(grant.mode, locale())}
-                      <div>${grant.purpose}${grant.expiresAt ? ` · ${t("connector.expiresLower", { date: fmtDate(grant.expiresAt) })}` : ""}</div>
+                      <strong>${scopeName(grant.audienceScopeId)}</strong> ·
+                      ${keychainAccessModeLabel(grant.mode, locale())}
+                      <div>
+                        ${grant.purpose}${grant.expiresAt ? ` · ${t("connector.expiresLower", { date: fmtDate(grant.expiresAt) })}` : ""}
+                      </div>
                     </div>
                     <button
                       class="kc-text-action"
@@ -282,7 +285,8 @@ function addCredentialCard(): TemplateResult {
               <strong>${t("connector.secureFormReady")}</strong><span>${t("connector.openSecureFormDescription")}</span>
             </div>
             <div class="kc-form-actions">
-              <a class="btn primary" href=${secureDropUrl} target="_blank" rel="noopener noreferrer">${t("connector.openSecureForm")}</a
+              <a class="btn primary" href=${secureDropUrl} target="_blank" rel="noopener noreferrer"
+                >${t("connector.openSecureForm")}</a
               ><button
                 class="btn"
                 type="button"
@@ -379,7 +383,8 @@ function confirmationCard(): TemplateResult {
       <h2 id="kc-confirm-title">${pending.title}</h2>
       <p id="kc-confirm-body">${pending.body}</p>
       <div class="kc-form-actions">
-        <button class="btn" type="button" data-dialog-cancel @click=${closeConfirmation}>${t("connector.cancel")}</button
+        <button class="btn" type="button" data-dialog-cancel @click=${closeConfirmation}>
+          ${t("connector.cancel")}</button
         ><button class="btn danger" type="button" @click=${() => void pending.run()}>${pending.action}</button>
       </div>
     </article>
@@ -407,7 +412,8 @@ export function clearConnectorNotice(): void {
 
 export function noteConnectorResult(provider: string, status: string): void {
   const name = CONNECTOR_LABELS[provider]?.name ?? provider;
-  connectorNotice = status === "connected" ? t("connector.connectedResult", { name }) : t("connector.connectionFailed", { name });
+  connectorNotice =
+    status === "connected" ? t("connector.connectedResult", { name }) : t("connector.connectionFailed", { name });
 }
 
 function drawConnectors(loading = false): void {
@@ -438,7 +444,9 @@ function drawConnectors(loading = false): void {
       credentials.map((credential) => [credential.credentialId, { id: credential.credentialId, kind: "connector" }]),
     );
     const grants = keychainGrants.filter((grant) => isActiveGrant(grant, credentialsById.get(grant.credentialId)));
-    let connectionState: TemplateResult | string = html`<span class="kc-state neutral">${t("connector.notConnected")}</span>`;
+    let connectionState: TemplateResult | string = html`<span class="kc-state neutral"
+      >${t("connector.notConnected")}</span
+    >`;
     if (needsReconnect) connectionState = html`<span class="kc-state warning">${t("connector.reconnectNeeded")}</span>`;
     else if (connected) connectionState = "";
     return html`
@@ -463,8 +471,11 @@ function drawConnectors(loading = false): void {
                   (grant) =>
                     html` <div class="kc-access-row">
                       <div>
-                        <strong>${scopeName(grant.audienceScopeId)}</strong> · ${keychainAccessModeLabel(grant.mode, locale())}
-                        <div>${grant.purpose}${grant.expiresAt ? ` · ${t("connector.expiresLower", { date: fmtDate(grant.expiresAt) })}` : ""}</div>
+                        <strong>${scopeName(grant.audienceScopeId)}</strong> ·
+                        ${keychainAccessModeLabel(grant.mode, locale())}
+                        <div>
+                          ${grant.purpose}${grant.expiresAt ? ` · ${t("connector.expiresLower", { date: fmtDate(grant.expiresAt) })}` : ""}
+                        </div>
                       </div>
                       <button
                         class="kc-text-action"
@@ -497,9 +508,7 @@ function drawConnectors(loading = false): void {
           <div class="kc-hero-copy">
             <h1>${t("connector.keychainTitle")}</h1>
             <p>${t("connector.keychainDescription")}</p>
-            <div class="kc-trust-note">
-              ${icon(ShieldCheck, 14)}<span>${t("connector.trustNote")}</span>
-            </div>
+            <div class="kc-trust-note">${icon(ShieldCheck, 14)}<span>${t("connector.trustNote")}</span></div>
           </div>
           <div class="kc-hero-actions">
             <button
@@ -529,7 +538,9 @@ function drawConnectors(loading = false): void {
         </header>
         <div class="kc-summary" aria-label=${t("connector.summary")}>
           <div><span>${loading ? "—" : summary.connected}</span><small>${t("connector.connectedAccounts")}</small></div>
-          <div><span>${loading ? "—" : keychainCredentials.length}</span><small>${t("connector.storedCredentials")}</small></div>
+          <div>
+            <span>${loading ? "—" : keychainCredentials.length}</span><small>${t("connector.storedCredentials")}</small>
+          </div>
           <div><span>${loading ? "—" : summary.activeGrants}</span><small>${t("connector.activeGrants")}</small></div>
           <div class=${summary.attention ? "needs-attention" : ""}>
             <span>${loading ? "—" : summary.attention}</span><small>${t("connector.needsAttention")}</small>
@@ -552,8 +563,7 @@ function drawConnectors(loading = false): void {
                 : html`<div class="kc-empty">
                     ${icon(Link, 20)}
                     <div>
-                      <strong>${t("connector.noAccounts")}</strong
-                      ><span>${t("connector.noAccountsDescription")}</span>
+                      <strong>${t("connector.noAccounts")}</strong><span>${t("connector.noAccountsDescription")}</span>
                     </div>
                   </div>`
             }
@@ -574,7 +584,8 @@ function drawConnectors(loading = false): void {
                 : html`<div class="kc-empty">
                     ${icon(KeyRound, 20)}
                     <div>
-                      <strong>${t("connector.noStoredCredentials")}</strong><span>${t("connector.noStoredCredentialsDescription")}</span>
+                      <strong>${t("connector.noStoredCredentials")}</strong
+                      ><span>${t("connector.noStoredCredentialsDescription")}</span>
                     </div>
                     <button
                       class="btn"
@@ -822,7 +833,8 @@ async function performRevokeConnector(provider: string, stateEpoch: number): Pro
   try {
     await api("/api/connectors/revoke", { method: "POST", body: JSON.stringify({ provider }) });
   } catch (e) {
-    if (keychainOperations.isCurrentEpoch(stateEpoch)) connectorNotice = errMessage(e, t("connector.couldNotDisconnect"));
+    if (keychainOperations.isCurrentEpoch(stateEpoch))
+      connectorNotice = errMessage(e, t("connector.couldNotDisconnect"));
   }
   if (keychainOperations.isCurrentEpoch(stateEpoch)) await renderConnectors();
 }

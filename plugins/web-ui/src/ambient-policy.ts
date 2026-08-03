@@ -229,9 +229,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
       </div>
       <label class="ambient-field" for="ambient-enabled">
         <span class="ambient-field-label">${t("ambient.behavior")}</span>
-        <span class="ambient-policy-hint"
-          >${t("ambient.behaviorHint")}</span
-        >
+        <span class="ambient-policy-hint">${t("ambient.behaviorHint")}</span>
       </label>
       <select
         id="ambient-enabled"
@@ -244,17 +242,13 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           markDirty();
         }}
       >
-        <option value="default" ?selected=${ambientPolicyState.ambientEnabled === null}>
-          ${t("ambient.default")}
-        </option>
+        <option value="default" ?selected=${ambientPolicyState.ambientEnabled === null}>${t("ambient.default")}</option>
         <option value="on" ?selected=${ambientPolicyState.ambientEnabled === true}>${t("ambient.on")}</option>
         <option value="off" ?selected=${ambientPolicyState.ambientEnabled === false}>${t("ambient.off")}</option>
       </select>
       <label class="ambient-field" for="ambient-orders">
         <span class="ambient-field-label">${t("ambient.standingOrders")}</span>
-        <span class="ambient-policy-hint" id="ambient-orders-hint"
-          >${t("ambient.ordersHint")}</span
-        >
+        <span class="ambient-policy-hint" id="ambient-orders-hint">${t("ambient.ordersHint")}</span>
       </label>
       <textarea
         id="ambient-orders"

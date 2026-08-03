@@ -92,9 +92,7 @@ function statusClass(d: DeploymentView): string {
 
 function permissionBadge(d: DeploymentView): TemplateResult {
   const manage = canManage(d);
-  const title = manage
-    ? t("deployment.manageHint")
-    : t("deployment.viewHint");
+  const title = manage ? t("deployment.manageHint") : t("deployment.viewHint");
   return html`<span class="deploy-permission ${manage ? "manage" : "view"}" title=${title}
     >${manage ? t("deployment.canManage") : t("deployment.canView")}</span
   >`;
@@ -118,7 +116,9 @@ function ownerLabel(d: DeploymentView): string {
   if (d.ownerScopeId?.startsWith("personal:"))
     return t("deployment.personalContext", { name: friendlyPrincipal(d.ownerScopeId.slice("personal:".length)) });
   if (d.ownerScopeId?.startsWith("org:")) return t("deployment.organization");
-  return d.createdBy ? t("deployment.createdBy", { name: friendlyPrincipal(d.createdBy) }) : t("deployment.sharedContext");
+  return d.createdBy
+    ? t("deployment.createdBy", { name: friendlyPrincipal(d.createdBy) })
+    : t("deployment.sharedContext");
 }
 
 function deployTabs(): TemplateResult {
@@ -355,7 +355,11 @@ async function openDeploy(d: DeploymentView): Promise<void> {
     drawDeployDetail(activeDeploy);
   } catch (error) {
     if (activeDeploy?.id !== d.id) return;
-    deployNotices = withDeploymentDetailNotice(deployNotices, d.id, errMessage(error, t("deployment.couldNotLoadDetails")));
+    deployNotices = withDeploymentDetailNotice(
+      deployNotices,
+      d.id,
+      errMessage(error, t("deployment.couldNotLoadDetails")),
+    );
     drawDeployDetail(d);
   }
 }
@@ -394,11 +398,15 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           <h3>${t("deployment.overview")}</h3>
           <div class="deploy-facts">
             <div><span>${t("deployment.status")}</span><strong>${statusLabel(d)}</strong></div>
-            <div><span>${t("deployment.liveVersion")}</span><strong>${d.appliedVersion ?? d.currentVersion ?? "—"}</strong></div>
+            <div>
+              <span>${t("deployment.liveVersion")}</span><strong>${d.appliedVersion ?? d.currentVersion ?? "—"}</strong>
+            </div>
             <div><span>${t("deployment.latestVersion")}</span><strong>${d.currentVersion ?? "—"}</strong></div>
             <div>
               <span>${t("deployment.lastDeployed")}</span
-              ><strong>${deploymentLatestAt(d) ? new Date(deploymentLatestAt(d)).toLocaleString(locale()) : "—"}</strong>
+              ><strong
+                >${deploymentLatestAt(d) ? new Date(deploymentLatestAt(d)).toLocaleString(locale()) : "—"}</strong
+              >
             </div>
             <div>
               <span>${t("deployment.lastOpened")}</span
@@ -456,8 +464,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                 <h3>${t("deployment.settings")}</h3>
                 <div class="deploy-setting-row">
                   <div>
-                    <strong>${t("deployment.displayName")}</strong
-                    ><span>${t("deployment.displayNameHint")}</span>
+                    <strong>${t("deployment.displayName")}</strong><span>${t("deployment.displayNameHint")}</span>
                   </div>
                   ${editingName ? deployEditForm(d, "displayName") : html`<div class="deploy-setting-value"><span>${d.displayName || t("deployment.usingUrlSlug")}</span><button class="btn" type="button" @click=${() => startEditDeploy(d, "displayName")}>${t("deployment.edit")}</button></div>`}
                 </div>
@@ -548,7 +555,13 @@ function deployEditForm(d: DeploymentView, field: "displayName" | "name"): Templ
           />${slug ? html`<span>/</span>` : nothing}</span
         >
       </label>
-      <button class="icon-btn" type="submit" title=${t("deployment.save")} aria-label=${t("deployment.save")} ?disabled=${deploySaving}>
+      <button
+        class="icon-btn"
+        type="submit"
+        title=${t("deployment.save")}
+        aria-label=${t("deployment.save")}
+        ?disabled=${deploySaving}
+      >
         ${icon(Check, 14)}
       </button>
       <button
@@ -707,11 +720,11 @@ function archiveDialog(d: DeploymentView): TemplateResult {
         <div class="project-dialog-head">
           <div><h2 id="deploy-archive-title">${t("deployment.archiveTitle", { name: deploymentTitle(d) })}</h2></div>
         </div>
-        <p>
-          ${t("deployment.archiveBody")}
-        </p>
+        <p>${t("deployment.archiveBody")}</p>
         <div class="project-dialog-actions actions">
-          <button class="btn" type="button" data-dialog-cancel @click=${closeArchiveDialog}>${t("deployment.cancel")}</button>
+          <button class="btn" type="button" data-dialog-cancel @click=${closeArchiveDialog}>
+            ${t("deployment.cancel")}
+          </button>
           <button
             class="btn danger deploy-archive-confirm"
             type="button"
@@ -840,7 +853,11 @@ async function openLiveEdit(d: DeploymentView, button: HTMLButtonElement): Promi
     else window.open(r.url, "_blank");
   } catch (error) {
     tab?.close();
-    deployNotices = withDeploymentDetailNotice(deployNotices, d.id, errMessage(error, t("deployment.couldNotOpenLive")));
+    deployNotices = withDeploymentDetailNotice(
+      deployNotices,
+      d.id,
+      errMessage(error, t("deployment.couldNotOpenLive")),
+    );
     drawDeployDetail(activeDeploy ?? d);
     button.blur();
   }
