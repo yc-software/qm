@@ -18,6 +18,8 @@ await new Promise<void>((r) => core.listen(0, r));
 const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
+process.env.NODE_ENV = "test";
+process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "1";
 process.env.CORE_SIGNING_SECRET = "admin-gzip-test-secret";
 
 const { server } = await import("../src/index.ts");
@@ -45,11 +47,12 @@ function raw(
 }
 
 test("GET / serves gzip + etag when gzip is accepted", async () => {
-  const r = await raw("/", { "accept-encoding": "gzip" });
+  const r = await raw("/", { "accept-encoding": "gzip", "x-qm-locale": "en" });
   assert.equal(r.status, 200);
   assert.equal(r.headers["content-encoding"], "gzip");
   assert.ok(r.headers["etag"], "etag present");
   assert.equal(r.headers["cache-control"], "no-cache");
+  assert.equal(r.headers["vary"], "x-qm-locale, accept-language, accept-encoding");
   const html = gunzipSync(r.body).toString("utf8");
   assert.match(html, /<!doctype html>|<html/i);
 });
@@ -61,12 +64,39 @@ test("GET / without gzip serves identity HTML with the same etag", async () => {
   assert.match(r.body.toString("utf8"), /<!doctype html>|<html/i);
 });
 
+test("a direct development URL uses browser language and falls back to English", async () => {
+  const browser = await raw("/", { "accept-language": "ja-JP, en;q=0.5" });
+  const fallback = await raw("/");
+  assert.match(browser.body.toString("utf8"), /<html lang="ja">/);
+  assert.match(fallback.body.toString("utf8"), /<html lang="en">/);
+});
+
 test("GET / with matching if-none-match → 304", async () => {
-  const first = await raw("/", { "accept-encoding": "gzip" });
+  const first = await raw("/", { "accept-encoding": "gzip", "x-qm-locale": "ja" });
   const etag = first.headers["etag"] as string;
-  const r = await raw("/", { "if-none-match": etag });
+  const r = await raw("/", { "if-none-match": etag, "x-qm-locale": "ja" });
   assert.equal(r.status, 304);
   assert.equal(r.body.length, 0);
+  assert.equal(r.headers["vary"], "x-qm-locale, accept-language, accept-encoding");
+});
+
+test("gzip bytes and etags differ by locale while each locale remains stable", async () => {
+  const en = await raw("/", { "accept-encoding": "gzip", "x-qm-locale": "en" });
+  const ja = await raw("/", { "accept-encoding": "gzip", "x-qm-locale": "ja" });
+  const jaAgain = await raw("/users", { "accept-encoding": "gzip", "x-qm-locale": "ja" });
+  assert.notDeepEqual(en.body, ja.body);
+  assert.notEqual(en.headers["etag"], ja.headers["etag"]);
+  assert.deepEqual(jaAgain.body, ja.body);
+  assert.equal(jaAgain.headers["etag"], ja.headers["etag"]);
+  assert.match(gunzipSync(en.body).toString("utf8"), /<html lang="en">/);
+  assert.match(gunzipSync(ja.body).toString("utf8"), /<html lang="ja">/);
+});
+
+test("an etag from one locale never produces a 304 for another locale", async () => {
+  const en = await raw("/", { "x-qm-locale": "en" });
+  const ja = await raw("/", { "if-none-match": en.headers["etag"] as string, "x-qm-locale": "ja" });
+  assert.equal(ja.status, 200);
+  assert.match(ja.body.toString("utf8"), /<html lang="ja">/);
 });
 
 test("a JSON api route round-trips intact through the gzip proxy path", async () => {

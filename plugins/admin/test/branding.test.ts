@@ -27,6 +27,8 @@ await new Promise<void>((r) => core.listen(0, r));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_ORG_ID = "acme";
+process.env.NODE_ENV = "test";
+process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "1";
 process.env.CORE_SIGNING_SECRET = "admin-branding-test-secret";
 
 const { server } = await import("../src/index.ts");
@@ -56,13 +58,19 @@ test("the shell's badge and product name are branding-driven, not hardcoded", ()
 });
 
 test("a branding save acks only after the shell reflects it — the post-save reload can't be stale", async () => {
+  await Promise.all([
+    fetch(`${base}/`, { headers: { "x-qm-locale": "en" } }),
+    fetch(`${base}/`, { headers: { "x-qm-locale": "ja" } }),
+  ]);
   const put = await fetch(`${base}/api/scopes/${encodeURIComponent("org:acme")}/branding`, {
     method: "PUT",
     headers: { cookie: "admin=U-admin", "content-type": "application/json" },
     body: JSON.stringify({ accent: "#0055ff", mark: "Z", selfLabel: "Zed" }),
   });
   assert.equal(put.status, 200);
-  const html = await (await fetch(`${base}/`)).text();
-  assert.match(html, /--brand-accent:#0055ff/);
-  assert.match(html, /<meta name="brand-self-label" content="Zed"\s*\/?>/);
+  for (const locale of ["en", "ja"]) {
+    const html = await (await fetch(`${base}/`, { headers: { "x-qm-locale": locale } })).text();
+    assert.match(html, /--brand-accent:#0055ff/);
+    assert.match(html, /<meta name="brand-self-label" content="Zed"\s*\/?>/);
+  }
 });

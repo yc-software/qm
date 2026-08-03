@@ -147,6 +147,28 @@
         font-size: 13px;
         color: var(--muted);
       }
+      #language-form {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #language-form label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      #language-select {
+        min-height: 32px;
+        padding: 4px 24px 4px 8px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--text);
+        font: inherit;
+      }
       .pill {
         max-width: 42vw;
         overflow: hidden;
@@ -3755,8 +3777,17 @@
       <div class="brand"><span id="brand-product">Agent</span>&nbsp;Admin <span id="org-tag"></span></div>
       <div class="header-controls" id="header-controls" aria-label="Page controls"></div>
       <div class="who hidden" id="who">
-        <a class="header-button" href="/" id="dashboard-link">Dashboard</a><span class="pill" id="who-name"></span
-        ><button class="link" id="signout">Sign out</button>
+        <a class="header-button" href="/" id="dashboard-link">{{t:dashboard}}</a
+        ><span class="pill" id="who-name"></span>
+        <form id="language-form" action="/locale" method="post">
+          <label for="language-select">{{t:language}}</label>
+          <select id="language-select" name="locale">
+            <option value="en">{{t:english}}</option>
+            <option value="ja">{{t:japanese}}</option>
+          </select>
+          <input id="locale-return-to" type="hidden" name="returnTo" value="" />
+        </form>
+        <button class="link" id="signout">{{t:signOut}}</button>
       </div>
     </header>
 
@@ -3769,31 +3800,29 @@
 
     <div class="center" id="loading-view" aria-busy="true">
       <div class="signin">
-        <p class="lead" role="status">Checking your access…</p>
+        <p class="lead" role="status">{{t:checkingAccess}}</p>
       </div>
     </div>
 
     <div class="center hidden" id="signin-view">
       <div class="signin">
-        <h1>Sign in through the portal</h1>
-        <p class="lead">This admin surface is reached through the portal. Sign in there to continue.</p>
+        <h1>{{t:auth.signInTitle}}</h1>
+        <p class="lead">{{t:auth.signInBody}}</p>
         <div class="card">
-          <div class="body" id="principal-list"><p class="hint">Sign in through the portal to continue.</p></div>
+          <div class="body" id="principal-list"><p class="hint">{{t:auth.signInHint}}</p></div>
         </div>
       </div>
     </div>
 
     <div class="center hidden" id="unavailable-view">
       <div class="signin">
-        <h1>Admin is temporarily unavailable</h1>
-        <p class="lead">
-          We couldn't verify your admin access right now — the backend didn't answer. This is usually temporary.
-        </p>
+        <h1>{{t:auth.unavailableTitle}}</h1>
+        <p class="lead">{{t:auth.unavailableBody}}</p>
         <div class="card">
           <div class="body">
-            <p class="hint">Trying again resolves most cases. If this keeps happening, the core service may be down.</p>
+            <p class="hint">{{t:auth.unavailableHint}}</p>
             <div class="signin-actions" style="display: flex; gap: 10px; margin-top: 8px; justify-content: center">
-              <button class="link" id="uv-retry" type="button">Try again</button>
+              <button class="link" id="uv-retry" type="button">{{t:auth.tryAgain}}</button>
             </div>
           </div>
         </div>
@@ -3802,21 +3831,15 @@
 
     <div class="center hidden" id="notadmin-view">
       <div class="signin">
-        <h1>You don't have admin access</h1>
-        <p class="lead">
-          The Admin area is limited to governance admins. Your account is signed in and verified — it just isn't granted
-          admin rights.
-        </p>
+        <h1>{{t:auth.deniedTitle}}</h1>
+        <p class="lead">{{t:auth.deniedBody}}</p>
         <div class="card">
           <div class="body">
             <p class="notebox">Signed in as <b id="na-sub"></b> · <span id="na-org"></span></p>
-            <p class="hint">
-              Admin rights come from your organization's admin grants. If you need access, ask an existing admin to
-              grant it.
-            </p>
+            <p class="hint">{{t:auth.deniedHint}}</p>
             <div class="signin-actions" style="display: flex; gap: 10px; margin-top: 8px; justify-content: center">
-              <a class="link" href="/">Back to your surfaces</a>
-              <button class="link" id="na-signout" type="button">Sign out</button>
+              <a class="link" href="/">{{t:auth.backToSurfaces}}</a>
+              <button class="link" id="na-signout" type="button">{{t:signOut}}</button>
             </div>
           </div>
         </div>
@@ -3824,12 +3847,12 @@
     </div>
 
     <main class="admin-app hidden" id="app-view">
-      <aside class="admin-sidebar" aria-label="Admin navigation">
+      <aside class="admin-sidebar" aria-label="{{t:adminNavigation}}">
         <div class="sidebar-title">Admin</div>
         <nav class="tabs" id="tabs"></nav>
       </aside>
 
-      <section class="admin-main" aria-label="Admin content">
+      <section class="admin-main" aria-label="{{t:adminContent}}">
         <div class="admin-inner">
           <div class="shellbar" id="shellbar"></div>
 
@@ -4753,8 +4776,14 @@
       </div>
     </dialog>
 
+    <template id="locale-messages">__ADMIN_MESSAGES__</template>
     <script>
       const $ = (id) => document.getElementById(id);
+      const localeMessages = JSON.parse($("locale-messages").content.textContent);
+      const t = (key, values = {}) =>
+        localeMessages[key].replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, (match, name) =>
+          Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match,
+        );
       const EFFECTS = ["allow", "deny", "require_approval"];
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
@@ -4832,6 +4861,12 @@
       const transcriptVisibility = { thinking: true, toolResults: true };
 
       const API_BASE = "__ADMIN_BASE__";
+      $("language-select").value = document.documentElement.lang;
+      $("header-controls").setAttribute("aria-label", t("pageControls"));
+      $("language-select").addEventListener("change", () => {
+        $("locale-return-to").value = location.pathname + location.search + location.hash;
+        $("language-form").requestSubmit();
+      });
 
       async function api(method, path, body) {
         const res = await fetch(API_BASE + path, {
@@ -5398,7 +5433,7 @@
           if (s.label) {
             const h = document.createElement("div");
             h.className = "tab-section";
-            h.textContent = s.label;
+            h.textContent = t("section." + s.label.toLowerCase());
             nav.appendChild(h);
           }
           s.views.forEach((v) => {
@@ -5406,7 +5441,9 @@
             b.className = "tab" + (s.label ? "" : " tab-top") + (v === view ? " active" : "");
             b.type = "button";
             if (ICONS[v]) b.innerHTML = ICONS[v];
-            b.appendChild(document.createTextNode(VIEW_TITLE[v] || v[0].toUpperCase() + v.slice(1)));
+            b.appendChild(
+              document.createTextNode(localeMessages["view." + v] ? t("view." + v) : VIEW_TITLE[v] || titleCase(v)),
+            );
             if (v === view) b.setAttribute("aria-current", "page");
             if (DISABLED_VIEWS.has(v)) {
               b.disabled = true;
