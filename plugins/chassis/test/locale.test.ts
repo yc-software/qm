@@ -37,6 +37,7 @@ test("Accept-Language honors quality weights", () => {
   assert.equal(acceptLanguageLocale("en;q=0, ja;q=0"), null);
   assert.equal(acceptLanguageLocale("ja;q=0, en;q=0.5"), "en");
   assert.equal(acceptLanguageLocale("ja;q=0.8, en;q=0.8"), "ja");
+  assert.equal(acceptLanguageLocale("en;q=0.7 , ja ; q=0.8"), "ja");
   assert.equal(acceptLanguageLocale("ja;q=.8, en;q=0.7"), "en");
   assert.equal(acceptLanguageLocale("ja;q=1e-1, en;q=0.2"), "en");
   assert.equal(acceptLanguageLocale("ja;q=01, en;q=0.9"), "en");
@@ -45,6 +46,8 @@ test("Accept-Language honors quality weights", () => {
   assert.equal(acceptLanguageLocale("ja;q, en;q=0.5"), "en");
   assert.equal(acceptLanguageLocale("ja;foo=bar, en;q=0.5"), "en");
   assert.equal(acceptLanguageLocale("ja;q=0.4;q=0, en;q=0.3"), "en");
+  assert.equal(acceptLanguageLocale("ja;q = 0.8, en;q=0.7"), "en");
+  assert.equal(acceptLanguageLocale("ja;q= 0.8, en;q=0.7"), "en");
 });
 
 test("message interpolation and catalog audit are deterministic", () => {

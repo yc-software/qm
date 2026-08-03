@@ -24,7 +24,7 @@ export function acceptLanguageLocale(value: string | readonly string[] | undefin
     const locale = normalizeLocale(tag);
     if (!locale) continue;
     if (parameters.length > 1) continue;
-    const qualityMatch = parameters[0]?.match(/^\s*q\s*=\s*(?<value>[^\s;]+)\s*$/i);
+    const qualityMatch = parameters[0]?.match(/^\s*q=(?<value>[^\s;]+)\s*$/i);
     if (parameters.length === 1 && (!qualityMatch || !qvalue.test(qualityMatch.groups?.value ?? ""))) continue;
     const quality = Number(qualityMatch?.groups?.value ?? "1");
     if (quality === 0) continue;
