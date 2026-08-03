@@ -56,6 +56,36 @@ test("POST /v1/turns strips ownerKeychainUnion from the external body but keeps 
   assert.equal(run?.request.skipMemory, true, "the source-authenticated memory opt-out is forwarded");
 });
 
+test("POST /v1/turns strips unattendedGrants from the external body", async () => {
+  const body = JSON.stringify({
+    surface: "cron",
+    actor: { externalId: "internal:owner" },
+    conversation: {
+      kind: "channel",
+      channelRef: "C9",
+      threadRef: "t-grants-guard",
+      audience: [{ externalId: "internal:owner" }],
+    },
+    text: "x",
+    triggered: true,
+    unattendedGrants: ["admin.sessions.read"],
+    async: true,
+  });
+  const r = await fetch(`${base}/v1/turns`, {
+    method: "POST",
+    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    body,
+  });
+  assert.equal(r.status, 202);
+  const { runId } = (await r.json()) as { runId: string };
+  const run = await built.runs.get(runId);
+  assert.equal(
+    run?.request.unattendedGrants,
+    undefined,
+    "an external caller cannot smuggle an unattended admin grant into a turn",
+  );
+});
+
 test("POST /v1/turns strips nested owner-keychain union from typed automation origin", async () => {
   const body = JSON.stringify({
     surface: "cron",

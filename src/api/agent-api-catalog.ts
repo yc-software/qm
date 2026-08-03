@@ -585,6 +585,19 @@ const FAMILIES: AgentApiFamily[] = [
       },
     ],
   },
+  {
+    match: () => false,
+    when: (v) => v.claims.liveActor !== true && v.claims.grants?.includes("admin.sessions.read") === true,
+    guidance:
+      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
+    routes: [
+      { method: "GET", path: "/v1/admin/sessions", summary: "list conversation metadata" },
+      { method: "GET", path: "/v1/admin/sessions/:id", summary: "read a conversation transcript" },
+      { method: "GET", path: "/v1/admin/scopes", summary: "list the scope directory" },
+      { method: "GET", path: "/v1/admin/errors", summary: "read error telemetry" },
+      { method: "GET", path: "/v1/admin/runs", summary: "read queued, in-flight, and recent runs" },
+    ],
+  },
 ];
 
 const WHOAMI_FOR_ALL: AgentApiFamily = {

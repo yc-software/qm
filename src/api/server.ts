@@ -38,7 +38,7 @@ const safeDecode = (s: string): string => {
 function capabilityAdminDenied(method: string, pathname: string, url: URL, claims: CapabilityClaims): string | null {
   if (method === "GET" && pathname === "/v1/admin/whoami") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
-  if (claims.liveActor !== true) {
+  if (claims.liveActor !== true && !unattendedAdminReadAllowed(method, pathname, claims)) {
     return "admin actions through the agent require a turn the admin started themselves — autonomous turns (crons) cannot act as an admin";
   }
   if (pathname.startsWith("/v1/admin/grants")) {
@@ -70,6 +70,17 @@ function capabilityAdminDenied(method: string, pathname: string, url: URL, claim
     }
   }
   return null;
+}
+
+function unattendedAdminReadAllowed(method: string, pathname: string, claims: CapabilityClaims): boolean {
+  if (method !== "GET" || !claims.grants?.includes("admin.sessions.read")) return false;
+  return (
+    pathname === "/v1/admin/sessions" ||
+    /^\/v1\/admin\/sessions\/[^/]+$/.test(pathname) ||
+    pathname === "/v1/admin/scopes" ||
+    pathname === "/v1/admin/errors" ||
+    pathname === "/v1/admin/runs"
+  );
 }
 
 function isAdminContentRead(pathname: string): boolean {
@@ -438,7 +449,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     : null;
   const wiring: Wiring = {
     app,
-    deps: { ...deps, control: createControlService(app, deps.scheduler) },
+    deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },
     secret: deps.signingSecret,
     auth,
     requirePortalIdentity,

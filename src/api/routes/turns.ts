@@ -34,7 +34,12 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
   }
   const wantAsync = url.searchParams.get("async") === "1" || body.async === true;
-  const { ownerKeychainUnion: _ownerKeychainUnion, spawned: _spawned, ...safeBody } = body;
+  const {
+    ownerKeychainUnion: _ownerKeychainUnion,
+    spawned: _spawned,
+    unattendedGrants: _unattendedGrants,
+    ...safeBody
+  } = body;
   const resolvedOrigin = publicTurnOrigin(safeBody);
   if (resolvedOrigin.error) return sendJson(res, 400, { error: "bad_request", message: resolvedOrigin.error });
   const origin = resolvedOrigin.origin;

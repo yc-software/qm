@@ -138,6 +138,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(cron.message !== undefined ? { message: cron.message } : {}),
           ...(cron.destination ? { destination: cron.destination } : {}),
           ...(cron.runAs ? { runAs: cron.runAs } : {}),
+          ...(cron.unattendedGrants ? { unattendedGrants: cron.unattendedGrants } : {}),
           ...(cron.members ? { members: cron.members } : {}),
           ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
           recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,

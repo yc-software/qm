@@ -47,6 +47,7 @@ export interface TriggerSpec {
   message?: string;
   threadRef?: string;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
+  unattendedGrants?: string[];
   members?: Principal[];
   recipientConsent?: RecipientConsent;
   recipientConsentRequired?: boolean;
@@ -282,6 +283,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       text: spec.input,
       ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
       triggered: true,
+      ...(!isScopeFloor && !isScopeShared && spec.unattendedGrants ? { unattendedGrants: spec.unattendedGrants } : {}),
       ...turnModelOptions({ triggered: true, ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}) }),
       ...(spec.readOnly ? { readOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),

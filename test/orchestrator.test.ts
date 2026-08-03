@@ -749,6 +749,35 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   assert.equal(invalidClaims!.timezone, undefined, "invalid surface timezones are omitted from the token");
 });
 
+test("unattended grants enter capability claims only on non-live turns", async () => {
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+  });
+  const { app, sandbox } = buildApp(config);
+  let captured: ProvisionOptions | undefined;
+  const realProvision = sandbox.provision.bind(sandbox);
+  sandbox.provision = (layers, opts) => {
+    captured = opts;
+    return realProvision(layers, opts);
+  };
+
+  await app.turn(dm("!run echo cron", { triggered: true, unattendedGrants: ["admin.sessions.read"] }));
+  let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.deepEqual(claims?.grants, ["admin.sessions.read"]);
+
+  await app.turn(
+    dm("!run echo live", {
+      liveActor: true,
+      conversation: { kind: "dm", threadRef: "dm:U1:live-grant" },
+      unattendedGrants: ["admin.sessions.read"],
+    }),
+  );
+  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims?.grants, undefined);
+});
+
 test("the egress claim keeps the control-plane host reachable under an allowlist or a matching denylist", () => {
   const core = "https://core.example.com";
 

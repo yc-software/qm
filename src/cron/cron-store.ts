@@ -18,6 +18,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   message?: string;
   runAs?: Cron["runAs"];
   members?: Principal[];
+  unattendedGrants?: string[];
 }
 
 export interface CronPatch {
@@ -30,6 +31,7 @@ export interface CronPatch {
   destination?: Destination;
   members?: Principal[];
   runAs?: Cron["runAs"];
+  unattendedGrants?: string[];
 }
 
 export interface CronStore {
@@ -71,6 +73,7 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
         contentPart(input.destination),
         contentPart(input.runAs),
         contentPart(input.members),
+        contentPart(input.unattendedGrants),
         contentPart(title),
       ]);
       return createDeduped(backing, contentId, (id) => ({
@@ -82,6 +85,7 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
         ...(input.message !== undefined ? { message: input.message } : {}),
         ...(input.runAs ? { runAs: input.runAs } : {}),
         ...(input.members ? { members: input.members } : {}),
+        ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
       }));
     },
     get: (id) => backing.get(id),
@@ -102,6 +106,7 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
       if (patch.archived === true) fields.enabled = false;
       if (patch.members !== undefined) fields.members = patch.members;
       if (patch.runAs !== undefined) fields.runAs = patch.runAs;
+      if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
       return backing.merge(id, fields);
     },
     delete: (id) => backing.delete(id),
