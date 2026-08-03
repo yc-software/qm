@@ -6,7 +6,14 @@ import type { Destination, SurfaceContextRequest, SurfaceContextResult } from ".
 import { errMessage } from "../util/errors.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
-import { reachEnqueue, withSlackUnfurlOption, withReact, withDelete, type ReachResolution } from "../reach/reach.ts";
+import {
+  reachEnqueue,
+  withSlackUnfurlOption,
+  withReact,
+  withDelete,
+  withThread,
+  type ReachResolution,
+} from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
@@ -426,6 +433,17 @@ export function createMessagingMethods(
         if (r.recipient) extra.recipient = r.recipient;
         if (r.channel) extra.channel = r.channel;
         if (r.group) extra.group = r.group;
+      }
+      if (input.threadTs) {
+        if (baseDestination.type !== "slack" && baseDestination.type !== "group") {
+          return {
+            ok: false,
+            status: 400,
+            error: "bad_request",
+            message: "threadTs threads a channel or group DM post — a DM to a person has no threads",
+          };
+        }
+        baseDestination = withThread(baseDestination, input.threadTs);
       }
       const sender = await deps.directory.get(input.senderId).catch(() => null);
       const delivery = await reachEnqueue({

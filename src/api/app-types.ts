@@ -147,6 +147,7 @@ interface ReachNowInput {
   recipient?: string;
   channel?: string;
   participants?: readonly string[];
+  threadTs?: string;
   unfurlLinks?: boolean;
   attachments?: OutgoingAttachment[];
   react?: { messageTs: string; emoji: string };
