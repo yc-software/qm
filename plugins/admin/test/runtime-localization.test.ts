@@ -258,7 +258,17 @@ test("Japanese user renderer localizes fallback copy and every displayed count",
     displayName: "利用者",
     scopeId: "personal:U1",
     stats: { sessions: 12345, turns: 23456 },
-    conversations: [],
+    conversations: [
+      {
+        scopeId: "channel:C1",
+        firstMessage: "最初の依頼",
+        lastMessage: "最後の返答",
+        createdAt: 1,
+        lastActivity: 2,
+        userTurns: 1,
+        messages: 2,
+      },
+    ],
     files: [{ name: "README", path: "README", size: 0, direction: "out", openable: false }],
     deployments: [],
     crons: [],
@@ -314,6 +324,7 @@ test("Japanese user renderer localizes fallback copy and every displayed count",
   );
   await vm.runInContext('__showUserDetail("U1")', context);
   const rows = tables.flatMap((entry) => entry.rows);
+  const conversationTable = tables.find((entry) => entry.headers[0] === "会話");
   const configValue = (label: string) => rows.find((row) => row[0] === label)?.[1];
   const fileKindCell = rows.find((row) => (row[0] as string)?.includes?.("README"))?.[1] as { text?: string };
   assert.deepEqual(
@@ -324,6 +335,7 @@ test("Japanese user renderer localizes fallback copy and every displayed count",
       commandPolicy: configValue("コマンドポリシー"),
       egress: configValue("外部通信の上書き"),
       connectors: configValue("接続済みコネクター"),
+      conversationLocation: conversationTable?.headers[1],
     },
     {
       sessionCount: "number:ja-JP",
@@ -332,6 +344,7 @@ test("Japanese user renderer localizes fallback copy and every displayed count",
       commandPolicy: "ルール number:ja-JP件 · denylist",
       egress: "許可number:ja-JP件、拒否number:ja-JP件",
       connectors: "number:ja-JP",
+      conversationLocation: "会話の場所",
     },
   );
 });
@@ -445,6 +458,7 @@ test("Japanese keychain and skill renderers localize fallback copy and counts", 
 test("Japanese skills renderer formats every visible sync count", async () => {
   const context = createRuntime("ja", "en-US");
   const packRows: unknown[][] = [];
+  const skillHeaders: unknown[][] = [];
   const pack = {
     id: "pack-1",
     url: "https://github.com/acme/skills.git",
@@ -457,7 +471,7 @@ test("Japanese skills renderer formats every visible sync count", async () => {
       counts: { imported: 12345, updated: 12345, skipped: 12345, archived: 12345 },
     },
   };
-  Object.assign(context, { __pack: pack, __packRows: packRows });
+  Object.assign(context, { __pack: pack, __packRows: packRows, __skillHeaders: skillHeaders });
   vm.runInContext(
     `view = "skills";
      scope = "org:acme";
@@ -465,7 +479,10 @@ test("Japanese skills renderer formats every visible sync count", async () => {
      globalThis.orgOwnView = () => false;
      globalThis.groupSkillsByIdentity = () => [];
      globalThis.scopeIndexList = () => document.createElement("div");
-     globalThis.openableTable = () => document.createElement("table");
+     globalThis.openableTable = (headers) => {
+       globalThis.__skillHeaders.push(headers);
+       return document.createElement("table");
+     };
      globalThis.wireScopeSearch = () => {};
      globalThis.bareDataCard = (value) => value;
      globalThis.table = (_headers, rows) => {
@@ -504,6 +521,7 @@ test("Japanese skills renderer formats every visible sync count", async () => {
   const root = new FakeElement();
   Object.assign(context, { __root: root });
   vm.runInContext("__renderSkills(__root, { skills: [] })", context);
+  assert.equal(skillHeaders[0]?.[1], "利用先");
   const packNode = (packRows[0]?.[0] as { node?: FakeElement })?.node;
   const statusNode = (packRows[0]?.[3] as { node?: FakeElement })?.node;
   const menuWrap = (packRows[0]?.[4] as { node?: FakeElement })?.node;

@@ -3932,7 +3932,8 @@
                 <p class="lead">{{t:governance.intro}}</p>
               </div>
               <div class="governance-scope" aria-label="{{t:governance.selectedScope}}">
-                <span>{{t:common.scope}}</span><strong id="governance-scope-label">{{t:common.organization}}</strong>
+                <span>{{t:common.policyTarget}}</span
+                ><strong id="governance-scope-label">{{t:common.organization}}</strong>
               </div>
             </div>
             <section class="governance-overview" id="governance-overview" aria-labelledby="governance-overview-title">
@@ -6029,7 +6030,7 @@
               title: t("governance.restoreTitle", { version: immutable.version }),
               subtitle: t("governance.restoreSubtitle"),
               facts: [
-                [t("common.scope"), governanceScopeName(targetScope)],
+                [t("common.policyTarget"), governanceScopeName(targetScope)],
                 [t("common.current"), t("governance.version", { version: expectedVersion })],
                 [t("common.restore"), t("governance.version", { version: immutable.version })],
               ],
@@ -6825,7 +6826,7 @@
           title: t("credentials.deleteReviewTitle", { name: c.name || c.slug }),
           subtitle: t("credentials.deleteReviewSubtitle", { principals, recent }),
           facts: [
-            [t("common.scope"), governanceScopeName(targetScope)],
+            [t("common.policyTarget"), governanceScopeName(targetScope)],
             [t("credentials.credential"), c.name || c.slug],
             [t("credentials.slug"), c.slug],
           ],
@@ -7847,7 +7848,7 @@
             title: dangerous ? t("review.enableDangerousTitle") : t("review.changePostureTitle"),
             subtitle: t("review.immutableSubtitle"),
             facts: [
-              [t("common.scope"), governanceScopeName()],
+              [t("common.policyTarget"), governanceScopeName()],
               [t("review.current"), titleCase(before)],
               [t("review.proposed"), titleCase(body.posture)],
             ],
@@ -7862,7 +7863,7 @@
             title: body.on ? t("review.allowExternalTitle") : t("review.internalOnlyTitle"),
             subtitle: t("review.audienceSubtitle"),
             facts: [
-              [t("common.scope"), governanceScopeName()],
+              [t("common.policyTarget"), governanceScopeName()],
               [t("review.current"), before ? t("review.externalAudience") : t("governance.internalOnly")],
               [t("review.proposed"), body.on ? t("review.externalAudience") : t("governance.internalOnly")],
             ],
@@ -8306,7 +8307,13 @@
             t("metrics.worst"),
             anyLinkable ? t("metrics.worstLinkedBody") : t("metrics.worstBody"),
             openableTable(
-              [phaseLabel(phaseKey), t("metrics.totalTurn"), t("common.scope"), t("metrics.machine"), t("audit.time")],
+              [
+                phaseLabel(phaseKey),
+                t("metrics.totalTurn"),
+                t("common.executionLocation"),
+                t("metrics.machine"),
+                t("audit.time"),
+              ],
               p.worst || [],
               (t) => [
                 { text: fmtMs(t.ms), cls: "num" },
@@ -8348,7 +8355,7 @@
                 t("section.admin"),
                 t("audit.action"),
                 t("audit.resource"),
-                ...(all ? [t("common.scope")] : []),
+                ...(all ? [t("common.executionLocation")] : []),
                 t("audit.time"),
               ],
               rows,
@@ -8465,7 +8472,7 @@
                 t("credentials.host"),
                 t("common.status"),
                 t("audit.source"),
-                ...(all ? [t("common.scope")] : []),
+                ...(all ? [t("common.executionLocation")] : []),
                 t("audit.principal"),
                 t("audit.detail"),
                 t("audit.time"),
@@ -9161,7 +9168,7 @@
           " " +
           t(skills.length === 1 ? "skills.skillSingular" : "skills.skillPlural") +
           (index && skills.length
-            ? " · " + fmtNumber(new Set(skills.map((s) => s.ownerScopeId)).size) + " " + t("common.scope")
+            ? " · " + fmtNumber(new Set(skills.map((s) => s.ownerScopeId)).size) + " " + t("common.skillTarget")
             : "");
 
         const recordsByKey = new Map(groupSkillsByIdentity(allSkills).map((g) => [g.key, g.records]));
@@ -9187,7 +9194,7 @@
         const skillTable = openableTable(
           [
             t("skills.skill"),
-            ...(index ? [t("common.scope")] : []),
+            ...(index ? [t("common.skillTarget")] : []),
             t("common.status"),
             t("skills.createdBy"),
             t("skills.lastUsed"),
@@ -9303,7 +9310,7 @@
           dataCard(
             t("skills.scopes", { count: fmtNumber(group.length) }),
             t("skills.scopesBody"),
-            table([t("common.scope"), t("common.status"), t("common.version"), ""], detailScopeRows, "—"),
+            table([t("common.skillTarget"), t("common.status"), t("common.version"), ""], detailScopeRows, "—"),
           ),
         );
         const capRows = (k.requiredCapabilities || []).map((c) => [
@@ -10572,7 +10579,7 @@
                   t("common.owner"),
                   t("common.requester"),
                   t("keychain.credential"),
-                  t("common.scope"),
+                  t("common.requestSource"),
                   t("common.status"),
                   t("common.purpose"),
                 ],
@@ -10737,7 +10744,7 @@
           );
 
           const admins = actionTable(
-            [t("common.principal"), t("common.role"), t("common.scope"), t("common.grantedBy"), ""],
+            [t("common.principal"), t("common.role"), t("common.permissionTarget"), t("common.grantedBy"), ""],
             filteredGrants,
             (g) => [
               { text: g.principalId, cls: "mono" },
@@ -11629,7 +11636,7 @@
 
         const convs = d.conversations || [];
         const convTable = openableTable(
-          [t("users.conversation"), t("common.scope"), t("users.volume"), t("users.lastActivity")],
+          [t("users.conversation"), t("common.conversationLocation"), t("users.volume"), t("users.lastActivity")],
           convs,
           (s) => {
             const latest = s.lastMessage || s.firstMessage || t("history.noMessagesYet");
@@ -14251,7 +14258,7 @@
               [
                 t("live.run"),
                 t("common.status"),
-                t("common.scope"),
+                t("common.executionLocation"),
                 t("common.type"),
                 t("live.attempts"),
                 t("live.worker"),

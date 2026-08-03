@@ -32,6 +32,7 @@ import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, formatBytes, icon, initials, relTime, toggleFormMenu } from "./ui";
 import { appState, renderSidebarTop, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { newChat } from "./chat";
+import type { ChatContextKind } from "./chat";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
 import { activityOf } from "./session-list";
 import type { CronView } from "./crons";
@@ -39,6 +40,7 @@ import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron
 import { restoreDialogFocus } from "./dialog-focus";
 import { ambientPolicyApplies, ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./ambient-policy";
 import { locale, t } from "./i18n";
+import type { WebMessageKey } from "./messages";
 
 interface ScopeFile {
   id: string;
@@ -185,7 +187,9 @@ export async function renderContexts(): Promise<void> {
   drawContexts();
 }
 
-function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconNode } {
+type ScopeChipKind = ChatContextKind | "personal";
+
+function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconNode; kind: ScopeChipKind } {
   if (c.project) {
     const memberCount = projectPeople(c).length;
     return {
@@ -195,22 +199,25 @@ function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconN
         unit: t(memberCount === 1 ? "context.member.one" : "context.member.other"),
       }),
       glyph: Folder,
+      kind: "project",
     };
   }
   if (c.kind === "personal") {
-    return { title: t("context.personal"), sub: t("context.personalDescription"), glyph: User };
+    return { title: t("context.personal"), sub: t("context.personalDescription"), glyph: User, kind: "personal" };
   }
   if (c.kind === "group") {
     return {
       title: sharedContextLabel(c.scopeId, c.name) ?? t("context.groupDm"),
       sub: t("context.groupDescription"),
       glyph: Users,
+      kind: "group",
     };
   }
   return {
     title: sharedContextLabel(c.scopeId, c.name) ?? t("context.channelFallback"),
     sub: t("context.channelDescription"),
     glyph: Hash,
+    kind: "channel",
   };
 }
 
@@ -228,22 +235,34 @@ export function personalScopeId(): string | null {
   return contextsState.list.find((c) => c.kind === "personal")?.scopeId ?? null;
 }
 
-function metaForScope(scopeId: string | null, fallbackName?: string | null): { title: string; glyph: IconNode } {
+function metaForScope(
+  scopeId: string | null,
+  fallbackName?: string | null,
+): { title: string; glyph: IconNode; kind: ScopeChipKind } {
   const c = scopeId ? contextsState.list.find((x) => x.scopeId === scopeId) : undefined;
   if (c) {
-    const { title, glyph } = contextMeta(c);
-    return { title, glyph };
+    const { title, glyph, kind } = contextMeta(c);
+    return { title, glyph, kind };
   }
   const shared = sharedContextLabel(scopeId, fallbackName ?? null);
-  if (shared) return { title: shared, glyph: scopeId?.startsWith("group:") ? Users : Hash };
+  if (shared)
+    return {
+      title: shared,
+      glyph: scopeId?.startsWith("group:") ? Users : Hash,
+      kind: scopeId?.startsWith("group:") ? "group" : "channel",
+    };
   if (scopeId?.startsWith("personal:") && scopeId !== personalScopeId())
-    return { title: t("context.sharedPersonal"), glyph: User };
-  return { title: fallbackName?.trim() || t("context.personalFallback"), glyph: User };
+    return { title: t("context.sharedPersonal"), glyph: User, kind: "personal" };
+  return { title: fallbackName?.trim() || t("context.personalFallback"), glyph: User, kind: "personal" };
 }
 
 export function scopeChip(scopeId: string | null, fallbackName?: string | null): TemplateResult {
-  const { title, glyph } = metaForScope(scopeId, fallbackName);
-  return html`<span class="scope-chip" title=${t("context.scopeChip", { title })}
+  const { title, glyph, kind } = metaForScope(scopeId, fallbackName);
+  let key: WebMessageKey = "context.scopeChipPersonal";
+  if (kind === "project") key = "context.scopeChipProject";
+  else if (kind === "channel") key = "context.scopeChipChannel";
+  else if (kind === "group") key = "context.scopeChipGroup";
+  return html`<span class="scope-chip" title=${t(key, { title })}
     >${icon(glyph, 12)}<span>${title.replace(/^#/, "")}</span></span
   >`;
 }
@@ -1227,7 +1246,11 @@ function selectContext(scopeId: string | null): void {
 }
 
 function startChatIn(c: CoreContext): void {
-  newChat(c.kind === "personal" ? undefined : { scopeId: c.scopeId, name: c.name });
+  newChat(
+    c.kind === "personal"
+      ? undefined
+      : { scopeId: c.scopeId, name: c.project?.name ?? c.name, kind: c.project ? "project" : c.kind },
+  );
 }
 
 async function openFromContext(s: CoreSession): Promise<void> {

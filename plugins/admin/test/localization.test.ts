@@ -52,9 +52,15 @@ test("Japanese Admin workflow terms use the operator vocabulary", () => {
   assert.equal(adminMessage("ja", "action.cancel"), "キャンセル");
 });
 
-test("Japanese Admin scope labels identify policy targets without using 領域", () => {
-  assert.equal(adminMessage("ja", "common.scope"), "適用先");
-  assert.equal(adminMessage("ja", "common.allScopes"), "すべての適用先");
+test("Japanese Admin labels distinguish workspaces, policy targets, and permission targets", () => {
+  assert.equal(adminMessage("ja", "common.scope"), "ワークスペース");
+  assert.equal(adminMessage("ja", "common.executionLocation"), "実行場所");
+  assert.equal(adminMessage("ja", "common.conversationLocation"), "会話の場所");
+  assert.equal(adminMessage("ja", "common.policyTarget"), "適用先");
+  assert.equal(adminMessage("ja", "common.skillTarget"), "利用先");
+  assert.equal(adminMessage("ja", "common.requestSource"), "依頼元");
+  assert.equal(adminMessage("ja", "common.permissionTarget"), "権限の対象");
+  assert.equal(adminMessage("ja", "common.allScopes"), "組織全体");
   assert.equal(adminMessage("ja", "governance.selectedScope"), "選択中の適用先");
   assert.equal(adminMessage("ja", "metrics.phase.layers.label"), "作業環境の復元");
   for (const message of Object.values(ADMIN_MESSAGES.ja)) assert.doesNotMatch(message, /領域/);

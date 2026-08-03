@@ -43,7 +43,8 @@ test("a pane opened from a project's + starts its chat in that project", () => {
   assert.ok(embed, "the embed boot branch not found");
   assert.match(embed, /await ensureContexts\(\)\)\.find\(\(c\) => c\.scopeId === scope\)/);
   assert.doesNotMatch(embed, /newChat\(\{ scopeId: scope/, "the URL's scope must not reach newChat unchecked");
-  assert.match(embed, /newChat\(context \? \{ scopeId: context\.scopeId/);
+  assert.match(embed, /context && context\.kind !== "personal"/);
+  assert.match(embed, /kind: context\.project \? "project" : context\.kind/);
 });
 
 test("a conversation dropped on a pane's tab strip joins that pane — and only there", () => {

@@ -43,9 +43,11 @@ function response(body: unknown, status = 200): Response {
   } as unknown as Response;
 }
 
+let contextsResponse: unknown = { contexts: [] };
+
 globalThis.fetch = (async (input: RequestInfo | URL) => {
   const path = String(input);
-  if (path.startsWith("/api/contexts")) return response({ contexts: [] });
+  if (path.startsWith("/api/contexts")) return response(contextsResponse);
   if (path.startsWith("/api/crons")) return response({ crons: [], visible: [] });
   if (path.startsWith("/api/runs/active")) return response({});
   if (path.startsWith("/api/runtime-config"))
@@ -63,8 +65,10 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
 }) as typeof fetch;
 
 const vite = await createViteTestServer();
+const { render } = await vite.ssrLoadModule("lit");
 const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
-const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+const { openSession, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+const { contextsState, scopeChip } = await vite.ssrLoadModule("/src/contexts.ts");
 const { chatState, drawActiveChat, newChat } = await vite.ssrLoadModule("/src/chat.ts");
 const { renderCronsPage } = await vite.ssrLoadModule("/src/crons.ts");
 
@@ -104,6 +108,126 @@ test("the first-use welcome renders the selected language", () => {
       content?: string;
     };
     assert.equal(block.content, expected[selected], selected);
+  }
+});
+
+test("Japanese chat context banners name projects, channels, and group DMs accurately", () => {
+  selectLocale("ja");
+  resetNewUser();
+
+  const cases = [
+    {
+      context: { scopeId: "group:project-alpha", name: "Alpha", kind: "project" as const },
+      label: "Alphaプロジェクト",
+      hint: "このチャットはAlphaプロジェクトで実行されます。",
+    },
+    {
+      context: { scopeId: "channel:C123", name: "general", kind: "channel" as const },
+      label: "#general",
+      hint: "このチャットは#generalチャンネルで実行されます。",
+    },
+    {
+      context: { scopeId: "group:G123", name: "Alice, Bob", kind: "group" as const },
+      label: "Alice, Bob",
+      hint: "このチャットはAlice, BobとのグループDMで実行されます。",
+    },
+  ];
+
+  for (const { context, label, hint } of cases) {
+    newChat(context);
+    const banner = appState.mainEl.querySelector(".context-banner");
+    assert.ok(banner, context.kind);
+    assert.equal(banner.textContent?.trim(), label, context.kind);
+    assert.match(banner.getAttribute("title") ?? "", new RegExp(`^${hint}`), context.kind);
+  }
+
+  newChat();
+  assert.equal(appState.mainEl.querySelector(".context-banner"), null, "personal");
+});
+
+test("Japanese scope chips identify personal, project, channel, and group DM destinations", () => {
+  selectLocale("ja");
+  const original = contextsState.list;
+  contextsState.list = [
+    { scopeId: "personal:alice", kind: "personal", name: null, sessionCount: 0, lastActivityAt: null },
+    {
+      scopeId: "group:project-alpha",
+      kind: "group",
+      name: "mpdm-alice--bob-1",
+      sessionCount: 0,
+      lastActivityAt: null,
+      project: {
+        id: "project-alpha",
+        name: "Alpha",
+        ownerId: "alice",
+        memberIds: ["alice"],
+        scopeId: "group:project-alpha",
+        members: [{ principalId: "alice", displayName: "Alice" }],
+      },
+    },
+    { scopeId: "channel:C123", kind: "channel", name: "general", sessionCount: 0, lastActivityAt: null },
+    { scopeId: "group:G123", kind: "group", name: "Alice, Bob", sessionCount: 0, lastActivityAt: null },
+  ];
+  const cases = [
+    ["personal:alice", "個人: 個人プロジェクト", "個人プロジェクト"],
+    ["group:project-alpha", "プロジェクト: Alpha", "Alpha"],
+    ["channel:C123", "チャンネル: #general", "general"],
+    ["group:G123", "グループDM: Alice, Bob", "Alice, Bob"],
+  ] as const;
+
+  try {
+    for (const [scopeId, title, text] of cases) {
+      const host = document.createElement("div");
+      render(scopeChip(scopeId), host);
+      const chip = host.querySelector(".scope-chip");
+      assert.ok(chip, scopeId);
+      assert.equal(chip.getAttribute("title"), title, scopeId);
+      assert.equal(chip.textContent?.trim(), text, scopeId);
+    }
+  } finally {
+    contextsState.list = original;
+  }
+});
+
+test("opening a project conversation loads context metadata before choosing its label", async () => {
+  selectLocale("ja");
+  resetNewUser();
+  contextsState.list = [];
+  contextsState.loaded = false;
+  contextsResponse = {
+    contexts: [
+      {
+        scopeId: "group:project-loaded",
+        kind: "group",
+        name: "mpdm-alice--bob-1",
+        sessionCount: 1,
+        lastActivityAt: 1,
+        project: {
+          id: "project-loaded",
+          name: "Alpha",
+          ownerId: "alice",
+          memberIds: ["alice"],
+          scopeId: "group:project-loaded",
+          members: [{ principalId: "alice", displayName: "Alice" }],
+        },
+      },
+    ],
+  };
+
+  try {
+    await openSession({
+      id: "",
+      type: "group",
+      scopeId: "group:project-loaded",
+      threadRef: "web:alice:project-loaded",
+      createdAt: 1,
+      channelName: "mpdm-alice--bob-1",
+    });
+    const banner = appState.mainEl.querySelector(".context-banner");
+    assert.ok(banner);
+    assert.equal(banner.textContent?.trim(), "Alphaプロジェクト");
+  } finally {
+    contextsResponse = { contexts: [] };
   }
 });
 

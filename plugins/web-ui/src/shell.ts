@@ -885,7 +885,15 @@ export async function boot(): Promise<void> {
     } else {
       const scope = params.get("scope");
       const context = scope ? (await ensureContexts()).find((c) => c.scopeId === scope) : undefined;
-      newChat(context ? { scopeId: context.scopeId, name: context.name ?? null } : undefined);
+      newChat(
+        context && context.kind !== "personal"
+          ? {
+              scopeId: context.scopeId,
+              name: context.project?.name ?? context.name ?? null,
+              kind: context.project ? "project" : context.kind,
+            }
+          : undefined,
+      );
     }
     return;
   }

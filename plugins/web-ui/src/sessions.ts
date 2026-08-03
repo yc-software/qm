@@ -77,6 +77,7 @@ import {
   newChat,
   requestBackgroundPanel,
   setTranscriptWindow,
+  type ChatContextKind,
 } from "./chat";
 import {
   addBlankPane,
@@ -196,6 +197,16 @@ function projectName(scopeId: string): string | null {
 
 function projectOf(scopeId: string): CoreProject | null {
   return contextsState.list.find((context) => context.scopeId === scopeId)?.project ?? null;
+}
+
+export function sessionContextKind(s: Pick<CoreSession, "scopeId" | "type">): ChatContextKind | null {
+  if (projectOf(s.scopeId)) return "project";
+  if (s.type === "channel" || s.type === "group") return s.type;
+  return null;
+}
+
+export function sessionContextName(s: Pick<CoreSession, "scopeId" | "channelName">): string | null {
+  return projectName(s.scopeId) ?? s.channelName ?? null;
 }
 
 function projectMenuKey(scopeId: string): string {
@@ -398,7 +409,7 @@ function startProjectChat(event: Event, scopeId: string, name: string | null): v
   closeSidebarOnNarrowView();
   sessionsState.collapsedProjectScopes.delete(scopeId);
   if (addBlankPane(scopeId)) return;
-  addPendingSession(newChat({ scopeId, name }), scopeId, name);
+  addPendingSession(newChat({ scopeId, name, kind: "project" }), scopeId, name);
 }
 
 function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
@@ -1156,11 +1167,12 @@ export async function refreshSessions(
 
 export async function openSession(s: CoreSession, entriesPrefetch?: Promise<TranscriptPage | null>): Promise<void> {
   if (splitInterceptsOpen(s)) return;
+  await ensureContexts();
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
   if (!s.id) {
     if (chatState.threadRef !== s.threadRef) {
-      mountContinuable(s.threadRef, null, s.scopeId || null, [], s.channelName ?? null);
+      mountContinuable(s.threadRef, null, s.scopeId || null, [], sessionContextName(s), sessionContextKind(s));
       renderList();
     }
     return;
@@ -1201,7 +1213,7 @@ export async function openSession(s: CoreSession, entriesPrefetch?: Promise<Tran
   const anchorSeq = entriesRes.entries?.[0]?.seq ?? null;
   if (continuable) {
     attachPendingApprovals(messages, approvalsRes?.approvals ?? [], transcriptModel());
-    mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null);
+    mountContinuable(s.threadRef, s.id, s.scopeId, messages, sessionContextName(s), sessionContextKind(s));
     setTranscriptWindow(anchorSeq, earlier);
   } else {
     mountReadOnly(s, messages, earlier, anchorSeq);

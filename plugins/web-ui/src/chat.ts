@@ -16,6 +16,7 @@ import {
   FileImage,
   FileText,
   Files,
+  Folder,
   GitFork,
   Hash,
   Maximize2,
@@ -90,6 +91,8 @@ import {
   groupDmTitle,
   refreshSessions,
   renderList,
+  sessionContextKind,
+  sessionContextName,
   sessionsState,
   sessionSlackUrl,
   surfaceOf,
@@ -116,6 +119,8 @@ import type { WebMessageKey } from "./messages";
 
 installMarkdownSanitizer();
 
+export type ChatContextKind = "project" | "channel" | "group";
+
 export const chatState = {
   agent: null as Agent | null,
   host: null as HTMLElement | null,
@@ -123,6 +128,7 @@ export const chatState = {
   sessionId: null as string | null,
   scopeId: null as string | null,
   contextName: null as string | null,
+  contextKind: null as ChatContextKind | null,
   rememberedThreadRef: null as string | null,
   rememberedSessionId: null as string | null,
   rememberedScopeId: null as string | null,
@@ -167,6 +173,7 @@ export function teardownActiveChat(): void {
   chatState.sessionId = null;
   chatState.scopeId = null;
   chatState.contextName = null;
+  chatState.contextKind = null;
   chatState.normalStreamFn = null;
   chatState.onWork = null;
   chatState.resolvingApprovals.clear();
@@ -185,7 +192,7 @@ export function resetChatState(): void {
   connectedConnectors.clear();
 }
 
-export function newChat(context?: { scopeId: string; name: string | null }): string {
+export function newChat(context?: { scopeId: string; name: string | null; kind: ChatContextKind }): string {
   appState.currentView = "chats";
   renderSidebarTop();
   const user = appState.me?.user ?? "anon";
@@ -193,7 +200,7 @@ export function newChat(context?: { scopeId: string; name: string | null }): str
   const carried = storedDraft(newChatDraftKey(user));
   if (carried) saveDraft(threadRef, carried);
   resetComposer();
-  mountContinuable(threadRef, null, context?.scopeId ?? null, [], context?.name ?? null);
+  mountContinuable(threadRef, null, context?.scopeId ?? null, [], context?.name ?? null, context?.kind ?? null);
   renderList();
   focusComposerEnd();
   return threadRef;
@@ -221,6 +228,7 @@ export function mountContinuable(
   scopeId: string | null,
   messages: ReturnType<typeof entriesToMessages>,
   contextName: string | null = null,
+  contextKind: ChatContextKind | null = null,
 ): void {
   if (!appState.mainEl) return;
   exitSplitIfActive();
@@ -232,6 +240,7 @@ export function mountContinuable(
   chatState.sessionId = sessionId;
   chatState.scopeId = scopeId;
   chatState.contextName = contextName;
+  chatState.contextKind = contextKind;
   chatState.rememberedThreadRef = threadRef;
   chatState.rememberedSessionId = sessionId;
   chatState.rememberedScopeId = scopeId;
@@ -532,7 +541,8 @@ function adoptActiveSessionFromList(agent: Agent): void {
   if (!match) return;
   chatState.sessionId = match.id;
   chatState.scopeId = match.scopeId;
-  if (match.channelName) chatState.contextName = match.channelName;
+  chatState.contextName = sessionContextName(match) ?? chatState.contextName;
+  chatState.contextKind = sessionContextKind(match);
   chatState.rememberedSessionId = match.id;
   chatState.rememberedScopeId = match.scopeId;
   chatState.rememberedContextName = chatState.contextName;
@@ -893,12 +903,22 @@ function lastTextNode(el: Node): Text | null {
   return null;
 }
 
+function contextMessageKeys(kind: ChatContextKind): { label: WebMessageKey; hint: WebMessageKey } {
+  if (kind === "project") return { label: "chat.contextLabelProject", hint: "chat.contextHintProject" };
+  if (kind === "channel") return { label: "chat.contextLabelChannel", hint: "chat.contextHintChannel" };
+  return { label: "chat.contextLabelGroup", hint: "chat.contextHintGroup" };
+}
+
 function contextBanner(): TemplateResult | typeof nothing {
   const label = sharedContextLabel(chatState.scopeId, chatState.contextName);
-  if (!label) return nothing;
-  const glyph = chatState.scopeId?.startsWith("group:") ? Users : Hash;
-  return html`<div class="context-banner" title=${t("chat.contextHint", { context: label })}>
-    ${icon(glyph, 13)}<span>${t("chat.contextLabel", { context: label })}</span>
+  const kind = chatState.contextKind;
+  if (!label || !kind) return nothing;
+  const keys = contextMessageKeys(kind);
+  let glyph = Hash;
+  if (kind === "project") glyph = Folder;
+  else if (kind === "group") glyph = Users;
+  return html`<div class="context-banner" title=${t(keys.hint, { context: label })}>
+    ${icon(glyph, 13)}<span>${t(keys.label, { context: label })}</span>
   </div>`;
 }
 
@@ -1106,7 +1126,8 @@ async function forkFromMessage(index: number): Promise<void> {
       forked.session.id,
       forked.session.scopeId,
       entriesToMessages(forked.entries ?? [], transcriptModel()),
-      forked.session.channelName ?? null,
+      chatState.contextName,
+      chatState.contextKind,
     );
     await refreshSessions({ silent: true });
     renderList();
