@@ -3775,7 +3775,7 @@
   <body>
     <header>
       <div class="brand"><span id="brand-product">Agent</span>&nbsp;Admin <span id="org-tag"></span></div>
-      <div class="header-controls" id="header-controls" aria-label="Page controls"></div>
+      <div class="header-controls" id="header-controls" aria-label="{{t:pageControls}}"></div>
       <div class="who hidden" id="who">
         <a class="header-button" href="/" id="dashboard-link">{{t:dashboard}}</a
         ><span class="pill" id="who-name"></span>
@@ -3835,7 +3835,7 @@
         <p class="lead">{{t:auth.deniedBody}}</p>
         <div class="card">
           <div class="body">
-            <p class="notebox">Signed in as <b id="na-sub"></b> · <span id="na-org"></span></p>
+            <p class="notebox">{{t:auth.signedInAsLabel}} <b id="na-sub"></b> · <span id="na-org"></span></p>
             <p class="hint">{{t:auth.deniedHint}}</p>
             <div class="signin-actions" style="display: flex; gap: 10px; margin-top: 8px; justify-content: center">
               <a class="link" href="/">{{t:auth.backToSurfaces}}</a>
@@ -3848,7 +3848,7 @@
 
     <main class="admin-app hidden" id="app-view">
       <aside class="admin-sidebar" aria-label="{{t:adminNavigation}}">
-        <div class="sidebar-title">Admin</div>
+        <div class="sidebar-title">{{t:section.admin}}</div>
         <nav class="tabs" id="tabs"></nav>
       </aside>
 
@@ -3858,25 +3858,20 @@
 
           <div id="view-onboarding" class="hidden">
             <div class="setup-head">
-              <p class="governance-eyebrow">Temporary setup guide</p>
-              <h1>Onboarding</h1>
-              <p class="lead">
-                Get this QM instance ready for real conversations. Secrets are validated, encrypted in durable storage,
-                and never displayed again.
-              </p>
+              <p class="governance-eyebrow">{{t:onboarding.eyebrow}}</p>
+              <h1>{{t:onboarding.title}}</h1>
+              <p class="lead">{{t:onboarding.intro}}</p>
             </div>
             <div class="setup-grid">
               <section class="setup-step">
-                <span class="badge muted" id="onboarding-model-badge">Not ready</span>
-                <h2>1. Model provider</h2>
-                <p id="onboarding-model-summary">Add the key QM will use for its base model.</p>
+                <span class="badge muted" id="onboarding-model-badge">{{t:state.notReady}}</span>
+                <h2>{{t:onboarding.modelStep}}</h2>
+                <p id="onboarding-model-summary">{{t:onboarding.modelSummary}}</p>
               </section>
               <section class="setup-step">
-                <span class="badge muted" id="onboarding-slack-badge">Optional</span>
-                <h2>2. Slack app</h2>
-                <p id="onboarding-slack-summary">
-                  Create the QM app, install it, then add its bot and Socket Mode tokens.
-                </p>
+                <span class="badge muted" id="onboarding-slack-badge">{{t:state.optional}}</span>
+                <h2>{{t:onboarding.slackStep}}</h2>
+                <p id="onboarding-slack-summary">{{t:onboarding.slackSummary}}</p>
                 <div class="foot">
                   <a
                     class="header-button"
@@ -3884,47 +3879,46 @@
                     href="https://api.slack.com/apps?new_app=1"
                     target="_blank"
                     rel="noopener noreferrer"
-                    >Create QM Slack app ↗</a
+                    >{{t:onboarding.createSlack}}</a
                   >
-                  <button type="button" data-onboarding-target="slack">Enter Slack tokens</button>
+                  <button type="button" data-onboarding-target="slack">{{t:onboarding.enterSlack}}</button>
                 </div>
               </section>
               <section class="setup-step">
-                <span class="badge muted" id="onboarding-oauth-badge">Optional</span>
-                <h2>3. OAuth apps</h2>
-                <p id="onboarding-oauth-summary">
-                  Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.
-                </p>
+                <span class="badge muted" id="onboarding-oauth-badge">{{t:state.optional}}</span>
+                <h2>{{t:onboarding.oauthStep}}</h2>
+                <p id="onboarding-oauth-summary">{{t:onboarding.oauthSummary}}</p>
                 <div class="foot">
-                  <button type="button" data-onboarding-target="oauth">Configure OAuth apps</button>
+                  <button type="button" data-onboarding-target="oauth">{{t:onboarding.configureOauth}}</button>
                 </div>
               </section>
             </div>
             <section class="card">
               <div class="head">
-                <h2>Base model</h2>
-                <p>
-                  Choose a supported provider and model. Saving validates the key, stores it write-only, and makes the
-                  selected model the organization default.
-                </p>
+                <h2>{{t:onboarding.baseModel}}</h2>
+                <p>{{t:onboarding.baseModelBody}}</p>
               </div>
               <div class="body setup-form">
                 <label
-                  >Provider
+                  >{{t:common.provider}}
                   <select id="onboarding-model-provider"></select>
                 </label>
                 <label
-                  >Base model
+                  >{{t:onboarding.baseModel}}
                   <select id="onboarding-model-id"></select
                 ></label>
                 <label
-                  >API key
-                  <input type="password" id="onboarding-model-key" autocomplete="off" placeholder="Write-only API key"
+                  >{{t:onboarding.apiKey}}
+                  <input
+                    type="password"
+                    id="onboarding-model-key"
+                    autocomplete="off"
+                    placeholder="{{t:onboarding.apiKeyPlaceholder}}"
                 /></label>
               </div>
               <div class="foot">
-                <button class="primary" id="onboarding-model-save">Validate and save</button
-                ><button class="danger" id="onboarding-model-delete">Disable this provider</button
+                <button class="primary" id="onboarding-model-save">{{t:onboarding.validateSave}}</button
+                ><button class="danger" id="onboarding-model-delete">{{t:onboarding.disableProvider}}</button
                 ><span class="status" id="st-onboarding-model"></span>
               </div>
             </section>
@@ -3933,438 +3927,383 @@
           <div id="view-governance">
             <div class="governance-page-head">
               <div>
-                <p class="governance-eyebrow">Control plane</p>
-                <h1>Governance</h1>
-                <p class="lead">
-                  Set the organization’s operating boundaries and review what agents can effectively do before changing
-                  them.
-                </p>
+                <p class="governance-eyebrow">{{t:governance.eyebrow}}</p>
+                <h1>{{t:governance.title}}</h1>
+                <p class="lead">{{t:governance.intro}}</p>
               </div>
-              <div class="governance-scope" aria-label="Selected governance scope">
-                <span>Scope</span><strong id="governance-scope-label">Organization</strong>
+              <div class="governance-scope" aria-label="{{t:governance.selectedScope}}">
+                <span>{{t:common.scope}}</span><strong id="governance-scope-label">{{t:common.organization}}</strong>
               </div>
             </div>
             <section class="governance-overview" id="governance-overview" aria-labelledby="governance-overview-title">
               <div class="governance-overview-head">
-                <h2 id="governance-overview-title">Effective state</h2>
-                <p>Resolved for this scope now</p>
+                <h2 id="governance-overview-title">{{t:governance.effectiveState}}</h2>
+                <p>{{t:governance.resolvedNow}}</p>
               </div>
               <div class="governance-status-grid">
                 <div class="governance-status" id="governance-status-posture">
-                  <span class="k">Autonomy</span><span class="v">Loading</span
-                  ><span class="detail">Security posture</span>
+                  <span class="k">{{t:governance.autonomy}}</span><span class="v">{{t:state.loading}}</span
+                  ><span class="detail">{{t:governance.securityPosture}}</span>
                 </div>
                 <div class="governance-status" id="governance-status-egress">
-                  <span class="k">Network</span><span class="v">Loading</span
-                  ><span class="detail">Outbound enforcement</span>
+                  <span class="k">{{t:governance.network}}</span><span class="v">{{t:state.loading}}</span
+                  ><span class="detail">{{t:governance.outboundEnforcement}}</span>
                 </div>
                 <div class="governance-status" id="governance-status-audience">
-                  <span class="k">Slack audience</span><span class="v">Loading</span
-                  ><span class="detail">External participants</span>
+                  <span class="k">{{t:governance.slackAudience}}</span><span class="v">{{t:state.loading}}</span
+                  ><span class="detail">{{t:governance.externalParticipants}}</span>
                 </div>
                 <div class="governance-status" id="governance-status-model">
-                  <span class="k">Intelligence</span><span class="v">Loading</span
-                  ><span class="detail">Base model</span>
+                  <span class="k">{{t:governance.intelligence}}</span><span class="v">{{t:state.loading}}</span
+                  ><span class="detail">{{t:onboarding.baseModel}}</span>
                 </div>
               </div>
             </section>
             <div class="governance-layout">
-              <nav class="governance-sections" aria-label="Governance sections">
-                <a href="#governance-autonomy" aria-current="true">Autonomy</a>
-                <a href="#governance-boundaries">Data boundaries</a>
-                <a href="#governance-intelligence">Models &amp; browsing</a>
-                <a href="#governance-credentials">Credentials</a>
+              <nav class="governance-sections" aria-label="{{t:governance.sections}}">
+                <a href="#governance-autonomy" aria-current="true">{{t:governance.autonomy}}</a>
+                <a href="#governance-boundaries">{{t:governance.dataBoundaries}}</a>
+                <a href="#governance-intelligence">{{t:governance.modelsBrowsing}}</a>
+                <a href="#governance-credentials">{{t:governance.credentials}}</a>
               </nav>
               <div class="governance-content">
                 <div class="governance-group" id="governance-autonomy">
-                  <h2>Autonomy</h2>
-                  <p>How agents reason, act, and respond without supervision.</p>
+                  <h2>{{t:governance.autonomy}}</h2>
+                  <p>{{t:governance.autonomyBody}}</p>
                 </div>
                 <section class="card setting-row hidden" id="card-security-posture">
                   <div class="head">
-                    <h2>Security posture</h2>
-                    <p>
-                      How much autonomy the harness gets in this scope. The org setting is a minimum; narrower scopes
-                      may tighten it but cannot weaken it. Identity, tenant isolation, credential scope, revocation, and
-                      audit always remain enforced.
-                    </p>
+                    <h2>{{t:governance.securityPosture}}</h2>
+                    <p>{{t:governance.postureBody}}</p>
                   </div>
                   <div class="body">
-                    <label for="security-posture">Posture</label>
+                    <label for="security-posture">{{t:governance.posture}}</label>
                     <select id="security-posture" style="max-width: 440px">
-                      <option value="dangerous">Dangerous — no content scans; nothing pauses between tool calls</option>
-                      <option value="auto">Auto — screen external content with proxy or model</option>
-                      <option value="strict">Strict — approve tool actions; direct mutations blocked</option>
+                      <option value="dangerous">{{t:governance.postureDangerous}}</option>
+                      <option value="auto">{{t:governance.postureAuto}}</option>
+                      <option value="strict">{{t:governance.postureStrict}}</option>
                     </select>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="security-posture">Apply</button
+                    <button class="primary" data-save="security-posture">{{t:action.apply}}</button
                     ><span class="status" id="st-security-posture"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-approval-grant-modes">
                   <div class="head">
-                    <h2>Approval grant options</h2>
-                    <p>
-                      Which standing options an approval card offers besides "Allow once". Composes tighten-only with
-                      the org value; disabling a mode also suspends existing grants of that mode until it is re-enabled.
-                      Predeclared command approvals and strict-posture tool approvals both honor this.
-                    </p>
+                    <h2>{{t:governance.approvalOptions}}</h2>
+                    <p>{{t:governance.approvalOptionsBody}}</p>
                   </div>
                   <div class="body">
                     <label
-                      ><input type="checkbox" id="approval-grant-session" /> Offer "Allow session" (grant lasts for the
-                      conversation)</label
+                      ><input type="checkbox" id="approval-grant-session" /> {{t:governance.allowSession}}</label
                     >
                     <label
-                      ><input type="checkbox" id="approval-grant-always" /> Offer "Allow always" (standing grant across
-                      turns)</label
+                      ><input type="checkbox" id="approval-grant-always" /> {{t:governance.allowAlways}}</label
                     >
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="approval-grant-modes">Apply</button
+                    <button class="primary" data-save="approval-grant-modes">{{t:action.apply}}</button
                     ><span class="status" id="st-approval-grant-modes"></span>
                   </div>
                 </section>
                 <section class="card" id="card-command-policy">
                   <div class="head">
-                    <h2>Command policy</h2>
-                    <p>Patterns matched against each executed command. First match wins.</p>
+                    <h2>{{t:governance.commandPolicy}}</h2>
+                    <p>{{t:governance.commandPolicyBody}}</p>
                   </div>
                   <div class="body">
-                    <label for="mode">Mode</label>
+                    <label for="mode">{{t:governance.mode}}</label>
                     <select id="mode" style="max-width: 240px">
-                      <option value="denylist">denylist — gate dangerous commands</option>
-                      <option value="allowlist">allowlist — only listed commands run</option>
+                      <option value="denylist">{{t:governance.denylistMode}}</option>
+                      <option value="allowlist">{{t:governance.allowlistMode}}</option>
                     </select>
                     <div class="tablewrap" style="margin-top: 14px">
                       <table class="rules policy-table">
                         <thead>
                           <tr>
-                            <th>Priority</th>
-                            <th>Pattern</th>
-                            <th>Effect</th>
-                            <th>Reason</th>
-                            <th>Order</th>
+                            <th>{{t:common.priority}}</th>
+                            <th>{{t:common.pattern}}</th>
+                            <th>{{t:common.effect}}</th>
+                            <th>{{t:common.reason}}</th>
+                            <th>{{t:common.order}}</th>
                           </tr>
                         </thead>
                         <tbody id="rules"></tbody>
                       </table>
                     </div>
-                    <p class="hint rules-empty" id="rules-empty">No command rules yet.</p>
-                    <button id="add-rule" type="button" style="margin-top: 10px">+ Add rule</button>
+                    <p class="hint rules-empty" id="rules-empty">{{t:governance.noCommandRules}}</p>
+                    <button id="add-rule" type="button" style="margin-top: 10px">{{t:governance.addRule}}</button>
                     <div class="policy-warnings" id="policy-warnings" aria-live="polite"></div>
                     <div class="policy-lab">
                       <div class="policy-lab-grid">
                         <label for="policy-sample"
-                          >Test a command<input
+                          >{{t:governance.testCommand}}<input
                             type="text"
                             id="policy-sample"
                             placeholder="git push --force origin main"
                             autocomplete="off"
                             spellcheck="false"
                         /></label>
-                        <button id="policy-simulate" type="button">Simulate</button>
+                        <button id="policy-simulate" type="button">{{t:governance.simulate}}</button>
                       </div>
                       <div class="policy-result" id="policy-result" aria-live="polite">
-                        Enter a sample command to test the scope policy. Deployment rules may further restrict
-                        execution.
+                        {{t:governance.simulationPrompt}}
                       </div>
                     </div>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="command-policy">Save</button
+                    <button class="primary" data-save="command-policy">{{t:action.save}}</button
                     ><span class="status" id="st-policy"></span>
                   </div>
                 </section>
                 <section class="card" id="card-soul">
                   <div class="head">
-                    <h2>SOUL editor</h2>
-                    <p>
-                      Write the standing instructions composed into every system prompt for this scope. Saving creates a
-                      durable revision; restoring an older revision creates a new one.
-                    </p>
+                    <h2>{{t:governance.soulEditor}}</h2>
+                    <p>{{t:governance.soulBody}}</p>
                   </div>
                   <div class="body soul-workbench">
-                    <label for="soul">Standing instructions</label>
-                    <textarea id="soul" maxlength="100000" placeholder="No scope-specific instructions"></textarea>
+                    <label for="soul">{{t:governance.standingInstructions}}</label>
+                    <textarea
+                      id="soul"
+                      maxlength="100000"
+                      placeholder="{{t:governance.noScopeInstructions}}"
+                    ></textarea>
                     <div class="soul-meta">
                       <span id="soul-ver"></span><span id="soul-size"></span><span id="soul-validation"></span>
                     </div>
                     <div class="soul-diff" id="soul-diff">
                       <section>
-                        <h3>Saved revision</h3>
-                        <pre id="soul-saved">No saved instructions</pre>
+                        <h3>{{t:governance.savedRevision}}</h3>
+                        <pre id="soul-saved">{{t:governance.noSavedInstructions}}</pre>
                       </section>
                       <section>
-                        <h3>Current draft</h3>
-                        <pre id="soul-draft">No draft changes</pre>
+                        <h3>{{t:governance.currentDraft}}</h3>
+                        <pre id="soul-draft">{{t:governance.noDraftChanges}}</pre>
                       </section>
                     </div>
-                    <div class="soul-history" id="soul-history" aria-label="SOUL version history"></div>
+                    <div class="soul-history" id="soul-history" aria-label="{{t:governance.versionHistory}}"></div>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="soul">Save</button><span class="status" id="st-soul"></span>
+                    <button class="primary" data-save="soul">{{t:action.save}}</button
+                    ><span class="status" id="st-soul"></span>
                   </div>
                 </section>
                 <section class="card hidden" id="card-ambient-policy">
                   <div class="head">
-                    <h2>Ambient policy</h2>
-                    <p>
-                      What the agent proactively acts on in this channel. The standing order is plain prose the ambient
-                      judge weighs each batch of new messages against — empty means it stays silent unless addressed.
-                      The bot ledger says how each automated poster is treated: <b>ignore</b> never wakes the judge,
-                      <b>rollup</b> batches its posts (judged at most once per the given hours), <b>action</b> marks its
-                      posts as triggers to act on, <b>user</b> reads it like a person.
-                    </p>
+                    <h2>{{t:governance.ambientPolicy}}</h2>
+                    <p>{{t:governance.ambientBody}}</p>
                   </div>
                   <div class="body">
-                    <label for="ambient-enabled">Ambient behavior</label>
-                    <p class="hint" style="margin: 2px 0 6px">
-                      When off, the agent never wakes on overheard messages in this channel — it only responds to direct
-                      @mentions. Default: on for channels with 8 or fewer members, off for larger ones.
-                    </p>
+                    <label for="ambient-enabled">{{t:governance.ambientBehavior}}</label>
+                    <p class="hint" style="margin: 2px 0 6px">{{t:governance.ambientHint}}</p>
                     <select id="ambient-enabled" style="margin-bottom: 14px">
-                      <option value="default">Default (by channel size)</option>
-                      <option value="on">On</option>
-                      <option value="off">Off</option>
+                      <option value="default">{{t:governance.defaultByChannelSize}}</option>
+                      <option value="on">{{t:governance.on}}</option>
+                      <option value="off">{{t:governance.off}}</option>
                     </select>
-                    <label for="ambient-orders">Standing order</label>
+                    <label for="ambient-orders">{{t:governance.standingOrder}}</label>
                     <textarea
                       id="ambient-orders"
-                      placeholder="(none — the agent stays silent here unless addressed)"
+                      placeholder="{{t:governance.noStandingOrder}}"
                     ></textarea>
                     <div class="tablewrap" style="margin-top: 14px">
                       <table class="rules">
                         <thead>
                           <tr>
-                            <th style="width: 34%">Bot (author name)</th>
-                            <th style="width: 30%">Handling</th>
-                            <th>Rollup hours</th>
+                            <th style="width: 34%">{{t:governance.botAuthor}}</th>
+                            <th style="width: 30%">{{t:governance.handling}}</th>
+                            <th>{{t:governance.rollupHours}}</th>
                             <th></th>
                           </tr>
                         </thead>
                         <tbody id="ambient-bots"></tbody>
                       </table>
                     </div>
-                    <p class="hint rules-empty" id="ambient-bots-empty">No bots in the ledger yet.</p>
-                    <button id="add-bot" type="button" style="margin-top: 10px">+ Add bot</button>
+                    <p class="hint rules-empty" id="ambient-bots-empty">{{t:governance.noBots}}</p>
+                    <button id="add-bot" type="button" style="margin-top: 10px">{{t:governance.addBot}}</button>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="ambient-policy">Save</button
+                    <button class="primary" data-save="ambient-policy">{{t:action.save}}</button
                     ><span class="status" id="st-ambient-policy"></span>
                   </div>
                 </section>
                 <div class="governance-group" id="governance-boundaries">
-                  <h2>Data boundaries</h2>
-                  <p>What can leave a scope, which audiences can see it, and how deployment authority is carried.</p>
+                  <h2>{{t:governance.dataBoundaries}}</h2>
+                  <p>{{t:governance.boundariesBody}}</p>
                 </div>
                 <section class="card" id="card-egress">
                   <div class="head">
-                    <h2>Egress</h2>
-                    <p>
-                      Outbound host controls for this scope. Enforcement depends on the active sandbox backend; this
-                      page reports that capability instead of implying every saved rule is live.
-                    </p>
+                    <h2>{{t:governance.egress}}</h2>
+                    <p>{{t:governance.egressBody}}</p>
                   </div>
                   <div class="body">
                     <div class="governance-capability" id="egress-capability" role="status">
                       <div>
-                        <strong>Policy is draft only</strong
-                        ><span
-                          >The current sandbox backend does not enforce outbound host policy. Agents still have open
-                          outbound access.</span
-                        >
+                        <strong>{{t:governance.policyDraftOnly}}</strong><span>{{t:governance.policyDraftBody}}</span>
                       </div>
                     </div>
                     <div class="egress-state">
-                      <div><span class="k">Backend</span><span class="v" id="egress-backend">Loading</span></div>
                       <div>
-                        <span class="k">Enforcement</span><span class="v" id="egress-enforcement">Loading</span>
+                        <span class="k">{{t:governance.backend}}</span
+                        ><span class="v" id="egress-backend">{{t:state.loading}}</span>
                       </div>
                       <div>
-                        <span class="k">Effective policy</span
+                        <span class="k">{{t:governance.enforcement}}</span
+                        ><span class="v" id="egress-enforcement">{{t:state.loading}}</span>
+                      </div>
+                      <div>
+                        <span class="k">{{t:governance.effectivePolicy}}</span
                         ><span
                           class="v"
                           id="egress-effective"
                           title="Organization and selected-scope rules; audience-specific policies may narrow this further"
-                          >Loading</span
+                          >{{t:state.loading}}</span
                         >
                       </div>
                     </div>
                     <label style="display: block; margin-bottom: 4px"
-                      >Denylist
-                      <span class="hint"
-                        >hosts the agent may never reach — exact host or any subdomain, one per line.</span
-                      ></label
+                      >{{t:governance.denylist}} <span class="hint">{{t:governance.denylistHint}}</span></label
                     >
                     <textarea id="egress-deny" placeholder="ads.example.com&#10;pastebin.com"></textarea>
                     <label style="display: block; margin: 12px 0 4px"
-                      >Allowlist
-                      <span class="hint"
-                        >when present, only these outbound hosts may be reached. Empty = otherwise open.</span
-                      ></label
+                      >{{t:governance.allowlist}} <span class="hint">{{t:governance.allowlistHint}}</span></label
                     >
                     <textarea id="egress" placeholder="example.com&#10;api.internal"></textarea>
                     <div class="policy-warnings" id="egress-warnings" aria-live="polite"></div>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="egress">Save draft</button
+                    <button class="primary" data-save="egress">{{t:governance.saveDraft}}</button
                     ><span class="status" id="st-egress"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-external-slack">
                   <div class="head">
-                    <h2>External Slack participants</h2>
-                    <p>
-                      Org-wide, default off. When on, internal members may chat with the agent in Slack rooms whose
-                      audience includes an external user (Connect member or guest) — its replies, and anything it reads
-                      there, are visible to those externals. Externals themselves still can't interact.
-                    </p>
+                    <h2>{{t:governance.externalSlack}}</h2>
+                    <p>{{t:governance.externalSlackBody}}</p>
                   </div>
                   <div class="body">
                     <label class="setting-toggle">
                       <input type="checkbox" id="external-slack-participants" />
                       <span class="setting-switch" aria-hidden="true"></span>
                       <span class="setting-copy"
-                        ><strong>Allow mixed Slack rooms</strong
-                        ><small
-                          >Internal members can use the agent where guests or Connect members are present.</small
-                        ></span
+                        ><strong>{{t:governance.allowMixedSlack}}</strong
+                        ><small>{{t:governance.mixedSlackHint}}</small></span
                       >
                     </label>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="external-slack-participants">Apply</button
+                    <button class="primary" data-save="external-slack-participants">{{t:action.apply}}</button
                     ><span class="status" id="st-external-slack-participants"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-org-ambient">
                   <div class="head">
-                    <h2>Ambient behavior</h2>
-                    <p>
-                      Org-wide, default on. When off, the agent never acts on overheard messages in any channel,
-                      regardless of per-channel settings — it only responds to direct @mentions.
-                    </p>
+                    <h2>{{t:governance.ambientBehavior}}</h2>
+                    <p>{{t:governance.ambientHint}}</p>
                   </div>
                   <div class="body">
                     <label class="setting-toggle">
                       <input type="checkbox" id="org-ambient" />
                       <span class="setting-switch" aria-hidden="true"></span>
                       <span class="setting-copy"
-                        ><strong>Allow ambient behavior</strong
-                        ><small
-                          >Channels choose per-channel; without a choice, ambient defaults off in channels with more
-                          than 8 members.</small
-                        ></span
+                        ><strong>{{t:governance.allowAmbient}}</strong
+                        ><small>{{t:governance.allowAmbientHint}}</small></span
                       >
                     </label>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="org-ambient">Apply</button
+                    <button class="primary" data-save="org-ambient">{{t:action.apply}}</button
                     ><span class="status" id="st-org-ambient"></span>
                   </div>
                 </section>
                 <div class="governance-group" id="governance-intelligence">
-                  <h2>Models &amp; browsing</h2>
-                  <p>The models, browser runtime, and organization context available on future turns.</p>
+                  <h2>{{t:governance.modelsBrowsing}}</h2>
+                  <p>{{t:governance.modelsBody}}</p>
                 </div>
                 <section class="card setting-row hidden" id="card-interactive-fast-mode">
                   <div class="head">
-                    <h2>Fast mode for interactive turns</h2>
-                    <p>
-                      Org-wide, default off. When on, human turns run in fast mode on fast-capable models unless the
-                      turn asks otherwise. Requires fast-mode quota with the provider.
-                    </p>
+                    <h2>{{t:governance.fastMode}}</h2>
+                    <p>{{t:governance.fastModeBody}}</p>
                   </div>
                   <div class="body">
                     <label class="setting-toggle">
                       <input type="checkbox" id="interactive-fast-mode" />
                       <span class="setting-switch" aria-hidden="true"></span>
                       <span class="setting-copy"
-                        ><strong>Default interactive turns to fast mode</strong
-                        ><small
-                          >A turn that picks its own fast-mode setting (for example the web UI toggle) still
-                          wins.</small
-                        ></span
+                        ><strong>{{t:governance.defaultFast}}</strong
+                        ><small>{{t:governance.defaultFastHint}}</small></span
                       >
                     </label>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="interactive-fast-mode">Apply</button
+                    <button class="primary" data-save="interactive-fast-mode">{{t:action.apply}}</button
                     ><span class="status" id="st-interactive-fast-mode"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-base-model">
                   <div class="head">
-                    <h2>Default harness and model</h2>
-                    <p>The runtime inherited by scopes without an override. Takes effect from the next turn.</p>
+                    <h2>{{t:governance.defaultHarnessModel}}</h2>
+                    <p>{{t:governance.defaultHarnessBody}}</p>
                   </div>
                   <div class="body">
-                    <label for="base-harness">Harness</label>
+                    <label for="base-harness">{{t:governance.harness}}</label>
                     <select id="base-harness" style="max-width: 360px"></select>
-                    <label for="base-model">Model</label>
+                    <label for="base-model">{{t:common.model}}</label>
                     <select id="base-model" style="max-width: 360px"></select>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="runtime">Apply</button
+                    <button class="primary" data-save="runtime">{{t:action.apply}}</button
                     ><span class="status" id="st-runtime"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-approved-harnesses">
                   <div class="head">
-                    <h2>Approved harnesses</h2>
-                    <p>Harnesses people may choose in the web UI or ask the agent to use.</p>
+                    <h2>{{t:governance.approvedHarnesses}}</h2>
+                    <p>{{t:governance.approvedHarnessesBody}}</p>
                   </div>
                   <div class="body">
                     <div id="approved-harnesses-list" style="display: flex; flex-direction: column; gap: 6px"></div>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="approved-harnesses">Apply</button
+                    <button class="primary" data-save="approved-harnesses">{{t:action.apply}}</button
                     ><span class="status" id="st-approved-harnesses"></span>
                   </div>
                 </section>
                 <section class="card hidden" id="card-webui-models">
                   <div class="head">
-                    <h2>Allowed models</h2>
-                    <p>
-                      Restrict which models the web UI offers and accepts, org-wide. Add the models to allow and pick
-                      which is pre-selected by default. Remove every chip to allow the deployment's full model set.
-                    </p>
+                    <h2>{{t:governance.allowedModels}}</h2>
+                    <p>{{t:governance.allowedModelsBody}}</p>
                   </div>
                   <div class="body">
                     <div id="webui-models-chips" style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
                       <input
                         id="webui-models-add"
                         list="webui-models-catalog"
-                        placeholder="+ Add model"
+                        placeholder="{{t:governance.addModel}}"
                         style="max-width: 240px"
                       />
                       <datalist id="webui-models-catalog"></datalist>
                     </div>
-                    <label for="webui-models-default" style="margin-top: 10px">Default</label>
+                    <label for="webui-models-default" style="margin-top: 10px">{{t:governance.default}}</label>
                     <select id="webui-models-default" style="max-width: 360px"></select>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="webui-models">Save</button
+                    <button class="primary" data-save="webui-models">{{t:action.save}}</button
                     ><span class="status" id="st-webui-models"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-branding">
                   <div class="head">
-                    <h2>Branding</h2>
-                    <p>
-                      How this org's surfaces look. Accent is the highlight color across the web UI, admin, and portal;
-                      mark is the 1–2 character badge in the web UI; label is the assistant's name in transcripts. Leave
-                      a field blank to use the deployment default.
-                    </p>
+                    <h2>{{t:governance.branding}}</h2>
+                    <p>{{t:governance.brandingBody}}</p>
                   </div>
                   <div class="body">
-                    <label for="branding-accent">Accent color</label>
+                    <label for="branding-accent">{{t:governance.accentColor}}</label>
                     <input type="text" id="branding-accent" style="max-width: 200px" placeholder="#4f46e5" />
-                    <label for="branding-mark" style="margin-top: 12px">Brand mark (1–2 chars)</label>
+                    <label for="branding-mark" style="margin-top: 12px">{{t:governance.brandMark}}</label>
                     <input type="text" id="branding-mark" style="max-width: 200px" maxlength="2" placeholder="A" />
-                    <label for="branding-self-label" style="margin-top: 12px">Assistant label</label>
+                    <label for="branding-self-label" style="margin-top: 12px">{{t:governance.assistantLabel}}</label>
                     <input
                       type="text"
                       id="branding-self-label"
@@ -4374,20 +4313,17 @@
                     />
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="branding">Apply</button
+                    <button class="primary" data-save="branding">{{t:action.apply}}</button
                     ><span class="status" id="st-branding"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-people-directory">
                   <div class="head">
-                    <h2>People directory</h2>
-                    <p>
-                      Public page or URL where the agent can look up a person's current role or title (e.g.
-                      https://www.example.com/people). Used when getting to know someone. Leave blank to disable.
-                    </p>
+                    <h2>{{t:governance.peopleDirectory}}</h2>
+                    <p>{{t:governance.peopleDirectoryBody}}</p>
                   </div>
                   <div class="body">
-                    <label for="people-directory-url">Directory URL</label>
+                    <label for="people-directory-url">{{t:governance.directoryUrl}}</label>
                     <input
                       type="text"
                       id="people-directory-url"
@@ -4396,38 +4332,31 @@
                     />
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="people-directory-url">Apply</button
+                    <button class="primary" data-save="people-directory-url">{{t:action.apply}}</button
                     ><span class="status" id="st-people-directory-url"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-browse-model">
                   <div class="head">
-                    <h2>Browse model</h2>
-                    <p>
-                      The model driving the browser agent in the browse skill, org-wide. Leave on the default to follow
-                      the deployment's base model. Fast mode applies only on Opus models; other models run at standard
-                      speed.
-                    </p>
+                    <h2>{{t:governance.browseModel}}</h2>
+                    <p>{{t:governance.browseModelBody}}</p>
                   </div>
                   <div class="body">
-                    <label for="browse-model">Model</label>
+                    <label for="browse-model">{{t:common.model}}</label>
                     <select id="browse-model" style="max-width: 360px"></select>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="browse-model">Apply</button
+                    <button class="primary" data-save="browse-model">{{t:action.apply}}</button
                     ><span class="status" id="st-browse-model"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-browse-max-steps">
                   <div class="head">
-                    <h2>Browse step limit</h2>
-                    <p>
-                      Max browser steps a single browse task may take, org-wide. Each step is one action (click, type,
-                      navigate) by the browser agent. Leave blank for the default of 50.
-                    </p>
+                    <h2>{{t:governance.browseSteps}}</h2>
+                    <p>{{t:governance.browseStepsBody}}</p>
                   </div>
                   <div class="body">
-                    <label for="browse-max-steps">Max steps</label>
+                    <label for="browse-max-steps">{{t:governance.maxSteps}}</label>
                     <input
                       type="number"
                       id="browse-max-steps"
@@ -4439,20 +4368,17 @@
                     />
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="browse-max-steps">Apply</button
+                    <button class="primary" data-save="browse-max-steps">{{t:action.apply}}</button
                     ><span class="status" id="st-browse-max-steps"></span>
                   </div>
                 </section>
                 <section class="card setting-row hidden" id="card-turn-wall-clock">
                   <div class="head">
-                    <h2>Turn time limit</h2>
-                    <p>
-                      Maximum wall-clock time for a turn, org-wide. Use 60–86400 seconds, 0 for no limit, or leave blank
-                      to use the deployment default.
-                    </p>
+                    <h2>{{t:governance.turnLimit}}</h2>
+                    <p>{{t:governance.turnLimitBody}}</p>
                   </div>
                   <div class="body">
-                    <label for="turn-wall-clock">Seconds</label>
+                    <label for="turn-wall-clock">{{t:governance.seconds}}</label>
                     <input
                       type="number"
                       id="turn-wall-clock"
@@ -4460,45 +4386,45 @@
                       max="86400"
                       step="1"
                       style="max-width: 160px"
-                      placeholder="Deployment default"
+                      placeholder="{{t:governance.default}}"
                     />
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="turn-wall-clock">Apply</button
+                    <button class="primary" data-save="turn-wall-clock">{{t:action.apply}}</button
                     ><span class="status" id="st-turn-wall-clock"></span>
                   </div>
                 </section>
                 <div class="governance-group" id="governance-credentials">
-                  <h2>Credentials</h2>
-                  <p>Shared server-side authority available to agents in this organization.</p>
+                  <h2>{{t:governance.credentials}}</h2>
+                  <p>{{t:credentials.intro}}</p>
                 </div>
                 <section class="card" id="card-service-credentials">
                   <div class="head">
-                    <h2>Shared service credentials</h2>
-                    <p>
-                      Server-side credentials vended through the broker. Review the complete effective
-                      capability—destination, authentication, methods, paths, and principals—before saving. Secrets
-                      never reach a sandbox.
-                    </p>
+                    <h2>{{t:credentials.shared}}</h2>
+                    <p>{{t:credentials.sharedBody}}</p>
                   </div>
-                  <div class="body"><div id="sc-list" class="hint">No credentials configured.</div></div>
+                  <div class="body"><div id="sc-list" class="hint">{{t:credentials.none}}</div></div>
                   <div class="body" style="border-top: 1px solid var(--border, #2a2a2a); padding-top: 12px">
                     <div class="sc-form-head">
-                      <p class="hint" id="sc-form-title">Add a credential</p>
-                      <span class="badge muted" id="sc-form-mode">New</span>
+                      <p class="hint" id="sc-form-title">{{t:credentials.add}}</p>
+                      <span class="badge muted" id="sc-form-mode">{{t:state.new}}</span>
                     </div>
                     <div class="sc-semantics" aria-label="Blank value semantics">
                       <div>
-                        <strong>Blank secret</strong
-                        ><span id="sc-secret-semantics">New credentials require a secret.</span>
+                        <strong>{{t:credentials.blankSecret}}</strong
+                        ><span id="sc-secret-semantics">{{t:credentials.blankSecretBody}}</span>
                       </div>
-                      <div><strong>Blank method</strong><span>Uses the broker default: GET only.</span></div>
-                      <div><strong>Blank paths</strong><span>Allows every path on the selected host.</span></div>
+                      <div>
+                        <strong>{{t:credentials.blankMethod}}</strong><span>{{t:credentials.blankMethodBody}}</span>
+                      </div>
+                      <div>
+                        <strong>{{t:credentials.blankPaths}}</strong><span>{{t:credentials.blankPathsBody}}</span>
+                      </div>
                     </div>
                     <div class="editor-grid">
                       <div>
                         <label style="display: block; margin-bottom: 8px"
-                          >Slug <span class="hint">lowercase identifier</span
+                          >{{t:credentials.slug}} <span class="hint">{{t:credentials.slugHint}}</span
                           ><input
                             type="text"
                             id="sc-slug"
@@ -4507,23 +4433,26 @@
                             style="width: 100%"
                         /></label>
                         <label style="display: block; margin-bottom: 8px"
-                          >Display name
-                          <input type="text" id="sc-name" placeholder="Credential display name" style="width: 100%"
+                          >{{t:credentials.displayName}}
+                          <input
+                            type="text"
+                            id="sc-name"
+                            placeholder="{{t:credentials.displayNamePlaceholder}}"
+                            style="width: 100%"
                         /></label>
                         <label style="display: block; margin-bottom: 8px"
-                          >Delivery <span class="hint">how the secret is used</span>
+                          >{{t:credentials.delivery}} <span class="hint">{{t:credentials.deliveryHint}}</span>
                           <select id="sc-delivery" style="width: 100%">
                             <option value="broker">
-                              Broker — core stamps it onto proxied HTTP calls; the secret never leaves core
+                              {{t:credentials.brokerDelivery}}
                             </option>
                             <option value="env">
-                              Sandbox env — injected into all-internal conversations under an env var (e.g. a
-                              browser-provider key for the browse skill)
+                              {{t:credentials.envDelivery}}
                             </option>
                           </select>
                         </label>
                         <label style="display: block; margin-bottom: 8px" class="sc-env-only hidden"
-                          >Env var <span class="hint">UPPER_SNAKE_CASE; the skill reads this</span
+                          >{{t:credentials.envVar}} <span class="hint">{{t:credentials.envVarHint}}</span
                           ><input
                             type="text"
                             id="sc-envkey"
@@ -4532,7 +4461,7 @@
                             style="width: 100%"
                         /></label>
                         <label style="display: block; margin-bottom: 8px" class="sc-broker-only"
-                          >Destination host <span class="hint">bare hostname only</span
+                          >{{t:credentials.destinationHost}} <span class="hint">{{t:credentials.hostHint}}</span
                           ><input
                             type="text"
                             id="sc-host"
@@ -4541,44 +4470,43 @@
                             style="width: 100%"
                         /></label>
                         <label style="display: block; margin-bottom: 8px"
-                          >Secret
+                          >{{t:credentials.secret}}
                           <input
                             type="password"
                             id="sc-secret"
                             autocomplete="new-password"
-                            placeholder="Write-only secret"
+                            placeholder="{{t:credentials.secret}}"
                             style="width: 100%"
                         /></label>
                         <p class="field-hint" id="sc-secret-hint">
-                          The secret is write-only. It cannot be viewed after saving.
+                          {{t:credentials.secretHint}}
                         </p>
                         <div class="sc-broker-only" style="display: flex; gap: 10px">
                           <label style="display: block; margin-bottom: 8px; flex: 1"
-                            >Authentication header <span class="hint">blank = Authorization</span
+                            >{{t:credentials.authHeader}} <span class="hint">{{t:credentials.authHeaderHint}}</span
                             ><input type="text" id="sc-header" placeholder="Default: Authorization" style="width: 100%"
                           /></label>
                           <label style="display: block; margin-bottom: 8px; flex: 1"
-                            >Value prefix <span class="hint">blank = Bearer</span
+                            >{{t:credentials.valuePrefix}} <span class="hint">{{t:credentials.valuePrefixHint}}</span
                             ><input type="text" id="sc-scheme" placeholder="Default: Bearer" style="width: 100%"
                           /></label>
                         </div>
                         <label style="display: block; margin-bottom: 8px" class="sc-broker-only"
-                          >Allowed HTTP methods <span class="hint">comma-separated; blank = GET</span
+                          >{{t:credentials.methods}} <span class="hint">{{t:credentials.methodsHint}}</span
                           ><input type="text" id="sc-methods" placeholder="GET" style="width: 100%"
                         /></label>
                         <label style="display: block; margin-bottom: 8px" class="sc-broker-only"
-                          >Allowed path prefixes <span class="hint">one per line; blank = any path</span
+                          >{{t:credentials.paths}} <span class="hint">{{t:credentials.pathsHint}}</span
                           ><textarea id="sc-paths" placeholder="/allowed/path/"></textarea>
                         </label>
                         <label
                           style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 10px"
-                          ><input type="checkbox" id="sc-enabled" style="width: auto" checked /> Credential is
-                          enabled</label
+                          ><input type="checkbox" id="sc-enabled" style="width: auto" checked />
+                          {{t:credentials.enabled}}</label
                         >
-                        <p class="hint sc-broker-only" style="margin-bottom: 6px">Principals with access</p>
+                        <p class="hint sc-broker-only" style="margin-bottom: 6px">{{t:credentials.principals}}</p>
                         <p class="hint sc-env-only hidden" style="margin-bottom: 6px">
-                          Access: every all-internal conversation. Env delivery is not gated by grants — rooms with
-                          externals get nothing, everyone else gets the env var.
+                          {{t:credentials.accessAllBody}}
                         </p>
                         <label
                           class="sc-broker-only"
@@ -4591,13 +4519,13 @@
                             style="width: auto"
                             checked
                           />
-                          Everyone in this organization</label
+                          {{t:credentials.everyone}}</label
                         >
                         <label
                           class="sc-broker-only"
                           style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 6px"
-                          ><input type="radio" name="sc-share" value="people" style="width: auto" /> Only selected
-                          people or teams</label
+                          ><input type="radio" name="sc-share" value="people" style="width: auto" />
+                          {{t:credentials.selected}}</label
                         >
                         <input
                           type="text"
@@ -4611,43 +4539,44 @@
                         <div class="identity-chips sc-broker-only" id="sc-people-chips"></div>
                       </div>
                       <aside class="editor-panel" aria-live="polite">
-                        <h3>Effective capability</h3>
+                        <h3>{{t:credentials.effective}}</h3>
                         <dl class="capability-summary">
                           <div>
-                            <dt>State</dt>
-                            <dd id="sc-cap-state">Enabled</dd>
+                            <dt>{{t:common.status}}</dt>
+                            <dd id="sc-cap-state">{{t:state.enabled}}</dd>
                           </div>
                           <div>
-                            <dt>Host</dt>
-                            <dd id="sc-cap-host">Not set</dd>
+                            <dt>{{t:credentials.host}}</dt>
+                            <dd id="sc-cap-host">{{t:credentials.notSet}}</dd>
                           </div>
                           <div>
-                            <dt>Auth</dt>
-                            <dd id="sc-cap-auth">Authorization header · no prefix</dd>
+                            <dt>{{t:credentials.auth}}</dt>
+                            <dd id="sc-cap-auth">{{t:credentials.authDefault}}</dd>
                           </div>
                           <div>
-                            <dt>Methods</dt>
+                            <dt>{{t:credentials.methods}}</dt>
                             <dd id="sc-cap-methods">GET</dd>
                           </div>
                           <div>
-                            <dt>Paths</dt>
-                            <dd id="sc-cap-paths">Any path</dd>
+                            <dt>{{t:credentials.paths}}</dt>
+                            <dd id="sc-cap-paths">{{t:credentials.pathsAny}}</dd>
                           </div>
                           <div>
-                            <dt>Access</dt>
-                            <dd id="sc-cap-principals">Everyone in this organization</dd>
+                            <dt>{{t:credentials.access}}</dt>
+                            <dd id="sc-cap-principals">{{t:credentials.everyone}}</dd>
                           </div>
                           <div>
-                            <dt>Secret</dt>
-                            <dd id="sc-cap-secret">Required before first save</dd>
+                            <dt>{{t:credentials.secret}}</dt>
+                            <dd id="sc-cap-secret">{{t:credentials.secretFirstSave}}</dd>
                           </div>
                         </dl>
                       </aside>
                     </div>
                   </div>
                   <div class="foot">
-                    <button class="primary" id="sc-save">Save credential</button
-                    ><button id="sc-reset">Clear form</button><span class="status" id="st-service-credentials"></span>
+                    <button class="primary" id="sc-save">{{t:credentials.save}}</button
+                    ><button id="sc-reset">{{t:action.clear}}</button
+                    ><span class="status" id="st-service-credentials"></span>
                   </div>
                 </section>
               </div>
@@ -4657,26 +4586,22 @@
           <div id="view-connectors" class="hidden">
             <section class="card" id="card-connectors">
               <div class="head">
-                <h2>Connector OAuth clients</h2>
-                <p>
-                  Each connector needs its own OAuth app's client ID and secret before anyone can link it. A connector
-                  stays hidden in everyone's web UI until you set its client here. The secret is write-only and never
-                  displayed. Applies org-wide.
-                </p>
+                <h2>{{t:connectors.oauthClients}}</h2>
+                <p>{{t:connectors.oauthBody}}</p>
               </div>
-              <div class="body"><div id="conn-list" class="hint">No connectors configured.</div></div>
+              <div class="body"><div id="conn-list" class="hint">{{t:connectors.none}}</div></div>
               <div class="body" style="border-top: 1px solid var(--border, #2a2a2a); padding-top: 12px">
                 <div class="sc-form-head">
-                  <p class="hint" id="conn-form-title">Add a connector</p>
-                  <span class="badge muted" id="conn-form-mode">New</span>
+                  <p class="hint" id="conn-form-title">{{t:connectors.add}}</p>
+                  <span class="badge muted" id="conn-form-mode">{{t:state.new}}</span>
                 </div>
                 <label style="display: block; margin-bottom: 8px"
-                  >Connector
+                  >{{t:connectors.connector}}
                   <select id="conn-provider" style="width: 100%"></select
                 ></label>
                 <div id="conn-guide" class="hint" style="margin: 0 0 12px"></div>
                 <label style="display: block; margin-bottom: 8px"
-                  >Client ID
+                  >{{t:connectors.clientId}}
                   <input
                     type="text"
                     id="conn-client-id"
@@ -4685,7 +4610,7 @@
                     style="width: 100%"
                 /></label>
                 <label style="display: block; margin-bottom: 8px"
-                  >Client secret
+                  >{{t:connectors.clientSecret}}
                   <input
                     type="password"
                     id="conn-client-secret"
@@ -4694,24 +4619,22 @@
                     style="width: 100%"
                 /></label>
                 <p class="field-hint" id="conn-secret-hint">
-                  Secret values are write-only and will not be displayed after saving.
+                  {{t:connectors.secretHint}}
                 </p>
                 <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 10px"
-                  ><input type="checkbox" id="conn-enabled" style="width: auto" checked /> Enabled</label
+                  ><input type="checkbox" id="conn-enabled" style="width: auto" checked /> {{t:state.enabled}}</label
                 >
               </div>
               <div class="foot">
-                <button class="primary" id="conn-save">Save connector</button><button id="conn-reset">Clear form</button
+                <button class="primary" id="conn-save">{{t:connectors.save}}</button
+                ><button id="conn-reset">{{t:action.clear}}</button
                 ><span class="status" id="st-connectors"></span>
               </div>
             </section>
             <section class="card" id="card-slack-installation">
               <div class="head">
-                <h2>Slack bot</h2>
-                <p>
-                  Add Slack after the web deployment is working. Tokens are validated with Slack, encrypted in durable
-                  storage, and never displayed again.
-                </p>
+                <h2>{{t:slack.bot}}</h2>
+                <p>{{t:slack.botBody}}</p>
               </div>
               <div class="body">
                 <p>
@@ -4720,12 +4643,12 @@
                     href="https://api.slack.com/apps?new_app=1"
                     target="_blank"
                     rel="noopener noreferrer"
-                    >Create QM Slack app from manifest ↗</a
+                    >{{t:slack.createManifest}}</a
                   >
                 </p>
-                <p class="hint" id="slack-installation-state">Not configured.</p>
+                <p class="hint" id="slack-installation-state">{{t:state.notConfigured}}</p>
                 <label style="display: block; margin-bottom: 8px"
-                  >Bot User OAuth Token
+                  >{{t:slack.botToken}}
                   <input
                     type="password"
                     id="slack-bot-token"
@@ -4734,7 +4657,7 @@
                     style="width: 100%"
                 /></label>
                 <label style="display: block; margin-bottom: 8px"
-                  >App-Level Token
+                  >{{t:slack.appToken}}
                   <input
                     type="password"
                     id="slack-app-token"
@@ -4743,13 +4666,12 @@
                     style="width: 100%"
                 /></label>
                 <p class="field-hint">
-                  Use an app-level token with <code>connections:write</code>. Saving activates or reloads the Slack
-                  surface within a few seconds.
+                  {{t:slack.tokenHint}}
                 </p>
               </div>
               <div class="foot">
-                <button class="primary" id="slack-installation-save">Validate and save</button
-                ><button class="danger" id="slack-installation-delete">Remove</button
+                <button class="primary" id="slack-installation-save">{{t:onboarding.validateSave}}</button
+                ><button class="danger" id="slack-installation-delete">{{t:action.remove}}</button
                 ><span class="status" id="st-slack-installation"></span>
               </div>
             </section>
@@ -4762,8 +4684,8 @@
 
     <dialog class="review-dialog" id="governance-review" aria-labelledby="governance-review-title">
       <div class="review-dialog-head">
-        <p class="governance-eyebrow">Review change</p>
-        <h2 id="governance-review-title">Confirm governance change</h2>
+        <p class="governance-eyebrow">{{t:review.title}}</p>
+        <h2 id="governance-review-title">{{t:review.subtitle}}</h2>
         <p id="governance-review-subtitle"></p>
       </div>
       <div class="review-dialog-body">
@@ -4771,8 +4693,8 @@
         <p class="review-dialog-warning" id="governance-review-warning"></p>
       </div>
       <div class="review-dialog-foot">
-        <button type="button" id="governance-review-cancel">Cancel</button
-        ><button type="button" class="review-dialog-confirm" id="governance-review-confirm">Confirm change</button>
+        <button type="button" id="governance-review-cancel">{{t:action.cancel}}</button
+        ><button type="button" class="review-dialog-confirm" id="governance-review-confirm">{{t:action.confirm}}</button>
       </div>
     </dialog>
 
@@ -4785,7 +4707,11 @@
           Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match,
         );
       const EFFECTS = ["allow", "deny", "require_approval"];
-      const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
+      const EFFECT_LABELS = {
+        allow: t("common.allow"),
+        deny: t("common.deny"),
+        require_approval: t("common.requireApproval"),
+      };
       const SECTIONS = [
         { views: ["history", "slack", "judgments"] },
         { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
@@ -4800,28 +4726,30 @@
         history:
           '<svg class="tab-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M14 10a2 2 0 0 1-2 2H6l-3.5 3V4a2 2 0 0 1 2-2h7.5a2 2 0 0 1 2 2z"/></svg>',
       };
-      const VIEW_TITLE = {
-        onboarding: "Onboarding",
-        governance: "Governance",
-        connectors: "Connectors",
-        users: "Users",
-        keychain: "Keychain",
-        user: "User",
-        metrics: "Metrics",
-        egress: "Egress",
-        history: "Sessions",
-        files: "Files",
-        memory: "Memory",
-        live: "Live",
-        audit: "Audit",
-        skills: "Skills",
-        crons: "Crons",
-        deployments: "Deployments",
-        retention: "Retention",
-        slack: "Slack",
-        judgments: "Judgments",
-        ackemoji: "Ack emoji",
-      };
+      const VIEW_TITLE = Object.fromEntries(
+        [
+          "onboarding",
+          "governance",
+          "connectors",
+          "users",
+          "keychain",
+          "user",
+          "metrics",
+          "egress",
+          "history",
+          "files",
+          "memory",
+          "live",
+          "audit",
+          "skills",
+          "crons",
+          "deployments",
+          "retention",
+          "slack",
+          "judgments",
+          "ackemoji",
+        ].map((name) => [name, t("view." + name)]),
+      );
       const SCOPED = new Set([
         "governance",
         "metrics",
@@ -4890,16 +4818,16 @@
             headers: { accept: "application/json" },
           });
           if (!res.ok) {
-            let msg = "Failed (" + res.status + ")";
+            let msg = t("common.failedStatus", { status: res.status });
             try {
               const j = await res.json();
               if (j && j.message) msg = j.message;
             } catch {}
-            alert("Couldn't start impersonation: " + msg);
+            alert(t("auth.impersonationFailed", { message: msg }));
             return;
           }
         } catch (e) {
-          alert("Couldn't start impersonation: " + (e && e.message ? e.message : e));
+          alert(t("auth.impersonationFailed", { message: e && e.message ? e.message : e }));
           return;
         }
         window.open("/web-ui/", "_blank", "noopener");
@@ -4908,8 +4836,8 @@
         const b = document.createElement("button");
         b.type = "button";
         b.className = "link";
-        b.textContent = "Open web UI as this person ↗";
-        b.title = "View the assistant web UI as " + target + " (audited)";
+        b.textContent = t("auth.openAs");
+        b.title = t("auth.openAsTitle", { principal: target });
         b.onclick = () => openWebUiAs(target);
         return b;
       }
@@ -4922,11 +4850,12 @@
         const d = new Date(ts);
         const now = new Date();
         const mins = Math.floor((now.getTime() - d.getTime()) / 60000);
-        if (mins >= 0 && mins < 1) return "now";
-        if (mins >= 0 && mins < 60) return mins + (mins === 1 ? " min" : " mins");
-        if (sameLocalDate(d, now)) return "Today " + fmtClock(d);
+        if (mins >= 0 && mins < 1) return t("time.now");
+        if (mins >= 0 && mins < 60)
+          return t(mins === 1 ? "time.minute" : "time.minutes", { count: mins.toLocaleString() });
+        if (sameLocalDate(d, now)) return t("time.today", { time: fmtClock(d) });
         const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-        if (sameLocalDate(d, yesterday)) return "Yesterday " + fmtClock(d);
+        if (sameLocalDate(d, yesterday)) return t("time.yesterday", { time: fmtClock(d) });
         return (
           d.toLocaleDateString(
             [],
@@ -5021,7 +4950,7 @@
         }
         card.classList.toggle("dirty", !!card.querySelector("button.dirty"));
         const st = statusId ? $(statusId) : null;
-        if (dirty && statusId) setStatus(statusId, "Unsaved changes", "dirty", true);
+        if (dirty && statusId) setStatus(statusId, t("common.unsavedChanges"), "dirty", true);
         else if (
           st &&
           (st.classList.contains("dirty") || st.classList.contains("saving") || st.classList.contains("muted"))
@@ -5202,14 +5131,7 @@
         glyph.className = "file-upload-icon";
         glyph.textContent = "⇧";
         const label = document.createElement("span");
-        label.append(
-          "Upload to ",
-          (() => {
-            const s = document.createElement("strong");
-            s.textContent = scopeTitle(scope);
-            return s;
-          })(),
-        );
+        label.textContent = t("files.uploadTo", { scope: scopeTitle(scope) });
         main.append(glyph, label);
         const actions = document.createElement("div");
         actions.className = "file-upload-actions";
@@ -5217,7 +5139,7 @@
         status.className = "status muted";
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = "Upload";
+        button.textContent = t("files.upload");
         const input = document.createElement("input");
         input.type = "file";
         input.multiple = true;
@@ -5230,7 +5152,10 @@
           button.disabled = true;
           uploadStatusMessage(
             status,
-            "Uploading " + picked.length + " " + (picked.length === 1 ? "file" : "files") + "...",
+            t("files.uploading", {
+              count: picked.length.toLocaleString(),
+              files: t(picked.length === 1 ? "files.file" : "files.files"),
+            }),
             "saving",
           );
           let uploaded = 0;
@@ -5250,14 +5175,19 @@
             }
             uploadStatusMessage(
               status,
-              "Uploaded " + picked.length + " " + (picked.length === 1 ? "file" : "files") + ".",
+              t("files.uploaded", {
+                count: picked.length.toLocaleString(),
+                files: t(picked.length === 1 ? "files.file" : "files.files"),
+              }),
               "ok",
             );
             dataCache.clear();
             await renderData();
           } catch (err) {
-            const partial = uploaded ? "Uploaded " + uploaded + " of " + picked.length + " before failure. " : "";
-            uploadStatusMessage(status, partial + (err instanceof Error ? err.message : "Upload failed."), "err");
+            const partial = uploaded
+              ? t("files.uploadedPartial", { uploaded: uploaded.toLocaleString(), count: picked.length.toLocaleString() })
+              : "";
+            uploadStatusMessage(status, partial + (err instanceof Error ? err.message : t("files.uploadFailed")), "err");
             if (uploaded) {
               dataCache.clear();
               await renderData();
@@ -5372,8 +5302,8 @@
         if (!me.ok) {
           $("who").classList.add("hidden");
 
-          if (me.status !== 401) return showView("unavailable-view", "Admin is temporarily unavailable.");
-          return showView("signin-view", "Sign in through the portal to continue.");
+          if (me.status !== 401) return showView("unavailable-view", t("auth.unavailableTitle"));
+          return showView("signin-view", t("auth.signInHint"));
         }
         $("org-tag").textContent = "· " + me.data.org;
         orgId = me.data.org;
@@ -5382,10 +5312,10 @@
           $("who").classList.remove("hidden");
           $("na-sub").textContent = me.data.principal;
           $("na-org").textContent = me.data.org;
-          return showView("notadmin-view", "You don't have admin access.");
+          return showView("notadmin-view", t("auth.deniedTitle"));
         }
         $("who").classList.remove("hidden");
-        showView("app-view", "Signed in as " + me.data.principal);
+        showView("app-view", t("auth.signedInAs", { principal: me.data.principal }));
 
         if (!new URLSearchParams(location.search).get("scope")) scope = "org:" + orgId;
         loadScopeDirectory();
@@ -5447,7 +5377,7 @@
             if (v === view) b.setAttribute("aria-current", "page");
             if (DISABLED_VIEWS.has(v)) {
               b.disabled = true;
-              b.title = "Coming back soon";
+              b.title = t("navigation.comingSoon");
             } else b.onclick = () => setView(v);
 
             if (v === "judgments" && view === "ackemoji") {
@@ -5583,7 +5513,7 @@
       }
       function governanceScopeName(scopeId = scope) {
         return scopeKind(scopeId) === "org"
-          ? "Organization · " + scopeId.split(":").slice(1).join(":")
+          ? t("common.organization") + " · " + scopeId.split(":").slice(1).join(":")
           : shortName(scopeId);
       }
       function commitGo(st) {
@@ -5595,26 +5525,26 @@
         if (!leavingDraft) return commitGo(st);
         if (governanceSaveInFlight()) {
           void reviewGovernanceChange({
-            title: "Governance save in progress",
-            subtitle: "Wait for the current save to finish before leaving.",
+            title: t("review.saveInProgress"),
+            subtitle: t("review.waitForSave"),
             facts: [
-              ["Current scope", governanceScopeName()],
-              ["Destination", VIEW_TITLE[st.view] || titleCase(st.view)],
+              [t("common.currentScope"), governanceScopeName()],
+              [t("common.destination"), VIEW_TITLE[st.view] || titleCase(st.view)],
             ],
-            warning: "The change may already be committing and cannot be safely discarded.",
+            warning: t("review.commitWarning"),
             confirmLabel: null,
           });
           return;
         }
         void reviewGovernanceChange({
-          title: "Discard unsaved governance changes?",
-          subtitle: "This page has a draft that has not been applied.",
+          title: t("review.discardTitle"),
+          subtitle: t("review.discardSubtitle"),
           facts: [
-            ["Current scope", governanceScopeName()],
-            ["Destination", VIEW_TITLE[st.view] || titleCase(st.view)],
+            [t("common.currentScope"), governanceScopeName()],
+            [t("common.destination"), VIEW_TITLE[st.view] || titleCase(st.view)],
           ],
-          warning: "Leaving now discards every unsaved setting on this Governance page.",
-          confirmLabel: "Discard and leave",
+          warning: t("review.discardWarning"),
+          confirmLabel: t("review.discardConfirm"),
           danger: true,
         }).then((confirmed) => {
           if (confirmed) commitGo(st);
@@ -5654,26 +5584,26 @@
         history.pushState(current, "", stateToUrl(current));
         if (governanceSaveInFlight()) {
           void reviewGovernanceChange({
-            title: "Governance save in progress",
-            subtitle: "Wait for the current save to finish before leaving.",
+            title: t("review.saveInProgress"),
+            subtitle: t("review.waitForSave"),
             facts: [
-              ["Current scope", governanceScopeName()],
-              ["Destination", VIEW_TITLE[next.view] || titleCase(next.view)],
+              [t("common.currentScope"), governanceScopeName()],
+              [t("common.destination"), VIEW_TITLE[next.view] || titleCase(next.view)],
             ],
-            warning: "The change may already be committing and cannot be safely discarded.",
+            warning: t("review.commitWarning"),
             confirmLabel: null,
           });
           return;
         }
         void reviewGovernanceChange({
-          title: "Discard unsaved governance changes?",
-          subtitle: "This page has a draft that has not been applied.",
+          title: t("review.discardTitle"),
+          subtitle: t("review.discardSubtitle"),
           facts: [
-            ["Current scope", governanceScopeName()],
-            ["Destination", VIEW_TITLE[next.view] || titleCase(next.view)],
+            [t("common.currentScope"), governanceScopeName()],
+            [t("common.destination"), VIEW_TITLE[next.view] || titleCase(next.view)],
           ],
-          warning: "Leaving now discards every unsaved setting on this Governance page.",
-          confirmLabel: "Discard and leave",
+          warning: t("review.discardWarning"),
+          confirmLabel: t("review.discardConfirm"),
           danger: true,
         }).then((confirmed) => {
           if (!confirmed) return;
@@ -5713,7 +5643,7 @@
       }
 
       function scopeTitle(id) {
-        return scopeKind(id) === "org" ? "All scopes" : dirLabel(id) || id;
+        return scopeKind(id) === "org" ? t("common.allScopes") : dirLabel(id) || id;
       }
 
       function shortName(scopeId) {
@@ -5805,7 +5735,7 @@
           w.className = "shell-search";
           const i = document.createElement("input");
           i.type = "search";
-          i.placeholder = opts.search.placeholder || "Search…";
+          i.placeholder = opts.search.placeholder || t("common.search");
           i.spellcheck = false;
           i.setAttribute("autocapitalize", "none");
           i.oninput = () => opts.search.onInput(i.value);
@@ -5823,14 +5753,14 @@
           const input = document.createElement("input");
           input.type = "checkbox";
           input.checked = transcriptVisibility[key];
-          input.setAttribute("aria-label", "Show " + label);
+          input.setAttribute("aria-label", t("common.show", { item: label }));
           input.onchange = () => {
             transcriptVisibility[key] = input.checked;
             onChange();
           };
           const prefix = document.createElement("span");
           prefix.className = "header-check-prefix";
-          prefix.textContent = "Show ";
+          prefix.textContent = t("common.show", { item: "" });
           wrap.append(input, prefix, document.createTextNode(label));
           return wrap;
         };
@@ -6035,26 +5965,27 @@
       let serviceCredDirectory = [];
       function updateSoulWorkbench() {
         const draft = $("soul").value;
-        $("soul-saved").textContent = soulSaved || "No saved instructions";
+        $("soul-saved").textContent = soulSaved || t("governance.noSavedInstructions");
         $("soul-draft").textContent =
-          draft === soulSaved ? "No draft changes" : draft || "Instructions will be cleared";
+          draft === soulSaved ? t("governance.noDraftChanges") : draft || t("governance.instructionsCleared");
         $("soul-size").textContent =
-          draft.length.toLocaleString() +
-          " characters · about " +
-          Math.ceil(draft.length / 4).toLocaleString() +
-          " tokens";
-        $("soul-validation").textContent = draft.length >= 100000 ? "Maximum length reached" : "Draft valid";
+          t("governance.size", {
+            characters: draft.length.toLocaleString(),
+            tokens: Math.ceil(draft.length / 4).toLocaleString(),
+          });
+        $("soul-validation").textContent =
+          draft.length >= 100000 ? t("common.maximumLength") : t("common.draftValid");
       }
       function renderSoulHistory() {
         const root = $("soul-history");
         root.textContent = "";
         const heading = document.createElement("h3");
-        heading.textContent = "Version history";
+        heading.textContent = t("governance.versionHistory");
         root.appendChild(heading);
         if (!soulHistory.length) {
           const empty = document.createElement("p");
           empty.className = "hint";
-          empty.textContent = "History begins with the next saved revision.";
+          empty.textContent = t("governance.historyEmpty");
           root.appendChild(empty);
           return;
         }
@@ -6062,37 +5993,36 @@
           const row = document.createElement("div");
           row.className = "soul-revision";
           const meta = document.createElement("p");
-          meta.textContent = "Version " + revision.version;
+          meta.textContent = t("governance.version", { version: revision.version });
           const detail = document.createElement("small");
           detail.textContent =
-            (revision.updatedBy || "Author unavailable") +
+            (revision.updatedBy || t("governance.authorUnavailable")) +
             " · " +
-            (revision.updatedAt ? fmtTime(revision.updatedAt) : "Time unavailable");
+            (revision.updatedAt ? fmtTime(revision.updatedAt) : t("governance.timeUnavailable"));
           meta.appendChild(detail);
           const restore = document.createElement("button");
           restore.type = "button";
-          restore.textContent = revision.version === soulVersion ? "Current" : "Restore";
+          restore.textContent = revision.version === soulVersion ? t("common.current") : t("common.restore");
           restore.disabled = revision.version === soulVersion;
           restore.onclick = async () => {
             const immutable = { ...revision };
             const targetScope = scope;
             const expectedVersion = soulVersion;
             const confirmed = await reviewGovernanceChange({
-              title: "Restore SOUL version " + immutable.version + "?",
-              subtitle: "The saved instructions from this revision will replace the current SOUL.",
+              title: t("governance.restoreTitle", { version: immutable.version }),
+              subtitle: t("governance.restoreSubtitle"),
               facts: [
-                ["Scope", governanceScopeName(targetScope)],
-                ["Current", "Version " + expectedVersion],
-                ["Restore", "Version " + immutable.version],
+                [t("common.scope"), governanceScopeName(targetScope)],
+                [t("common.current"), t("governance.version", { version: expectedVersion })],
+                [t("common.restore"), t("governance.version", { version: immutable.version })],
               ],
-              warning:
-                "This does not erase history. A new revision will be created, and future turns will use it immediately.",
-              confirmLabel: "Restore version " + immutable.version,
+              warning: t("governance.restoreWarning"),
+              confirmLabel: t("governance.restoreVersion", { version: immutable.version }),
               danger: true,
             });
             if (!confirmed) return;
             restore.disabled = true;
-            setStatus("st-soul", "Restoring…", "saving", true);
+            setStatus("st-soul", t("common.restoring"), "saving", true);
             const r = await api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/soul", {
               content: immutable.content,
               expectedVersion,
@@ -6103,14 +6033,14 @@
               return setStatus(
                 "st-soul",
                 r.status === 409
-                  ? "SOUL changed; latest revision loaded and your draft was preserved."
-                  : r.data?.message || "Restore failed.",
+                  ? t("governance.soulConflict")
+                  : r.data?.message || t("governance.restoreFailed"),
                 "err",
                 true,
               );
             }
             await loadScope();
-            setStatus("st-soul", "Version " + immutable.version + " restored as a new revision", "ok", true);
+            setStatus("st-soul", t("common.restoredVersion", { version: immutable.version }), "ok", true);
           };
           row.append(meta, restore);
           root.appendChild(row);
@@ -6248,7 +6178,9 @@
         soulSaved = r.data.soul || "";
         soulHistory = r.data.soulHistory || [];
         $("soul").value = soulSaved;
-        $("soul-ver").textContent = soulVersion ? "Saved version " + soulVersion : "No saved revision";
+        $("soul-ver").textContent = soulVersion
+          ? t("common.savedVersion", { version: soulVersion })
+          : t("common.noSavedRevision");
         updateSoulWorkbench();
         renderSoulHistory();
         $("card-ambient-policy").classList.toggle("hidden", !("ambientPolicy" in r.data));
@@ -6532,7 +6464,7 @@
         root.textContent = "";
         if (!list.length) {
           root.className = "hint";
-          root.textContent = "No credentials configured.";
+          root.textContent = t("credentials.none");
           return;
         }
         root.className = "";
@@ -6575,14 +6507,14 @@
           actions.className = "credential-actions";
           const edit = document.createElement("button");
           edit.type = "button";
-          edit.textContent = "Edit";
+          edit.textContent = t("action.edit");
           edit.onclick = () => loadScForm(c);
           const del = document.createElement("button");
           del.type = "button";
           del.className = "rowbtn danger";
-          del.textContent = "Delete";
-          del.title = "Delete credential";
-          del.setAttribute("aria-label", "Delete " + (c.name || c.slug));
+          del.textContent = t("action.delete");
+          del.title = t("credentials.deleteTitle");
+          del.setAttribute("aria-label", t("credentials.deleteTitle") + " " + (c.name || c.slug));
           del.onclick = () => deleteSc(c);
           actions.appendChild(edit);
           actions.appendChild(del);
@@ -6594,11 +6526,11 @@
       function loadScForm(c) {
         scEditing = c.slug;
         scEditVersion = c.updatedAt;
-        $("sc-form-title").textContent = "Editing " + c.slug;
-        $("sc-form-mode").textContent = "Editing";
+        $("sc-form-title").textContent = t("credentials.editing", { name: c.slug });
+        $("sc-form-mode").textContent = t("common.editing");
         $("sc-form-mode").className = "badge info";
-        $("sc-save").textContent = "Save changes";
-        $("sc-reset").textContent = "Cancel edit";
+        $("sc-save").textContent = t("common.saveChanges");
+        $("sc-reset").textContent = t("common.cancelEdit");
         $("sc-slug").value = c.slug;
         $("sc-slug").disabled = true;
         $("sc-name").value = c.name;
@@ -6634,11 +6566,11 @@
       function resetScForm() {
         scEditing = null;
         scEditVersion = null;
-        $("sc-form-title").textContent = "Add a credential";
-        $("sc-form-mode").textContent = "New";
+        $("sc-form-title").textContent = t("credentials.add");
+        $("sc-form-mode").textContent = t("state.new");
         $("sc-form-mode").className = "badge muted";
-        $("sc-save").textContent = "Save credential";
-        $("sc-reset").textContent = "Clear form";
+        $("sc-save").textContent = t("credentials.save");
+        $("sc-reset").textContent = t("action.clear");
         $("sc-slug").value = "";
         $("sc-slug").disabled = false;
         $("sc-name").value = "";
@@ -6648,8 +6580,8 @@
         syncScDelivery();
         $("sc-secret").value = "";
         $("sc-secret").placeholder = "(write-only)";
-        $("sc-secret-hint").textContent = "The secret is write-only. It cannot be viewed after saving.";
-        $("sc-secret-semantics").textContent = "New credentials require a secret.";
+        $("sc-secret-hint").textContent = t("credentials.secretWriteOnly");
+        $("sc-secret-semantics").textContent = t("credentials.newSecretRequired");
         $("sc-header").value = "";
         $("sc-scheme").value = "";
         $("sc-methods").value = "";
@@ -7009,7 +6941,7 @@
           api("GET", "/api/scopes/" + encodeURIComponent(orgScope())),
         ]);
         if (!models.ok || !slack.ok || !catalog.ok || !config.ok) {
-          setStatus("st-onboarding-model", "Setup status could not be loaded. Try again.", "err", true);
+          setStatus("st-onboarding-model", t("onboarding.loadFailed"), "err", true);
           renderOnboardingProviderOptions();
           return;
         }
@@ -7023,41 +6955,47 @@
         const baseStatus = onboardingModelStatuses.find((item) => item.provider === baseProvider);
         onboardingBadge(
           "onboarding-model-badge",
-          baseStatus?.configured ? "Ready" : "Needs a key",
+          baseStatus?.configured ? t("onboarding.ready") : t("onboarding.needsKey"),
           Boolean(baseStatus?.configured),
         );
         $("onboarding-model-summary").textContent = !baseModel
-          ? "No base model is configured yet — pick a provider and model below."
+          ? t("onboarding.noBaseModel")
           : baseStatus?.configured
-            ? baseModel + " · " + (baseStatus.source === "admin" ? "admin-managed key" : "deployment key")
-            : baseModel +
-              " cannot run until its " +
-              (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
-              " key is configured.";
+            ? baseModel + " · " + t(baseStatus.source === "admin" ? "onboarding.adminKey" : "onboarding.deploymentKey")
+            : t("onboarding.modelNeedsKey", {
+                model: baseModel,
+                provider: MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider),
+              });
         renderOnboardingProviderOptions(baseProvider);
         renderOnboardingModelOptions(baseModel);
 
         onboardingBadge(
           "onboarding-slack-badge",
-          slack.data.configured ? "Connected" : "Optional",
+          slack.data.configured ? t("onboarding.connected") : t("state.optional"),
           Boolean(slack.data.configured),
           true,
         );
         $("onboarding-slack-summary").textContent = slack.data.configured
-          ? "Connected to " + (slack.data.teamName || slack.data.teamId || "a Slack workspace") + "."
-          : "Create the QM app, install it, then add its bot and Socket Mode tokens.";
+          ? t("onboarding.connectedWorkspace", {
+              workspace: slack.data.teamName || slack.data.teamId || t("onboarding.slackWorkspace"),
+            })
+          : t("onboarding.slackSummary");
         if (slack.data.createUrl) $("onboarding-slack-create").href = slack.data.createUrl;
 
         const configured = (catalog.data.catalog || []).filter((item) => item.configured);
         onboardingBadge(
           "onboarding-oauth-badge",
-          configured.length ? configured.length + " configured" : "Optional",
+          configured.length
+            ? t("onboarding.configuredCount", { count: configured.length.toLocaleString() })
+            : t("state.optional"),
           configured.length > 0,
           true,
         );
         $("onboarding-oauth-summary").textContent = configured.length
-          ? configured.map((item) => connectorName(item.provider)).join(", ") + " available in the web UI."
-          : "Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.";
+          ? t("onboarding.oauthAvailable", {
+              connectors: configured.map((item) => connectorName(item.provider)).join(", "),
+            })
+          : t("onboarding.oauthSummary");
         viewLoadedAt.onboarding = Date.now();
       }
       $("onboarding-model-provider").onchange = () => renderOnboardingModelOptions();
@@ -7066,15 +7004,20 @@
         const apiKey = $("onboarding-model-key").value.trim();
         const modelId = $("onboarding-model-id").value;
         if (!apiKey) {
-          setStatus("st-onboarding-model", "Enter the provider API key.", "err");
+          setStatus("st-onboarding-model", t("onboarding.enterProviderKey"), "err");
           return;
         }
         $("onboarding-model-save").disabled = true;
-        setStatus("st-onboarding-model", "Validating with " + connectorName(provider) + "…", "saving", true);
+        setStatus(
+          "st-onboarding-model",
+          t("onboarding.validatingProvider", { provider: connectorName(provider) }),
+          "saving",
+          true,
+        );
         const saved = await api("PUT", "/api/model-providers/" + encodeURIComponent(provider), { apiKey });
         if (!saved.ok) {
           $("onboarding-model-save").disabled = false;
-          setStatus("st-onboarding-model", saved.data?.message || "The provider rejected this key.", "err", true);
+          setStatus("st-onboarding-model", saved.data?.message || t("onboarding.providerRejected"), "err", true);
           return;
         }
         const selected = await api("PUT", "/api/scopes/" + encodeURIComponent(orgScope()) + "/base-model", { modelId });
@@ -7083,7 +7026,7 @@
         await loadOnboarding();
         setStatus(
           "st-onboarding-model",
-          selected.ok ? "Key and base model saved." : "Key saved, but the base model could not be changed.",
+          selected.ok ? t("onboarding.keyModelSaved") : t("onboarding.keyOnlySaved"),
           selected.ok ? "ok" : "err",
           !selected.ok,
         );
@@ -7092,17 +7035,17 @@
         const provider = $("onboarding-model-provider").value;
         if (
           !confirm(
-            "Disable the " + connectorName(provider) + " model key? Models from this provider will stop working.",
+            t("onboarding.disableConfirm", { provider: connectorName(provider) }),
           )
         )
           return;
         const removed = await api("DELETE", "/api/model-providers/" + encodeURIComponent(provider));
         if (!removed.ok) {
-          setStatus("st-onboarding-model", removed.data?.message || "Could not disable this provider.", "err");
+          setStatus("st-onboarding-model", removed.data?.message || t("onboarding.disableFailed"), "err");
           return;
         }
         await loadOnboarding();
-        setStatus("st-onboarding-model", "Provider disabled.", "ok");
+        setStatus("st-onboarding-model", t("onboarding.providerDisabled"), "ok");
       };
       function openOnboardingTarget(target) {
         setView("connectors");
@@ -7130,14 +7073,14 @@
           api("GET", "/api/scopes/" + encodeURIComponent(orgScope())),
         ]);
         if (!catalog.ok) {
-          setStatus("st-connectors", catalog.data?.message || "Failed to load connector setup.", "err");
+          setStatus("st-connectors", catalog.data?.message || t("connectors.loadFailed"), "err");
           return;
         }
         connectorCatalog = catalog.data.catalog || [];
         if (!r.ok) {
           setStatus(
             "st-connectors",
-            r.status === 403 ? "Only an org admin can manage connectors." : r.data?.message || "Failed to load.",
+            r.status === 403 ? t("connectors.orgAdminOnly") : r.data?.message || t("connectors.loadGenericFailed"),
             "err",
           );
           return;
@@ -7161,7 +7104,7 @@
         const displayed = [...list, ...inherited];
         if (!displayed.length) {
           root.className = "hint";
-          root.textContent = "No connectors configured. Add one below to make it linkable in the web UI.";
+          root.textContent = t("connectors.noneWithHint");
           return;
         }
         root.className = "";
@@ -7179,7 +7122,7 @@
           const meta = document.createElement("div");
           meta.className = "hint";
           meta.textContent = c.inherited
-            ? "Configured by deployment secrets"
+            ? t("connectors.deploymentSecrets")
             : "client " +
               (c.clientId || "—") +
               (c.updatedBy ? " · by " + c.updatedBy : "") +
@@ -7202,7 +7145,7 @@
           if (c.inherited) {
             const override = document.createElement("button");
             override.type = "button";
-            override.textContent = "Override here";
+            override.textContent = t("connectors.override");
             override.onclick = () => {
               resetConnForm();
               $("conn-provider").value = c.provider;
@@ -7213,14 +7156,14 @@
           } else {
             const edit = document.createElement("button");
             edit.type = "button";
-            edit.textContent = "Edit";
+            edit.textContent = t("action.edit");
             edit.onclick = () => loadConnForm(c);
             const del = document.createElement("button");
             del.type = "button";
             del.className = "rowbtn danger";
-            del.textContent = "Delete";
-            del.title = "Delete connector";
-            del.setAttribute("aria-label", "Delete " + connectorName(c.provider));
+            del.textContent = t("action.delete");
+            del.title = t("connectors.deleteTitle");
+            del.setAttribute("aria-label", t("connectors.deleteTitle") + " " + connectorName(c.provider));
             del.onclick = () => deleteConn(c.provider);
             actions.appendChild(edit);
             actions.appendChild(del);
@@ -7238,7 +7181,7 @@
           const configured = c.configured;
           const o = document.createElement("option");
           o.value = c.provider;
-          o.textContent = connectorName(c.provider) + (configured ? " — configured" : "");
+          o.textContent = connectorName(c.provider) + (configured ? " — " + t("connectors.configured") : "");
           sel.appendChild(o);
         });
         if (cur && connectorCatalog.some((c) => c.provider === cur)) sel.value = cur;
@@ -7254,13 +7197,13 @@
         open.href = connector.setupGuide.url;
         open.target = "_blank";
         open.rel = "noopener noreferrer";
-        open.textContent = "Open " + connector.setupGuide.console + " ↗";
+        open.textContent = t("connectors.openConsole", { console: connector.setupGuide.console });
         const callback = document.createElement("div");
-        callback.textContent = "Callback URL: " + callbackUrl;
+        callback.textContent = t("connectors.callback", { url: callbackUrl });
         const scopes = document.createElement("div");
         scopes.textContent = connector.scopes.length
-          ? "Scopes: " + connector.scopes.join(", ")
-          : "Scopes are selected in the provider.";
+          ? t("connectors.scopes", { scopes: connector.scopes.join(", ") })
+          : t("connectors.providerScopes");
         const steps = document.createElement("ol");
         connector.setupGuide.steps.forEach((text) => {
           const item = document.createElement("li");
@@ -7271,30 +7214,29 @@
       }
       function loadConnForm(c) {
         connEditing = c.provider;
-        $("conn-form-title").textContent = "Editing " + connectorName(c.provider);
-        $("conn-form-mode").textContent = "Editing";
+        $("conn-form-title").textContent = t("credentials.editing", { name: connectorName(c.provider) });
+        $("conn-form-mode").textContent = t("common.editing");
         $("conn-form-mode").className = "badge info";
-        $("conn-save").textContent = "Save changes";
-        $("conn-reset").textContent = "Cancel edit";
+        $("conn-save").textContent = t("common.saveChanges");
+        $("conn-reset").textContent = t("common.cancelEdit");
         populateConnProviders();
         $("conn-provider").value = c.provider;
         $("conn-provider").disabled = true;
         $("conn-client-id").value = c.clientId || "";
         $("conn-client-secret").value = "";
         $("conn-client-secret").placeholder = c.hasSecret ? "•••• set (re-enter to replace)" : "(write-only)";
-        $("conn-secret-hint").textContent =
-          "Saving requires the client secret — re-enter it to keep this connector working.";
+        $("conn-secret-hint").textContent = t("connectors.secretReenter");
         $("conn-enabled").checked = c.enabled !== false;
         renderConnList(connList);
         $("card-connectors").scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
       function resetConnForm() {
         connEditing = null;
-        $("conn-form-title").textContent = "Add a connector";
-        $("conn-form-mode").textContent = "New";
+        $("conn-form-title").textContent = t("connectors.add");
+        $("conn-form-mode").textContent = t("state.new");
         $("conn-form-mode").className = "badge muted";
-        $("conn-save").textContent = "Save connector";
-        $("conn-reset").textContent = "Clear form";
+        $("conn-save").textContent = t("connectors.save");
+        $("conn-reset").textContent = t("action.clear");
         populateConnProviders();
         $("conn-provider").disabled = false;
         if ($("conn-provider").options.length) $("conn-provider").selectedIndex = 0;
@@ -7302,7 +7244,7 @@
         $("conn-client-id").value = "";
         $("conn-client-secret").value = "";
         $("conn-client-secret").placeholder = "(write-only)";
-        $("conn-secret-hint").textContent = "Secret values are write-only and will not be displayed after saving.";
+        $("conn-secret-hint").textContent = t("connectors.secretHint");
         $("conn-enabled").checked = true;
         if (connList.length) renderConnList(connList);
       }
@@ -7310,61 +7252,60 @@
       async function loadSlackInstallation() {
         const r = await api("GET", "/api/slack-installation");
         if (!r.ok) {
-          setStatus("st-slack-installation", r.data?.message || "Failed to load Slack status.", "err");
+          setStatus("st-slack-installation", r.data?.message || t("slack.loadFailed"), "err");
           return;
         }
         if (r.data.createUrl) $("slack-installation-create").href = r.data.createUrl;
         $("slack-installation-state").textContent =
           r.data.source === "environment"
-            ? "Connected using deployment environment secrets. Saving here replaces them with admin-managed encrypted tokens."
+            ? t("slack.connectedEnvironment")
             : r.data.source === "invalid_environment"
-              ? "The deployment contains only one Slack token. Save a matching pair here to repair it."
+              ? t("slack.invalidEnvironment")
               : r.data.configured
-                ? "Connected to " +
-                  (r.data.teamName || r.data.teamId || "a Slack workspace") +
+                ? t("slack.connectedWorkspace", {
+                    workspace: r.data.teamName || r.data.teamId || t("onboarding.slackWorkspace"),
+                  }) +
                   (r.data.updatedBy ? " · saved by " + r.data.updatedBy : "")
                 : r.data.managed
-                  ? "Disabled by an administrator."
-                  : "Not configured.";
+                  ? t("slack.disabledAdmin")
+                  : t("state.notConfigured");
         $("slack-installation-delete").disabled = !r.data.configured;
       }
       $("slack-installation-save").onclick = async () => {
         const botToken = $("slack-bot-token").value.trim();
         const appToken = $("slack-app-token").value.trim();
         if (!botToken || !appToken) {
-          setStatus("st-slack-installation", "Both Slack tokens are required.", "err");
+          setStatus("st-slack-installation", t("slack.bothRequired"), "err");
           return;
         }
         $("slack-installation-save").disabled = true;
-        setStatus("st-slack-installation", "Validating with Slack…", "saving", true);
+        setStatus("st-slack-installation", t("slack.validating"), "saving", true);
         const r = await api("PUT", "/api/slack-installation", { botToken, appToken });
         $("slack-installation-save").disabled = false;
         if (!r.ok) {
-          setStatus("st-slack-installation", r.data?.message || "Slack validation failed.", "err");
+          setStatus("st-slack-installation", r.data?.message || t("slack.validationFailed"), "err");
           return;
         }
         $("slack-bot-token").value = "";
         $("slack-app-token").value = "";
         await loadSlackInstallation();
-        setStatus("st-slack-installation", "Saved. Slack is activating.", "ok");
+        setStatus("st-slack-installation", t("slack.savedActivating"), "ok");
       };
       $("slack-installation-delete").onclick = async () => {
-        if (!confirm("Remove the Slack bot connection? Slack chat will stop until new tokens are saved.")) return;
+        if (!confirm(t("slack.removeConfirm"))) return;
         const r = await api("DELETE", "/api/slack-installation");
         if (!r.ok) {
-          setStatus("st-slack-installation", r.data?.message || "Remove failed.", "err");
+          setStatus("st-slack-installation", r.data?.message || t("slack.removeFailed"), "err");
           return;
         }
         await loadSlackInstallation();
-        setStatus("st-slack-installation", "Removed", "ok");
+        setStatus("st-slack-installation", t("slack.removed"), "ok");
       };
       $("conn-reset").onclick = resetConnForm;
       async function deleteConn(provider) {
         if (
           !confirm(
-            "Delete the OAuth client for " +
-              connectorName(provider) +
-              "? This hides the connector in everyone's web UI; existing links stop working.",
+            t("connectors.deleteConfirm", { provider: connectorName(provider) }),
           )
         )
           return;
@@ -7375,27 +7316,27 @@
         if (r.ok) {
           resetConnForm();
           await loadConnectors();
-          setStatus("st-connectors", "Deleted", "ok");
-        } else setStatus("st-connectors", r.data?.message || "Delete failed.", "err");
+          setStatus("st-connectors", t("common.deleted"), "ok");
+        } else setStatus("st-connectors", r.data?.message || t("connectors.deleteFailed"), "err");
       }
       $("conn-save").onclick = async () => {
         const provider = $("conn-provider").value;
         const clientId = $("conn-client-id").value.trim();
         const clientSecret = $("conn-client-secret").value;
         if (!provider) {
-          setStatus("st-connectors", "Choose a connector.", "err");
+          setStatus("st-connectors", t("connectors.choose"), "err");
           return;
         }
         if (!clientId) {
-          setStatus("st-connectors", "Client ID is required.", "err");
+          setStatus("st-connectors", t("connectors.clientIdRequired"), "err");
           return;
         }
         if (!clientSecret) {
-          setStatus("st-connectors", "Client secret is required.", "err");
+          setStatus("st-connectors", t("connectors.clientSecretRequired"), "err");
           return;
         }
         $("conn-save").disabled = true;
-        setStatus("st-connectors", "Saving...", "saving", true);
+        setStatus("st-connectors", t("state.saving"), "saving", true);
         const r = await api("PUT", "/api/scopes/" + encodeURIComponent(orgScope()) + "/connectors", {
           provider,
           clientId,
@@ -7406,7 +7347,7 @@
         if (r.ok) {
           resetConnForm();
           await loadConnectors();
-          setStatus("st-connectors", "Saved", "ok");
+          setStatus("st-connectors", t("state.saved"), "ok");
         } else
           setStatus(
             "st-connectors",
@@ -8667,7 +8608,7 @@
         const edit = document.createElement("button");
         edit.type = "button";
         edit.className = "rowbtn";
-        edit.textContent = "Edit destination";
+        edit.textContent = t("crons.editDestination");
         edit.onclick = () => {
           cronDestinationEditId = c.id;
           renderCurrentData();
@@ -8676,7 +8617,7 @@
         const clear = document.createElement("button");
         clear.type = "button";
         clear.className = "rowbtn danger";
-        clear.textContent = "Clear destination";
+        clear.textContent = t("crons.clearDestination");
         clear.disabled = !c.destination;
         clear.onclick = async () => {
           if (!(await saveCronDestination(c.id, null))) return;
@@ -8693,7 +8634,7 @@
         form.style.gridTemplateColumns = "repeat(auto-fit, minmax(160px, 1fr))";
         form.style.gap = "10px";
         const typeWrap = document.createElement("label");
-        typeWrap.textContent = "Type";
+        typeWrap.textContent = t("common.type");
         const type = document.createElement("select");
         for (const value of ["slack", "principal"]) {
           const opt = document.createElement("option");
@@ -8704,19 +8645,19 @@
         type.value = c.destination?.type === "principal" ? "principal" : "slack";
         typeWrap.appendChild(type);
         const targetWrap = document.createElement("label");
-        targetWrap.textContent = "Target";
+        targetWrap.textContent = t("common.target");
         const target = document.createElement("input");
         target.type = "text";
         target.value = c.destination?.target || "";
         targetWrap.appendChild(target);
         const scopeWrap = document.createElement("label");
-        scopeWrap.textContent = "Audience scope";
+        scopeWrap.textContent = t("common.audienceScope");
         const audienceScopeId = document.createElement("input");
         audienceScopeId.type = "text";
         audienceScopeId.value = c.destination?.audienceScopeId || "";
         scopeWrap.appendChild(audienceScopeId);
         const oboWrap = document.createElement("label");
-        oboWrap.textContent = "On behalf of";
+        oboWrap.textContent = t("common.onBehalfOf");
         const onBehalfOf = document.createElement("input");
         onBehalfOf.type = "text";
         onBehalfOf.value = c.destination?.onBehalfOf || "";
@@ -8735,12 +8676,12 @@
         const save = document.createElement("button");
         save.type = "button";
         save.className = "primary";
-        save.textContent = "Save destination";
+        save.textContent = t("crons.saveDestination");
         save.onclick = async () => {
           const nextTarget = target.value.trim();
           if (!nextTarget) {
             target.focus();
-            alert("Target is required.");
+            alert(t("crons.targetRequired"));
             return;
           }
           const destination = {
@@ -8755,19 +8696,19 @@
         };
         const cancel = document.createElement("button");
         cancel.type = "button";
-        cancel.textContent = "Cancel";
+        cancel.textContent = t("action.cancel");
         cancel.onclick = () => {
           cronDestinationEditId = null;
           renderCurrentData();
         };
         foot.append(save, cancel);
         body.appendChild(foot);
-        return dataCard("Edit cron destination", c.title || c.action || c.message || c.id, body);
+        return dataCard(t("crons.destinationTitle"), c.title || c.action || c.message || c.id, body);
       }
       const cronStatusText = (c) => {
-        if (c.archived) return "archived";
-        if (c.enabled === false) return "disabled";
-        return "enabled";
+        if (c.archived) return t("crons.archived");
+        if (c.enabled === false) return t("crons.disabled");
+        return t("crons.enabled");
       };
       function renderCrons(root, d) {
         const index = orgWideView() && !orgOwnView();
@@ -8794,20 +8735,20 @@
           else if (c.action && c.message) promptSource = c.action;
           const prompt = firstLine(promptSource, 200);
           const status = cronStatusText(c);
-          const preview = [index ? shortName(c.ownerScopeId) : "", status === "enabled" ? "" : status, prompt]
+          const preview = [index ? shortName(c.ownerScopeId) : "", status === t("crons.enabled") ? "" : status, prompt]
             .filter(Boolean)
             .join(" · ");
           return {
             name,
             preview,
-            time: shortSchedule(c.schedule) + " · " + (c.lastFiredAt ? relTime(c.lastFiredAt) : "never fired"),
-            cls: status === "enabled" ? "" : "dim",
+            time: shortSchedule(c.schedule) + " · " + (c.lastFiredAt ? relTime(c.lastFiredAt) : t("crons.neverFired")),
+            cls: status === t("crons.enabled") ? "" : "dim",
             href: stateToUrl({ view: "crons", scope, cron: c.id }),
           };
         };
         const openCron = (c) => go({ view: "crons", scope, session: null, cron: c.id, page: 1 });
         const names = sorted.map((c) => (cronName(c, true) + " " + (c.action || c.message || "")).toLowerCase());
-        const list = denseList(sorted, cronRow, openCron, index ? "No crons yet." : "No crons in this scope.");
+        const list = denseList(sorted, cronRow, openCron, index ? t("crons.noCrons") : t("crons.noScope"));
         let scopeWrap = null;
         if (index) {
           scopeWrap = document.createElement("div");
@@ -8815,14 +8756,14 @@
             scopeIndexList(allCrons, {
               latestOf: lastRun,
               noun: "cron",
-              empty: "No crons yet.",
+              empty: t("crons.noCrons"),
               extra: { cron: null },
             }),
           );
         }
         const noMatch = document.createElement("p");
         noMatch.className = "empty hidden";
-        noMatch.textContent = "No crons match.";
+        noMatch.textContent = t("crons.noMatch");
         const listWrap = document.createElement("div");
         listWrap.append(list, noMatch);
         wireScopeSearch({
@@ -8847,7 +8788,7 @@
             count: plural(crons.length, "cron"),
             stats: [...(disabled ? [[disabled, "disabled"]] : []), ...(archived ? [[archived, "archived"]] : [])],
           },
-          placeholder: index ? "Search all crons…" : "Search crons…",
+          placeholder: index ? t("crons.searchAll") : t("crons.search"),
         });
         const card = bareDataCard(listWrap);
         if (scopeWrap) card.querySelector(".body").prepend(scopeWrap);
@@ -8903,7 +8844,7 @@
         if (!c) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = "Cron " + shortId(cronId) + " isn't in this scope.";
+          p.textContent = t("crons.notInScope", { id: shortId(cronId) });
           root.appendChild(p);
           return;
         }
@@ -8991,7 +8932,7 @@
           const more = document.createElement("button");
           more.type = "button";
           more.className = "prompt-toggle";
-          more.textContent = "All " + plural(total, "fire") + " →";
+          more.textContent = t("crons.allFires", { count: plural(total, "fire") });
           more.onclick = () =>
             go({ view: "history", scope, session: null, page: 1, historyKind: "cron", cron: cronId });
           container.appendChild(more);
@@ -11455,7 +11396,7 @@
               };
             },
             (c) => go({ view: "history", scope, session: null, page: 1, historyKind, cron: c.cronId }),
-            "No crons in this scope.",
+            t("crons.noScope"),
           );
           root.appendChild(bareDataCard(t));
           return;
@@ -11684,7 +11625,11 @@
           dataCard(
             "Crons",
             "Scheduled prompts and reminders this person owns.",
-            table(["What", "Schedule", "Last fired", "Status"], cronRows, "No crons."),
+            table(
+              [t("crons.what"), t("crons.schedule"), t("crons.lastFired"), t("common.status")],
+              cronRows,
+              t("crons.noCrons"),
+            ),
           ),
         );
 

@@ -43,6 +43,23 @@ test("Admin catalogs have the same keys and named variables without HTML", () =>
   );
 });
 
+test("Japanese Admin workflow terms use the operator vocabulary", () => {
+  assert.equal(adminMessage("ja", "navigation.onboarding"), "初期設定");
+  assert.equal(adminMessage("ja", "navigation.users"), "利用者");
+  assert.equal(adminMessage("ja", "navigation.crons"), "定期実行");
+  assert.equal(adminMessage("ja", "navigation.keychain"), "認証情報");
+  assert.equal(adminMessage("ja", "action.save"), "保存");
+  assert.equal(adminMessage("ja", "action.cancel"), "キャンセル");
+});
+
+test("Japanese Admin shell renders localized onboarding and governance copy", async () => {
+  const html = await (await fetch(`${base}/onboarding`, { headers: { "x-qm-locale": "ja" } })).text();
+  assert.match(html, /<h1>初期設定<\/h1>/);
+  assert.match(html, /実際の会話に使えるよう、このQM環境を設定します。/);
+  assert.match(html, /<h2>コマンドポリシー<\/h2>/);
+  assert.match(html, /<button class="primary" data-save="command-policy">保存<\/button/);
+});
+
 test("static tokens are HTML escaped and locale JSON cannot close its inert template", () => {
   const mutable = ADMIN_MESSAGES.en as Record<string, string>;
   const original = mutable.language;
