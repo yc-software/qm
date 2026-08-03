@@ -4,11 +4,15 @@ export const LOCALE_COOKIE = "qm_locale";
 export const LOCALE_HEADER = "x-qm-locale";
 export const DEFAULT_LOCALE_ENV = "QM_DEFAULT_LOCALE";
 
+const localeTag =
+  /^(en|ja)(?:-(?:[a-z]{2,8}|[0-9][a-z0-9]{3}))*(?:-[0-9a-wyz](?:-[a-z0-9]{2,8})+)*(?:-x(?:-[a-z0-9]{1,8})+)?$/;
+const qvalue = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
+
 export function normalizeLocale(value: unknown): Locale | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
-  if (!/^(en|ja)(?:-[a-z0-9]+)*$/.test(normalized)) return null;
-  return normalized.startsWith("ja") ? "ja" : "en";
+  const match = normalized.match(localeTag);
+  return (match?.[1] as Locale | undefined) ?? null;
 }
 
 export function acceptLanguageLocale(value: string | readonly string[] | undefined): Locale | null {
@@ -19,8 +23,10 @@ export function acceptLanguageLocale(value: string | readonly string[] | undefin
     const locale = normalizeLocale(tag);
     if (!locale) continue;
     const qualityValue = parameters.find((parameter) => /^\s*q\s*=/i.test(parameter));
-    const quality = qualityValue === undefined ? 1 : Number(qualityValue.replace(/^\s*q\s*=\s*/i, ""));
-    if (!Number.isFinite(quality) || quality < 0 || quality > 1 || quality === 0) continue;
+    const qualityMatch = qualityValue?.match(/^\s*q=(?<value>[^\s;]+)\s*$/i);
+    if (qualityValue !== undefined && (!qualityMatch || !qvalue.test(qualityMatch.groups?.value ?? ""))) continue;
+    const quality = Number(qualityMatch?.groups?.value ?? "1");
+    if (quality === 0) continue;
     if (!selected || quality > selected.quality || (quality === selected.quality && index < selected.index)) {
       selected = { locale, quality, index };
     }
@@ -37,7 +43,12 @@ export function resolveLocale(input: {
   defaultLocale?: unknown;
   acceptLanguage?: string | readonly string[];
 }): Locale {
-  return normalizeLocale(input.explicit) ?? normalizeLocale(input.defaultLocale) ?? acceptLanguageLocale(input.acceptLanguage) ?? "en";
+  return (
+    normalizeLocale(input.explicit) ??
+    normalizeLocale(input.defaultLocale) ??
+    acceptLanguageLocale(input.acceptLanguage) ??
+    "en"
+  );
 }
 
 export function formatMessage(template: string, values: Record<string, unknown> = {}): string {
@@ -52,15 +63,15 @@ function placeholders(message: string): string[] {
 
 export function catalogProblems(en: Record<string, string>, translated: Record<string, string>): string[] {
   const missing = Object.keys(en)
-    .filter((key) => !(key in translated))
+    .filter((key) => !Object.hasOwn(translated, key))
     .sort()
     .map((key) => `missing key: ${key}`);
   const extra = Object.keys(translated)
-    .filter((key) => !(key in en))
+    .filter((key) => !Object.hasOwn(en, key))
     .sort()
     .map((key) => `extra key: ${key}`);
   const mismatches = Object.keys(en)
-    .filter((key) => key in translated)
+    .filter((key) => Object.hasOwn(translated, key))
     .filter((key) => {
       const english = [...new Set(placeholders(en[key]!))].sort();
       const localized = [...new Set(placeholders(translated[key]!))].sort();

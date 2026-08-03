@@ -25,9 +25,10 @@ function configWith(body: string): QmConfig {
   }
 }
 
-function configText(over: { services?: string; env?: string } = {}): string {
+function configText(over: { services?: string; env?: string; defaultLocale?: "en" | "ja" } = {}): string {
+  const defaultLocale = over.defaultLocale === undefined ? "" : `, "defaultLocale": "${over.defaultLocale}"`;
   return `{
-    "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "docker",
+    "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "docker"${defaultLocale},
     "services": ${over.services ?? '["core", "web-ui", "admin", "portal", "auth"]'},
     "plugins": [], "skills": [],
     "env": ${over.env ?? '{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" } }'}
@@ -149,6 +150,20 @@ test("Docker and AWS pass the default locale only to localized surfaces", () => 
     assert.equal(serviceEnvironment(aws, service).QM_DEFAULT_LOCALE, "en");
   }
   assert.equal(serviceEnvironment(aws, "core").QM_DEFAULT_LOCALE, undefined);
+});
+
+test("configured Japanese locale reaches every localized Docker and Fly service", () => {
+  const docker = configWith(configText({ defaultLocale: "ja" }));
+  for (const service of ["web-ui", "admin", "portal", "auth"] as const) {
+    assert.equal(dockerServiceEnv(docker, service).QM_DEFAULT_LOCALE, "ja");
+  }
+  assert.equal(dockerServiceEnv(docker, "core").QM_DEFAULT_LOCALE, undefined);
+
+  const fly = { ...brokerConfig(), defaultLocale: "ja" as const };
+  for (const service of ["web-ui", "admin", "portal", "auth"] as const) {
+    assert.match(derivedTomlFor(fly, service, repoRoot), /^\s*QM_DEFAULT_LOCALE = "ja"$/m);
+  }
+  assert.doesNotMatch(derivedTomlFor(fly, "core", repoRoot), /^\s*QM_DEFAULT_LOCALE = /m);
 });
 
 test("the broker's generated secrets reach both sides under the right names", () => {

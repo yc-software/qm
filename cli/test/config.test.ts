@@ -150,6 +150,38 @@ test("QM_DEFAULT_LOCALE is managed by the deployment target", () => {
   });
 });
 
+test("QM_DEFAULT_LOCALE cannot enter virtual services or plugins", () => {
+  withConfig({ env: { slack: { QM_DEFAULT_LOCALE: "ja" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /env\.slack\.QM_DEFAULT_LOCALE.*managed/);
+  });
+  withConfig({ secretEnv: { slack: { QM_DEFAULT_LOCALE: "LOCALE" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /secretEnv\.slack\.QM_DEFAULT_LOCALE.*managed/);
+  });
+  withConfig({ plugins: [{ name: "linear", env: { QM_DEFAULT_LOCALE: "ja" } }] }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /plugins\[0\]\.env\.QM_DEFAULT_LOCALE.*managed/);
+  });
+  withConfig({ plugins: [{ name: "linear", secrets: [{ name: "QM_DEFAULT_LOCALE" }] }] }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /plugins\[0\]\.secrets\[0\]\.name\.QM_DEFAULT_LOCALE.*managed/);
+  });
+});
+
+test("virtual-service and plugin variables preserve unrelated values", () => {
+  withConfig(
+    {
+      env: { slack: { FEATURE_SWITCH: "on" } },
+      secretEnv: { slack: { SERVICE_TOKEN: "SLACK_SERVICE_TOKEN" } },
+      plugins: [{ name: "linear", env: { LINEAR_REGION: "us" }, secrets: [{ name: "LINEAR_TOKEN" }] }],
+    },
+    ({ path }) => {
+      const { config } = loadConfigAt(path);
+      assert.deepEqual(config.env.slack, { FEATURE_SWITCH: "on" });
+      assert.deepEqual(config.secretEnv?.slack, { SERVICE_TOKEN: "SLACK_SERVICE_TOKEN" });
+      assert.deepEqual(config.plugins[0]?.env, { LINEAR_REGION: "us" });
+      assert.deepEqual(config.plugins[0]?.secrets, [{ name: "LINEAR_TOKEN" }]);
+    },
+  );
+});
+
 test("portal-mounted admin uses the portal's fixed /admin route", () => {
   withConfig({ services: ["core", "admin", "portal"], env: { admin: { ADMIN_BASE_PATH: "/ops" } } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /env\.admin\.ADMIN_BASE_PATH.*must be "\/admin"/);

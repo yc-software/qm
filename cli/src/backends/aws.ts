@@ -31,6 +31,7 @@ import {
   isServiceName,
   isVirtualService,
   virtualServiceEnv,
+  withoutDefaultLocale,
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
@@ -290,7 +291,7 @@ function workloadEnvironment(config: QmConfig, workload: string): Record<string,
     Object.entries({
       CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080`,
       ...orgEnv(workload, config.orgId, config.publicUrl, config.services.includes("portal")),
-      ...plugin?.env,
+      ...withoutDefaultLocale(plugin?.env),
       PORT: "8080",
     }).sort(([a], [b]) => a.localeCompare(b)),
   );

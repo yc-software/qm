@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 import { CliError, die, errMessage } from "./log.ts";
 import {
   AUTH_BROKER_ENV_KEYS,
+  DEFAULT_LOCALE_ENV,
   SERVICE_NAMES,
   VIRTUAL_SERVICE_NAMES,
   isDeclaredService,
@@ -577,6 +578,11 @@ function validate(raw: unknown, path: string): QmConfig {
     "SECURITY_SCREEN_PROXY_ROLLOUT",
   ];
   for (const [service, values] of Object.entries(env)) {
+    if (values?.[DEFAULT_LOCALE_ENV] !== undefined) {
+      throw new CliError(
+        `${path}: "env.${service}.${DEFAULT_LOCALE_ENV}" is managed by the deployment target and cannot be overridden`,
+      );
+    }
     for (const name of [...managedSecurityScreenEnv, "SECURITY_SCREEN_PROXY_TOKEN"]) {
       if (values?.[name] !== undefined) {
         throw new CliError(`${path}: "env.${service}.${name}" is managed by securityScreen and cannot be overridden`);
@@ -584,6 +590,11 @@ function validate(raw: unknown, path: string): QmConfig {
     }
   }
   for (const [service, values] of Object.entries(secretEnv)) {
+    if (values?.[DEFAULT_LOCALE_ENV] !== undefined) {
+      throw new CliError(
+        `${path}: "secretEnv.${service}.${DEFAULT_LOCALE_ENV}" is managed by the deployment target and cannot be overridden`,
+      );
+    }
     for (const name of managedSecurityScreenEnv) {
       if (values?.[name] !== undefined) {
         throw new CliError(
@@ -603,7 +614,7 @@ function validate(raw: unknown, path: string): QmConfig {
   }
   for (const [service, values] of Object.entries(env)) {
     if (!isServiceName(service)) continue;
-    for (const name of [serviceDef(service).docker.portEnv, "QM_DEFAULT_LOCALE"]) {
+    for (const name of [serviceDef(service).docker.portEnv]) {
       if (values?.[name] === undefined) continue;
       throw new CliError(
         `${path}: "env.${service}.${name}" is managed by the deployment target and cannot be overridden`,
@@ -612,7 +623,7 @@ function validate(raw: unknown, path: string): QmConfig {
   }
   for (const [service, entries] of Object.entries(secretEnv)) {
     if (!isServiceName(service)) continue;
-    for (const name of [serviceDef(service).docker.portEnv, "QM_DEFAULT_LOCALE"]) {
+    for (const name of [serviceDef(service).docker.portEnv]) {
       if (entries?.[name] === undefined) continue;
       throw new CliError(
         `${path}: "secretEnv.${service}.${name}" is managed by the deployment target and cannot be overridden`,
@@ -923,7 +934,14 @@ function validatePlugins(raw: unknown, path: string): PluginEntry[] {
       }
       entry.image = e["image"];
     }
-    if (e["env"] !== undefined) entry.env = validateStringMap(e["env"], path, `plugins[${i}].env`);
+    if (e["env"] !== undefined) {
+      entry.env = validateStringMap(e["env"], path, `plugins[${i}].env`);
+      if (entry.env[DEFAULT_LOCALE_ENV] !== undefined) {
+        throw new CliError(
+          `${path}: plugins[${i}].env.${DEFAULT_LOCALE_ENV} is managed by the deployment target and cannot be overridden`,
+        );
+      }
+    }
     if (e["secrets"] !== undefined) entry.secrets = validatePluginSecrets(e["secrets"], path, i);
     return entry;
   });
@@ -938,6 +956,11 @@ function validatePluginSecrets(raw: unknown, path: string, pluginIndex: number):
     const name = value["name"];
     if (typeof name !== "string" || !isEnvVarName(name))
       throw new CliError(`${path}: ${field}.name must be a valid env var name`);
+    if (name === DEFAULT_LOCALE_ENV) {
+      throw new CliError(
+        `${path}: ${field}.name.${DEFAULT_LOCALE_ENV} is managed by the deployment target and cannot be overridden`,
+      );
+    }
     if (seen.has(name)) throw new CliError(`${path}: duplicate plugin secret ${JSON.stringify(name)}`);
     seen.add(name);
     const out: PluginSecret = { name };

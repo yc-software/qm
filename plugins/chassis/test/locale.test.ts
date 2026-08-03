@@ -12,6 +12,10 @@ import {
 test("locale normalization accepts only Japanese and English", () => {
   assert.equal(normalizeLocale("ja-JP"), "ja");
   assert.equal(normalizeLocale("en-US"), "en");
+  assert.equal(normalizeLocale("en-a-extended"), "en");
+  assert.equal(normalizeLocale("ja-x-private"), "ja");
+  assert.equal(normalizeLocale("en-a"), null);
+  assert.equal(normalizeLocale("ja-x"), null);
   assert.equal(normalizeLocale("fr"), null);
   assert.equal(normalizeLocale("<script>"), null);
 });
@@ -27,7 +31,13 @@ test("Accept-Language honors quality weights", () => {
   assert.equal(acceptLanguageLocale("en-US;q=0.6, ja-JP;q=0.9"), "ja");
   assert.equal(acceptLanguageLocale("fr-FR, en;q=0.8"), "en");
   assert.equal(acceptLanguageLocale("en;q=0, ja;q=0"), null);
+  assert.equal(acceptLanguageLocale("ja;q=0, en;q=0.5"), "en");
   assert.equal(acceptLanguageLocale("ja;q=0.8, en;q=0.8"), "ja");
+  assert.equal(acceptLanguageLocale("ja;q=.8, en;q=0.7"), "en");
+  assert.equal(acceptLanguageLocale("ja;q=1e-1, en;q=0.2"), "en");
+  assert.equal(acceptLanguageLocale("ja;q=01, en;q=0.9"), "en");
+  assert.equal(acceptLanguageLocale("ja;q=0.1234, en;q=0.1"), "en");
+  assert.equal(acceptLanguageLocale("ja;q=1.001, en;q=0.9"), "en");
 });
 
 test("message interpolation and catalog audit are deterministic", () => {
@@ -40,5 +50,22 @@ test("message interpolation and catalog audit are deterministic", () => {
   ]);
   assert.deepEqual(catalogProblems({ greeting: "Hello {name}" }, { greeting: "こんにちは {person}" }), [
     "placeholder mismatch: greeting",
+  ]);
+});
+
+test("catalog audits own special keys without prototype lookups", () => {
+  const en = Object.create(null) as Record<string, string>;
+  en.toString = "Hello {name}";
+  en.constructor = "Hello {name}";
+  Object.defineProperty(en, "__proto__", { value: "Hello {name}", enumerable: true });
+  const translated = {
+    toString: "こんにちは {name}",
+    extra: "余分",
+  } as Record<string, string>;
+  Object.defineProperty(translated, "__proto__", { value: "こんにちは {person}", enumerable: true });
+  assert.deepEqual(catalogProblems(en, translated), [
+    "missing key: constructor",
+    "extra key: extra",
+    "placeholder mismatch: __proto__",
   ]);
 });

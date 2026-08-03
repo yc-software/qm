@@ -137,7 +137,12 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
     console.warn = console.log;
     const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
-    await dockerUp(config, dir, {});
+    const unsafe = {
+      ...config,
+      env: { ...config.env, slack: { ...config.env.slack, QM_DEFAULT_LOCALE: "ja" } },
+      plugins: config.plugins.map((plugin) => ({ ...plugin, env: { ...plugin.env, QM_DEFAULT_LOCALE: "ja" } })),
+    };
+    await dockerUp(unsafe, dir, {});
 
     const argv = readFileSync(fake.argvLog, "utf8");
     for (const value of Object.values(SECRETS)) {
@@ -152,6 +157,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     assert.ok(argv.includes("FLY_SANDBOX_APP_NAME=sekrit-sandboxes"), "non-secret env still flows as -e");
     assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
     assert.ok(argv.includes("LINEAR_REGION=us"), "undeclared plugin env still flows as -e");
+    assert.ok(!argv.includes("QM_DEFAULT_LOCALE=ja"), "the managed locale reaches neither core nor plugins");
     assert.ok(argv.includes("SECURITY_SCREEN_BACKEND=proxy"));
     assert.ok(argv.includes("SECURITY_SCREEN_PROXY_PROVIDER=example-screen"));
     assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ENDPOINT=https://screen.example.test/classify"));

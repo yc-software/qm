@@ -26,6 +26,7 @@ import {
   serviceDef,
   teardownOrdered,
   virtualServiceEnv,
+  withoutDefaultLocale,
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
@@ -615,7 +616,7 @@ export async function dockerUp(
     };
     const env = {
       ...wiring,
-      ...p.env,
+      ...withoutDefaultLocale(p.env),
       ...(ctx.signingSecret ? { CORE_SIGNING_SECRET: ctx.signingSecret } : {}),
       ...secretValues(ctx, p.name),
     };

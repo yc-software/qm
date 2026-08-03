@@ -1,5 +1,6 @@
 export const SERVICE_NAMES = ["core", "web-ui", "admin", "portal", "auth"] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
+export const DEFAULT_LOCALE_ENV = "QM_DEFAULT_LOCALE";
 
 export const isServiceName = (s: string): s is ServiceName => (SERVICE_NAMES as readonly string[]).includes(s);
 
@@ -17,7 +18,11 @@ export function virtualServiceEnv(
   services: readonly DeclaredServiceName[],
   env: Partial<Record<DeclaredServiceName, Record<string, string>>>,
 ): Record<string, string> {
-  return Object.assign({}, ...services.filter(isVirtualService).map((s) => env[s] ?? {}));
+  return Object.assign({}, ...services.filter(isVirtualService).map((s) => withoutDefaultLocale(env[s])));
+}
+
+export function withoutDefaultLocale(env: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(env ?? {}).filter(([name]) => name !== DEFAULT_LOCALE_ENV));
 }
 
 const RESERVED_CONTAINER_NAMES: readonly string[] = [...SERVICE_NAMES, ...VIRTUAL_SERVICE_NAMES, "pg", "sandbox"];
@@ -87,7 +92,7 @@ export function orgEnv(service: string, orgId: string, publicUrl: string, hasPor
 
 export function defaultLocaleEnv(service: string, locale: "en" | "ja"): Record<string, string> {
   return service === "web-ui" || service === "admin" || service === "portal" || service === "auth"
-    ? { QM_DEFAULT_LOCALE: locale }
+    ? { [DEFAULT_LOCALE_ENV]: locale }
     : {};
 }
 

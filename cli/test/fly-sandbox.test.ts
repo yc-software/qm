@@ -107,6 +107,24 @@ test("the fly target derives a plugin fly.toml wiring it to the core over 6PN", 
   assert.doesNotMatch(toml, /CORE_SIGNING_SECRET/, "the source-auth secret must not be in the toml");
 });
 
+test("Fly omits managed locale overrides from core and plugins", () => {
+  const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
+  const unsafe: QmConfig = {
+    ...config,
+    env: { ...config.env, slack: { QM_DEFAULT_LOCALE: "ja", FEATURE_SWITCH: "on" } },
+  };
+  const plugin: ResolvedPlugin = {
+    name: "linear",
+    kind: "image",
+    image: "ghcr.io/x:1",
+    env: { QM_DEFAULT_LOCALE: "ja", LINEAR_REGION: "us" },
+  };
+  assert.doesNotMatch(derivedTomlFor(unsafe, "core", repoRoot), /QM_DEFAULT_LOCALE/);
+  const pluginToml = derivedPluginTomlFor(unsafe, plugin);
+  assert.doesNotMatch(pluginToml, /QM_DEFAULT_LOCALE/);
+  assert.match(pluginToml, /LINEAR_REGION = "us"/);
+});
+
 test("a plugin's entry env can override the injected wiring (entry env wins)", () => {
   const config: QmConfig = {
     contract: 1,

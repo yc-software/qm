@@ -474,6 +474,43 @@ test("AWS derives the configured default locale only for localized surfaces", ()
     assert.equal(serviceEnvironment(config, service).QM_DEFAULT_LOCALE, "en");
   }
   assert.equal(serviceEnvironment(config, "core").QM_DEFAULT_LOCALE, undefined);
+
+  const japanese = { ...config, defaultLocale: "ja" as const };
+  for (const service of ["web-ui", "admin", "portal"] as const) {
+    assert.equal(serviceEnvironment(japanese, service).QM_DEFAULT_LOCALE, "ja");
+  }
+  assert.equal(serviceEnvironment(japanese, "core").QM_DEFAULT_LOCALE, undefined);
+});
+
+test("AWS omits managed locale overrides from core and plugins", () => {
+  const unsafe: QmConfig = {
+    ...config,
+    env: { ...config.env, slack: { QM_DEFAULT_LOCALE: "ja", FEATURE_SWITCH: "on" } },
+    plugins: [
+      { name: "linear", image: "ghcr.io/acme/linear:1", env: { QM_DEFAULT_LOCALE: "ja", LINEAR_REGION: "us" } },
+    ],
+    aws: {
+      ...config.aws!,
+      services: {
+        ...config.aws!.services,
+        linear: { ecrRepository: "qm-linear", ecsService: "acme-linear", cpu: 256, memory: 512, architecture: "amd64" },
+      },
+    },
+  };
+  assert.equal(serviceEnvironment(unsafe, "core").QM_DEFAULT_LOCALE, undefined);
+  const task = renderTaskDefinition(
+    unsafe,
+    "linear",
+    `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-linear@sha256:${"a".repeat(64)}`,
+  );
+  const environment = Object.fromEntries(
+    (task.containerDefinitions[0]!.environment as Array<{ name: string; value: string }>).map(({ name, value }) => [
+      name,
+      value,
+    ]),
+  );
+  assert.equal(environment.QM_DEFAULT_LOCALE, undefined);
+  assert.equal(environment.LINEAR_REGION, "us");
 });
 
 test("AWS routes security screen proxy configuration and its token only to core", () => {
