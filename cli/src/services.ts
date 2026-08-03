@@ -85,6 +85,12 @@ export function orgEnv(service: string, orgId: string, publicUrl: string, hasPor
   return identity;
 }
 
+export function defaultLocaleEnv(service: string, locale: "en" | "ja"): Record<string, string> {
+  return service === "web-ui" || service === "admin" || service === "portal" || service === "auth"
+    ? { QM_DEFAULT_LOCALE: locale }
+    : {};
+}
+
 const AUTH_PATH_PREFIX = "/idp";
 const AUTH_CLIENT_ID = "qm-portal";
 

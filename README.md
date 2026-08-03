@@ -114,6 +114,15 @@ operator's own cloud account; initialization does not generate or enable deploym
 and this repository has no production deployment workflow. See
 [`deployment.md`](./deployment.md) for the details.
 
+Set `defaultLocale` in `qm.config.jsonc` to choose the initial language for the web UI,
+admin panel, portal, and sign-in page. It defaults to English.
+
+```json
+{
+  "defaultLocale": "ja"
+}
+```
+
 ## Contributing
 
 We take contributions as _human-written_ text, not code — see

@@ -24,6 +24,7 @@ import { manifestRef } from "../manifest.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService, type ComputedSecret } from "../secrets.ts";
 import {
   brokerWiring,
+  defaultLocaleEnv,
   orgEnv,
   runnableServices,
   serviceDef,
@@ -221,6 +222,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       : {};
   const env: Record<string, string> = {
     ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal")),
+    ...defaultLocaleEnv(service, config.defaultLocale),
     ...(service === "core" ? {} : { CORE_API_URL: coreUrl }),
     ...coreEnv,
     ...config.env[service],

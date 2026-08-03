@@ -19,6 +19,7 @@ import {
 import { manifestRef } from "../manifest.ts";
 import {
   brokerWiring,
+  defaultLocaleEnv,
   ordered,
   orgEnv,
   runnableServices,
@@ -281,6 +282,7 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
     [def.docker.portEnv]: String(def.docker.internalPort),
     CORE_API_URL: "http://core:8080",
     ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal")),
+    ...defaultLocaleEnv(service, config.defaultLocale),
   };
   if (service === "portal") {
     if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";

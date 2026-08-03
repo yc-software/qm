@@ -90,6 +90,14 @@ test("basePort must be a positive integer", () => {
   withConfig({ basePort: 1.5 }, ({ path }) => assert.throws(() => loadConfigAt(path), /basePort/));
 });
 
+test("defaultLocale accepts en or ja and defaults to en", () => {
+  withConfig({}, ({ path }) => assert.equal(loadConfigAt(path).config.defaultLocale, "en"));
+  withConfig({ defaultLocale: "ja" }, ({ path }) => assert.equal(loadConfigAt(path).config.defaultLocale, "ja"));
+  withConfig({ defaultLocale: "fr" }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /"defaultLocale" must be "en" or "ja"/),
+  );
+});
+
 test("plugins: image is OPTIONAL (source plugins); env attaches to either; bad image rejected", () => {
   withConfig({ plugins: [{ name: "intercom", env: { INTERCOM_REGION: "us" } }] }, ({ path }) => {
     const { config } = loadConfigAt(path);
@@ -130,6 +138,15 @@ test("listen ports are managed consistently across deployment targets", () => {
   });
   withConfig({ plugins: [{ name: "linear", env: { PORT: "9000" } }] }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /plugins\[0\]\.env\.PORT.*managed/);
+  });
+});
+
+test("QM_DEFAULT_LOCALE is managed by the deployment target", () => {
+  withConfig({ env: { "web-ui": { QM_DEFAULT_LOCALE: "ja" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /env\.web-ui\.QM_DEFAULT_LOCALE.*managed/);
+  });
+  withConfig({ secretEnv: { portal: { QM_DEFAULT_LOCALE: "LOCALE" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /secretEnv\.portal\.QM_DEFAULT_LOCALE.*managed/);
   });
 });
 

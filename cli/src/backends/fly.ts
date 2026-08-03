@@ -16,6 +16,7 @@ import {
   which,
 } from "../util.ts";
 import {
+  defaultLocaleEnv,
   isVirtualService,
   ordered,
   orgEnv,
@@ -204,6 +205,7 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
     ...sandboxEnv,
     ...virtualEnv,
     ...modelEnv,
+    ...defaultLocaleEnv(service, ctx.config.defaultLocale),
     ...configuredEnv,
     ...(service === "core" ? securityScreenEnv(ctx.config) : {}),
     ...deploymentEnv,

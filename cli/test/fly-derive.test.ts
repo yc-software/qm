@@ -28,6 +28,14 @@ test("web-ui serves at the root in both shapes — publicUrl IS the web-ui URL (
   assert.equal(orgEnv("admin", "acme", url, false).ADMIN_BASE_PATH, undefined);
 });
 
+test("Fly derives the default locale only for localized surfaces", () => {
+  const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
+  for (const service of ["web-ui", "admin", "portal"] as const) {
+    assert.match(derivedTomlFor(config, service, repoRoot), /^\s*QM_DEFAULT_LOCALE = "en"$/m);
+  }
+  assert.doesNotMatch(derivedTomlFor(config, "core", repoRoot), /^\s*QM_DEFAULT_LOCALE = /m);
+});
+
 const imageFromStack = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "imagefrom-stack.json");
 
 test("an imageFrom stack reuses the reference images and overrides only its own keys", () => {
@@ -45,6 +53,7 @@ test("derived Fly configs contain only the deployment's region, org, sandbox, an
     contract: 1,
     orgId: "example",
     publicUrl: "https://example.invalid",
+    defaultLocale: "en",
     target: "fly",
     model: "example-model",
     appPrefix: "example-stack",

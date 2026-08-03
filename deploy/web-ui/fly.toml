@@ -3,6 +3,7 @@ primary_region = "sjc"
 
 [env]
   QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
+  QM_DEFAULT_LOCALE = "en"
   PORT = "8080"
   CORE_API_URL = "http://qm-core.internal:8080"
   CORE_ORG_ID = "acme"

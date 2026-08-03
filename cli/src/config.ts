@@ -132,6 +132,7 @@ export interface QmConfig {
   contract: typeof CONTRACT_VERSION;
   orgId: string;
   publicUrl: string;
+  defaultLocale: "en" | "ja";
   apiUrl?: string;
   target: Target;
   model?: string;
@@ -529,6 +530,12 @@ function validate(raw: unknown, path: string): QmConfig {
   const target = o["target"];
   if (!isTarget(target)) throw new CliError(`${path}: "target" must be ${hostingProviderChoices()}`);
 
+  const configuredDefaultLocale = o["defaultLocale"];
+  if (configuredDefaultLocale !== undefined && configuredDefaultLocale !== "en" && configuredDefaultLocale !== "ja") {
+    throw new CliError(`${path}: "defaultLocale" must be "en" or "ja"`);
+  }
+  const defaultLocale = configuredDefaultLocale ?? "en";
+
   const servicesRaw = o["services"];
   if (!Array.isArray(servicesRaw)) throw new CliError(`${path}: "services" must be an array`);
   const services: DeclaredServiceName[] = [];
@@ -596,19 +603,19 @@ function validate(raw: unknown, path: string): QmConfig {
   }
   for (const [service, values] of Object.entries(env)) {
     if (!isServiceName(service)) continue;
-    const portEnv = serviceDef(service).docker.portEnv;
-    if (values?.[portEnv] !== undefined) {
+    for (const name of [serviceDef(service).docker.portEnv, "QM_DEFAULT_LOCALE"]) {
+      if (values?.[name] === undefined) continue;
       throw new CliError(
-        `${path}: "env.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
+        `${path}: "env.${service}.${name}" is managed by the deployment target and cannot be overridden`,
       );
     }
   }
   for (const [service, entries] of Object.entries(secretEnv)) {
     if (!isServiceName(service)) continue;
-    const portEnv = serviceDef(service).docker.portEnv;
-    if (entries?.[portEnv] !== undefined) {
+    for (const name of [serviceDef(service).docker.portEnv, "QM_DEFAULT_LOCALE"]) {
+      if (entries?.[name] === undefined) continue;
       throw new CliError(
-        `${path}: "secretEnv.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
+        `${path}: "secretEnv.${service}.${name}" is managed by the deployment target and cannot be overridden`,
       );
     }
   }
@@ -638,6 +645,7 @@ function validate(raw: unknown, path: string): QmConfig {
     contract,
     orgId,
     publicUrl: publicUrl.replace(/\/$/, ""),
+    defaultLocale,
     target,
     services,
     plugins,

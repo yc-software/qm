@@ -393,6 +393,7 @@ const config: QmConfig = {
   contract: 1,
   orgId: "acme",
   publicUrl: "https://agent.acme.example",
+  defaultLocale: "en",
   target: "aws",
   services: ["core", "slack", "web-ui", "admin", "portal"],
   plugins: [],
@@ -436,6 +437,7 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
     CORE_API_URL: "http://core.acme.internal:8080",
     CORE_ORG_ID: "acme",
     PORT: "8080",
+    QM_DEFAULT_LOCALE: "en",
     REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
     WEB_UI_PUBLIC_URL: "https://agent.acme.example",
   });
@@ -465,6 +467,13 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
   assert.equal(core.DEPLOY_PROVIDER, "aws");
   assert.equal(core.AWS_DEPLOY_REGION, "us-west-2");
   assert.equal(core.PORT, "8080");
+});
+
+test("AWS derives the configured default locale only for localized surfaces", () => {
+  for (const service of ["web-ui", "admin", "portal"] as const) {
+    assert.equal(serviceEnvironment(config, service).QM_DEFAULT_LOCALE, "en");
+  }
+  assert.equal(serviceEnvironment(config, "core").QM_DEFAULT_LOCALE, undefined);
 });
 
 test("AWS routes security screen proxy configuration and its token only to core", () => {

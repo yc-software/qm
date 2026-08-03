@@ -120,6 +120,37 @@ test("docker and AWS wire the broker with parity", () => {
   assert.equal(serviceEnvironment(aws, "auth").PORT, "8080");
 });
 
+test("Docker and AWS pass the default locale only to localized surfaces", () => {
+  const docker = configWith(configText());
+  for (const service of ["web-ui", "admin", "portal", "auth"] as const) {
+    assert.equal(dockerServiceEnv(docker, service).QM_DEFAULT_LOCALE, "en");
+  }
+  assert.equal(dockerServiceEnv(docker, "core").QM_DEFAULT_LOCALE, undefined);
+
+  const aws = configWith(`{
+    "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "aws",
+    "services": ["core", "web-ui", "admin", "portal", "auth"], "plugins": [], "skills": [],
+    "env": { "core": { "AWS_DEPLOY_IMAGE": "acme-sandbox" }, "auth": { "AUTH_EMAIL_TRANSPORT": "smtp", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" } },
+    "aws": {
+      "accountId": "123456789012", "region": "us-west-2", "cluster": "acme-qm",
+      "deployRoleArn": "arn:aws:iam::123456789012:role/acme-qm-github-deploy",
+      "secretsPrefix": "acme/qm/", "imageLabel": "latest",
+      "networking": { "cloudMapNamespace": "acme.internal" },
+      "services": {
+        "core": { "ecrRepository": "acme-qm-core", "ecsService": "acme-qm-core", "cpu": 2048, "memory": 4096 },
+        "web-ui": { "ecrRepository": "acme-qm-web-ui", "ecsService": "acme-qm-web-ui", "cpu": 512, "memory": 1024 },
+        "admin": { "ecrRepository": "acme-qm-admin", "ecsService": "acme-qm-admin", "cpu": 512, "memory": 1024 },
+        "portal": { "ecrRepository": "acme-qm-portal", "ecsService": "acme-qm-portal", "cpu": 512, "memory": 1024 },
+        "auth": { "ecrRepository": "acme-qm-auth", "ecsService": "acme-qm-auth", "cpu": 256, "memory": 512 }
+      }
+    }
+  }`);
+  for (const service of ["web-ui", "admin", "portal", "auth"] as const) {
+    assert.equal(serviceEnvironment(aws, service).QM_DEFAULT_LOCALE, "en");
+  }
+  assert.equal(serviceEnvironment(aws, "core").QM_DEFAULT_LOCALE, undefined);
+});
+
 test("the broker's generated secrets reach both sides under the right names", () => {
   const config = brokerConfig();
   const secrets = computedSecrets(config);
