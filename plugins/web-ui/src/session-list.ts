@@ -1,4 +1,6 @@
 import { sharedContextLabel, type CoreContext, type CoreProject, type CoreSession } from "./core-bridge.ts";
+import type { Locale } from "../../chassis/src/locale.ts";
+import { webMessage, type WebMessageKey } from "./messages.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
@@ -83,14 +85,14 @@ export function groupProjectSessions(
   return items;
 }
 
-export function recencyGroup(ms: number, now = Date.now()): string {
+export function recencyGroup(ms: number, now = Date.now(), selected: Locale = "en"): string {
   const d = new Date(now);
   const dayStart = (back: number): number => new Date(d.getFullYear(), d.getMonth(), d.getDate() - back).getTime();
-  if (ms >= dayStart(0)) return "Today";
-  if (ms >= dayStart(1)) return "Yesterday";
-  if (ms >= dayStart(6)) return "Previous 7 days";
-  if (ms >= dayStart(29)) return "Previous 30 days";
-  return "Older";
+  if (ms >= dayStart(0)) return webMessage(selected, "history.today");
+  if (ms >= dayStart(1)) return webMessage(selected, "history.yesterday");
+  if (ms >= dayStart(6)) return webMessage(selected, "history.previous7Days");
+  if (ms >= dayStart(29)) return webMessage(selected, "history.previous30Days");
+  return webMessage(selected, "history.older");
 }
 
 export function withPendingSession(list: CoreSession[], pending: CoreSession): CoreSession[] {
@@ -152,18 +154,27 @@ export interface RowIndicators {
   background: { count: number; label: string } | null;
 }
 
-export function backgroundLabel(jobs: number, watches: number): { count: number; label: string } | null {
+function countMessage(selected: Locale, count: number, one: WebMessageKey, other: WebMessageKey): string {
+  const key = new Intl.PluralRules(selected).select(count) === "one" ? one : other;
+  return webMessage(selected, key, { count: new Intl.NumberFormat(selected).format(count) });
+}
+
+export function backgroundLabel(
+  jobs: number,
+  watches: number,
+  selected: Locale = "en",
+): { count: number; label: string } | null {
   const parts: string[] = [];
-  if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
-  if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
+  if (jobs > 0) parts.push(countMessage(selected, jobs, "background.jobs.one", "background.jobs.other"));
+  if (watches > 0) parts.push(countMessage(selected, watches, "background.watches.one", "background.watches.other"));
   return parts.length ? { count: jobs + watches, label: parts.join(" · ") } : null;
 }
 
-export function rowIndicators(s: CoreSession, liveThreadRef: string | null): RowIndicators {
+export function rowIndicators(s: CoreSession, liveThreadRef: string | null, selected: Locale = "en"): RowIndicators {
   return {
     working: Boolean(s.working) || (Boolean(s.threadRef) && s.threadRef === liveThreadRef),
     awaiting: Boolean(s.awaitingInput),
-    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0),
+    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0, selected),
   };
 }
 
@@ -171,7 +182,8 @@ export function conversationBackground(
   list: CoreSession[],
   sessionId: string | null,
   threadRef: string | null,
+  selected: Locale = "en",
 ): RowIndicators["background"] {
   const row = list.find((s) => (sessionId ? s.id === sessionId : Boolean(threadRef) && s.threadRef === threadRef));
-  return row ? rowIndicators(row, null).background : null;
+  return row ? rowIndicators(row, null, selected).background : null;
 }

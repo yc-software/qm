@@ -78,7 +78,7 @@ test("the pane body no longer offers a tab zone", () => {
   assert.doesNotMatch(layout, /"tab"/, "DropEdge must drop the zone that no longer exists");
   const zones = fn(split, "zonesTpl");
   assert.doesNotMatch(zones, /tab/i);
-  assert.match(zones, /zoneTpl\("center", "Open here"/);
+  assert.match(zones, /zoneTpl\("center", t\("split\.openHere"\)/);
   for (const edge of ["left", "right", "top", "bottom"]) assert.match(zones, new RegExp(`zoneTpl\\("${edge}"`));
   assert.doesNotMatch(css, /\.zone-tab \{/);
   const center = css.match(/\.zone-center \{[^}]*\}/)?.[0] ?? "";

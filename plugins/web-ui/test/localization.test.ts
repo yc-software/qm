@@ -36,6 +36,13 @@ test("web catalogs have identical keys and variables", () => {
   assert.deepEqual(catalogProblems(WEB_MESSAGES.en, WEB_MESSAGES.ja), []);
 });
 
+test("chat, session, composer, and approval controls have Japanese labels", () => {
+  assert.equal(webMessage("ja", "chat.new"), "新しいチャット");
+  assert.equal(webMessage("ja", "session.archive"), "アーカイブ");
+  assert.equal(webMessage("ja", "composer.send"), "送信");
+  assert.equal(webMessage("ja", "approval.allowOnce"), "今回のみ許可");
+});
+
 test("browser translation reads the normalized page locale", () => {
   const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
   Object.defineProperty(globalThis, "document", {

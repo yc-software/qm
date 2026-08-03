@@ -1,5 +1,6 @@
 import { html, type TemplateResult } from "lit";
 import { createElement, type IconNode } from "lucide";
+import { locale, t } from "./i18n.ts";
 
 export function brandName(): string {
   if (typeof document === "undefined") return "QM";
@@ -29,18 +30,25 @@ export function initials(s: string): string {
   return (two || "?").toUpperCase();
 }
 
-export function relTime(ms: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
+export function relTime(ms: number, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - ms) / 1000));
+  if (seconds < 60) return t("time.justNow");
+  const selected = locale();
+  const formatter = new Intl.RelativeTimeFormat(selected, {
+    numeric: "always",
+    style: selected === "ja" ? "narrow" : "long",
+  });
+  if (seconds < 3600) return formatter.format(-Math.floor(seconds / 60), "minute");
+  if (seconds < 86400) return formatter.format(-Math.floor(seconds / 3600), "hour");
+  return formatter.format(-Math.floor(seconds / 86400), "day");
 }
 
 export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  const selected = locale();
+  if (bytes < 1024) return `${new Intl.NumberFormat(selected).format(bytes)} B`;
+  if (bytes < 1024 * 1024)
+    return `${new Intl.NumberFormat(selected, { maximumFractionDigits: 0 }).format(bytes / 1024)} KB`;
+  return `${new Intl.NumberFormat(selected, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(bytes / 1024 / 1024)} MB`;
 }
 
 const RENDERABLE_IMAGE_TYPES = new Set([
@@ -72,7 +80,7 @@ export async function copyText(text: string, btn?: HTMLButtonElement): Promise<v
       const active = copyFeedback.get(btn);
       if (active) clearTimeout(active.timer);
       const html = active?.html ?? btn.innerHTML;
-      btn.textContent = "Copied";
+      btn.textContent = t("chat.copied");
       const timer = setTimeout(() => {
         btn.innerHTML = html;
         copyFeedback.delete(btn);
@@ -86,7 +94,7 @@ export async function copyText(text: string, btn?: HTMLButtonElement): Promise<v
 
 export function actionSnippet(action: string): string {
   const s = action.trim().replace(/\s+/g, " ");
-  return s.length > 48 ? `${s.slice(0, 47)}…` : s || "(no action)";
+  return s.length > 48 ? `${s.slice(0, 47)}…` : s || t("approval.noAction");
 }
 
 export function closeFormMenus(): boolean {

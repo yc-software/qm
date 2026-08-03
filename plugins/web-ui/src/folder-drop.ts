@@ -1,3 +1,6 @@
+import type { Locale } from "../../chassis/src/locale.ts";
+import { webMessage } from "./messages.ts";
+
 export interface DropEntryLike {
   isFile: boolean;
   isDirectory: boolean;
@@ -62,7 +65,11 @@ async function readAllEntries(dir: DropEntryLike): Promise<DropEntryLike[]> {
   }
 }
 
-async function collectFolder(root: DropEntryLike, caps: FolderCaps): Promise<{ path: string; file: File }[]> {
+async function collectFolder(
+  root: DropEntryLike,
+  caps: FolderCaps,
+  selected: Locale,
+): Promise<{ path: string; file: File }[]> {
   const out: { path: string; file: File }[] = [];
   let bytes = 0;
   const walk = async (dir: DropEntryLike, prefix: string): Promise<void> => {
@@ -74,14 +81,20 @@ async function collectFolder(root: DropEntryLike, caps: FolderCaps): Promise<{ p
       if (!entry.isFile || !entry.file || JUNK_FILES.has(entry.name)) continue;
       if (out.length >= caps.maxFiles) {
         throw new FolderDropError(
-          `"${root.name}" has too many files (over ${caps.maxFiles.toLocaleString()}) — zip it yourself or drop a subfolder.`,
+          webMessage(selected, "composer.folderTooMany", {
+            name: root.name,
+            count: new Intl.NumberFormat(selected).format(caps.maxFiles),
+          }),
         );
       }
       const file = await new Promise<File>((resolve, reject) => entry.file!(resolve, reject));
       bytes += file.size;
       if (bytes > caps.maxBytes) {
         throw new FolderDropError(
-          `"${root.name}" is too big (over ${Math.round(caps.maxBytes / (1024 * 1024))} MB) — zip it yourself or drop a subfolder.`,
+          webMessage(selected, "composer.folderTooBig", {
+            name: root.name,
+            size: new Intl.NumberFormat(selected).format(Math.round(caps.maxBytes / (1024 * 1024))),
+          }),
         );
       }
       out.push({ path: `${prefix}${entry.name}`, file });
@@ -91,9 +104,13 @@ async function collectFolder(root: DropEntryLike, caps: FolderCaps): Promise<{ p
   return out;
 }
 
-export async function folderToZipFile(root: DropEntryLike, caps: FolderCaps = DEFAULT_CAPS): Promise<File> {
-  const files = await collectFolder(root, caps);
-  if (!files.length) throw new FolderDropError(`"${root.name}" has no files in it.`);
+export async function folderToZipFile(
+  root: DropEntryLike,
+  caps: FolderCaps = DEFAULT_CAPS,
+  selected: Locale = "en",
+): Promise<File> {
+  const files = await collectFolder(root, caps, selected);
+  if (!files.length) throw new FolderDropError(webMessage(selected, "composer.folderEmpty", { name: root.name }));
   const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
   for (const { path, file } of files) zip.file(path, await file.arrayBuffer());

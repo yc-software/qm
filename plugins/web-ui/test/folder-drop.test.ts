@@ -103,6 +103,18 @@ test("file-count cap throws a composer-ready FolderDropError", async () => {
   });
 });
 
+test("folder limits localize while preserving the folder name and binary unit", async () => {
+  const root = dirEntry("資料", [fileEntry("a", "1"), fileEntry("b", "1")]);
+  await assert.rejects(folderToZipFile(root, { maxFiles: 1, maxBytes: Infinity }, "ja"), (err: unknown) => {
+    assert.ok(err instanceof FolderDropError);
+    assert.equal(
+      err.message,
+      "「資料」のファイル数が上限（1件）を超えています。zip形式にするか、サブフォルダをドロップしてください。",
+    );
+    return true;
+  });
+});
+
 test("byte cap throws a composer-ready FolderDropError", async () => {
   const root = dirEntry("proj", [fileEntry("a.txt", "x".repeat(100))]);
   await assert.rejects(folderToZipFile(root, { maxFiles: Infinity, maxBytes: 50 }), (err: unknown) => {

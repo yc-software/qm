@@ -60,6 +60,15 @@ test("chat browse statuses are mutually exclusive and working does not mean wait
   );
 });
 
+test("recency and background counts localize without changing session data", () => {
+  const now = new Date(2026, 7, 3, 12).getTime();
+  assert.equal(recencyGroup(now, now, "ja"), "今日");
+  assert.deepEqual(backgroundLabel(1, 2, "ja"), {
+    count: 3,
+    label: "バックグラウンドジョブ1件を実行中 · 監視2件を実行中",
+  });
+});
+
 test("splitPinned lifts pinned rows out in order and leaves the rest untouched", () => {
   const a = saved("a", "web:u:a");
   const b = { ...saved("b", "web:u:b"), pinned: true };

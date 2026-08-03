@@ -2,6 +2,7 @@ import { normalizeLocale, type Locale } from "../../chassis/src/locale.ts";
 import { webMessage, type WebMessageKey } from "./messages.ts";
 
 export function locale(): Locale {
+  if (typeof document === "undefined") return "en";
   return normalizeLocale(document.querySelector<HTMLMetaElement>('meta[name="qm-locale"]')?.content) ?? "en";
 }
 

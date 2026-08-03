@@ -36,7 +36,6 @@ import {
   applyRuntimeOptions,
   defaultEffortForModel,
   defaultModelValue,
-  effortLabel,
   getHarnessOptions,
   getModelOptions,
   getModelOptionsForHarness,
@@ -60,6 +59,7 @@ import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions"
 import { adminSessionLogUrl, appState, can } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
+import { locale, t } from "./i18n";
 
 export type ComposerMenu = "effort" | "harness" | "model" | "settings";
 
@@ -216,6 +216,10 @@ function effectiveFastMode(): boolean {
 }
 let fastModeChargeTimer: ReturnType<typeof setTimeout> | null = null;
 
+function localizedEffortLabel(level: EffortLevel): string {
+  return t(`composer.effort.${level}`);
+}
+
 export function resetComposer(): void {
   composerState.draft = "";
   composerState.attachments = [];
@@ -241,7 +245,7 @@ export async function refreshRuntimeSelection(scopeId: string | null, agent?: Ag
   const config = await fetchRuntimeConfig(scopeId);
   if (request !== runtimeRequest) return;
   if (!config) {
-    composerState.error = "Could not load runtime settings.";
+    composerState.error = t("composer.couldNotLoadSettings");
     drawActiveChat(agent);
     return;
   }
@@ -273,7 +277,7 @@ async function changeScopeRuntime(
     composerState.error = "";
   } catch (e) {
     if (request !== runtimeRequest || scopeId !== chatState.scopeId) return;
-    composerState.error = errMessage(e, "Could not update the scope default.");
+    composerState.error = errMessage(e, t("composer.couldNotUpdateDefault"));
   }
   drawActiveChat(agent);
 }
@@ -294,23 +298,23 @@ export function composerForm(agent: Agent): TemplateResult {
   const fastAvailable = fastSupported && modelSupportsFastMode(selectedModel.model.id);
   const fastOn = fastAvailable && effectiveFastMode();
   const fastCharging = fastModeCharging && fastOn;
-  let fastTitle = "Fast mode is only available on Opus models";
-  if (fastAvailable) fastTitle = fastOn ? "Fast mode active" : "Fast mode";
+  let fastTitle = t("composer.fastUnavailable");
+  if (fastAvailable) fastTitle = t(fastOn ? "composer.fastActive" : "composer.fastMode");
   const approvalPauses = activePendingApprovals();
   const runtimePending = activeRuntimeConfig === null;
   const modelToggled = !runtimePending && selectedModel.value !== defaultModelValue();
   const inputBlocked = runtimePending || chatState.resolvingApprovals.size > 0 || approvalPauses.length > 0;
   const attachingDisabled = inputBlocked || agent.state.isStreaming;
-  let placeholder = "Ask anything";
-  if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
-  else if (agent.state.isStreaming) placeholder = "Steer the running task…";
+  let placeholder = t("composer.askAnything");
+  if (inputBlocked) placeholder = t(runtimePending ? "composer.loadingRuntime" : "composer.approveToContinue");
+  else if (agent.state.isStreaming) placeholder = t("composer.steerPlaceholder");
   let composerNotice: TemplateResult | typeof nothing = nothing;
   if (composerState.processingFiles) {
-    composerNotice = html`<div class="composer-note">Preparing files...</div>`;
+    composerNotice = html`<div class="composer-note">${t("composer.preparingFiles")}</div>`;
   } else if (!approvalPauses.length && runtimePending) {
     composerNotice = html`<div class="composer-error">
-      ${composerState.error || "Loading runtime settings…"}
-      ${composerState.error ? html`<button type="button" @click=${() => void refreshRuntimeSelection(chatState.scopeId, agent)}>Retry</button>` : nothing}
+      ${composerState.error || t("composer.loadingSettings")}
+      ${composerState.error ? html`<button type="button" @click=${() => void refreshRuntimeSelection(chatState.scopeId, agent)}>${t("common.retry")}</button>` : nothing}
     </div>`;
   } else if (composerState.error) {
     composerNotice = html`<div class="composer-error">${composerState.error}</div>`;
@@ -322,20 +326,26 @@ export function composerForm(agent: Agent): TemplateResult {
         activeRuntimeConfig?.upgradeAvailable
           ? html`<div class="runtime-upgrade">
               <span
-                >The org now recommends
-                ${modelOptionFor(`${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`).harnessLabel}
-                ·
-                ${modelOptionFor(`${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`).buttonLabel}.</span
+                >${t("composer.orgRecommends", {
+                harness: modelOptionFor(
+                  `${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`,
+                ).harnessLabel,
+                model: modelOptionFor(
+                  `${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`,
+                ).buttonLabel,
+              })}</span
               >
               <button
                 type="button"
                 @click=${() => changeScopeRuntime({ harnessId: activeRuntimeConfig!.orgDefault.harnessId, modelId: activeRuntimeConfig!.orgDefault.modelId }, agent)}
               >
-                Upgrade
+                ${t("composer.upgrade")}
               </button>
-              <button type="button" @click=${() => changeScopeRuntime({ keep: true }, agent)}>Keep mine</button>
+              <button type="button" @click=${() => changeScopeRuntime({ keep: true }, agent)}>
+                ${t("composer.keepMine")}
+              </button>
               <button type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>
-                Inherit future defaults
+                ${t("composer.inheritDefaults")}
               </button>
             </div>`
           : nothing
@@ -353,7 +363,7 @@ export function composerForm(agent: Agent): TemplateResult {
                               <button
                                 type="button"
                                 class="chip-open"
-                                title="View pasted text"
+                                title=${t("composer.viewPasted")}
                                 @click=${() => openPasteView(a.id, agent)}
                               >
                                 ${icon(FileText, 14)}
@@ -362,7 +372,12 @@ export function composerForm(agent: Agent): TemplateResult {
                             `
                           : html`${icon(Paperclip, 14)}<span>${a.fileName}</span>`
                       }
-                      <button type="button" class="chip-x" title="Remove" @click=${() => removeAttachment(a.id, agent)}>
+                      <button
+                        type="button"
+                        class="chip-x"
+                        title=${t("common.remove")}
+                        @click=${() => removeAttachment(a.id, agent)}
+                      >
                         ${icon(X, 13)}
                       </button>
                     </span>
@@ -394,7 +409,7 @@ export function composerForm(agent: Agent): TemplateResult {
             !embedMode && chatState.sessionId && can("admin")
               ? html`<a
                   class="icon-btn"
-                  title="View session log (admin)"
+                  title=${t("chat.viewSessionLog")}
                   href=${adminSessionLogUrl(chatState.sessionId, chatState.scopeId ?? `org:${appState.me?.org ?? ""}`)}
                   target="_blank"
                   rel="noreferrer"
@@ -413,7 +428,7 @@ export function composerForm(agent: Agent): TemplateResult {
           <button
             class="icon-btn"
             type="button"
-            title="Attach files"
+            title=${t("composer.attachFiles")}
             ?disabled=${attachingDisabled}
             @click=${() => pickFiles()}
           >
@@ -428,10 +443,13 @@ export function composerForm(agent: Agent): TemplateResult {
                       ? menuControl({
                           kind: "effort",
                           glyph: Brain,
-                          label: effortLabel(composerState.effortLevel),
-                          title: "Effort",
+                          label: localizedEffortLabel(composerState.effortLevel),
+                          title: t("composer.effort"),
                           selected: composerState.effortLevel,
-                          options: EFFORT_LEVELS,
+                          options: EFFORT_LEVELS.map((option) => ({
+                            value: option.value,
+                            label: localizedEffortLabel(option.value),
+                          })),
                           disabled: inputBlocked,
                           onSelect: (value: string) => selectEffort(value as EffortLevel, agent),
                         })
@@ -450,7 +468,7 @@ export function composerForm(agent: Agent): TemplateResult {
                           @click=${() => toggleFastMode(agent)}
                         >
                           ${icon(Zap, 15)}
-                          <span class="fast-label">Fast</span>
+                          <span class="fast-label">${t("composer.fast")}</span>
                         </button>`
                       : nothing
                   }
@@ -467,13 +485,13 @@ export function composerForm(agent: Agent): TemplateResult {
                       ? html`<button
                           class="runtime-default-btn"
                           type="button"
-                          aria-label="Make default"
-                          data-mobile-label="Default"
-                          title="Use this harness and model as the default for this scope"
+                          aria-label=${t("composer.makeDefault")}
+                          data-mobile-label=${t("composer.default")}
+                          title=${t("composer.defaultHint")}
                           ?disabled=${inputBlocked}
                           @click=${() => changeScopeRuntime({ harnessId: selectedModel.harnessId, modelId: selectedModel.model.id }, agent)}
                         >
-                          Make default
+                          ${t("composer.makeDefault")}
                         </button>`
                       : nothing
                   }
@@ -482,19 +500,19 @@ export function composerForm(agent: Agent): TemplateResult {
                       ? html`<button
                           class="runtime-default-btn"
                           type="button"
-                          aria-label="Use org default"
-                          data-mobile-label="Org default"
+                          aria-label=${t("composer.useOrgDefault")}
+                          data-mobile-label=${t("composer.orgDefault")}
                           ?disabled=${inputBlocked}
                           @click=${() => changeScopeRuntime({ inherit: true }, agent)}
                         >
-                          Use org default
+                          ${t("composer.useOrgDefault")}
                         </button>`
                       : nothing
                   }
                   ${menuControl({
                     kind: "model",
                     label: selectedModel.buttonLabel,
-                    title: "Model",
+                    title: t("composer.model"),
                     selected: selectedModel.value,
                     align: "right",
                     options: getModelOptionsForHarness(selectedModel.harnessId).map((option) => ({
@@ -507,7 +525,7 @@ export function composerForm(agent: Agent): TemplateResult {
                   ${menuControl({
                     kind: "harness",
                     label: selectedModel.harnessLabel,
-                    title: "Harness",
+                    title: t("composer.harness"),
                     selected: selectedModel.harnessId,
                     align: "right",
                     options: getHarnessOptions(),
@@ -536,8 +554,14 @@ function pasteViewDialog(agent: Agent): TemplateResult | typeof nothing {
     >
       <div class="project-dialog paste-dialog" role="dialog" aria-modal="true" aria-labelledby="paste-dialog-title">
         <div class="project-dialog-head">
-          <div><h2 id="paste-dialog-title">Pasted text</h2></div>
-          <button class="chip-x" type="button" aria-label="Close" title="Close" @click=${() => closePasteView(agent)}>
+          <div><h2 id="paste-dialog-title">${t("composer.pastedText")}</h2></div>
+          <button
+            class="chip-x"
+            type="button"
+            aria-label=${t("common.close")}
+            title=${t("common.close")}
+            @click=${() => closePasteView(agent)}
+          >
             ${icon(X, 16)}
           </button>
         </div>
@@ -550,9 +574,13 @@ function pasteViewDialog(agent: Agent): TemplateResult | typeof nothing {
         >
 ${view.initial}</textarea>
         <div class="project-dialog-actions">
-          <button class="btn" type="button" @click=${() => removeAttachment(view.id, agent)}>Remove</button>
-          <button class="btn" type="button" @click=${() => insertPasteIntoDraft(agent)}>Insert into message</button>
-          <button class="btn primary" type="button" @click=${() => closePasteView(agent)}>Done</button>
+          <button class="btn" type="button" @click=${() => removeAttachment(view.id, agent)}>
+            ${t("common.remove")}
+          </button>
+          <button class="btn" type="button" @click=${() => insertPasteIntoDraft(agent)}>
+            ${t("composer.insertMessage")}
+          </button>
+          <button class="btn primary" type="button" @click=${() => closePasteView(agent)}>${t("common.done")}</button>
         </div>
       </div>
     </div>
@@ -602,20 +630,26 @@ function insertPasteIntoDraft(agent: Agent): void {
 
 function sendControls(agent: Agent): TemplateResult {
   if (!agent.state.isStreaming) {
-    return html`<button class="send-btn" type="submit" title="Send" ?disabled=${!composerCanSend()}>
+    return html`<button class="send-btn" type="submit" title=${t("composer.send")} ?disabled=${!composerCanSend()}>
       ${icon(ArrowUp, 17)}
     </button>`;
   }
   const canSteer = Boolean(composerState.draft.trim());
   return html`
-    <button class="stop-btn" type="button" title="Stop" aria-label="Stop" @click=${() => stopStreaming(agent)}>
+    <button
+      class="stop-btn"
+      type="button"
+      title=${t("composer.stop")}
+      aria-label=${t("composer.stop")}
+      @click=${() => stopStreaming(agent)}
+    >
       ${icon(Square, 16)}
     </button>
     <button
       class="send-btn"
       type="submit"
-      title="Steer the running task"
-      aria-label="Steer the running task"
+      title=${t("composer.steer")}
+      aria-label=${t("composer.steer")}
       ?disabled=${!canSteer}
     >
       ${icon(ArrowUp, 17)}
@@ -628,7 +662,7 @@ function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
   const decide = (decision: ApprovalDecision): void => {
     if (!busy) resolveCommandApproval(decision);
   };
-  return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
+  return html`<div class="composer-approval-panel" role="group" aria-label=${t("composer.commandApproval")}>
     ${approvals.map(
       (a) =>
         html`<div class="composer-approval">
@@ -640,7 +674,7 @@ function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
               ?disabled=${busy}
               @click=${() => decide({ requestId: a.requestId, approved: false })}
             >
-              Deny
+              ${t("approval.deny")}
             </button>
             <button
               class="approval-btn"
@@ -648,7 +682,7 @@ function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
               ?disabled=${busy}
               @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
             >
-              Allow once
+              ${t("approval.allowOnce")}
             </button>
             ${
               a.grantModes?.session === false
@@ -659,7 +693,7 @@ function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
                     ?disabled=${busy}
                     @click=${() => decide({ requestId: a.requestId, approved: true, scope: "session" })}
                   >
-                    Allow for session
+                    ${t("approval.allowSession")}
                   </button>`
             }
             ${
@@ -671,7 +705,7 @@ function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
                     ?disabled=${busy}
                     @click=${() => decide({ requestId: a.requestId, approved: true, scope: "always" })}
                   >
-                    Allow always
+                    ${t("approval.allowAlways")}
                   </button>`
             }
           </div>
@@ -684,14 +718,14 @@ function settingsControl(agent: Agent, selected: ModelOption, disabled: boolean)
   const open = composerState.openMenu === "settings";
   const fastAvailable = harnessSupportsFastMode(selected.harnessId) && modelSupportsFastMode(selected.model.id);
   const fastOn = fastAvailable && effectiveFastMode();
-  const summary = `${selected.buttonLabel} · ${effortLabel(composerState.effortLevel)}${fastOn ? " · Fast" : ""}`;
+  const summary = `${selected.buttonLabel} · ${localizedEffortLabel(composerState.effortLevel)}${fastOn ? ` · ${t("composer.fast")}` : ""}`;
   return html`
     <div class="menu-control settings-control ${open ? "open" : ""}" data-align="right">
       <button
         class="menu-button settings-button"
         type="button"
-        title="Session settings — ${summary}"
-        aria-label="Session settings — ${summary}"
+        title=${t("composer.sessionSettings", { summary })}
+        aria-label=${t("composer.sessionSettings", { summary })}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
         aria-controls="composer-settings-menu"
@@ -709,7 +743,7 @@ function settingsControl(agent: Agent, selected: ModelOption, disabled: boolean)
                 role="menu"
                 @click=${(e: Event) => e.stopPropagation()}
               >
-                <div class="menu-title">Model</div>
+                <div class="menu-title">${t("composer.model")}</div>
                 ${getModelOptionsForHarness(selected.harnessId).map(
                   (option) => html`
                     <button
@@ -726,8 +760,8 @@ function settingsControl(agent: Agent, selected: ModelOption, disabled: boolean)
                     </button>
                   `,
                 )}
-                <div class="menu-title">Harness</div>
-                <div class="settings-seg" role="group" aria-label="Harness">
+                <div class="menu-title">${t("composer.harness")}</div>
+                <div class="settings-seg" role="group" aria-label=${t("composer.harness")}>
                   ${getHarnessOptions().map(
                     (option) => html`
                       <button
@@ -744,8 +778,8 @@ function settingsControl(agent: Agent, selected: ModelOption, disabled: boolean)
                 ${
                   harnessSupportsEffort(selected.harnessId)
                     ? html`
-                        <div class="menu-title">Effort</div>
-                        <div class="settings-seg" role="group" aria-label="Effort">
+                        <div class="menu-title">${t("composer.effort")}</div>
+                        <div class="settings-seg" role="group" aria-label=${t("composer.effort")}>
                           ${EFFORT_LEVELS.map(
                             (option) => html`
                               <button
@@ -754,7 +788,7 @@ function settingsControl(agent: Agent, selected: ModelOption, disabled: boolean)
                                 aria-pressed=${option.value === composerState.effortLevel ? "true" : "false"}
                                 @click=${() => selectEffort(option.value, agent)}
                               >
-                                ${option.label}
+                                ${localizedEffortLabel(option.value)}
                               </button>
                             `,
                           )}
@@ -773,7 +807,7 @@ function settingsControl(agent: Agent, selected: ModelOption, disabled: boolean)
                           @click=${() => toggleFastMode(agent)}
                         >
                           <span class="menu-option-copy">
-                            <span class="menu-option-label">${icon(Zap, 13)} Fast mode</span>
+                            <span class="menu-option-label">${icon(Zap, 13)} ${t("composer.fastMode")}</span>
                           </span>
                           ${fastOn ? icon(Check, 15) : nothing}
                         </button>
@@ -935,14 +969,14 @@ function slashMenu(agent: Agent): TemplateResult | typeof nothing {
   if (!slash.open) return nothing;
   if (slash.loading && slash.matches.length === 0) {
     return html`<div class="slash-popover">
-      <div class="menu-title">Skills</div>
-      <div class="slash-empty">Loading skills…</div>
+      <div class="menu-title">${t("composer.skills")}</div>
+      <div class="slash-empty">${t("composer.loadingSkills")}</div>
     </div>`;
   }
   const active = clampedActive(slash.matches.length);
   return html`
-    <div class="slash-popover" role="listbox" aria-label="Skills">
-      <div class="menu-title">Skills</div>
+    <div class="slash-popover" role="listbox" aria-label=${t("composer.skills")}>
+      <div class="menu-title">${t("composer.skills")}</div>
       ${slash.matches.map((m, i) => slashRow(m, i === active, agent))}
     </div>
   `;
@@ -1085,7 +1119,7 @@ async function sendSteer(agent: Agent): Promise<void> {
   try {
     await signalLiveRun("steer", text);
   } catch (err) {
-    composerState.error = errMessage(err, "Could not steer the running task.");
+    composerState.error = errMessage(err, t("composer.couldNotSteer"));
     drawActiveChat(agent);
   }
 }
@@ -1120,7 +1154,7 @@ async function sendPrompt(agent: Agent): Promise<void> {
     chatState.pendingSend = null;
     if (chatState.threadRef && chatState.sessionId === null) dropPendingSession(chatState.threadRef);
     renderList();
-    composerState.error = errMessage(err, "Could not send message.");
+    composerState.error = errMessage(err, t("composer.couldNotSend"));
     drawActiveChat(agent);
   }
 }
@@ -1203,7 +1237,7 @@ async function addFiles(files: File[], agent: Agent, folders: DropEntryLike[] = 
   )
     return;
   if (composerState.processingFiles) {
-    composerState.error = "Still preparing the previous drop — try again in a moment.";
+    composerState.error = t("composer.previousDrop");
     drawActiveChat(agent);
     return;
   }
@@ -1212,15 +1246,13 @@ async function addFiles(files: File[], agent: Agent, folders: DropEntryLike[] = 
   drawActiveChat(agent);
   try {
     const zipped: File[] = [];
-    for (const folder of folders) zipped.push(await folderToZipFile(folder));
+    for (const folder of folders) zipped.push(await folderToZipFile(folder, undefined, locale()));
     const loaded = await Promise.all([...files, ...zipped].map((file) => loadAnyAttachment(file)));
     composerState.attachments = [...composerState.attachments, ...loaded];
   } catch (err) {
     if (err instanceof FolderDropError) composerState.error = err.message;
-    else if (isFolderReadError(err))
-      composerState.error =
-        "That drop included a folder this browser can't read — zip it and drop the archive instead.";
-    else composerState.error = errMessage(err, "Could not attach that file.");
+    else if (isFolderReadError(err)) composerState.error = t("composer.folderUnreadable");
+    else composerState.error = errMessage(err, t("composer.couldNotAttach"));
   } finally {
     composerState.processingFiles = false;
     drawActiveChat(agent);

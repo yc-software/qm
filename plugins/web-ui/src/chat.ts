@@ -111,6 +111,8 @@ import {
   resizeComposer,
 } from "./composer";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
+import { locale, t } from "./i18n";
+import type { WebMessageKey } from "./messages";
 
 installMarkdownSanitizer();
 
@@ -323,7 +325,7 @@ function startProactiveOpenerIfNew(
     try {
       await agent.continue();
     } catch (err) {
-      if (agent === chatState.agent) composerState.error = errMessage(err, "Could not start the conversation.");
+      if (agent === chatState.agent) composerState.error = errMessage(err, t("chat.couldNotStart"));
     } finally {
       if (agent === chatState.agent) {
         agent.streamFn = normalStreamFn;
@@ -416,7 +418,7 @@ async function approveCommand(agent: Agent, decision: ApprovalDecision): Promise
     await runApprovalTurn(chatState.threadRef, agent, decision, currentTurnOptions, chatState.onWork ?? undefined);
   } catch (err) {
     if (agent === chatState.agent) {
-      composerState.error = err instanceof Error ? err.message : "Could not send the approval.";
+      composerState.error = err instanceof Error ? err.message : t("chat.couldNotApprove");
       drawActiveChat(agent);
     }
   } finally {
@@ -514,7 +516,7 @@ async function resumeTrackedRun(
     await agent.continue();
   } catch (err) {
     if (agent === chatState.agent)
-      composerState.error = err instanceof Error ? err.message : "Could not reconnect to the running task.";
+      composerState.error = err instanceof Error ? err.message : t("chat.couldNotReconnect");
   } finally {
     if (agent === chatState.agent) {
       agent.streamFn = normalStreamFn;
@@ -616,19 +618,18 @@ export function mountReadOnly(
           <div class="readonly-banner">
             ${
               surfaceOf(s) === "slack"
-                ? html`This conversation lives in Slack. Replies happen
-                  there.${
+                ? html`${t("chat.readOnlySlack")}${
                     sessionSlackUrl(s)
                       ? html` <a
                           class="readonly-banner-link"
                           href=${sessionSlackUrl(s)!}
                           target="_blank"
                           rel="noreferrer"
-                          >Open in Slack</a
+                          >${t("chat.openSlack")}</a
                         >`
                       : nothing
                   }`
-                : "This conversation is read-only here."
+                : t("chat.readOnlyHere")
             }
           </div>
           ${backgroundActivityStrip()}
@@ -642,7 +643,7 @@ export function mountReadOnly(
                         @click=${async (e: Event) => {
                           const btn = e.currentTarget as HTMLButtonElement;
                           btn.disabled = true;
-                          btn.textContent = "Loading earlier messages\u2026";
+                          btn.textContent = t("chat.loadingEarlier");
                           try {
                             const page = await fetchTranscript(
                               s.id,
@@ -666,16 +667,16 @@ export function mountReadOnly(
                             });
                           } catch {
                             btn.disabled = false;
-                            btn.textContent = "Show earlier messages";
+                            btn.textContent = t("chat.showEarlier");
                           }
                         }}
                       >
-                        Show earlier messages
+                        ${t("chat.showEarlier")}
                       </button>
                     </div>`
                   : nothing
               }
-              ${messages.length ? messages.map((m, i) => chatMessage(m, i)) : html`<div class="empty compact">No readable messages in this conversation.</div>`}
+              ${messages.length ? messages.map((m, i) => chatMessage(m, i)) : html`<div class="empty compact">${t("chat.noReadableMessages")}</div>`}
             </div>
           </section>
         </div>
@@ -719,7 +720,7 @@ function earlierNotice(agent: Agent): TemplateResult {
       ?disabled=${chatState.loadingEarlier || agent.state.isStreaming}
       @click=${() => void loadEarlierMessages()}
     >
-      ${chatState.loadingEarlier ? "Loading earlier messages…" : "Show earlier messages"}
+      ${t(chatState.loadingEarlier ? "chat.loadingEarlier" : "chat.showEarlier")}
     </button>
   </div>`;
 }
@@ -782,7 +783,7 @@ function paneGlance(agent: Agent, messages: AgentMessage[], tier: "card" | "stri
   const snippet = last ? messageText(last).trim() : "";
   if (tier === "strip") {
     return html`
-      <button type="button" class="pane-strip" title="Expand this pane" @click=${() => requestPaneExpand()}>
+      <button type="button" class="pane-strip" title=${t("chat.expandPane")} @click=${() => requestPaneExpand()}>
         <span class="pane-strip-text">${now ?? snippet}</span>
         ${icon(Maximize2, 13)}
       </button>
@@ -790,18 +791,18 @@ function paneGlance(agent: Agent, messages: AgentMessage[], tier: "card" | "stri
   }
   return html`
     <section class="pane-card" aria-live="polite">
-      ${now ? html`<div class="pane-card-now"><span class="pane-card-now-label">Now</span><span class="pane-card-now-text">${now}</span></div>` : nothing}
+      ${now ? html`<div class="pane-card-now"><span class="pane-card-now-label">${t("chat.now")}</span><span class="pane-card-now-text">${now}</span></div>` : nothing}
       ${snippet ? html`<div class="pane-card-last">${snippet}</div>` : nothing}
     </section>
   `;
 }
 
 function paneNowLine(agent: Agent): string | null {
-  if (activePendingApprovals().length) return "Needs your approval";
+  if (activePendingApprovals().length) return t("chat.needsApproval");
   if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     const summary = liveWorkSummary(work);
-    if (!summary) return "Thinking…";
+    if (!summary) return t("chat.thinkingEllipsis");
     return summary.detail ? `${summary.label} — ${summary.detail}` : summary.label;
   }
   return null;
@@ -835,7 +836,7 @@ export function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: bo
         ${
           composerState.dragging
             ? html`<div class="drop-overlay">
-                <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
+                <div class="drop-overlay-card">${icon(Files, 30)}<span>${t("chat.dropFiles")}</span></div>
               </div>`
             : nothing
         }
@@ -902,11 +903,8 @@ function contextBanner(): TemplateResult | typeof nothing {
   const label = sharedContextLabel(chatState.scopeId, chatState.contextName);
   if (!label) return nothing;
   const glyph = chatState.scopeId?.startsWith("group:") ? Users : Hash;
-  return html`<div
-    class="context-banner"
-    title="This chat runs in the ${label} context — the agent works with that context's files and memory, separate from your personal context."
-  >
-    ${icon(glyph, 13)}<span><strong>${label}</strong> context</span>
+  return html`<div class="context-banner" title=${t("chat.contextHint", { context: label })}>
+    ${icon(glyph, 13)}<span>${t("chat.contextLabel", { context: label })}</span>
   </div>`;
 }
 
@@ -915,14 +913,14 @@ function chatHeader(title: string | TemplateResult, detail: string, readOnly: bo
     <header class="chat-topbar">
       <div class="chat-heading">
         <div class="chat-title">${title}</div>
-        <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
+        <div class="chat-subtitle">${readOnly ? t("chat.readOnly") : detail}</div>
       </div>
       <div class="topbar-actions">
         ${
           chatState.sessionId && can("admin")
             ? html`<a
                 class="icon-btn subtle"
-                title="View session log (admin)"
+                title=${t("chat.viewSessionLog")}
                 href=${adminSessionLogUrl(chatState.sessionId, chatState.scopeId ?? `org:${appState.me?.org ?? ""}`)}
                 target="_blank"
                 rel="noreferrer"
@@ -932,7 +930,7 @@ function chatHeader(title: string | TemplateResult, detail: string, readOnly: bo
         }
         <button
           class="icon-btn subtle"
-          title="Refresh conversations"
+          title=${t("chat.refreshConversations")}
           @click=${() => void refreshSessions({ refreshContexts: true })}
         >
           ${icon(RefreshCw, 17)}
@@ -1013,7 +1011,7 @@ function chatMessage(message: AgentMessage, index: number, isStreaming = false):
     const steered = Boolean((message as { steered?: boolean }).steered);
     return html`
       <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
-        ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
+        ${steered ? html`<div class="steer-label">↪ ${t("chat.steered")}</div>` : nothing}
         <div class="message-bubble user-bubble">
           ${markdown(messageText(message))}
           ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
@@ -1041,7 +1039,7 @@ function chatMessage(message: AgentMessage, index: number, isStreaming = false):
           ${showWork ? workBlock(work, isStreaming) : nothing} ${assistantContent(msg, isStreaming, showWork)}
           ${assistantFileList(deliveredFiles)}
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
-          ${msg.stopReason === "aborted" ? html`<div class="stopped-note">${icon(Ban, 13)}<span>Stopped</span></div>` : nothing}
+          ${msg.stopReason === "aborted" ? html`<div class="stopped-note">${icon(Ban, 13)}<span>${t("chat.stopped")}</span></div>` : nothing}
           ${isStreaming ? nothing : messageMeta(msg, index)}
         </div>
       </article>
@@ -1063,8 +1061,8 @@ function messageMeta(message: AgentMessage, index: number): TemplateResult | typ
           ? html`<button
               class="msg-copy"
               type="button"
-              title="Copy"
-              aria-label="Copy message"
+              title=${t("chat.copy")}
+              aria-label=${t("chat.copyMessage")}
               @click=${(e: Event) => void copyMessage(text, e.currentTarget as HTMLButtonElement)}
             >
               ${icon(Copy, 13)}
@@ -1076,8 +1074,8 @@ function messageMeta(message: AgentMessage, index: number): TemplateResult | typ
           ? html`<button
               class="msg-copy msg-fork"
               type="button"
-              title="Fork conversation from here"
-              aria-label="Fork conversation from here"
+              title=${t("chat.fork")}
+              aria-label=${t("chat.fork")}
               @click=${() => void forkFromMessage(index)}
             >
               ${icon(GitFork, 13)}
@@ -1119,14 +1117,14 @@ async function forkFromMessage(index: number): Promise<void> {
     await refreshSessions({ silent: true });
     renderList();
   } catch (err) {
-    composerState.error = errMessage(err, "Could not fork the conversation.");
+    composerState.error = errMessage(err, t("chat.couldNotFork"));
     drawActiveChat();
   }
 }
 
 function formatClock(ms: number): string {
   try {
-    return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return new Date(ms).toLocaleTimeString(locale(), { hour: "numeric", minute: "2-digit" });
   } catch {
     return "";
   }
@@ -1164,19 +1162,19 @@ function withReturnTo(url: string): string {
 function connectorWidget(link: ConnectorLink): TemplateResult {
   const name =
     CONNECTOR_NAMES[link.provider] ??
-    (link.provider ? link.provider[0]!.toUpperCase() + link.provider.slice(1) : "your account");
+    (link.provider ? link.provider[0]!.toUpperCase() + link.provider.slice(1) : t("chat.connectorAccount"));
   if (link.provider && connectedConnectors.has(link.provider)) {
     return html`<div class="connector-widget connected" role="status">
       <span class="connector-widget-icon">${icon(Check, 18)}</span>
       <span class="connector-widget-text"
-        ><strong>Connected ${name}</strong><small>Authorized — its tools work here now</small></span
+        ><strong>${t("chat.connectorConnected", { name })}</strong><small>${t("chat.connectorAuthorized")}</small></span
       >
     </div>`;
   }
   return html`<a class="connector-widget" href=${withReturnTo(link.url)} target="_blank" rel="noreferrer">
     <span class="connector-widget-icon">${icon(Plug, 18)}</span>
     <span class="connector-widget-text"
-      ><strong>Connect ${name}</strong><small>Authorize access in a new tab</small></span
+      ><strong>${t("chat.connectorConnect", { name })}</strong><small>${t("chat.connectorAuthorize")}</small></span
     >
     ${icon(ChevronRight, 16)}
   </a>`;
@@ -1199,7 +1197,7 @@ function assistantContent(message: AssistantMessage, isStreaming = false, hasWor
     if (chunk.type === "thinking" && chunk.thinking.trim()) {
       parts.push(
         html`<details class="thinking">
-          <summary>${sheenLabel("Thinking", isStreaming)}</summary>
+          <summary>${sheenLabel(t("chat.thinking"), isStreaming)}</summary>
           ${markdown(chunk.thinking)}
         </details>`,
       );
@@ -1255,7 +1253,7 @@ function messageText(message: AgentMessage): string {
 }
 
 function typingRow(): TemplateResult {
-  return html`<div class="thinking-placeholder">${sheenLabel("Thinking", true)}</div>`;
+  return html`<div class="thinking-placeholder">${sheenLabel(t("chat.thinking"), true)}</div>`;
 }
 
 function syncWorkTicker(): void {
@@ -1375,7 +1373,7 @@ async function refreshBackgroundDetail(): Promise<void> {
     bgPanel.error = "";
   } catch (e) {
     if (seq !== bgPanel.fetchSeq) return;
-    bgPanel.error = errMessage(e, "Failed to load background activity.");
+    bgPanel.error = errMessage(e, t("background.failedLoad"));
   } finally {
     if (seq === bgPanel.fetchSeq) {
       bgPanel.loading = false;
@@ -1434,17 +1432,30 @@ async function pollJobOutput(processId: string): Promise<void> {
   redrawBackgroundPanel();
 }
 
+function formatCount(value: number): string {
+  return new Intl.NumberFormat(locale()).format(value);
+}
+
+function countMessage(count: number, one: WebMessageKey, other: WebMessageKey): string {
+  return t(new Intl.PluralRules(locale()).select(count) === "one" ? one : other, { count: formatCount(count) });
+}
+
 function timeLeft(expiresAt: number): string {
   const mins = Math.round((expiresAt - Date.now()) / 60_000);
-  if (mins <= 0) return "expiring";
-  if (mins < 60) return `${mins}m left`;
-  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`;
+  if (mins <= 0) return t("background.expiring");
+  if (mins < 60) return t("background.minutesLeft", { minutes: formatCount(mins) });
+  return t("background.hoursLeft", {
+    hours: formatCount(Math.floor(mins / 60)),
+    minutes: new Intl.NumberFormat(locale(), { minimumIntegerDigits: 2 }).format(mins % 60),
+  });
 }
 
 function backgroundActivityStrip(): TemplateResult | typeof nothing {
-  const row = conversationBackground(sessionsState.list, chatState.sessionId, chatState.threadRef);
+  const row = conversationBackground(sessionsState.list, chatState.sessionId, chatState.threadRef, locale());
   const live =
-    bgPanel.open && bgPanel.detail ? backgroundLabel(bgPanel.detail.jobs.length, bgPanel.detail.watches.length) : null;
+    bgPanel.open && bgPanel.detail
+      ? backgroundLabel(bgPanel.detail.jobs.length, bgPanel.detail.watches.length, locale())
+      : null;
   const label = (live ?? row)?.label;
   if (!label && !bgPanel.open) return nothing;
   return html`
@@ -1453,10 +1464,10 @@ function backgroundActivityStrip(): TemplateResult | typeof nothing {
         type="button"
         class="bg-activity-strip"
         aria-expanded=${String(bgPanel.open)}
-        title=${bgPanel.open ? "Hide background activity" : "Work continuing on the agent's computer — click to inspect"}
+        title=${t(bgPanel.open ? "background.hide" : "background.inspect")}
         @click=${toggleBackgroundPanel}
       >
-        ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
+        ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? t("background.activity")}</span>
         <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
       </button>
       ${bgPanel.open ? backgroundPanelBody() : nothing}
@@ -1467,10 +1478,10 @@ function backgroundActivityStrip(): TemplateResult | typeof nothing {
 function backgroundPanelBody(): TemplateResult {
   const d = bgPanel.detail;
   const empty = d && d.jobs.length === 0 && d.watches.length === 0;
-  return html`<div class="bg-panel" role="region" aria-label="Background activity">
+  return html`<div class="bg-panel" role="region" aria-label=${t("background.activity")}>
     ${bgPanel.error ? html`<div class="bg-panel-note">${bgPanel.error}</div>` : nothing}
-    ${!d && bgPanel.loading ? html`<div class="bg-panel-note">Loading…</div>` : nothing}
-    ${empty && !bgPanel.error ? html`<div class="bg-panel-note">Nothing running here anymore.</div>` : nothing}
+    ${!d && bgPanel.loading ? html`<div class="bg-panel-note">${t("loading")}</div>` : nothing}
+    ${empty && !bgPanel.error ? html`<div class="bg-panel-note">${t("background.none")}</div>` : nothing}
     ${d ? d.jobs.map((j) => backgroundJobRow(j)) : nothing} ${d ? d.watches.map((w) => backgroundWatchRow(w)) : nothing}
   </div>`;
 }
@@ -1479,37 +1490,39 @@ function backgroundJobRow(j: SessionBackgroundView["jobs"][number]): TemplateRes
   const open = bgPanel.openJob === j.processId;
   const out = bgPanel.output.get(j.processId);
   const status =
-    out?.state === "exited" ? `exited${out.exitCode !== undefined ? ` (${out.exitCode})` : ""}` : timeLeft(j.expiresAt);
+    out?.state === "exited"
+      ? `${t("background.exited")}${out.exitCode !== undefined ? ` (${formatCount(out.exitCode)})` : ""}`
+      : timeLeft(j.expiresAt);
   return html`
     <div class="bg-row ${open ? "open" : ""}">
       <button
         type="button"
         class="bg-row-head"
         aria-expanded=${String(open)}
-        title=${open ? "Hide output" : "Show live output"}
+        title=${t(open ? "background.hideOutput" : "background.showOutput")}
         @click=${() => toggleJobOutput(j.processId)}
       >
         ${icon(Terminal, 13)}
         <code class="bg-row-cmd">${j.command}</code>
-        <span class="bg-row-meta">started ${relTime(j.startedAt)} · ${status}</span>
+        <span class="bg-row-meta">${t("background.started", { time: relTime(j.startedAt), status })}</span>
         <span class="bg-row-toggle">${icon(ChevronRight, 13)}</span>
       </button>
-      ${open ? html`<pre class="bg-row-output">${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
+      ${open ? html`<pre class="bg-row-output">${out ? out.text || t("background.noOutput") : t("background.loadingOutput")}</pre>` : nothing}
     </div>
   `;
 }
 
 function backgroundWatchRow(w: SessionBackgroundView["watches"][number]): TemplateResult {
-  const what = w.pattern ? `output matching /${w.pattern}/` : "any new output";
+  const what = w.pattern ? t("background.matchingOutput", { pattern: w.pattern }) : t("background.anyOutput");
   const note = w.instructions?.trim();
   return html`
     <div class="bg-row watch">
       <div class="bg-row-head static">
         ${icon(Radar, 13)}
-        <span class="bg-row-cmd">Watch — wakes on ${what}${note ? ` · “${note}”` : ""}</span>
+        <span class="bg-row-cmd">${t("background.watch", { condition: what })}${note ? ` · “${note}”` : ""}</span>
         <span class="bg-row-meta"
-          >armed ${relTime(w.createdAt)}${w.lastFiredAt ? ` · last fired ${relTime(w.lastFiredAt)}` : ""} ·
-          ${timeLeft(w.expiresAt)}</span
+          >${t("background.armed", { time: relTime(w.createdAt) })}${w.lastFiredAt ? ` · ${t("background.lastFired", { time: relTime(w.lastFiredAt) })}` : ""}
+          · ${timeLeft(w.expiresAt)}</span
         >
       </div>
     </div>
@@ -1524,7 +1537,7 @@ function liveWorkDock(agent: Agent): TemplateResult | typeof nothing {
   const expandable = Boolean(summary?.detail);
   const expanded = expandable && liveWorkExpanded;
   let title = "";
-  if (expandable) title = liveWorkExpanded ? "Show less" : "Show more";
+  if (expandable) title = t(liveWorkExpanded ? "work.showLess" : "work.showMore");
   return html`
     <section class="live-work-dock ${expanded ? "expanded" : ""}" aria-live="polite">
       <button
@@ -1537,7 +1550,7 @@ function liveWorkDock(agent: Agent): TemplateResult | typeof nothing {
       >
         ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
         <span class="live-work-label"
-          >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
+          >${summary ? summary.label : sheenLabel(`${t("chat.thinking")}${usedToolsSuffix(work)}`, true)}</span
         >
         ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
         ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
@@ -1556,10 +1569,10 @@ function liveWorkSummary(work: WorkBlock): { icon: IconNode; label: string; deta
     const active = activeToolRow(work);
     const call = (active?.call?.payload ?? {}) as ToolPayload;
     const tool = call.tool ?? "";
-    const verb = active ? (TOOL_META[tool] ?? UNKNOWN_TOOL).active : null;
+    const verb = active ? t((TOOL_META[tool] ?? UNKNOWN_TOOL).active) : null;
     return {
       icon: RefreshCw,
-      label: verb ? `${verb} interrupted — resuming…` : "Interrupted — resuming…",
+      label: verb ? t("work.activeInterrupted", { action: verb }) : t("work.interrupted"),
       detail: active ? toolDetail(tool, call, (active.result?.payload ?? {}) as ToolPayload) : "",
     };
   }
@@ -1584,7 +1597,7 @@ function activeToolSummary(row: ToolRowModel, work: WorkBlock): { icon: IconNode
   const secs = elapsedSeconds(row.call?.createdAt) || workSeconds(work);
   return {
     icon: meta.icon,
-    label: secs > 0 ? `${meta.active} for ${secs}s` : meta.active,
+    label: secs > 0 ? t("work.activeFor", { action: t(meta.active), seconds: formatCount(secs) }) : t(meta.active),
     detail: toolDetail(tool, call, result),
   };
 }
@@ -1602,14 +1615,14 @@ function workSeconds(work: WorkBlock): number {
 
 function usedToolsSuffix(work: WorkBlock): string {
   const n = work.activity.filter((a) => a.type === "tool_call").length;
-  return n > 0 ? ` (used ${n} tool${n === 1 ? "" : "s"})` : "";
+  return n > 0 ? ` (${countMessage(n, "work.usedTools.one", "work.usedTools.other")})` : "";
 }
 
 function workLabel(work: WorkBlock): string {
-  if (work.stale && (work.status === "thinking" || work.status === "working")) return "Interrupted — resuming…";
-  if (work.status === "thinking") return "Thinking";
+  if (work.stale && (work.status === "thinking" || work.status === "working")) return t("work.interrupted");
+  if (work.status === "thinking") return t("chat.thinking");
   const secs = workSeconds(work);
-  return work.status === "working" ? `Working for ${secs}s` : `Worked for ${secs}s`;
+  return t(work.status === "working" ? "work.workingFor" : "work.workedFor", { seconds: formatCount(secs) });
 }
 
 function workBlock(work: WorkBlock, isStreaming: boolean): TemplateResult {
@@ -1663,9 +1676,9 @@ function workBlock(work: WorkBlock, isStreaming: boolean): TemplateResult {
 
 function segmentSummaryLabel(items: TimelineItem[], work: WorkBlock): string {
   const tools = items.filter((it) => it.kind === "tool").length;
-  if (tools > 0) return `${tools} tool call${tools === 1 ? "" : "s"}`;
+  if (tools > 0) return countMessage(tools, "work.toolCalls.one", "work.toolCalls.other");
   const secs = workSeconds(work);
-  return work.status === "failed" ? `Failed after ${secs}s` : `Worked for ${secs}s`;
+  return t(work.status === "failed" ? "work.failedAfter" : "work.workedFor", { seconds: formatCount(secs) });
 }
 
 export function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
@@ -1673,11 +1686,11 @@ export function approvalSummaryView(a: PendingApproval, expanded = false): Templ
   const truncated = a.command.includes("\n") || a.command.length > 80;
   return html`
     <div class="approval-head">
-      <span class="approval-title">Approval needed</span>
+      <span class="approval-title">${t("approval.needed")}</span>
       ${a.reason ? html`<span class="approval-reason-badge">${a.reason}</span>` : nothing}
     </div>
     ${a.summary ? html`<div class="approval-summary-line">${a.summary}</div>` : nothing}
-    ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">Why</span>${a.purpose}</div>` : nothing}
+    ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">${t("approval.why")}</span>${a.purpose}</div>` : nothing}
     ${
       expanded
         ? html`<code class="approval-cmd approval-cmd-full">${a.command}</code>`
@@ -1686,7 +1699,7 @@ export function approvalSummaryView(a: PendingApproval, expanded = false): Templ
     ${
       a.matched
         ? html`<div class="approval-match">
-            <span class="approval-match-label">Triggered by</span
+            <span class="approval-match-label">${t("approval.triggeredBy")}</span
             ><code class="approval-match-snippet">${a.matched}</code>
           </div>`
         : nothing
@@ -1694,7 +1707,7 @@ export function approvalSummaryView(a: PendingApproval, expanded = false): Templ
     ${
       !expanded && truncated
         ? html`<details class="approval-full">
-            <summary>Show full command</summary>
+            <summary>${t("approval.showCommand")}</summary>
             <code class="approval-cmd">${a.command}</code>
           </details>`
         : nothing
@@ -1731,27 +1744,45 @@ function messageRow(activity: ToolActivity): TemplateResult {
   return html`<div class="work-message">${markdown(text)}</div>`;
 }
 
-const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
-  execute: { icon: Terminal, active: "Running command", done: "Ran command", attempted: "Tried command" },
-  read: { icon: FileText, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
-  write: { icon: Pencil, active: "Writing file", done: "Wrote file", attempted: "Tried writing file" },
-  publish: { icon: Rocket, active: "Publishing", done: "Published", attempted: "Tried publishing" },
-  recall: { icon: Brain, active: "Searching memory", done: "Searched memory", attempted: "Tried searching memory" },
-  memory: { icon: Brain, active: "Using memory", done: "Used memory", attempted: "Tried using memory" },
+const TOOL_META: Record<
+  string,
+  { icon: IconNode; active: WebMessageKey; done: WebMessageKey; attempted: WebMessageKey }
+> = {
+  execute: {
+    icon: Terminal,
+    active: "tool.execute.active",
+    done: "tool.execute.done",
+    attempted: "tool.execute.attempted",
+  },
+  read: { icon: FileText, active: "tool.read.active", done: "tool.read.done", attempted: "tool.read.attempted" },
+  write: { icon: Pencil, active: "tool.write.active", done: "tool.write.done", attempted: "tool.write.attempted" },
+  publish: {
+    icon: Rocket,
+    active: "tool.publish.active",
+    done: "tool.publish.done",
+    attempted: "tool.publish.attempted",
+  },
+  recall: { icon: Brain, active: "tool.recall.active", done: "tool.recall.done", attempted: "tool.recall.attempted" },
+  memory: { icon: Brain, active: "tool.memory.active", done: "tool.memory.done", attempted: "tool.memory.attempted" },
   history: {
     icon: ScrollText,
-    active: "Searching history",
-    done: "Searched history",
-    attempted: "Tried searching history",
+    active: "tool.history.active",
+    done: "tool.history.done",
+    attempted: "tool.history.attempted",
   },
   background: {
     icon: Terminal,
-    active: "Managing process",
-    done: "Managed process",
-    attempted: "Tried managing process",
+    active: "tool.background.active",
+    done: "tool.background.done",
+    attempted: "tool.background.attempted",
   },
 };
-const UNKNOWN_TOOL = { icon: Wrench, active: "Working", done: "Finished step", attempted: "Tried step" };
+const UNKNOWN_TOOL = {
+  icon: Wrench,
+  active: "tool.unknown.active",
+  done: "tool.unknown.done",
+  attempted: "tool.unknown.attempted",
+} as const;
 
 function firstLine(s: string, max = 72): string {
   const line = s.split("\n")[0] ?? "";
@@ -1774,16 +1805,18 @@ function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): strin
     case "recall":
     case "history": {
       const q = call.query ?? result.query ?? "";
-      return result.count !== undefined ? `${q} · ${result.count} result${result.count === 1 ? "" : "s"}` : q;
+      return result.count !== undefined
+        ? `${q} · ${countMessage(result.count, "work.results.one", "work.results.other")}`
+        : q;
     }
     case "memory": {
       const action = call.action ?? result.action ?? "";
       const q = call.query ?? result.query ?? "";
       let detail = q;
       if (result.count !== undefined) {
-        detail = `${q} · ${result.count} result${result.count === 1 ? "" : "s"}`;
+        detail = `${q} · ${countMessage(result.count, "work.results.one", "work.results.other")}`;
       } else if (result.added !== undefined) {
-        detail = `${result.added} saved`;
+        detail = t("work.saved", { count: formatCount(result.added) });
       }
       return [action, detail].filter(Boolean).join(" ");
     }
@@ -1803,7 +1836,7 @@ function toolRow(row: ToolRowModel, status: WorkBlock["status"], stale = false):
     return html`<div class="tool-row tool-approval">
       <span class="tool-icon">${icon(Wrench, 15)}</span>
       <span class="tool-label"
-        >Approval needed${p.reason ? html` <span class="tool-detail">${firstLine(p.reason, 90)}</span>` : nothing}</span
+        >${t("approval.needed")}${p.reason ? html` <span class="tool-detail">${firstLine(p.reason, 90)}</span>` : nothing}</span
       >
     </div>`;
   }
@@ -1812,15 +1845,15 @@ function toolRow(row: ToolRowModel, status: WorkBlock["status"], stale = false):
   const tool = call.tool ?? result.tool ?? "unknown";
   const meta = TOOL_META[tool] ?? UNKNOWN_TOOL;
   const kind = toolRowKind(row, status);
-  let label = meta.attempted;
-  if (kind === "approval") label = "Approval needed";
-  else if (kind === "running") label = stale ? `${meta.active} — interrupted` : meta.active;
-  else if (kind === "ok") label = meta.done;
+  let label = t(meta.attempted);
+  if (kind === "approval") label = t("approval.needed");
+  else if (kind === "running") label = stale ? t("work.interruptedSuffix", { action: t(meta.active) }) : t(meta.active);
+  else if (kind === "ok") label = t(meta.done);
   let why = "";
   if (kind === "approval") why = firstLine(result.reason ?? "", 90);
   else if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
   const base = kind === "approval" ? "" : toolDetail(tool, call, result);
-  const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
+  const attempts = row.attempts && row.attempts > 1 ? t("work.attempts", { count: formatCount(row.attempts) }) : "";
   const detail = [base, why, attempts].filter(Boolean).join(" · ");
   const classes = ["tool-row", `tool-${kind}`].join(" ");
   const head = html`<span class="tool-icon">${icon(meta.icon, 15)}</span>
@@ -1839,7 +1872,9 @@ function execOutputCard(result: ToolPayload): TemplateResult {
   return html`<div class="code-card">
     <div class="code-card-head"><span class="code-card-lang">bash</span></div>
     <pre class="code-card-body">${out}</pre>
-    <div class="code-card-foot">exit ${result.code ?? 0}${result.timedOut ? " · timed out" : ""}</div>
+    <div class="code-card-foot">
+      ${t("tool.exit", { code: formatCount(result.code ?? 0) })}${result.timedOut ? ` · ${t("tool.timedOut")}` : ""}
+    </div>
   </div>`;
 }
 
