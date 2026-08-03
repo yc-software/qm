@@ -20,6 +20,7 @@ test("Portal catalogs have matching keys and contain text rather than HTML", () 
   for (const catalog of Object.values(PORTAL_MESSAGES)) {
     for (const message of Object.values(catalog)) assert.doesNotMatch(message, /[<>]/);
   }
+  for (const message of Object.values(PORTAL_MESSAGES.ja)) assert.doesNotMatch(message, /領域/);
 });
 
 test("sign-in, admin, and setup cards render their English and Japanese copy", () => {

@@ -52,6 +52,14 @@ test("Japanese Admin workflow terms use the operator vocabulary", () => {
   assert.equal(adminMessage("ja", "action.cancel"), "キャンセル");
 });
 
+test("Japanese Admin scope labels identify policy targets without using 領域", () => {
+  assert.equal(adminMessage("ja", "common.scope"), "適用先");
+  assert.equal(adminMessage("ja", "common.allScopes"), "すべての適用先");
+  assert.equal(adminMessage("ja", "governance.selectedScope"), "選択中の適用先");
+  assert.equal(adminMessage("ja", "metrics.phase.layers.label"), "作業環境の復元");
+  for (const message of Object.values(ADMIN_MESSAGES.ja)) assert.doesNotMatch(message, /領域/);
+});
+
 test("Japanese Admin operational messages render dynamic values without interpreting them as markup", () => {
   assert.equal(adminMessage("ja", "transcript.thinking"), "思考");
   assert.equal(adminMessage("ja", "retention.newVsReturning"), "新規利用者と継続利用者");

@@ -203,6 +203,7 @@ test("raw problem details stay escaped and untranslated inside a localized page"
 
 test("the Auth message catalogs keep identical keys and placeholders", () => {
   assert.deepEqual(catalogProblems(AUTH_MESSAGES.en, AUTH_MESSAGES.ja), []);
+  for (const message of Object.values(AUTH_MESSAGES.ja)) assert.doesNotMatch(message, /領域/);
 });
 
 test("an expired Japanese request keeps its signed locale only for the refusal page", async (t) => {

@@ -43,10 +43,18 @@ test("chat, session, composer, and approval controls have Japanese labels", () =
   assert.equal(webMessage("ja", "approval.allowOnce"), "今回のみ許可");
 });
 
-test("workspace feature controls have Japanese labels", () => {
-  assert.equal(webMessage("ja", "navigation.contexts"), "領域");
-  assert.equal(webMessage("ja", "context.personal"), "個人領域");
-  assert.equal(webMessage("ja", "context.shared"), "共有領域");
+test("project controls use Japanese project terminology", () => {
+  assert.equal(webMessage("ja", "navigation.contexts"), "プロジェクト");
+  assert.equal(webMessage("ja", "context.personal"), "個人プロジェクト");
+  assert.equal(webMessage("ja", "context.shared"), "共有プロジェクト");
+  assert.equal(webMessage("ja", "context.settings"), "プロジェクトの設定");
+  assert.equal(webMessage("ja", "context.all"), "すべてのプロジェクト");
+  assert.equal(webMessage("ja", "chat.contextLabel"), "{context}プロジェクト");
+  assert.equal(
+    webMessage("ja", "chat.contextHint"),
+    "このチャットは{context}プロジェクトで実行されます。エージェントは個人プロジェクトとは別に、このプロジェクトのファイルとメモリを使用します。",
+  );
+  assert.equal(webMessage("ja", "context.scopeChip"), "プロジェクト: {title}");
   assert.equal(webMessage("ja", "navigation.crons"), "定期実行");
   assert.equal(webMessage("ja", "navigation.connectors"), "外部サービス連携");
   assert.equal(webMessage("ja", "navigation.keychain"), "認証情報");
@@ -54,6 +62,10 @@ test("workspace feature controls have Japanese labels", () => {
   assert.equal(webMessage("ja", "deployment.publish"), "公開");
   assert.equal(webMessage("ja", "memory.search"), "記憶を検索");
   assert.equal(webMessage("ja", "skill.install"), "スキルを追加");
+});
+
+test("Japanese web messages do not use 領域", () => {
+  for (const message of Object.values(WEB_MESSAGES.ja)) assert.doesNotMatch(message, /領域/);
 });
 
 test("deployment chat drafts use the selected language", () => {
