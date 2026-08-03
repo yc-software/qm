@@ -66,6 +66,32 @@ test("a channel cron runs in the channel scope and delivers its real output to t
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
+test("overlapping fires for the same cron are coalesced", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let started!: () => void;
+  const didStart = new Promise<void>((resolve) => (started = resolve));
+  const { crons, calls, scheduler } = harness(async () => {
+    started();
+    await held;
+    return { status: "silent" };
+  });
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "check the inbox",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  const first = scheduler.runNow(cron.id);
+  await didStart;
+  await scheduler.runNow(cron.id);
+  assert.equal(calls.length, 1, "a second fire must not start while the first is running");
+  release();
+  await first;
+});
+
 test("a group-DM cron runs in the group scope and delivers its real output to the group", async () => {
   const { crons, deliveries, calls, scheduler } = harness();
   const cron = await crons.create({

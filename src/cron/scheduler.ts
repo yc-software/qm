@@ -17,6 +17,7 @@ import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
+const CRON_FIRE_LEASE_PREFIX = "cron:scheduler:fire:";
 const CRON_FIRE_REPLY_MAX_CHARS = 2000;
 
 export interface Scheduler {
@@ -111,6 +112,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? (() => Date.now());
   const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
+  const inFlight = new Set<string>();
 
   async function fire(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<{ authzFailed: boolean }> {
     const threadRef = cronFireThreadRef(cron.id, fireKey);
@@ -172,6 +174,24 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return { authzFailed: false };
   }
 
+  async function fireIfIdle(
+    cron: Cron,
+    t: number,
+    fireKey: string,
+    scheduledAt?: number,
+  ): Promise<{ authzFailed: boolean; skipped: boolean }> {
+    if (inFlight.has(cron.id)) return { authzFailed: false, skipped: true };
+    inFlight.add(cron.id);
+    try {
+      const result = await leaderLease.hold(`${CRON_FIRE_LEASE_PREFIX}${cron.id}`, async () =>
+        fire(cron, t, fireKey, scheduledAt),
+      );
+      return result === null ? { authzFailed: false, skipped: true } : { ...result, skipped: false };
+    } finally {
+      inFlight.delete(cron.id);
+    }
+  }
+
   const fireDue = async (t: number): Promise<void> => {
     const due = await deps.crons.due(t);
     const batch = due.slice(0, maxFiresPerTick);
@@ -179,7 +199,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       console.warn(`[scheduler] fan-out capped: firing ${batch.length}/${due.length} due crons this tick`);
     }
     for (const cron of batch) {
-      const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
+      const { authzFailed } = await fireIfIdle(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
       if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
     }
   };
@@ -221,7 +241,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
     if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
     try {
-      const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
+      const { authzFailed } = await fireIfIdle(cron, t, `cron:${cron.id}:${slot}`, slot);
       if (authzFailed) {
         await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
         return;
@@ -267,7 +287,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     async runNow(cronId) {
       const cron = await deps.crons.get(cronId);
       if (!cron || cron.archived || !cron.enabled) return;
-      await fire(cron, now(), `cron:${cron.id}:manual:${randomUUID()}`);
+      await fireIfIdle(cron, now(), `cron:${cron.id}:manual:${randomUUID()}`);
     },
     notifyChanged(cronId) {
       if (!deps.jobQueue) return;
