@@ -20,7 +20,7 @@ import {
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
-import { LOCALE_HEADER, resolveLocale, type Locale } from "../../chassis/src/locale.ts";
+import { LOCALE_COOKIE, LOCALE_HEADER, normalizeLocale, resolveLocale, type Locale } from "../../chassis/src/locale.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -33,6 +33,15 @@ const PORT = portFromEnv(8096);
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const DEFAULT_LOCALE = process.env.QM_DEFAULT_LOCALE;
+const LOCALE_TTL_S = 31_536_000;
+const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
+const PUBLIC_ORIGIN = (() => {
+  try {
+    return new URL(PUBLIC_URL).origin;
+  } catch {
+    return "";
+  }
+})();
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
 const COOKIE_AUTH = !CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY;
@@ -64,11 +73,58 @@ async function brandIndexHtml(html: string): Promise<string> {
 }
 
 export function localeOf(req: IncomingMessage): Locale {
+  const selectedCookie = (() => {
+    try {
+      return cookie(req, LOCALE_COOKIE);
+    } catch {
+      return null;
+    }
+  })();
   return resolveLocale({
-    explicit: req.headers[LOCALE_HEADER],
+    explicit: normalizeLocale(req.headers[LOCALE_HEADER]) ?? selectedCookie,
     defaultLocale: DEFAULT_LOCALE,
     acceptLanguage: req.headers["accept-language"],
   });
+}
+
+function sameOriginRequest(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  const originMatches =
+    typeof origin === "string" &&
+    (() => {
+      try {
+        return new URL(origin).origin === PUBLIC_ORIGIN;
+      } catch {
+        return false;
+      }
+    })();
+  const site = req.headers["sec-fetch-site"];
+  if (typeof site !== "string") return originMatches;
+  return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
+}
+
+function localeCookie(locale: Locale): string {
+  const parts = [
+    `${LOCALE_COOKIE}=${encodeURIComponent(locale)}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Path=/",
+    `Max-Age=${LOCALE_TTL_S}`,
+  ];
+  if (SECURE_COOKIES) parts.push("Secure");
+  return parts.join("; ");
+}
+
+function sanitizeLocaleReturnTo(value: string | null): string {
+  if (!value || value[0] !== "/" || value.startsWith("//")) return "/";
+  if (/[\\\x00-\x1f]/.test(value) || /%2f%2f|%5c/i.test(value)) return "/";
+  try {
+    const target = new URL(value, PUBLIC_ORIGIN);
+    if (target.origin !== PUBLIC_ORIGIN) return "/";
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return "/";
+  }
 }
 
 export async function renderIndexHtml(html: string, selected: Locale): Promise<string> {
@@ -750,6 +806,27 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (method === "GET" && path === "/healthz") return json(res, 200, { ok: true });
   if (method === "GET" && path === "/favicon.svg") {
     return serveEmojiFavicon(res, process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "no-cache");
+  }
+
+  if (path === "/locale") {
+    if (method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+    if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+    const contentType = req.headers["content-type"];
+    if (
+      typeof contentType !== "string" ||
+      contentType.split(";", 1)[0]?.trim().toLowerCase() !== "application/x-www-form-urlencoded"
+    ) {
+      return json(res, 415, { error: "unsupported_media_type" });
+    }
+    const form = new URLSearchParams(await readBodyCapped(req, 1024));
+    const locale = normalizeLocale(form.get("locale"));
+    if (!locale) return json(res, 400, { error: "bad_request", message: "locale must be en or ja" });
+    res.writeHead(303, {
+      "set-cookie": localeCookie(locale),
+      location: sanitizeLocaleReturnTo(form.get("returnTo")),
+      "cache-control": "no-store",
+    });
+    return void res.end();
   }
 
   if (method === "POST" && path === "/signin") {
@@ -1892,6 +1969,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const portalTok = portalTokenStore.getStore();
     const headers: Record<string, string> = {
       ...signedHeaders(CORE_SIGNING_SECRET, method, corePath, "", user),
+      [LOCALE_HEADER]: localeOf(req),
       "x-as-principal": user,
       ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
     };

@@ -1,4 +1,5 @@
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { LOCALE_HEADER } from "../../chassis/src/locale.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, get as httpGet, type IncomingMessage } from "node:http";
@@ -6,11 +7,15 @@ import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
 
 const PAGE = "<!doctype html><h1>deployed app</h1>";
-let lastCoreRequest: { url: string; principal: string } | null = null;
+let lastCoreRequest: { url: string; principal: string; locale: string } | null = null;
 
 const core = createServer((req: IncomingMessage, res) => {
   const u = req.url ?? "";
-  lastCoreRequest = { url: u, principal: String(req.headers["x-as-principal"] ?? "") };
+  lastCoreRequest = {
+    url: u,
+    principal: String(req.headers["x-as-principal"] ?? ""),
+    locale: String(req.headers[LOCALE_HEADER] ?? ""),
+  };
   if (!u.startsWith("/d/")) {
     res.writeHead(404, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ error: "not_found" }));
@@ -81,6 +86,20 @@ test("GET /deployments/:id/ passes an app redirect through without following it"
   const r = await rawGet("/deployments/redirecting-app/", { ...IDENTITY, "accept-encoding": "identity" });
   assert.equal(r.status, 302, "the 3xx reaches the browser, which follows it itself");
   assert.equal(r.headers.location, "/d/redirecting-app/home");
+});
+
+test("GET /deployments/:id/ forwards only a normalized locale to the deployment", async () => {
+  const selected = await rawGet("/deployments/app1/", { ...IDENTITY, [LOCALE_HEADER]: "ja" });
+  assert.equal(selected.status, 200);
+  assert.equal(lastCoreRequest?.locale, "ja");
+
+  const forged = await rawGet("/deployments/app1/", {
+    ...IDENTITY,
+    [LOCALE_HEADER]: "fr",
+    "accept-language": "en-US",
+  });
+  assert.equal(forged.status, 200);
+  assert.equal(lastCoreRequest?.locale, "en");
 });
 
 test("GET /deployments/:id/ requires a signed-in user", async () => {
