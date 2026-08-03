@@ -51,7 +51,18 @@ function brokerHostMatches(requestHost: string, pinnedHost: string): boolean {
   return h === p || h.endsWith(`.${p}`);
 }
 
+function hasParentSegment(pathname: string): boolean {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return true;
+  }
+  return decoded.split("/").includes("..");
+}
+
 export function brokerPathAllowed(pathname: string, prefixes?: string[]): boolean {
+  if (hasParentSegment(pathname)) return false;
   const allow = prefixes && prefixes.length ? prefixes : ["/"];
   return allow.some((pre) =>
     pre.endsWith("/") ? pathname.startsWith(pre) : pathname === pre || pathname.startsWith(`${pre}/`),

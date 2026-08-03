@@ -218,6 +218,22 @@ test("WHAT path allowlist: an out-of-allowlist path is refused", async () => {
   assert.equal(cap.calls.length, 0);
 });
 
+test("WHAT path allowlist: a percent-encoded parent traversal is refused even when the raw path starts with an allowed prefix", async () => {
+  for (const url of [
+    "https://api.x.com/2/tweets/search/..%2fadmin",
+    "https://api.x.com/2/tweets/search/%2e%2e%2fadmin",
+    "https://api.x.com/2/tweets/search/%2e%2e/admin",
+  ]) {
+    const cap = captureFetch();
+    const r = await brokerCredentialCall(
+      base({ body: { credential: "x-firehose", url }, fetchImpl: cap.fetch }),
+    );
+    assert.equal(r.status, 403, url);
+    assert.match(JSON.stringify(r.json), /path_not_allowed/);
+    assert.equal(cap.calls.length, 0, "no upstream fetch happens");
+  }
+});
+
 test("a disabled credential is refused even when the token still names it (live re-check)", async () => {
   const cap = captureFetch();
   const r = await brokerCredentialCall(
