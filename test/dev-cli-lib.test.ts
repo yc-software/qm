@@ -369,6 +369,29 @@ test("supervised children share the selected dev org", () => {
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
 });
 
+test("supervised children omit Slack wiring when Slack is disabled", () => {
+  const inputs: SpecInputs = {
+    worktree: "/tmp/worktree",
+    ports: slotPorts("pool1"),
+    baseEnv: {},
+    watch: false,
+    webUiBasePath: "/",
+    sessionStore: "memory",
+    runStore: "memory",
+    databaseUrl: "",
+    adminGrantsSeed: "",
+    coreSigningSecret: "",
+    portalSessionSecret: "secret",
+    portalDevPrincipal: "U1",
+    sandboxEnv: {},
+  };
+  const core = buildChildSpecs(inputs).find((spec) => spec.name === "core")!;
+  assert.equal(core.env.SLACK_BOT_TOKEN, undefined);
+  assert.equal(core.env.SLACK_APP_TOKEN, undefined);
+  assert.equal(core.env.DEV_INTROSPECTION, undefined);
+  assert.equal(core.env.DEV_HEALTH_PORT, undefined);
+});
+
 test("formatAge renders the bash-compatible shapes", () => {
   assert.equal(formatAge(42), "42s");
   assert.equal(formatAge(150), "2m");

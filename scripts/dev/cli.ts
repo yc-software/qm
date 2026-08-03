@@ -58,6 +58,7 @@ function parseCli() {
         follow: { type: "boolean", short: "f", default: false },
         fix: { type: "boolean", default: false },
         sandbox: { type: "string", default: "auto" },
+        "no-slack": { type: "boolean", default: false },
         "no-watch": { type: "boolean", default: false },
         org: { type: "string" },
       },
@@ -74,13 +75,13 @@ const command = positionals[0] ?? "up";
 const store = poolStore();
 
 const commandOptions: Record<string, readonly string[]> = {
-  up: ["json", "force", "strict", "rotate", "sandbox", "no-watch", "org"],
+  up: ["json", "force", "strict", "rotate", "sandbox", "no-slack", "no-watch", "org"],
   down: ["json"],
   status: ["json"],
   restart: ["json"],
   canary: ["json"],
   logs: ["follow"],
-  doctor: ["json", "fix"],
+  doctor: ["json", "fix", "no-slack"],
 };
 
 const devServiceNames = [...CHILD_ORDER, "web-ui"];
@@ -115,6 +116,7 @@ function emitJson(payload: unknown): void {
 }
 
 const orgId = opts.org ?? process.env.DEV_INSTANCE_ORG_ID ?? "acme";
+const slackEnabled = !opts["no-slack"] && process.env.DEV_INSTANCE_NO_SLACK !== "1";
 const devCallerEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
 
 async function legacyTeardown(lease: LeaseInfo): Promise<void> {
@@ -175,6 +177,15 @@ function claimNext(exclude: Set<string>): string | null {
   return null;
 }
 
+function claimNextLocal(exclude: Set<string>): string | null {
+  for (let i = 1; i <= 99; i++) {
+    const slot = `pool${i}`;
+    if (exclude.has(slot)) continue;
+    if (claimSlotLock(slot, store)) return slot;
+  }
+  return null;
+}
+
 function renderPhase(e: BootPhaseEvent): void {
   if (opts.json || e.event !== "phase") return;
   let mark = "…";
@@ -188,7 +199,7 @@ function renderPhase(e: BootPhaseEvent): void {
 async function bootOnSlot(slot: string, worktree: string, branch: string): Promise<BootResult> {
   const ports = slotPorts(slot);
   const lock = lockDir(slot, store);
-  const tokens = slotTokens(slot, store);
+  const tokens = slackEnabled ? slotTokens(slot, store) : null;
 
   writeFileSync(
     join(lock, "meta"),
@@ -200,6 +211,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       `web_port=${ports.web}`,
       `admin_port=${ports.admin}`,
       `portal_port=${ports.portal}`,
+      `slack=${slackEnabled ? "1" : "0"}`,
       "booting=1",
       `owner_pid=${process.pid}`,
       `created_epoch=${nowEpoch()}`,
@@ -208,11 +220,13 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
     ].join("\n"),
   );
 
-  const swept = await sweepSlackTokenOrphans(tokens.appToken, new Set(), (m) => out(m));
-  if (swept.swept.length) out(`swept ${swept.swept.length} orphaned process(es) holding ${slot}'s Slack app token`);
+  if (tokens) {
+    const swept = await sweepSlackTokenOrphans(tokens.appToken, new Set(), (m) => out(m));
+    if (swept.swept.length) out(`swept ${swept.swept.length} orphaned process(es) holding ${slot}'s Slack app token`);
+  }
 
   const callerEnv = devCallerEnv();
-  const canaryChannel = tokens.canaryChannel || callerEnv.DEV_INSTANCE_CANARY_CHANNEL || "";
+  const canaryChannel = tokens?.canaryChannel || callerEnv.DEV_INSTANCE_CANARY_CHANNEL || "";
   writeFileSync(
     join(lock, "boot-spec.json"),
     JSON.stringify(
@@ -225,6 +239,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
         sandbox: opts.sandbox as "local" | "sprites" | "auto",
         canaryChannel,
         strict: opts.strict,
+        slack: slackEnabled,
       },
       null,
       2,
@@ -256,7 +271,9 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
     };
   }
 
-  out(`booting on slot ${slot} (@${tokens.handle || `agent-${slot}`})...`);
+  out(
+    tokens ? `booting on slot ${slot} (@${tokens.handle || `agent-${slot}`})...` : `booting on local slot ${slot}...`,
+  );
   let result: BootResult | null = null;
   await streamBootEvents(sock, (e) => {
     renderPhase(e);
@@ -270,15 +287,18 @@ function printSuccess(result: BootResult, branch: string): void {
   const lock = lockDir(result.slot, store);
   const meta = readMeta(lock);
   out("");
+  const hasSlack = result.slackEnabled !== false;
   out(
-    `[ok] dev instance up -- slot ${result.slot} (VERIFIED: socket exclusive${result.canary ? `, canary ${result.canary.rttMs}ms round trip` : ", delivery unverified -- no canary channel"})`,
+    hasSlack
+      ? `[ok] dev instance up -- slot ${result.slot} (VERIFIED: socket exclusive${result.canary ? `, canary ${result.canary.rttMs}ms round trip` : ", delivery unverified -- no canary channel"})`
+      : `[ok] dev instance up -- slot ${result.slot} (Slack disabled)`,
   );
   out(`   branch : ${branch}`);
   out(`   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and /admin`);
   out(
     `   core   : http://localhost:${ports.core}  (org=${orgId}, session_store=${meta.session_store}, run_store=${meta.run_store})`,
   );
-  out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
+  if (hasSlack) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
   out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
   out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.admin})`);
   out(`   logs   : ${lock}/{core,web,admin,portal,supervisor}.log`);
@@ -327,9 +347,10 @@ async function cmdUp(): Promise<number> {
   const excluded = new Set<string>();
   const waitMax = Number(process.env.DEV_INSTANCE_WAIT || 120);
   for (let attempt = 1; attempt <= 3; attempt++) {
-    let slot = claimNext(excluded);
-    if (!slot && (await reclaimReclaimable())) slot = claimNext(excluded);
-    if (!slot && waitMax > 0 && attempt === 1) {
+    const claim = (): string | null => (slackEnabled ? claimNext(excluded) : claimNextLocal(excluded));
+    let slot = claim();
+    if (!slot && (await reclaimReclaimable())) slot = claim();
+    if (!slot && slackEnabled && waitMax > 0 && attempt === 1) {
       out("");
       out(`all pool apps are in use by other worktrees -- waiting up to ${waitMax}s for a free slot.`);
       out(`  this is normal contention, not an error.  held now: ${takenSummary(store)}`);
@@ -338,14 +359,16 @@ async function cmdUp(): Promise<number> {
         await sleep(5000);
         waited += 5;
         await reapStale();
-        if (await reclaimReclaimable()) slot = claimNext(excluded);
-        if (!slot) slot = claimNext(excluded);
+        if (await reclaimReclaimable()) slot = claim();
+        if (!slot) slot = claim();
       }
     }
     if (!slot) {
       emitJson({ ok: false, reason: "no free pool slot", held: takenSummary(store) });
       out(
-        `no free pool app. Another worktree holds each one -- 'dev down' one of them, add a poolN.env, or raise DEV_INSTANCE_WAIT.`,
+        slackEnabled
+          ? `no free pool app. Another worktree holds each one -- 'dev down' one of them, add a poolN.env, or raise DEV_INSTANCE_WAIT.`
+          : `no free local slot. Another worktree holds every slot -- 'dev down' one of them and retry.`,
       );
       return EXIT.noFreeSlot;
     }
@@ -404,7 +427,7 @@ async function cmdDown(): Promise<number> {
     return EXIT.ok;
   }
   const slot = mine.slot;
-  const tokens = slotTokens(slot, store);
+  const tokens = mine.meta.slack === "0" ? null : slotTokens(slot, store);
   await teardownLease(mine);
   const residue: string[] = [];
   for (const [name, port] of Object.entries(slotPorts(slot))) {
@@ -412,7 +435,7 @@ async function cmdDown(): Promise<number> {
     const holders = portHolders(port);
     if (holders.length) residue.push(`port ${port} (${name}) still held by pid(s) ${holders.join(",")}`);
   }
-  const swept = await sweepSlackTokenOrphans(tokens.appToken, new Set(), (m) => out(m));
+  const swept = tokens ? await sweepSlackTokenOrphans(tokens.appToken, new Set(), (m) => out(m)) : { swept: [] };
   if (residue.length) {
     emitJson({ ok: false, slot, residue });
     out(`[!] down completed with residue:\n  ${residue.join("\n  ")}`);
@@ -435,7 +458,11 @@ async function cmdStatus(): Promise<number> {
     }
   })();
   const rows: Record<string, unknown>[] = [];
-  for (const slot of listSlots(store)) {
+  const leases = listLeases(store);
+  const slots = [...new Set([...listSlots(store), ...leases.map((lease) => lease.slot)])].sort(
+    (a, b) => Number(a.slice(4)) - Number(b.slice(4)),
+  );
+  for (const slot of slots) {
     const lock = lockDir(slot, store);
     const ports = slotPorts(slot);
     const flag = readSlotFlag(slot, store);
@@ -443,7 +470,7 @@ async function cmdStatus(): Promise<number> {
       rows.push({ slot, state: flag && slotFlagged(slot, store) ? `flagged(${flag.reason})` : "free", ports });
       continue;
     }
-    const lease = listLeases(store).find((l) => l.slot === slot);
+    const lease = leases.find((l) => l.slot === slot);
     if (!lease) continue;
     const sock = resolveSocketPath(lock);
     if (await supervisorReachable(sock)) {
@@ -511,7 +538,7 @@ async function cmdStatus(): Promise<number> {
   }
   const taken = rows.filter((r) => r.state !== "free" && !String(r.state).startsWith("flagged")).length;
   console.log("");
-  console.log(`${taken} taken / ${rows.length - taken} free / ${rows.length} pool apps total`);
+  console.log(`${taken} taken / ${rows.length - taken} free / ${rows.length} slots total`);
   console.log("live = supervised + verified. Reclaim never touches a slot with a fresh supervisor heartbeat.");
   return EXIT.ok;
 }
@@ -597,10 +624,10 @@ async function main(): Promise<number> {
     case "logs":
       return await cmdLogs();
     case "doctor":
-      return await runDoctor({ json: opts.json, fix: opts.fix, store });
+      return await runDoctor({ json: opts.json, fix: opts.fix, store, slack: slackEnabled });
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|auto] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|auto] [--no-slack] [--no-watch] [--org id] [--fix]",
       );
       return EXIT.usage;
   }

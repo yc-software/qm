@@ -13,6 +13,7 @@
     "start": "node --env-file-if-exists=.env src/index.ts",
     "dev": "SHUTDOWN_DRAIN_MS=2000 node --env-file-if-exists=.env --watch src/index.ts",
     "dev-instance": "bash scripts/dev-instance.sh up",
+    "dev-instance:no-slack": "bash scripts/dev-instance.sh up --no-slack",
     "dev-instance:status": "bash scripts/dev-instance.sh status",
     "dev-instance:down": "bash scripts/dev-instance.sh down",
     "worker": "node --env-file-if-exists=.env src/runs/worker-main.ts",

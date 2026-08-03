@@ -1,12 +1,12 @@
 ---
 name: dev-instance
-description: Run the current worktree as a production-shaped local dev instance — core, Slack, web UI, admin, portal, on a real Pi LLM + Postgres — reachable in Slack as your own bot. Each developer uses their own set of Slack apps from their own machine's pool store, so many worktrees (yours and a teammate's) can run reachable at once without colliding. Use when asked to /dev-instance, "spin this up so I can QA it in Slack", or "let me test your branch end to end".
+description: Run the current worktree as a production-shaped local dev instance — core, optional Slack, web UI, admin, portal, on a real Pi LLM + Postgres. Each developer can use Slack apps from their own machine's pool store, while browser-only instances need no Slack configuration. Use when asked to /dev-instance, "spin this up so I can QA it", or "let me test your branch end to end".
 ---
 
 # dev-instance
 
 `dev-instance` runs the current worktree as a full, production-shaped stack on your
-machine and makes it reachable in Slack as one of _your_ bots. It is the way to QA a
+machine, with Slack enabled by default and optional for browser-only QA. It is the way to QA a
 branch end to end: real LLM turns, a real sandbox, a real local Postgres (empty by
 default; opt in to prod data), and the real Slack/web/admin surfaces.
 
@@ -15,6 +15,7 @@ every command accepts `--json` for machine-readable output):
 
 ```bash
 bash scripts/dev-instance.sh up
+bash scripts/dev-instance.sh up --no-slack
 bash scripts/dev-instance.sh status
 bash scripts/dev-instance.sh down
 bash scripts/dev-instance.sh doctor
@@ -23,17 +24,19 @@ bash scripts/dev-instance.sh restart [child]
 bash scripts/dev-instance.sh logs [child] [-f]
 ```
 
-`npm run dev-instance`, `npm run dev-instance:status`, `npm run dev-instance:down`, and
+`npm run dev-instance`, `npm run dev-instance:no-slack`, `npm run dev-instance:status`, `npm run dev-instance:down`, and
 `npm run dev-instance:doctor` are equivalent. The Codex-visible skill copy lives at
 `.codex/skills/dev-instance/SKILL.md`; keep the two skill descriptions equivalent.
 
 ## What `up` Starts
 
 `up` claims one free Slack app slot from **this machine's** pool store (see "Slack reach"
-below), then spawns a **per-slot supervisor daemon** that owns the production-shaped stack:
+below), then spawns a **per-slot supervisor daemon** that owns the production-shaped stack.
+With `--no-slack` or `DEV_INSTANCE_NO_SLACK=1`, it claims only a local port slot and needs
+no pool configuration:
 
 - core API + workers
-- Slack Socket Mode plugin (connected as the claimed app's bot)
+- Slack Socket Mode plugin when Slack is enabled (connected as the claimed app's bot)
 - web UI surface
 - admin surface
 - portal front door proxying `/web-ui/` and `/admin/`
@@ -42,7 +45,7 @@ The supervisor restarts crashed children with backoff, waits for a port to actua
 before respawning (no more EADDRINUSE), health-probes everything every 10s, and writes a
 heartbeat so slot reclaim can tell "actively in use" from "abandoned".
 
-**`up` only prints success after proving the bot is reachable**: the Slack socket must be
+When Slack is enabled, **`up` only prints success after proving the bot is reachable**: the Slack socket must be
 the app's _only_ connection (`num_connections == 1`, read from the hello frame) and — when
 the slot has a `CANARY_CHANNEL` — a posted canary message must arrive back over that same
 socket. If another machine/worktree holds a connection to the app (the classic "boots LIVE
@@ -52,11 +55,26 @@ means a stale Slack app; `up` flags and rotates past that too.
 
 **Re-running `up` on a live instance is a reload, not a no-op**: it re-reads your shell
 env, dev.env, and `.env`, diffs against what the children are running, and does a rolling
-restart + re-verification when anything changed (`--force` to restart regardless,
+restart plus Slack re-verification when enabled and anything changed (`--force` to restart regardless,
 `--rotate` to move to a different Slack app).
 
 Open the portal URL printed by the CLI. Direct web/admin URLs are also printed for
 debugging, but the portal URL is the prod-like path.
+
+## Browser-only mode
+
+Use browser-only mode when Slack is outside the test scope:
+
+```bash
+bash scripts/dev-instance.sh up --no-slack
+bash scripts/dev-instance.sh doctor --no-slack
+```
+
+This starts the same core, local Postgres, sandbox, web UI, admin, portal, supervisor,
+health checks, reloads, and teardown flow. It omits Slack credentials, Socket Mode,
+canaries, exclusivity checks, and the pool requirement. `DEV_INSTANCE_NO_SLACK=1` is the
+environment equivalent. Switching an existing worktree between modes requires `down`
+followed by `up` with the desired mode.
 
 ## Sandbox: local Docker by default
 
@@ -146,14 +164,15 @@ DEV_INSTANCE_ALLOW_MOCK=1 bash scripts/dev-instance.sh up
 DEV_INSTANCE_ALLOW_MEMORY=1 bash scripts/dev-instance.sh up
 DEV_INSTANCE_WATCH=0 bash scripts/dev-instance.sh up
 DEV_INSTANCE_RECLAIM_STALE=0 bash scripts/dev-instance.sh up
+DEV_INSTANCE_NO_SLACK=1 bash scripts/dev-instance.sh up
 ```
 
 ## Env Discovery
 
 The launcher reads values from, in priority order: exported shell env, the machine-global
 `~/.config/qm/dev.env`, your login shell (for a model credential exported there), and this
-worktree's `.env` (seeded from the main checkout in linked worktrees). Slack pool tokens
-default to `~/.config/qm/slack-pool`.
+worktree's `.env` (seeded from the main checkout in linked worktrees). When Slack is enabled,
+pool tokens default to `~/.config/qm/slack-pool`.
 
 When a cloud sandbox backend is configured it also validates that provider's access at
 startup, refreshes a stale provider token from the provider CLI's own logged-in session
@@ -162,15 +181,15 @@ self-API calls can reach your local core. None of that runs on the default local
 
 ## After Startup
 
-Report the slot, portal URL, Slack handle, and log directory. To test Slack-specific
+Report the slot, portal URL, log directory, and Slack handle when enabled. To test Slack-specific
 behavior, DM the printed `@<handle>` (on Alice's machine that's one of `@bot1 … @bot10`)
 in `example.slack.com`; for admin and web behavior, open the printed portal URL. Tear down
 with `bash scripts/dev-instance.sh down` when QA is finished.
 
 ## Troubleshooting
 
-**Start with `dev doctor` (or `doctor --json`).** It runs the checks that used to take a
-debugging session by hand — socket exclusivity (`num_connections`), a live canary
+**Start with `dev doctor` (or `doctor --json`; pass `--no-slack` before the first browser-only boot).** It runs the checks that used to take a
+debugging session by hand — socket exclusivity (`num_connections`) and a live canary when Slack is enabled,
 round trip, env/git drift since boot, per-child health and restart counts, stale leases,
 port squatters, machine-wide token orphans, Docker daemon — and prints a ranked diagnosis
 with a remedy per finding. `doctor --fix` applies the safe ones (child restarts).

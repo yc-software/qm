@@ -104,7 +104,10 @@ function readBootSpec(): BootSpec {
   return JSON.parse(readFileSync(join(lock, "boot-spec.json"), "utf8")) as BootSpec;
 }
 
+const slackOn = (spec: BootSpec): boolean => spec.slack !== false;
+
 async function resolveCanaryChannel(spec: BootSpec): Promise<void> {
+  if (!slackOn(spec)) return;
   if (spec.canaryChannel) {
     canaryChannel = spec.canaryChannel;
     canaryChannelSource = "configured";
@@ -258,6 +261,7 @@ async function verifySlack(spec: BootSpec): Promise<{ ok: boolean; result: Parti
 }
 
 function writeLegacyMeta(booting: boolean): void {
+  const slackEnabled = specInputs?.slack !== undefined || slackOn(readBootSpec());
   const branch = specInputs ? currentBranch(worktree) : "?";
   const meta: Record<string, string> = {
     slot,
@@ -272,6 +276,7 @@ function writeLegacyMeta(booting: boolean): void {
     session_store: durability.sessionStore,
     run_store: durability.runStore,
     watch: watch ? "1" : "0",
+    slack: slackEnabled ? "1" : "0",
     created_epoch: String(startedAt),
     created: new Date(startedAt * 1000).toISOString().replace("T", " ").slice(0, 19),
   };
@@ -390,7 +395,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   if (!portalDevPrincipal) portalDevPrincipal = assembled.env.USER || "dev-admin";
   log(`portal auth: localhost bypass signs in as ${portalDevPrincipal}`);
 
-  const tokens = slotTokens(slot, store);
+  const tokens = slackOn(spec) ? slotTokens(slot, store) : null;
 
   return {
     worktree,
@@ -398,7 +403,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     baseEnv: assembled.env,
     watch: spec.watch,
     webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/",
-    slack: { botToken: tokens.botToken, appToken: tokens.appToken },
+    ...(tokens ? { slack: { botToken: tokens.botToken, appToken: tokens.appToken } } : {}),
     sessionStore,
     runStore,
     databaseUrl,
@@ -454,29 +459,34 @@ async function boot(): Promise<void> {
       process.exit(EXIT.childFailed);
     }
     phase("verify", "start");
-    await resolveCanaryChannel(spec);
-    const verified = await verifySlack(spec);
-    if (!verified.ok) {
-      bootResult = { ok: false, slot, ...verified.result } as BootResult;
-      phase("verify", "fail", bootResult.reason);
-      finishBoot();
-      await teardown(`verification failed: ${bootResult.reason}`);
-      process.exit(bootResult.reason === "slot-stolen" ? EXIT.slotStolen : EXIT.verificationFailed);
+    let verified: { ok: boolean; result: Partial<BootResult> } = { ok: true, result: {} };
+    if (slackOn(spec)) {
+      await resolveCanaryChannel(spec);
+      verified = await verifySlack(spec);
+      if (!verified.ok) {
+        bootResult = { ok: false, slackEnabled: true, slot, ...verified.result } as BootResult;
+        phase("verify", "fail", bootResult.reason);
+        finishBoot();
+        await teardown(`verification failed: ${bootResult.reason}`);
+        process.exit(bootResult.reason === "slot-stolen" ? EXIT.slotStolen : EXIT.verificationFailed);
+      }
+      phase(
+        "verify",
+        "ok",
+        verified.result.canary
+          ? `canary ${verified.result.canary.rttMs}ms, connections=1`
+          : "socket verified (no canary channel)",
+      );
+    } else {
+      phase("verify", "ok", "Slack disabled");
     }
-    phase(
-      "verify",
-      "ok",
-      verified.result.canary
-        ? `canary ${verified.result.canary.rttMs}ms, connections=1`
-        : "socket verified (no canary channel)",
-    );
     bootedAt = nowEpoch();
-    bootResult = { ok: true, slot, handle, ...verified.result } as BootResult;
+    bootResult = { ok: true, slackEnabled: slackOn(spec), slot, handle, ...verified.result } as BootResult;
     writeLegacyMeta(false);
     persistState();
     finishBoot();
     startLoops();
-    log(`live -- @${handle} on slot ${slot}`);
+    log(slackOn(spec) ? `live -- @${handle} on slot ${slot}` : `live -- Slack disabled on slot ${slot}`);
   } catch (err) {
     bootResult = { ok: false, reason: errMessage(err), slot };
     phase(phaseName, "fail", errMessage(err));
@@ -516,7 +526,7 @@ function startLoops(): void {
         log(`${name} healthy again`);
       }
     }
-    const slackHealth = await fetchSlackHealth();
+    const slackHealth = slackOn(readBootSpec()) ? await fetchSlackHealth() : null;
     if (slackHealth) {
       if (slackHealth.lastActivityAt) {
         lastSlackActivitySec = Math.max(lastSlackActivitySec, Math.floor(slackHealth.lastActivityAt / 1000));
@@ -531,7 +541,7 @@ function startLoops(): void {
   }, HEALTH_INTERVAL_MS);
   health.unref();
 
-  if (CANARY_INTERVAL_MS > 0) {
+  if (CANARY_INTERVAL_MS > 0 && slackOn(readBootSpec())) {
     const canary = setInterval(async () => {
       if (!canaryChannel) await resolveCanaryChannel(readBootSpec());
       if (!canaryChannel) return;
@@ -546,8 +556,9 @@ function startLoops(): void {
       const lastActivity = Math.max(bootedAt ?? startedAt, lastSlackActivitySec, lastControlAt);
       const idleSec = nowEpoch() - lastActivity;
       if (idleSec > IDLE_HOURS * 3600) {
+        const activity = slackOn(readBootSpec()) ? "Slack events or control actions" : "control actions";
         log(
-          `idle self-teardown: no Slack events or control actions for ${Math.floor(idleSec / 3600)}h (limit ${IDLE_HOURS}h; set DEV_INSTANCE_IDLE_HOURS=0 to disable)`,
+          `idle self-teardown: no ${activity} for ${Math.floor(idleSec / 3600)}h (limit ${IDLE_HOURS}h; set DEV_INSTANCE_IDLE_HOURS=0 to disable)`,
         );
         await shutdownSelf(true);
       }
@@ -662,8 +673,9 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
   const callerEnv = (body.callerEnv as Record<string, string> | undefined) ?? spec.callerEnv;
   const force = body.force === true;
   const dryRun = body.dryRun === true;
-  const freshCanary =
-    slotTokens(slot, store).canaryChannel || callerEnv.DEV_INSTANCE_CANARY_CHANNEL || spec.canaryChannel || "";
+  const freshCanary = slackOn(spec)
+    ? slotTokens(slot, store).canaryChannel || callerEnv.DEV_INSTANCE_CANARY_CHANNEL || spec.canaryChannel || ""
+    : "";
   const newSpec: BootSpec = { ...spec, callerEnv, canaryChannel: freshCanary };
   if (dryRun) {
     const assembled = await assembleEnv({
@@ -719,13 +731,25 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
         logTail: logTail(childSpec.name),
       };
   }
-  await resolveCanaryChannel(newSpec);
-  const verified = await verifySlack(newSpec);
-  if (!verified.ok) return { ok: false, reason: verified.result.reason, ...verified.result };
+  let verified: { ok: boolean; result: Partial<BootResult> } = { ok: true, result: {} };
+  if (slackOn(newSpec)) {
+    await resolveCanaryChannel(newSpec);
+    verified = await verifySlack(newSpec);
+    if (!verified.ok) return { ok: false, reason: verified.result.reason, ...verified.result };
+  }
   bootedAt = nowEpoch();
   writeLegacyMeta(false);
   persistState();
-  return { ok: true, noop: false, envSha: newEnvSha, gitSha: newGitSha, bootId, handle, ...verified.result };
+  return {
+    ok: true,
+    noop: false,
+    slackEnabled: slackOn(newSpec),
+    envSha: newEnvSha,
+    gitSha: newGitSha,
+    bootId,
+    handle,
+    ...verified.result,
+  };
 }
 
 async function statusReport(): Promise<StatusReport> {
@@ -733,7 +757,8 @@ async function statusReport(): Promise<StatusReport> {
   for (const [name, child] of children) {
     childStatuses[name] = child.status();
   }
-  const slackHealth = await fetchSlackHealth();
+  const slackEnabled = slackOn(readBootSpec());
+  const slackHealth = slackEnabled ? await fetchSlackHealth() : null;
   if (slackHealth && childStatuses.core) childStatuses.core.slack = slackHealth;
   return {
     slot,
@@ -754,6 +779,7 @@ async function statusReport(): Promise<StatusReport> {
       databaseUrl: Boolean(durability.databaseUrl),
     },
     harness,
+    slackEnabled,
     watch,
     turnsLive: harness !== "mock",
     publicApiUrl: sandbox?.publicApiUrl ?? null,

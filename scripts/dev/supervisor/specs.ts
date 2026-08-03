@@ -7,7 +7,7 @@ export interface SpecInputs {
   baseEnv: Record<string, string>;
   watch: boolean;
   webUiBasePath: string;
-  slack: { botToken: string; appToken: string };
+  slack?: { botToken: string; appToken: string };
   sessionStore: string;
   runStore: string;
   databaseUrl: string;
@@ -37,11 +37,15 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         ...(i.databaseUrl ? { DATABASE_URL: i.databaseUrl } : {}),
         ...(i.adminGrantsSeed ? { ADMIN_GRANTS: i.adminGrantsSeed } : {}),
         PUBLIC_WEB_URL: `http://localhost:${i.ports.portal}`,
-        SLACK_BOT_TOKEN: i.slack.botToken,
-        SLACK_APP_TOKEN: i.slack.appToken,
+        ...(i.slack
+          ? {
+              SLACK_BOT_TOKEN: i.slack.botToken,
+              SLACK_APP_TOKEN: i.slack.appToken,
+              DEV_INTROSPECTION: "1",
+              DEV_HEALTH_PORT: String(i.ports.slackHealth),
+            }
+          : {}),
         CORE_ORG_ID: orgId,
-        DEV_INTROSPECTION: "1",
-        DEV_HEALTH_PORT: String(i.ports.slackHealth),
         SHUTDOWN_DRAIN_MS: "2000",
       },
       port: i.ports.core,

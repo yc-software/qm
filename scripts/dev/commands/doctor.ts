@@ -18,7 +18,7 @@ interface Check {
   autoFixable?: boolean;
 }
 
-export async function runDoctor(opts: { json: boolean; fix: boolean; store: string }): Promise<number> {
+export async function runDoctor(opts: { json: boolean; fix: boolean; store: string; slack: boolean }): Promise<number> {
   const checks: Check[] = [];
   const worktree = (() => {
     try {
@@ -28,16 +28,21 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
     }
   })();
 
+  const mine = worktree ? myLease(worktree, opts.store) : null;
+  const slackExpected = opts.slack && mine?.meta.slack !== "0";
   const slots = listSlots(opts.store);
+  let poolDetail = "Slack disabled; no pool slot required";
+  if (slackExpected)
+    poolDetail = slots.length ? `${slots.length} pool slot(s) configured` : "no poolN.env files in the pool store";
   checks.push({
     id: "pool",
-    ok: slots.length > 0,
-    severity: "critical",
-    detail: slots.length ? `${slots.length} pool slot(s) configured` : "no poolN.env files in the pool store",
-    remedy: slots.length ? undefined : "add poolN.env files (see the dev-instance skill runbook)",
+    ok: !slackExpected || slots.length > 0,
+    severity: slackExpected ? "critical" : "info",
+    detail: poolDetail,
+    remedy: slackExpected && !slots.length ? "add poolN.env files (see the dev-instance skill runbook)" : undefined,
   });
 
-  for (const slot of slots) {
+  for (const slot of slackExpected ? slots : []) {
     const flag = readSlotFlag(slot, opts.store);
     if (flag && slotFlagged(slot, opts.store)) {
       checks.push({
@@ -53,7 +58,6 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
     }
   }
 
-  const mine = worktree ? myLease(worktree, opts.store) : null;
   if (!mine) {
     checks.push({ id: "lease", ok: true, severity: "info", detail: "no dev instance for this worktree" });
   } else {
@@ -83,37 +87,40 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
           autoFixable: child?.state !== "healthy",
         });
       }
-      const slack = status.children.core?.slack;
-      const conns = slack?.numConnections ?? null;
-      checks.push({
-        id: "slack-socket",
-        ok: conns === 1,
-        severity: "critical",
-        detail:
-          conns === null
-            ? "num_connections unknown (introspection tap degraded)"
-            : `num_connections=${conns}${slack?.helloHost ? ` (hello host ${slack.helloHost})` : ""}`,
-        remedy: conns !== null && conns > 1 ? "another live connection is stealing events: dev up --rotate" : undefined,
-      });
-      const canary = (await supervisorRequest(sock, "POST", "/canary", {}, 40_000)).body as {
-        ok: boolean;
-        rttMs?: number;
-        reason?: string;
-      };
-      const unconfigured = !canary.ok && /no canary channel configured/.test(canary.reason ?? "");
-      let eventDeliveryRemedy: string | undefined;
-      if (!canary.ok) {
-        eventDeliveryRemedy = unconfigured
-          ? "set CANARY_CHANNEL in the slot env (a channel the bot is in), then dev down && dev up"
-          : "events are not arriving: dev up --rotate (stolen/stale app), or check the slack log";
+      if (status.slackEnabled) {
+        const slack = status.children.core?.slack;
+        const conns = slack?.numConnections ?? null;
+        checks.push({
+          id: "slack-socket",
+          ok: conns === 1,
+          severity: "critical",
+          detail:
+            conns === null
+              ? "num_connections unknown (introspection tap degraded)"
+              : `num_connections=${conns}${slack?.helloHost ? ` (hello host ${slack.helloHost})` : ""}`,
+          remedy:
+            conns !== null && conns > 1 ? "another live connection is stealing events: dev up --rotate" : undefined,
+        });
+        const canary = (await supervisorRequest(sock, "POST", "/canary", {}, 40_000)).body as {
+          ok: boolean;
+          rttMs?: number;
+          reason?: string;
+        };
+        const unconfigured = !canary.ok && /no canary channel configured/.test(canary.reason ?? "");
+        let eventDeliveryRemedy: string | undefined;
+        if (!canary.ok) {
+          eventDeliveryRemedy = unconfigured
+            ? "set CANARY_CHANNEL in the slot env (a channel the bot is in), then dev down && dev up"
+            : "events are not arriving: dev up --rotate (stolen/stale app), or check the slack log";
+        }
+        checks.push({
+          id: "event-delivery",
+          ok: canary.ok,
+          severity: unconfigured ? "warn" : "critical",
+          detail: canary.ok ? `canary round trip ${canary.rttMs}ms` : `canary failed: ${canary.reason}`,
+          remedy: eventDeliveryRemedy,
+        });
       }
-      checks.push({
-        id: "event-delivery",
-        ok: canary.ok,
-        severity: unconfigured ? "warn" : "critical",
-        detail: canary.ok ? `canary round trip ${canary.rttMs}ms` : `canary failed: ${canary.reason}`,
-        remedy: eventDeliveryRemedy,
-      });
       const gitNow = gitHead(worktree);
       checks.push({
         id: "git-drift",
