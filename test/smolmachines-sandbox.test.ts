@@ -175,6 +175,15 @@ test("timeouts beyond the API's sync exec ceiling run detached and poll to compl
   assert.equal(leftovers.stdout.trim(), "0");
 });
 
+test("configured resources are requested at create and advertised in the profile", async () => {
+  const s = make({ cpus: 4, memoryMb: 8192, diskGb: 200 });
+  const h = await s.provision(layers);
+  assert.deepEqual(fake.machine(h.id)?.resources, { cpus: 4, memoryMb: 8192, diskGb: 200 });
+  assert.equal(s.profile.spec?.diskGb, 200);
+  assert.equal(s.profile.spec?.memoryMb, 8192);
+  assert.equal(s.profile.spec?.cpus, 4);
+});
+
 test("profile advertises resident disk and process sessions", () => {
   assert.equal(sandbox.profile.backend, "smolmachines");
   assert.equal(sandbox.profile.writablePersistence, "resident_disk");

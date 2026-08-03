@@ -14,6 +14,7 @@ interface FakeMachine {
   name: string | null;
   state: string;
   ephemeral: boolean;
+  resources?: Record<string, number>;
   home: string;
 }
 
@@ -22,7 +23,7 @@ export interface FakeSmolmachines {
   calls: SmolCall[];
   homeDir(name: string): string;
   names(): string[];
-  machine(name: string): { state: string; ephemeral: boolean } | null;
+  machine(name: string): { state: string; ephemeral: boolean; resources?: Record<string, number> } | null;
   stop(name: string): void;
   execScripts(): string[];
   reset(): void;
@@ -40,9 +41,16 @@ export function installFakeSmolmachines(): FakeSmolmachines {
 
   const byName = (name: string): FakeMachine | undefined => [...machines.values()].find((m) => m.name === name);
 
-  const create = (name: string | null, ephemeral: boolean): FakeMachine => {
+  const create = (name: string | null, ephemeral: boolean, resources?: Record<string, number>): FakeMachine => {
     const id = `m-${nextId++}`;
-    const m: FakeMachine = { id, name, state: "stopped", ephemeral, home: join(root, id) };
+    const m: FakeMachine = {
+      id,
+      name,
+      state: "stopped",
+      ephemeral,
+      ...(resources ? { resources } : {}),
+      home: join(root, id),
+    };
     mkdirSync(m.home, { recursive: true });
     machines.set(id, m);
     return m;
@@ -90,7 +98,7 @@ export function installFakeSmolmachines(): FakeSmolmachines {
     state: m.state,
     ephemeral: m.ephemeral,
     source: { type: "image", reference: "ubuntu:24.04" },
-    resources: {},
+    resources: m.resources ?? {},
     network: { mode: "open" },
     env: {},
     createdAt: "2026-01-01T00:00:00Z",
@@ -114,9 +122,10 @@ export function installFakeSmolmachines(): FakeSmolmachines {
       const body = JSON.parse(toBuf(init?.body).toString() || "{}") as {
         name?: string | null;
         ephemeral?: boolean;
+        resources?: Record<string, number>;
       };
       if (body.name && byName(body.name)) return new Response("machine name conflict", { status: 409 });
-      return Response.json(info(create(body.name ?? null, body.ephemeral ?? false)), { status: 201 });
+      return Response.json(info(create(body.name ?? null, body.ephemeral ?? false, body.resources)), { status: 201 });
     }
     const files = /^\/v1\/machines\/([^/]+)\/files(\/.+)$/.exec(url.pathname);
     if (files) {
@@ -176,7 +185,7 @@ export function installFakeSmolmachines(): FakeSmolmachines {
     names: () => [...machines.values()].map((m) => m.name ?? m.id),
     machine: (name) => {
       const m = byName(name);
-      return m ? { state: m.state, ephemeral: m.ephemeral } : null;
+      return m ? { state: m.state, ephemeral: m.ephemeral, ...(m.resources ? { resources: m.resources } : {}) } : null;
     },
     stop: (name) => {
       const m = byName(name);

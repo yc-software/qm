@@ -70,6 +70,9 @@ export interface SmolmachinesSandboxOptions {
   baseUrl?: string;
   namePrefix?: string;
   image?: string;
+  cpus?: number;
+  memoryMb?: number;
+  diskGb?: number;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   blobTransfer?: BlobTransferStore;
@@ -88,6 +91,11 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const baseUrl = (opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
   const image = opts.image ?? DEFAULT_IMAGE;
+  const resources = {
+    ...(opts.cpus ? { cpus: opts.cpus } : {}),
+    ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
+    ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
+  };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
@@ -138,6 +146,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     const res = await api("POST", "/v1/machines", {
       name,
       source: { type: "image", reference: image },
+      ...(Object.keys(resources).length ? { resources } : {}),
       network: { mode: "open" },
       workdir: HOME_DIR,
       ephemeral,
@@ -374,6 +383,9 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       get notInstalled() {
         return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
+      ...(opts.cpus ? { cpus: opts.cpus } : {}),
+      ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
+      ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
       homeDir: HOME_DIR,
       workdir: workspaceDir,
     },
