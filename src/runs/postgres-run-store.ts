@@ -73,8 +73,19 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         PRIMARY KEY(run_id, attempt, call_index)
       )`,
     `ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1`,
-    `ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey`,
-    `ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index)`,
+    `DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.constraint_column_usage
+          WHERE table_name = 'tool_calls' AND constraint_name = 'tool_calls_pkey' AND column_name = 'run_id'
+        ) AND NOT EXISTS (
+          SELECT 1 FROM information_schema.constraint_column_usage
+          WHERE table_name = 'tool_calls' AND constraint_name = 'tool_calls_pkey' AND column_name = 'attempt'
+        ) THEN
+          ALTER TABLE tool_calls DROP CONSTRAINT tool_calls_pkey;
+          ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index);
+        END IF;
+      END $$`,
   ]);
 
   async function getRun(id: string): Promise<Run | null> {
