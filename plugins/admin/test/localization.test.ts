@@ -125,3 +125,22 @@ test("language form is accessible and preserves the current path, query, and has
   assert.match(html, /location\.pathname \+ location\.search \+ location\.hash/);
   assert.match(html, /document\.documentElement\.lang/);
 });
+
+test("an Admin base path containing the locale JSON marker remains literal", async () => {
+  const original = process.env.ADMIN_BASE_PATH;
+  process.env.ADMIN_BASE_PATH = "/__ADMIN_MESSAGES__";
+  const loaded = (await import(new URL("../src/index.ts?admin-base-marker", import.meta.url).href)) as unknown as {
+    server: typeof server;
+  };
+  await new Promise<void>((resolve) => loaded.server.listen(0, resolve));
+  try {
+    const markerBase = `http://localhost:${(loaded.server.address() as AddressInfo).port}`;
+    const response = await fetch(`${markerBase}/`, { headers: { "x-qm-locale": "en" } });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /const API_BASE = "\/__ADMIN_MESSAGES__";/);
+  } finally {
+    await new Promise<void>((resolve, reject) => loaded.server.close((error) => (error ? reject(error) : resolve())));
+    if (original === undefined) delete process.env.ADMIN_BASE_PATH;
+    else process.env.ADMIN_BASE_PATH = original;
+  }
+});

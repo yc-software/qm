@@ -74,3 +74,31 @@ test("a branding save acks only after the shell reflects it — the post-save re
     assert.match(html, /<meta name="brand-self-label" content="Zed"\s*\/?>/);
   }
 });
+
+async function saveSelfLabel(selfLabel: string, locale = "en"): Promise<Response> {
+  const put = await fetch(`${base}/api/scopes/${encodeURIComponent("org:acme")}/branding`, {
+    method: "PUT",
+    headers: { cookie: "admin=U-admin", "content-type": "application/json" },
+    body: JSON.stringify({ accent: "#0055ff", mark: "Z", selfLabel }),
+  });
+  assert.equal(put.status, 200);
+  return fetch(`${base}/`, { headers: { "x-qm-locale": locale } });
+}
+
+test("a known locale token in saved branding remains literal", async () => {
+  const response = await saveSelfLabel("{{t:language}}", "ja");
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /<meta name="brand-self-label" content="\{\{t:language\}\}"\s*\/?>/);
+});
+
+test("an unknown locale token in saved branding cannot make the shell fail", async () => {
+  const response = await saveSelfLabel("{{t:unknown}}");
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /<meta name="brand-self-label" content="\{\{t:unknown\}\}"\s*\/?>/);
+});
+
+test("the locale JSON marker in saved branding remains literal", async () => {
+  const response = await saveSelfLabel("__ADMIN_MESSAGES__");
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /<meta name="brand-self-label" content="__ADMIN_MESSAGES__"\s*\/?>/);
+});

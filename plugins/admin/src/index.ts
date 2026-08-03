@@ -27,10 +27,8 @@ function signedHeaders(method: string, corePath: string, rawBody: string): Recor
   return signedRequestHeaders(CORE_SIGNING_SECRET, method, corePath, rawBody, { "content-type": "application/json" });
 }
 
-const BASE_HTML = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"),
-  "utf8",
-).replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH);
+const ADMIN_TEMPLATE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+const BASE_HTML = ADMIN_TEMPLATE.replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH);
 const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
 const ADMIN_CSP = [
   "default-src 'self'",
@@ -68,7 +66,8 @@ function brandedShell(branding: OrgBranding, locale: Locale): { html: string; gz
   const key = JSON.stringify([branding.accent, branding.mark, branding.selfLabel, locale]);
   const cached = shellCache.get(key);
   if (cached) return cached;
-  const html = localizeAdminShell(injectBranding(BASE_HTML, branding), locale);
+  const localized = localizeAdminShell(ADMIN_TEMPLATE, locale).replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH);
+  const html = injectBranding(localized, branding);
   const shell = {
     html,
     gzip: gzipSync(html),
