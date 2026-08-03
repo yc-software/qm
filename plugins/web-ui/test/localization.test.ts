@@ -125,7 +125,7 @@ test("language form submits the URL at submit time after history navigation", as
     const form = document.querySelector<HTMLFormElement>(".language-form")!;
     const select = form.elements.namedItem("locale") as HTMLSelectElement;
     const returnTo = form.elements.namedItem("returnTo") as HTMLInputElement;
-    assert.equal(new URL(form.action).pathname, "/locale");
+    assert.equal(form.action, new URL("/locale", location.href).href);
     assert.equal(form.method, "post");
     let submitted = "";
     form.addEventListener("submit", () => {
