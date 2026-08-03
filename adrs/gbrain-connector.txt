@@ -1,0 +1,29 @@
+gbrain connector
+
+It would be really useful if QM had a first-class way to attach a company
+"brain" / knowledge graph — specifically GBrain (Garry's markdown knowledge
+base on Postgres/Supabase, with hybrid search, pages, and graph links).
+
+What we'd want, roughly:
+- Admin can point a deployment at a GBrain backend (connection / API config),
+  without baking secrets into sandbox images by hand
+- agents can search and read as a first-class skill surface: hybrid query,
+  keyword search, get page by slug, list recent, basic graph (links /
+  backlinks / traverse)
+- writes (put/update pages) optional and clearly gated — many orgs will want
+  read-only by default
+- works as org-shared knowledge (one brain for the company), with room later
+  for per-user or per-scope views if that fits the model
+
+Why this belongs in QM: a lot of multiplayer agent value is "remember the
+company," not only SaaS OAuth. Today GBrain can be bolted on via sandbox
+CLI/skills or an external MCP bridge, but a supported connector (Admin config
++ documented tool surface, MCP-shaped or native) would match how Google/Slack
+show up and be much cleaner for rollouts.
+
+Happy for you to shape this as:
+- a first-class knowledge-store connector with a GBrain driver, or
+- a first-class MCP connector recipe for GBrain, or
+- a thinner "external brain" hook that GBrain (and others) can implement
+
+Not a security report — just a product ask.
