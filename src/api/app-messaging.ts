@@ -305,7 +305,7 @@ export function createMessagingMethods(
     async upsertDirectory(members) {
       const previous = await deps.directory.list();
       await deps.directory.replace(members);
-      const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
+      const present = (await deps.directory.list()).filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
       const outcome = await deps.identity.recordDirectorySync(removed, present);

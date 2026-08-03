@@ -66,7 +66,7 @@ export const MAX_CANDIDATES = 10;
 export const normDirectoryQuery = (s: string): string => s.trim().toLowerCase().replace(/^[@#]/, "");
 
 function pickMatch<T>(
-  items: T[],
+  items: readonly T[],
   query: string,
   id: (t: T) => string,
   label: (t: T) => string,
@@ -83,6 +83,20 @@ function pickMatch<T>(
   if (pool.length === 0) return { kind: "none" };
   if (pool.length === 1) return { kind: "one", item: pool[0]! };
   return { kind: "ambiguous", items: pool.slice(0, MAX_CANDIDATES) };
+}
+
+export function resolveDirectoryMember(members: readonly DirectoryMember[], query: string): RecipientResolution {
+  const bySlackId = members.find((member) => member.slackId && member.slackId === query.trim());
+  if (bySlackId) return { kind: "one", member: bySlackId };
+  const match = pickMatch(
+    members,
+    query,
+    (member) => member.principalId,
+    (member) => member.displayName,
+  );
+  if (match.kind === "one") return { kind: "one", member: match.item };
+  if (match.kind === "ambiguous") return { kind: "ambiguous", candidates: match.items };
+  return { kind: "none" };
 }
 
 export function createDirectoryStore(): DirectoryStore {
@@ -181,17 +195,7 @@ export function createDirectoryStore(): DirectoryStore {
       return members.find((m) => samePerson(m.principalId, principalId)) ?? null;
     },
     async resolve(query) {
-      const bySlackId = members.find((x) => x.slackId && x.slackId === query.trim());
-      if (bySlackId) return { kind: "one", member: bySlackId };
-      const m = pickMatch(
-        members,
-        query,
-        (x) => x.principalId,
-        (x) => x.displayName,
-      );
-      if (m.kind === "one") return { kind: "one", member: m.item };
-      if (m.kind === "ambiguous") return { kind: "ambiguous", candidates: m.items };
-      return { kind: "none" };
+      return resolveDirectoryMember(members, query);
     },
     async resolveChannel(query) {
       const m = pickMatch(
