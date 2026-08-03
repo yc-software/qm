@@ -1,0 +1,32 @@
+salesforce MCP connector
+
+It would be really useful if QM had first-class Salesforce support for agents —
+ideally as an MCP-shaped connector (or whatever fits the existing connector /
+tooling model), so orgs don't have to hand-roll sandbox skills.
+
+What we'd want, roughly:
+- Admin can register a Salesforce connection (Connected App / OAuth client, or
+  hosted MCP endpoint + auth)
+- users connect their own Salesforce identity from Keychain where that makes
+  sense (so the agent acts as them, not a shared integration user)
+- agent can run common CRM reads first: SOQL-style query, get object/schema,
+  recent records, find people/accounts
+- writes (create/update) optional later, behind clear permissions
+- works with typical Salesforce clouds (at least Sales/Service-style orgs)
+
+Why MCP-shaped: a lot of Salesforce agent tooling is landing as MCP servers
+(query, schema, CRUD). A native QM path that can attach a Salesforce MCP
+server (or speak the same tool surface) would match how people already
+integrate SF elsewhere, while still showing up cleanly under Admin →
+Connectors / Keychain like Google and Slack.
+
+Today this can be approximated with a custom sandbox tool or an external MCP
+bridge, but a supported connector would be much cleaner for company rollouts
+and least-privilege per user.
+
+Happy for you to shape this as:
+- a first-class OAuth connector with built-in SF tools, or
+- a first-class "MCP connector" slot with a Salesforce recipe, or
+- both
+
+Not a security report — just a product ask.
