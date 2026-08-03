@@ -125,6 +125,8 @@ test("language form submits the URL at submit time after history navigation", as
     const form = document.querySelector<HTMLFormElement>(".language-form")!;
     const select = form.elements.namedItem("locale") as HTMLSelectElement;
     const returnTo = form.elements.namedItem("returnTo") as HTMLInputElement;
+    assert.equal(new URL(form.action).pathname, "/locale");
+    assert.equal(form.method, "post");
     let submitted = "";
     form.addEventListener("submit", () => {
       submitted = returnTo.value;
@@ -145,18 +147,22 @@ test("language form submits the URL at submit time after history navigation", as
 });
 
 test("configured Japanese default localizes Vite and app-edit HTML responses", async () => {
-  process.env.QM_DEFAULT_LOCALE = "ja";
-  process.env.WEB_UI_DEV = "1";
-  process.env.DEPLOY_APPS_DOMAIN = "apps.test";
-  const loaded = (await import(new URL("../server/index.ts?localization-vite", import.meta.url).href)) as unknown as {
-    handler: typeof handler;
-    startVite: (server: ReturnType<typeof createServer>) => Promise<{ close(): Promise<void> }>;
-  };
-  const devSurface = createServer((req, res) => void loaded.handler(req, res));
-  const vite = await loaded.startVite(devSurface);
-  await new Promise<void>((resolve) => devSurface.listen(0, resolve));
-  const devBase = `http://localhost:${(devSurface.address() as AddressInfo).port}`;
+  const names = ["QM_DEFAULT_LOCALE", "WEB_UI_DEV", "DEPLOY_APPS_DOMAIN"] as const;
+  const before = new Map(names.map((name) => [name, process.env[name]]));
+  let devSurface: ReturnType<typeof createServer> | undefined;
+  let vite: { close(): Promise<void> } | undefined;
   try {
+    process.env.QM_DEFAULT_LOCALE = "ja";
+    process.env.WEB_UI_DEV = "1";
+    process.env.DEPLOY_APPS_DOMAIN = "apps.test";
+    const loaded = (await import(new URL("../server/index.ts?localization-vite", import.meta.url).href)) as unknown as {
+      handler: typeof handler;
+      startVite: (server: ReturnType<typeof createServer>) => Promise<{ close(): Promise<void> }>;
+    };
+    devSurface = createServer((req, res) => void loaded.handler(req, res));
+    vite = await loaded.startVite(devSurface);
+    await new Promise<void>((resolve) => devSurface!.listen(0, resolve));
+    const devBase = `http://localhost:${(devSurface.address() as AddressInfo).port}`;
     for (const path of ["/", "/app-edit?slug=demo"]) {
       const response = await fetch(`${devBase}${path}`);
       const body = await response.text();
@@ -165,8 +171,18 @@ test("configured Japanese default localizes Vite and app-edit HTML responses", a
       assert.equal(response.headers.get("vary"), "x-qm-locale, accept-language");
     }
   } finally {
-    devSurface.close();
-    await vite.close();
+    const cleanup = await Promise.allSettled([
+      ...(vite ? [vite.close()] : []),
+      ...(devSurface
+        ? [new Promise<void>((resolve, reject) => devSurface!.close((error) => (error ? reject(error) : resolve())))]
+        : []),
+    ]);
+    for (const name of names) {
+      const value = before.get(name);
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    assert.ok(cleanup.every((result) => result.status === "fulfilled"));
   }
 });
 
