@@ -5,9 +5,9 @@ import test from "node:test";
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
 test("admin shell uses the QM identity with org-injectable branding", () => {
-  assert.match(html, /<title>QM Admin<\/title>/);
+  assert.match(html, /<title>\{\{t:adminDefaultTitle\}\}<\/title>/);
   assert.match(html, /<meta name="brand-self-label" content="Agent" \/>/);
-  assert.match(html, /<div class="brand"><span id="brand-product">Agent<\/span>&nbsp;Admin /);
+  assert.match(html, /<div class="brand"><span id="brand-product">Agent<\/span>&nbsp;\{\{t:adminLabel\}\} /);
   assert.doesNotMatch(html, new RegExp(["Work", "Claw"].join(" "), "i"));
   assert.doesNotMatch(html, new RegExp(["Quarter", "master"].join(""), "i"));
 });
@@ -26,17 +26,17 @@ test("connector setup uses the live catalog and shows exact provider and callbac
   assert.match(html, /setupGuide\.url/);
   assert.match(html, /location\.origin \+ "\/v1\/connectors\/oauth\/" \+ connector\.redirectPath/);
   assert.match(html, /target="_blank"/);
-  assert.match(html, /Configured by deployment secrets/);
+  assert.match(html, /t\("connectors\.deploymentSecrets"\)/);
   assert.match(html, /item\.configured/);
   assert.doesNotMatch(html, /const CONNECTOR_CATALOG = \[/);
   assert.match(html, /id="slack-bot-token"/);
   assert.match(html, /api\("PUT", "\/api\/slack-installation"/);
-  assert.match(html, /encrypted in durable storage/);
+  assert.match(html, /\{\{t:slack\.botBody\}\}/);
 });
 
 test("temporary onboarding covers model credentials, Slack, and OAuth setup", () => {
   assert.match(html, /view-onboarding/);
-  assert.match(html, /Model provider/);
+  assert.match(html, /\{\{t:onboarding\.modelStep\}\}/);
   assert.match(html, /OpenRouter/);
   assert.match(html, /api\("GET", "\/api\/model-providers"\)/);
   assert.match(html, /api\("PUT", "\/api\/model-providers\/" \+ encodeURIComponent\(provider\)/);
@@ -80,11 +80,32 @@ test("admin history previews quote the first message instead of saying started",
   assert.doesNotMatch(html, /\? "started " \+ s\.firstMessage : "created "/);
 });
 
+test("localized list renderers do not shadow the translation helper", () => {
+  assert.doesNotMatch(html, /const t = denseList\(/);
+  assert.match(html, /const list = denseList\(/);
+});
+
+test("Admin detail views localize secondary operator status and count copy", () => {
+  for (const key of [
+    "connectors.secretSetReplacement",
+    "crons.defaultTimezone",
+    "crons.destinationSummary",
+    "tool.pendingResult",
+    "tool.approvalNeeded",
+    "tool.timedOut",
+    "context.tokens",
+    "judgments.promptNotRecorded",
+  ]) {
+    assert.match(html, new RegExp(`t\\("${key.replaceAll(".", "\\.")}"`));
+  }
+  assert.doesNotMatch(html, /function plural\(/);
+});
+
 test("transcript visibility controls stay in the sticky header and filter lazy-rendered entries", () => {
   const transcript = html.slice(html.indexOf("async function showTranscript("));
-  assert.match(html, /id="header-controls" aria-label="Page controls"/);
-  assert.match(html, /checkbox\("thinking", "thinking"\)/);
-  assert.match(html, /checkbox\("tool results", "toolResults"\)/);
+  assert.match(html, /id="header-controls" aria-label="\{\{t:pageControls\}\}"/);
+  assert.match(html, /checkbox\("transcript\.thinking", "thinking"\)/);
+  assert.match(html, /checkbox\("transcript\.toolResults", "toolResults"\)/);
   assert.match(html, /materialize\(from, firstRendered, true\);[\s\S]*applyTranscriptControls\(\);/);
   assert.match(html, /applyTranscriptControls\(\);\s*const addedHeight = document\.body\.scrollHeight - prevHeight;/);
   assert.match(html, /if \(addedHeight > 1\) io\.observe\(sentinel\);\s*else pauseFilteredReveal\(\);/);
@@ -124,7 +145,7 @@ test("governance posture saves refresh only the saved card", () => {
 test("governance presents a scoped effective-state control plane", () => {
   assert.match(html, /class="governance-page-head"/);
   assert.match(html, /id="governance-overview"/);
-  assert.match(html, /aria-label="Governance sections"/);
+  assert.match(html, /aria-label="\{\{t:governance\.sections\}\}"/);
   for (const id of [
     "governance-autonomy",
     "governance-boundaries",
@@ -135,8 +156,8 @@ test("governance presents a scoped effective-state control plane", () => {
     assert.match(html, new RegExp(`href="#${id}"`));
   }
   assert.match(html, /function renderGovernanceOverview\(data\)/);
-  assert.match(html, /Effective security posture/);
-  assert.match(html, /Resolved at organization scope/);
+  assert.match(html, /t\("governance\.effectivePosture"\)/);
+  assert.match(html, /t\("governance\.resolvedOrg"\)/);
 });
 
 test("governance renders simple settings as compact rows with contextual actions", () => {
@@ -153,7 +174,7 @@ test("governance renders simple settings as compact rows with contextual actions
   }
   assert.match(html, /class="setting-toggle"/);
   assert.match(html, /class="setting-switch" aria-hidden="true"/);
-  assert.match(html, /data-save="external-slack-participants">\s*Apply\s*<\/button\s*>/);
+  assert.match(html, /data-save="external-slack-participants">\{\{t:action\.apply\}\}<\/button\s*>/);
   assert.match(html, /"turnWallClockSec" in r\.data/);
 });
 
@@ -173,26 +194,26 @@ test("governance reviews high-impact changes in product and preserves drafts", (
   assert.match(html, /<dialog class="review-dialog" id="governance-review"/);
   assert.match(html, /key === "security-posture"/);
   assert.match(html, /key === "external-slack-participants"/);
-  assert.match(html, /Review the immutable change below/);
+  assert.match(html, /t\("review\.immutableSubtitle"\)/);
   assert.match(html, /function hasGovernanceDraft\(\)/);
   assert.match(html, /function governanceScopeName\(scopeId = scope\)/);
-  assert.match(html, /"Organization · " \+ scopeId/);
+  assert.match(html, /t\("common\.organization"\) \+ " · " \+ scopeId/);
   assert.match(html, /window\.addEventListener\("beforeunload"/);
   assert.match(html, /function governanceSaveInFlight\(\)/);
-  assert.match(html, /The change may already be committing and cannot be safely discarded/);
+  assert.match(html, /t\("review\.commitWarning"\)/);
   assert.match(html, /confirm\.classList\.toggle\("hidden", !confirmLabel\)/);
   assert.doesNotMatch(html, /confirm\("Enable Dangerous/);
 });
 
 test("governance makes unenforced egress a draft instead of an effective control", () => {
   assert.match(html, /id="egress-capability"/);
-  assert.match(html, />\s*Save draft\s*<\/button\s*>/);
+  assert.match(html, />\{\{t:governance\.saveDraft\}\}<\/button\s*>/);
   assert.match(html, /data\.egressEnforcement/);
-  assert.match(html, /enforcement\.active \? "Save policy" : "Save draft"/);
+  assert.match(html, /enforcement\.active \? t\("governance\.savePolicy"\) : t\("governance\.saveDraft"\)/);
   assert.match(html, /enforcement\.reason === "control_plane_unconfigured"/);
-  assert.match(html, /control plane cannot mint a reachable proxy token/);
-  assert.match(html, /Backend supports policy; control plane inactive/);
-  assert.match(html, /Backend cannot enforce host policy/);
+  assert.match(html, /t\("governance\.controlPlaneSummary"/);
+  assert.match(html, /t\("governance\.backendInactive"\)/);
+  assert.match(html, /t\("governance\.backendUnsupported"\)/);
 });
 
 test("governance keeps effective-state summaries synchronized after focused saves", () => {
@@ -209,14 +230,8 @@ test("stale governance reads cannot overwrite a newer scope", () => {
 });
 
 test("effective egress summary preserves deny-before-allow semantics", () => {
-  assert.match(
-    html,
-    /plural\(effectiveAllowCount, "allowed host"\)[\s\S]*plural\(effectiveDenyCount, "explicitly denied host"\)[\s\S]*deny rules first[\s\S]*all other hosts denied/,
-  );
-  assert.match(
-    html,
-    /else if \(effectiveDenyCount\) \{\s*effectiveEgressLabel = plural\(effectiveDenyCount, "denied host"\) \+ " · all other hosts allowed";/,
-  );
+  assert.match(html, /t\("governance\.allowSummary", \{\s*allowed: effectiveAllowCount,\s*denied: effectiveDenyCount/);
+  assert.match(html, /effectiveEgressLabel = t\("governance\.denySummary", \{ denied: effectiveDenyCount \}\)/);
 });
 
 test("egress validation follows programmatic reloads and successful saves", () => {
@@ -265,20 +280,20 @@ test("governance credential editor previews effective capability and uses an in-
   assert.match(html, /function refreshServiceCredentialConflict\(\)/);
   assert.match(html, /if \(refreshedEditing\) scEditVersion = refreshedEditing\.updatedAt/);
   assert.match(html, /scEditing && scEditVersion != null \? \{ expectedUpdatedAt: scEditVersion \}/);
-  assert.match(html, /it remains an edit and cannot recreate the credential/);
-  assert.match(html, /latest state could not be loaded\. Refresh the page before deleting/);
-  assert.match(html, /latest revision could not be loaded\. Your draft is preserved/);
-  assert.match(html, /Save failed because the admin service could not be reached/);
+  assert.match(html, /t\("credentials\.deletedConflict"\)/);
+  assert.match(html, /t\("credentials\.deleteConflictLoadFailed"\)/);
+  assert.match(html, /t\("credentials\.changedConflictLoadFailed"\)/);
+  assert.match(html, /t\("credentials\.adminUnavailable"\)/);
   assert.match(
     html,
-    /catch \{\s*updateScFormDirty\(\);\s*setStatus\(\s*"st-service-credentials",\s*"Save failed because the admin service could not be reached/,
+    /catch \{\s*updateScFormDirty\(\);\s*setStatus\(\s*"st-service-credentials",\s*t\("credentials\.adminUnavailable"\)/,
   );
-  assert.match(html, /usageTruncated \? "at least "/);
-  assert.match(html, /Recent users in the retained window/);
+  assert.match(html, /usageTruncated \? t\("credentials\.atLeast"\)/);
+  assert.match(html, /t\("credentials\.recentUsers"/);
   assert.doesNotMatch(html, /serviceCredList\.find\(\(c\) => c\.slug === scEditing\)\?\.updatedAt/);
   assert.match(html, /personal\|team\|org\|channel\|group/);
-  assert.match(html, /unsupported legacy grant/);
-  assert.match(html, /matches multiple people/);
+  assert.match(html, /t\("credentials\.unsupportedGrant"/);
+  assert.match(html, /t\("credentials\.multiplePeople"/);
   assert.match(html, /reviewGovernanceChange/);
   assert.doesNotMatch(html, /confirm\("Delete shared credential/);
 });
@@ -289,5 +304,5 @@ test("governance SOUL workbench shows draft diff, history, and conflict-safe res
   assert.match(html, /id="soul-history"/);
   assert.match(html, /expectedVersion: soulVersion/);
   assert.match(html, /function refreshSoulConflict\(\)/);
-  assert.match(html, /Restore SOUL version/);
+  assert.match(html, /t\("governance\.restoreTitle"/);
 });

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>QM Admin</title>
+    <title>{{t:adminDefaultTitle}}</title>
     <meta name="brand-self-label" content="Agent" />
     <style>
       :root {
@@ -3774,7 +3774,7 @@
   </head>
   <body>
     <header>
-      <div class="brand"><span id="brand-product">Agent</span>&nbsp;Admin <span id="org-tag"></span></div>
+      <div class="brand"><span id="brand-product">Agent</span>&nbsp;{{t:adminLabel}} <span id="org-tag"></span></div>
       <div class="header-controls" id="header-controls" aria-label="{{t:pageControls}}"></div>
       <div class="who hidden" id="who">
         <a class="header-button" href="/" id="dashboard-link">{{t:dashboard}}</a
@@ -3995,12 +3995,8 @@
                     <p>{{t:governance.approvalOptionsBody}}</p>
                   </div>
                   <div class="body">
-                    <label
-                      ><input type="checkbox" id="approval-grant-session" /> {{t:governance.allowSession}}</label
-                    >
-                    <label
-                      ><input type="checkbox" id="approval-grant-always" /> {{t:governance.allowAlways}}</label
-                    >
+                    <label><input type="checkbox" id="approval-grant-session" /> {{t:governance.allowSession}}</label>
+                    <label><input type="checkbox" id="approval-grant-always" /> {{t:governance.allowAlways}}</label>
                   </div>
                   <div class="foot">
                     <button class="primary" data-save="approval-grant-modes">{{t:action.apply}}</button
@@ -4103,10 +4099,7 @@
                       <option value="off">{{t:governance.off}}</option>
                     </select>
                     <label for="ambient-orders">{{t:governance.standingOrder}}</label>
-                    <textarea
-                      id="ambient-orders"
-                      placeholder="{{t:governance.noStandingOrder}}"
-                    ></textarea>
+                    <textarea id="ambient-orders" placeholder="{{t:governance.noStandingOrder}}"></textarea>
                     <div class="tablewrap" style="margin-top: 14px">
                       <table class="rules">
                         <thead>
@@ -4154,10 +4147,7 @@
                       </div>
                       <div>
                         <span class="k">{{t:governance.effectivePolicy}}</span
-                        ><span
-                          class="v"
-                          id="egress-effective"
-                          title="{{t:governance.effectiveRulesTitle}}"
+                        ><span class="v" id="egress-effective" title="{{t:governance.effectiveRulesTitle}}"
                           >{{t:state.loading}}</span
                         >
                       </div>
@@ -4443,12 +4433,8 @@
                         <label style="display: block; margin-bottom: 8px"
                           >{{t:credentials.delivery}} <span class="hint">{{t:credentials.deliveryHint}}</span>
                           <select id="sc-delivery" style="width: 100%">
-                            <option value="broker">
-                              {{t:credentials.brokerDelivery}}
-                            </option>
-                            <option value="env">
-                              {{t:credentials.envDelivery}}
-                            </option>
+                            <option value="broker">{{t:credentials.brokerDelivery}}</option>
+                            <option value="env">{{t:credentials.envDelivery}}</option>
                           </select>
                         </label>
                         <label style="display: block; margin-bottom: 8px" class="sc-env-only hidden"
@@ -4478,17 +4464,23 @@
                             placeholder="{{t:credentials.secret}}"
                             style="width: 100%"
                         /></label>
-                        <p class="field-hint" id="sc-secret-hint">
-                          {{t:credentials.secretHint}}
-                        </p>
+                        <p class="field-hint" id="sc-secret-hint">{{t:credentials.secretHint}}</p>
                         <div class="sc-broker-only" style="display: flex; gap: 10px">
                           <label style="display: block; margin-bottom: 8px; flex: 1"
                             >{{t:credentials.authHeader}} <span class="hint">{{t:credentials.authHeaderHint}}</span
-                            ><input type="text" id="sc-header" placeholder="{{t:credentials.defaultAuthorization}}" style="width: 100%"
+                            ><input
+                              type="text"
+                              id="sc-header"
+                              placeholder="{{t:credentials.defaultAuthorization}}"
+                              style="width: 100%"
                           /></label>
                           <label style="display: block; margin-bottom: 8px; flex: 1"
                             >{{t:credentials.valuePrefix}} <span class="hint">{{t:credentials.valuePrefixHint}}</span
-                            ><input type="text" id="sc-scheme" placeholder="{{t:credentials.defaultBearer}}" style="width: 100%"
+                            ><input
+                              type="text"
+                              id="sc-scheme"
+                              placeholder="{{t:credentials.defaultBearer}}"
+                              style="width: 100%"
                           /></label>
                         </div>
                         <label style="display: block; margin-bottom: 8px" class="sc-broker-only"
@@ -4618,17 +4610,14 @@
                     placeholder="{{t:credentials.writeOnlyPlaceholder}}"
                     style="width: 100%"
                 /></label>
-                <p class="field-hint" id="conn-secret-hint">
-                  {{t:connectors.secretHint}}
-                </p>
+                <p class="field-hint" id="conn-secret-hint">{{t:connectors.secretHint}}</p>
                 <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 10px"
                   ><input type="checkbox" id="conn-enabled" style="width: auto" checked /> {{t:state.enabled}}</label
                 >
               </div>
               <div class="foot">
                 <button class="primary" id="conn-save">{{t:connectors.save}}</button
-                ><button id="conn-reset">{{t:action.clear}}</button
-                ><span class="status" id="st-connectors"></span>
+                ><button id="conn-reset">{{t:action.clear}}</button><span class="status" id="st-connectors"></span>
               </div>
             </section>
             <section class="card" id="card-slack-installation">
@@ -4665,9 +4654,7 @@
                     placeholder="xapp-…"
                     style="width: 100%"
                 /></label>
-                <p class="field-hint">
-                  {{t:slack.tokenHint}}
-                </p>
+                <p class="field-hint">{{t:slack.tokenHint}}</p>
               </div>
               <div class="foot">
                 <button class="primary" id="slack-installation-save">{{t:onboarding.validateSave}}</button
@@ -4694,7 +4681,9 @@
       </div>
       <div class="review-dialog-foot">
         <button type="button" id="governance-review-cancel">{{t:action.cancel}}</button
-        ><button type="button" class="review-dialog-confirm" id="governance-review-confirm">{{t:action.confirm}}</button>
+        ><button type="button" class="review-dialog-confirm" id="governance-review-confirm">
+          {{t:action.confirm}}
+        </button>
       </div>
     </dialog>
 
@@ -5022,7 +5011,7 @@
       }
       function sessionCountsLabel(sessions, background) {
         const parts = [];
-        if (sessions) parts.push(plural(sessions, "conversation"));
+        if (sessions) parts.push(t("history.conversationCount", { count: Number(sessions).toLocaleString() }));
         if (background) parts.push(Number(background).toLocaleString() + " background");
         return parts.join(" · ") || "no conversations";
       }
@@ -5084,14 +5073,32 @@
         if (status === "pending") return "warn";
         return "muted";
       }
+      function statusLabel(status) {
+        const labels = {
+          done: t("state.done"),
+          failed: t("state.failed"),
+          running: t("state.running"),
+          pending: t("state.pending"),
+          unknown: t("state.unknown"),
+        };
+        return labels[status] || titleCase(status || labels.unknown);
+      }
       function statusBadge(status) {
-        return badge(titleCase(status || "unknown"), statusKind(status));
+        return badge(statusLabel(status), statusKind(status));
       }
       function typeBadge(type) {
         let kind = "warn";
         if (type === "dm") kind = "info";
         else if (type) kind = "muted";
-        return badge(titleCase(type || "unknown"), kind);
+        const labels = {
+          dm: "DM",
+          cron: t("view.crons"),
+          cron_wake: t("view.crons"),
+          cron_monologue: t("view.crons"),
+          background: t("history.background"),
+          conversation: t("history.conversations"),
+        };
+        return badge(labels[type] || titleCase(type || t("state.unknown")), kind);
       }
       function entryIsNoise(e) {
         return ["tool_call", "tool_result", "soul", "system"].includes(e.type);
@@ -5173,7 +5180,10 @@
                 },
                 body: file,
               });
-              if (!r.ok) throw new Error(uploadErrorMessage(await r.text(), "Upload failed (" + r.status + ")."));
+              if (!r.ok)
+                throw new Error(
+                  uploadErrorMessage(await r.text(), t("files.uploadFailedStatus", { status: r.status })),
+                );
               uploaded += 1;
             }
             uploadStatusMessage(
@@ -5188,9 +5198,16 @@
             await renderData();
           } catch (err) {
             const partial = uploaded
-              ? t("files.uploadedPartial", { uploaded: uploaded.toLocaleString(), count: picked.length.toLocaleString() })
+              ? t("files.uploadedPartial", {
+                  uploaded: uploaded.toLocaleString(),
+                  count: picked.length.toLocaleString(),
+                })
               : "";
-            uploadStatusMessage(status, partial + (err instanceof Error ? err.message : t("files.uploadFailed")), "err");
+            uploadStatusMessage(
+              status,
+              partial + (err instanceof Error ? err.message : t("files.uploadFailed")),
+              "err",
+            );
             if (uploaded) {
               dataCache.clear();
               await renderData();
@@ -5238,7 +5255,7 @@
           p.textContent = emptyMsg;
           return p;
         }
-        const t = document.createElement("table");
+        const tableEl = document.createElement("table");
         const thead = document.createElement("thead");
         const htr = document.createElement("tr");
         headers.forEach((h) => {
@@ -5248,7 +5265,7 @@
           htr.appendChild(th);
         });
         thead.appendChild(htr);
-        t.appendChild(thead);
+        tableEl.appendChild(thead);
         const tb = document.createElement("tbody");
         rows.forEach((r) => {
           const tr = document.createElement("tr");
@@ -5259,8 +5276,8 @@
           });
           tb.appendChild(tr);
         });
-        t.appendChild(tb);
-        return tableWrap(t);
+        tableEl.appendChild(tb);
+        return tableWrap(tableEl);
       }
       function dataCard(title, desc, node) {
         const sec = document.createElement("section");
@@ -5625,8 +5642,7 @@
       async function loadScopeDirectory() {
         const r = await api("GET", "/api/scopes");
         if (!r.ok) {
-          scopeDirNote =
-            r.status === 403 ? t("scope.listDenied") : r.data?.message || t("scope.loadFailed");
+          scopeDirNote = r.status === 403 ? t("scope.listDenied") : r.data?.message || t("scope.loadFailed");
           if (historyIsIndex()) renderScopeIndex();
           return;
         }
@@ -5765,10 +5781,7 @@
           wrap.append(input, document.createTextNode(t("common.show", { item: label })));
           return wrap;
         };
-        controls.append(
-          checkbox("transcript.thinking", "thinking"),
-          checkbox("transcript.toolResults", "toolResults"),
-        );
+        controls.append(checkbox("transcript.thinking", "thinking"), checkbox("transcript.toolResults", "toolResults"));
       }
       function transcriptEntryHidden(entryTypes, hasDelivery, visibility = transcriptVisibility) {
         return (
@@ -5881,7 +5894,7 @@
         selectScope(scopeId);
       }
 
-      function scopeIndexList(items, { latestOf, noun, open, empty, extra }) {
+      function scopeIndexList(items, { latestOf, countLabel, open, empty, extra }) {
         const groups = new Map();
         items.forEach((it) => {
           const sid = it.ownerScopeId || it.scopeId;
@@ -5896,7 +5909,7 @@
           rows,
           (g) => ({
             name: shortName(g.scopeId),
-            preview: plural(g.count, noun),
+            preview: countLabel(g.count),
             time: relTime(g.latest),
             href: hrefOf(g.scopeId),
           }),
@@ -5972,13 +5985,11 @@
         $("soul-saved").textContent = soulSaved || t("governance.noSavedInstructions");
         $("soul-draft").textContent =
           draft === soulSaved ? t("governance.noDraftChanges") : draft || t("governance.instructionsCleared");
-        $("soul-size").textContent =
-          t("governance.size", {
-            characters: draft.length.toLocaleString(),
-            tokens: Math.ceil(draft.length / 4).toLocaleString(),
-          });
-        $("soul-validation").textContent =
-          draft.length >= 100000 ? t("common.maximumLength") : t("common.draftValid");
+        $("soul-size").textContent = t("governance.size", {
+          characters: draft.length.toLocaleString(),
+          tokens: Math.ceil(draft.length / 4).toLocaleString(),
+        });
+        $("soul-validation").textContent = draft.length >= 100000 ? t("common.maximumLength") : t("common.draftValid");
       }
       function renderSoulHistory() {
         const root = $("soul-history");
@@ -6036,9 +6047,7 @@
               if (r.status === 409) await refreshSoulConflict();
               return setStatus(
                 "st-soul",
-                r.status === 409
-                  ? t("governance.soulConflict")
-                  : r.data?.message || t("governance.restoreFailed"),
+                r.status === 409 ? t("governance.soulConflict") : r.data?.message || t("governance.restoreFailed"),
                 "err",
                 true,
               );
@@ -6338,7 +6347,7 @@
               const x = document.createElement("button");
               x.type = "button";
               x.textContent = "×";
-              x.setAttribute("aria-label", "Remove " + id);
+              x.setAttribute("aria-label", t("governance.removeModel", { model: id }));
               x.style.cssText = "border:0;background:none;cursor:pointer;padding:0;font-size:14px;line-height:1";
               x.onclick = () => {
                 webuiModelIds = webuiModelIds.filter((v) => v !== id);
@@ -6414,8 +6423,8 @@
           add(
             "",
             browseDefault
-              ? "Default — " + browseDefault.name + " (" + browseDefault.id + ")"
-              : "Default — the deployment's base model",
+              ? t("governance.browseDefaultModel", { name: browseDefault.name, id: browseDefault.id })
+              : t("governance.browseDeploymentModel"),
           );
           browseOpts.forEach((m) => add(m.id, m.name + " (" + m.id + ")"));
           if (r.data.browseModel && !browseOpts.some((m) => m.id === r.data.browseModel))
@@ -6444,7 +6453,9 @@
         soulSaved = fresh.data.soul || "";
         soulHistory = fresh.data.soulHistory || [];
         $("soul").value = draft;
-        $("soul-ver").textContent = soulVersion ? "Saved version " + soulVersion : "No saved revision";
+        $("soul-ver").textContent = soulVersion
+          ? t("common.savedVersion", { version: soulVersion })
+          : t("common.noSavedRevision");
         updateSoulWorkbench();
         renderSoulHistory();
         sectionSnapshots.set("soul", JSON.stringify({ content: soulSaved, expectedVersion: soulVersion }));
@@ -6521,7 +6532,10 @@
           badges.append(
             badge(c.delivery === "env" ? t("credentials.env") : t("credentials.broker"), "info"),
             badge(c.enabled === false ? t("state.disabled") : t("state.enabled"), c.enabled === false ? "warn" : "ok"),
-            badge(c.hasSecret ? t("credentials.secretSet") : t("credentials.secretMissing"), c.hasSecret ? "ok" : "err"),
+            badge(
+              c.hasSecret ? t("credentials.secretSet") : t("credentials.secretMissing"),
+              c.hasSecret ? "ok" : "err",
+            ),
             badge(who, orgWide ? "info" : "muted"),
           );
           left.append(title, meta, badges);
@@ -6653,8 +6667,7 @@
                 const names = serviceCredDirectory.filter((member) => member.displayName.toLowerCase() === q);
                 if (names.length === 1) return "personal:" + names[0].principalId;
                 if (names.length > 1 || identifiers.length > 1)
-                  serviceCredentialResolutionError =
-                    t("credentials.multiplePeople", { id });
+                  serviceCredentialResolutionError = t("credentials.multiplePeople", { id });
                 return "personal:" + id;
               });
       }
@@ -6788,8 +6801,7 @@
         const unsupported = body.grantees.find(
           (grantee) => /^(channel|group):/.test(grantee) || /^personal:[^,]*:/.test(grantee),
         );
-        if (unsupported)
-          return t("credentials.unsupportedGrant", { grant: unsupported });
+        if (unsupported) return t("credentials.unsupportedGrant", { grant: unsupported });
         return "";
       }
       async function deleteSc(credential) {
@@ -6804,9 +6816,7 @@
           : c.grantees.map(serviceCredentialPrincipalLabel).join(", ");
         const recent = c.recentUsagePrincipals.length
           ? t("credentials.recentUsers", {
-              users: c.recentUsagePrincipals
-                .map((id) => serviceCredentialPrincipalLabel("personal:" + id))
-                .join(", "),
+              users: c.recentUsagePrincipals.map((id) => serviceCredentialPrincipalLabel("personal:" + id)).join(", "),
             })
           : t("credentials.noRecentUse");
         const confirmed = await reviewGovernanceChange({
@@ -6835,9 +6845,7 @@
           const conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
           let message = r.data?.message || t("credentials.deleteFailed");
           if (r.status === 409) {
-            message = conflictState
-              ? t("credentials.deleteConflict")
-              : t("credentials.deleteConflictLoadFailed");
+            message = conflictState ? t("credentials.deleteConflict") : t("credentials.deleteConflictLoadFailed");
           }
           setStatus("st-service-credentials", message, "err");
         }
@@ -6857,12 +6865,7 @@
           r = await api("PUT", "/api/scopes/" + encodeURIComponent(scope) + "/service-credentials", body);
         } catch {
           updateScFormDirty();
-          setStatus(
-            "st-service-credentials",
-            t("credentials.adminUnavailable"),
-            "err",
-            true,
-          );
+          setStatus("st-service-credentials", t("credentials.adminUnavailable"), "err", true);
           return;
         }
         if (r.ok) {
@@ -6875,12 +6878,7 @@
             conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
           } catch {
             updateScFormDirty();
-            setStatus(
-              "st-service-credentials",
-              t("credentials.adminUnavailable"),
-              "err",
-              true,
-            );
+            setStatus("st-service-credentials", t("credentials.adminUnavailable"), "err", true);
             return;
           }
           updateScFormDirty();
@@ -6933,7 +6931,7 @@
           const option = document.createElement("option");
           option.value = status.provider;
           const label = MODEL_PROVIDER_LABELS[status.provider] || connectorName(status.provider);
-          option.textContent = status.configured ? label + " — key configured" : label;
+          option.textContent = status.configured ? label + " — " + t("onboarding.keyConfigured") : label;
           select.appendChild(option);
         });
         if (preferred && [...select.options].some((option) => option.value === preferred)) select.value = preferred;
@@ -6952,8 +6950,8 @@
         const status = onboardingModelStatuses.find((item) => item.provider === provider);
         $("onboarding-model-delete").disabled = !status || status.source === "absent";
         $("onboarding-model-key").placeholder = status?.configured
-          ? "•••• set — enter a replacement"
-          : "Write-only API key";
+          ? t("onboarding.replacementKeyPlaceholder")
+          : t("onboarding.apiKeyPlaceholder");
       }
       async function loadOnboarding() {
         const [models, slack, catalog, config] = await Promise.all([
@@ -7055,12 +7053,7 @@
       };
       $("onboarding-model-delete").onclick = async () => {
         const provider = $("onboarding-model-provider").value;
-        if (
-          !confirm(
-            t("onboarding.disableConfirm", { provider: connectorName(provider) }),
-          )
-        )
-          return;
+        if (!confirm(t("onboarding.disableConfirm", { provider: connectorName(provider) }))) return;
         const removed = await api("DELETE", "/api/model-providers/" + encodeURIComponent(provider));
         if (!removed.ok) {
           setStatus("st-onboarding-model", removed.data?.message || t("onboarding.disableFailed"), "err");
@@ -7145,19 +7138,17 @@
           meta.className = "hint";
           meta.textContent = c.inherited
             ? t("connectors.deploymentSecrets")
-            : "client " +
-              (c.clientId || "—") +
-              (c.updatedBy ? " · by " + c.updatedBy : "") +
-              (c.updatedAt ? " · " + fmtTime(c.updatedAt) : "");
+            : t("connectors.clientMetadata", {
+                client: c.clientId || "—",
+                updatedBy: c.updatedBy ? t("connectors.updatedBy", { principal: c.updatedBy }) : "",
+                updatedAt: c.updatedAt ? " · " + fmtTime(c.updatedAt) : "",
+              });
           const badges = document.createElement("div");
           badges.className = "credential-badges";
           badges.append(
+            badge(c.enabled === false ? t("state.disabled") : t("state.enabled"), c.enabled === false ? "warn" : "ok"),
             badge(
-              c.inherited ? "Enabled" : c.enabled === false ? "Disabled" : "Enabled",
-              c.enabled === false ? "warn" : "ok",
-            ),
-            badge(
-              c.inherited || c.hasSecret ? "Secret set" : "Secret missing",
+              c.inherited || c.hasSecret ? t("connectors.secretSet") : t("connectors.secretMissing"),
               c.inherited || c.hasSecret ? "ok" : "err",
             ),
           );
@@ -7246,7 +7237,9 @@
         $("conn-provider").disabled = true;
         $("conn-client-id").value = c.clientId || "";
         $("conn-client-secret").value = "";
-        $("conn-client-secret").placeholder = c.hasSecret ? "•••• set (re-enter to replace)" : "(write-only)";
+        $("conn-client-secret").placeholder = c.hasSecret
+          ? t("connectors.secretSetReplacement")
+          : t("credentials.writeOnlyPlaceholder");
         $("conn-secret-hint").textContent = t("connectors.secretReenter");
         $("conn-enabled").checked = c.enabled !== false;
         renderConnList(connList);
@@ -7265,7 +7258,7 @@
         renderConnGuide();
         $("conn-client-id").value = "";
         $("conn-client-secret").value = "";
-        $("conn-client-secret").placeholder = "(write-only)";
+        $("conn-client-secret").placeholder = t("credentials.writeOnlyPlaceholder");
         $("conn-secret-hint").textContent = t("connectors.secretHint");
         $("conn-enabled").checked = true;
         if (connList.length) renderConnList(connList);
@@ -7286,8 +7279,7 @@
               : r.data.configured
                 ? t("slack.connectedWorkspace", {
                     workspace: r.data.teamName || r.data.teamId || t("onboarding.slackWorkspace"),
-                  }) +
-                  (r.data.updatedBy ? " · saved by " + r.data.updatedBy : "")
+                  }) + (r.data.updatedBy ? " · saved by " + r.data.updatedBy : "")
                 : r.data.managed
                   ? t("slack.disabledAdmin")
                   : t("state.notConfigured");
@@ -7325,12 +7317,7 @@
       };
       $("conn-reset").onclick = resetConnForm;
       async function deleteConn(provider) {
-        if (
-          !confirm(
-            t("connectors.deleteConfirm", { provider: connectorName(provider) }),
-          )
-        )
-          return;
+        if (!confirm(t("connectors.deleteConfirm", { provider: connectorName(provider) }))) return;
         const r = await api("PUT", "/api/scopes/" + encodeURIComponent(orgScope()) + "/connectors", {
           provider,
           delete: true,
@@ -7373,7 +7360,7 @@
         } else
           setStatus(
             "st-connectors",
-            r.status === 403 ? "Only an org admin can manage connectors." : r.data?.message || "Save failed.",
+            r.status === 403 ? t("connectors.manageDenied") : r.data?.message || t("common.saveFailed"),
             "err",
           );
       };
@@ -7396,15 +7383,11 @@
         patterns.forEach((pattern, i) => {
           if (!pattern) return;
           const duplicate = patterns.slice(0, i).findIndex((p) => p === pattern);
-          if (duplicate >= 0)
-            warnings.push(
-              "Rule " + (i + 1) + " is unreachable because rule " + (duplicate + 1) + " has the same pattern.",
-            );
+          if (duplicate >= 0) warnings.push(t("governance.ruleDuplicate", { rule: i + 1, duplicate: duplicate + 1 }));
           const catchAll = patterns
             .slice(0, i)
             .findIndex((p) => [".*", "^.*$", "[\\s\\S]*", "^[\\s\\S]*$"].includes(p));
-          if (catchAll >= 0)
-            warnings.push("Rule " + (i + 1) + " is shadowed by catch-all rule " + (catchAll + 1) + ".");
+          if (catchAll >= 0) warnings.push(t("governance.ruleShadowed", { rule: i + 1, catchAll: catchAll + 1 }));
         });
         const root = $("policy-warnings");
         root.textContent = "";
@@ -7424,7 +7407,7 @@
           new RegExp(pattern);
           return "";
         } catch (err) {
-          const message = err instanceof Error ? err.message : "Invalid regular expression.";
+          const message = err instanceof Error ? err.message : t("governance.invalidRegex");
           pat.setCustomValidity(message);
           pat.setAttribute("aria-invalid", "true");
           return message;
@@ -7435,9 +7418,9 @@
         const pat = document.createElement("input");
         pat.type = "text";
         pat.value = rule?.pattern || "";
-        pat.placeholder = "regex";
+        pat.placeholder = t("governance.regexPlaceholder");
         pat.spellcheck = false;
-        pat.setAttribute("aria-label", "Command pattern");
+        pat.setAttribute("aria-label", t("governance.commandPattern"));
         pat.addEventListener("input", () => {
           validatePatternInput(pat);
           syncRuleWorkbench();
@@ -7456,7 +7439,7 @@
         const rsn = document.createElement("input");
         rsn.type = "text";
         rsn.value = rule?.reason || "";
-        rsn.placeholder = "optional";
+        rsn.placeholder = t("governance.optionalReasonPlaceholder");
         const priority = document.createElement("span");
         priority.className = "rule-priority mono";
         const order = document.createElement("div");
@@ -7473,19 +7456,19 @@
         const up = document.createElement("button");
         up.type = "button";
         up.textContent = "↑";
-        up.setAttribute("aria-label", "Move rule up");
+        up.setAttribute("aria-label", t("governance.moveRuleUp"));
         up.onclick = () => move(-1);
         const down = document.createElement("button");
         down.type = "button";
         down.textContent = "↓";
-        down.setAttribute("aria-label", "Move rule down");
+        down.setAttribute("aria-label", t("governance.moveRuleDown"));
         down.onclick = () => move(1);
         const del = document.createElement("button");
         del.type = "button";
         del.className = "rowbtn danger";
         del.textContent = "×";
         del.title = t("governance.removeRule");
-        del.setAttribute("aria-label", "Remove command policy rule");
+        del.setAttribute("aria-label", t("governance.removeRule"));
         del.onclick = () => {
           tr.remove();
           syncRuleWorkbench();
@@ -7521,7 +7504,7 @@
         const nm = document.createElement("input");
         nm.type = "text";
         nm.value = name || "";
-        nm.placeholder = "e.g. GitHub";
+        nm.placeholder = t("governance.botNamePlaceholder");
         nm.spellcheck = false;
         const sel = document.createElement("select");
         BOT_MODES.forEach((m) => {
@@ -7547,7 +7530,7 @@
         del.className = "rowbtn danger";
         del.textContent = t("action.remove");
         del.title = t("governance.removeBot");
-        del.setAttribute("aria-label", "Remove bot ledger entry");
+        del.setAttribute("aria-label", t("governance.removeBot"));
         del.onclick = () => {
           tr.remove();
           syncBotsEmpty();
@@ -7586,7 +7569,7 @@
         for (const tr of $("ambient-bots").children) {
           const [nm, sel, hrs] = tr.querySelectorAll("input, select");
           const name = nm.value.trim();
-          if (!name) throw new Error("Every bot ledger row needs a bot name.");
+          if (!name) throw new Error(t("governance.botNameRequired"));
           if (seen.has(name.toLowerCase()))
             throw new Error('Duplicate bot "' + name + '" — the ledger matches names case-insensitively.');
           seen.add(name.toLowerCase());
@@ -7654,24 +7637,23 @@
         result.dataset.tone = tone;
         let ruleLabel = null;
         if (response.data.ruleSource === "organization") {
-          ruleLabel = "Organization rule " + (response.data.ruleIndex + 1);
+          ruleLabel = t("governance.organizationRule", { number: response.data.ruleIndex + 1 });
         } else if (response.data.ruleSource === "scope") {
-          ruleLabel = "This scope’s rule " + (response.data.ruleIndex + 1);
+          ruleLabel = t("governance.scopeRule", { number: response.data.ruleIndex + 1 });
         }
         const deploymentCaveat =
           decision === "allow" && response.data.ruleSource == null && response.data.deploymentRulesEvaluated === false
-            ? " · A deployment’s rules may still restrict this command."
+            ? t("governance.deploymentCaveat")
             : "";
         result.textContent = ruleLabel
-          ? ruleLabel +
-            " matches" +
-            (response.data.matched ? " “" + response.data.matched + "”" : "") +
-            " → " +
-            (EFFECT_LABELS[decision] || decision) +
-            (response.data.reason ? " · " + response.data.reason : "") +
-            deploymentCaveat
-          : "No scope-policy rule matches → " +
-            (EFFECT_LABELS[decision] || decision) +
+          ? t("governance.ruleMatches", {
+              rule: ruleLabel,
+              matched: response.data.matched ? " “" + response.data.matched + "”" : "",
+              decision: EFFECT_LABELS[decision] || decision,
+              reason: response.data.reason ? " · " + response.data.reason : "",
+              caveat: deploymentCaveat,
+            })
+          : t("governance.noRuleMatch", { decision: EFFECT_LABELS[decision] || decision }) +
             (response.data.reason ? " · " + response.data.reason : "") +
             deploymentCaveat;
       }
@@ -7701,7 +7683,7 @@
         if (firstInvalid) {
           firstInvalid.focus();
           firstInvalid.reportValidity?.();
-          throw new Error("Fix the highlighted regular expression before saving: " + firstMessage);
+          throw new Error(t("governance.fixRegex", { message: firstMessage }));
         }
         return { mode: $("mode").value, rules };
       }
@@ -7719,23 +7701,17 @@
                 host.endsWith(".") ||
                 !/^[a-z0-9:[\]._-]+$/.test(host)
               ) {
-                throw new Error(
-                  label +
-                    ' contains invalid host "' +
-                    host +
-                    '". Enter a hostname or IP only—no scheme, path, port, or wildcard.',
-                );
+                throw new Error(t("governance.invalidHost", { list: label, host }));
               }
-              if (seen.has(host)) throw new Error(label + ' contains duplicate host "' + host + '".');
+              if (seen.has(host)) throw new Error(t("governance.duplicateHost", { list: label, host }));
               seen.add(host);
               return host;
             });
         };
-        const allowedHosts = parse("egress", "Allowlist");
-        const deniedHosts = parse("egress-deny", "Denylist");
+        const allowedHosts = parse("egress", t("governance.allowlist"));
+        const deniedHosts = parse("egress-deny", t("governance.denylist"));
         const overlap = allowedHosts.find((host) => deniedHosts.includes(host));
-        if (overlap)
-          throw new Error('Host "' + overlap + '" appears in both lists. Remove it from one list before saving.');
+        if (overlap) throw new Error(t("governance.hostInBothLists", { host: overlap }));
         return { allowedHosts, deniedHosts };
       }
       function populateEgress(policy) {
@@ -7750,7 +7726,7 @@
           collectEgress();
         } catch (err) {
           const row = document.createElement("div");
-          row.textContent = err instanceof Error ? err.message : "Invalid egress policy.";
+          row.textContent = err instanceof Error ? err.message : t("governance.invalidEgress");
           root.appendChild(row);
         }
       }
@@ -7866,34 +7842,30 @@
           const before = JSON.parse(sectionSnapshots.get(key) || "{}").posture || "auto";
           const dangerous = body.posture === "dangerous";
           return reviewGovernanceChange({
-            title: dangerous ? "Enable Dangerous autonomy?" : "Change security posture?",
-            subtitle: "Review the immutable change below before it is applied.",
+            title: dangerous ? t("review.enableDangerousTitle") : t("review.changePostureTitle"),
+            subtitle: t("review.immutableSubtitle"),
             facts: [
-              ["Scope", governanceScopeName()],
-              ["Current", titleCase(before)],
-              ["Proposed", titleCase(body.posture)],
+              [t("common.scope"), governanceScopeName()],
+              [t("review.current"), titleCase(before)],
+              [t("review.proposed"), titleCase(body.posture)],
             ],
-            warning: dangerous
-              ? "Dangerous removes content screening; nothing pauses between tool calls. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
-              : "This changes the effective tools and approval behavior for future turns in this scope.",
-            confirmLabel: dangerous ? "Enable Dangerous" : "Apply posture",
+            warning: dangerous ? t("review.dangerousWarning") : t("review.postureWarning"),
+            confirmLabel: dangerous ? t("review.enableDangerous") : t("review.applyPosture"),
             danger: dangerous,
           });
         }
         if (key === "external-slack-participants") {
           const before = !!JSON.parse(sectionSnapshots.get(key) || "{}").on;
           return reviewGovernanceChange({
-            title: body.on ? "Allow external Slack audiences?" : "Return Slack to internal-only?",
-            subtitle: "This organization-wide audience boundary applies to future Slack turns.",
+            title: body.on ? t("review.allowExternalTitle") : t("review.internalOnlyTitle"),
+            subtitle: t("review.audienceSubtitle"),
             facts: [
-              ["Scope", governanceScopeName()],
-              ["Current", before ? "External audiences enabled" : "Internal only"],
-              ["Proposed", body.on ? "External audiences enabled" : "Internal only"],
+              [t("common.scope"), governanceScopeName()],
+              [t("review.current"), before ? t("review.externalAudience") : t("governance.internalOnly")],
+              [t("review.proposed"), body.on ? t("review.externalAudience") : t("governance.internalOnly")],
             ],
-            warning: body.on
-              ? "Agent replies and anything read in a mixed Slack room can be visible to guests or Slack Connect participants. External users still cannot drive the agent."
-              : "Mixed-audience Slack rooms will stop receiving agent replies after this change.",
-            confirmLabel: body.on ? "Allow external audiences" : "Require internal audiences",
+            warning: body.on ? t("review.externalWarning") : t("review.internalWarning"),
+            confirmLabel: body.on ? t("review.allowExternal") : t("review.requireInternal"),
             danger: !!body.on,
           });
         }
@@ -7954,11 +7926,11 @@
           } else {
             if (key === "soul" && r.status === 409) await refreshSoulConflict();
             updateSectionDirty(key);
-            let message = r.data?.message || "Save failed.";
+            let message = r.data?.message || t("common.saveFailed");
             if (key === "soul" && r.status === 409) {
-              message = "SOUL changed; latest revision loaded and your draft was preserved.";
+              message = t("governance.soulConflict");
             } else if (r.status === 403) {
-              message = "Not authorized for this scope.";
+              message = t("governance.scopeDenied");
             }
             setStatus(SAVE_ST[key], message, "err");
           }
@@ -8043,7 +8015,9 @@
           const p = document.createElement("p");
           p.className = "empty";
           p.textContent =
-            r.status === 403 ? "You don't administer this scope." : r.data?.message || `Failed to load (${r.status}).`;
+            r.status === 403
+              ? t("governance.scopeDenied")
+              : r.data?.message || t("common.failedStatus", { status: r.status });
           root.appendChild(p);
           return;
         }
@@ -8332,13 +8306,7 @@
             t("metrics.worst"),
             anyLinkable ? t("metrics.worstLinkedBody") : t("metrics.worstBody"),
             openableTable(
-              [
-                phaseLabel(phaseKey),
-                t("metrics.totalTurn"),
-                t("common.scope"),
-                t("metrics.machine"),
-                t("audit.time"),
-              ],
+              [phaseLabel(phaseKey), t("metrics.totalTurn"), t("common.scope"), t("metrics.machine"), t("audit.time")],
               p.worst || [],
               (t) => [
                 { text: fmtMs(t.ms), cls: "num" },
@@ -8365,7 +8333,7 @@
       function renderAudit(root, d) {
         const all = orgWideView();
         const events = d.events || [];
-        defaultShell({ count: plural(events.length, "event") });
+        defaultShell({ count: t("history.eventCount", { count: events.length.toLocaleString() }) });
         const rows = events.map((e) => [
           { text: e.principalId, cls: "mono" },
           nodeCell(mutedText(e.action || "event", /revoke|delete|deny|fail/.test(String(e.action || "")) ? "err" : "")),
@@ -8452,8 +8420,8 @@
         return box;
       }
       function egressStatus(r) {
-        if (r.allowed === false) return mutedText(r.status || "denied", "warn");
-        const label = r.status && r.status !== "ok" ? r.status : "allowed";
+        if (r.allowed === false) return mutedText(r.status || t("egress.denied"), "warn");
+        const label = r.status && r.status !== "ok" ? r.status : t("egress.allowed");
         return mutedText(label, r.status === "error" ? "err" : "");
       }
       function egressDetail(r) {
@@ -8477,8 +8445,8 @@
             [String(d.total ?? recs.length), t("egress.calls")],
             [String(d.denied ?? 0), t("egress.denied")],
             [String(d.hosts ?? 0), t("egress.hosts")],
-            [String(bs.broker ?? 0), "Broker"],
-            [String(bs.firewall ?? 0), "Firewall"],
+            [String(bs.broker ?? 0), t("egress.broker")],
+            [String(bs.firewall ?? 0), t("egress.firewall")],
           ],
         });
         const rows = recs.map((r) => [
@@ -8512,30 +8480,31 @@
         if (!c) return "Cron";
         if (c.title || c.message) return c.title || c.message;
         if (previewAction && c.action) return firstLine(c.action, 96);
-        return "Cron " + shortId(c.id);
+        return t("crons.cron") + " " + shortId(c.id);
       }
       function wakeOriginLabel(trigger) {
         switch (String(trigger || "").toLowerCase()) {
           case "cron":
             return "Cron";
           case "monitor":
-            return "Monitor wake";
+            return t("crons.monitorWake");
           case "webhook":
-            return "Webhook wake";
+            return t("crons.webhookWake");
           default:
-            return "Background wake";
+            return t("crons.backgroundWake");
         }
-      }
-      function plural(n, one, many = one + "s") {
-        return `${Number(n || 0).toLocaleString()} ${Number(n || 0) === 1 ? one : many}`;
       }
       function historyCategory(kind) {
         return kind === "cron" || kind === "background" ? "background" : kind;
       }
 
-      const KIND_LABEL = { conversation: "Conversations", cron: "Crons", background: "Background" };
+      const KIND_LABEL_KEY = {
+        conversation: "history.conversations",
+        cron: "view.crons",
+        background: "history.background",
+      };
       function historyModeLabel(kind) {
-        return KIND_LABEL[kind] || KIND_LABEL.conversation;
+        return t(KIND_LABEL_KEY[kind] || KIND_LABEL_KEY.conversation);
       }
       function historyKindMatches(s, kind) {
         if (kind === "conversation") return s.category !== "background";
@@ -8591,16 +8560,13 @@
         if (minute != null && hour != null && dom.any && months.any) {
           const suffix = hour < 12 ? "AM" : "PM";
           const time = (hour % 12 || 12) + ":" + String(minute).padStart(2, "0") + " " + suffix;
-          const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-          const full = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
-          if (dow.any) return "daily " + time;
-          if (dow.values.join(",") === "1,2,3,4,5") return "weekdays " + time;
-          return (
-            (dow.values.length === 1 ? full[dow.values[0]] : dow.values.map((d) => days[d]).join(", ")) + " " + time
-          );
+          const days = Array.from({ length: 7 }, (_, day) => t("crons.day" + day));
+          if (dow.any) return t("crons.dailyAt", { time });
+          if (dow.values.join(",") === "1,2,3,4,5") return t("crons.weekdaysAt", { time });
+          return t("crons.daysAt", { days: dow.values.map((day) => days[day]).join(", "), time });
         }
         if (minute != null && hours.any && dom.any && months.any && dow.any)
-          return minute === 0 ? "hourly" : "hourly at :" + String(minute).padStart(2, "0");
+          return minute === 0 ? t("crons.hourly") : t("crons.hourlyAt", { minute: String(minute).padStart(2, "0") });
         return "cron " + clean;
       }
       function fmtSchedule(sch) {
@@ -8609,12 +8575,12 @@
           const label = humanCron(sch.cron);
           return (
             label +
-            (sch.timezone ? " (" + sch.timezone + ")" : " (default timezone)") +
+            (sch.timezone ? " (" + sch.timezone + ")" : " (" + t("crons.defaultTimezone") + ")") +
             (label === "cron " + sch.cron ? "" : " · " + sch.cron)
           );
         }
         if (sch.everyMs != null) return shortSchedule(sch);
-        return sch.firstFireAt ? "once at " + fmtTime(sch.firstFireAt) : "—";
+        return sch.firstFireAt ? t("crons.onceAt", { time: fmtTime(sch.firstFireAt) }) : "—";
       }
 
       function shortSchedule(sch) {
@@ -8631,27 +8597,30 @@
             [1000, "s"],
           ];
           for (const [n, u] of units)
-            if (sch.everyMs >= n && sch.everyMs % n === 0) return "every " + sch.everyMs / n + u;
-          return "every " + sch.everyMs + " ms";
+            if (sch.everyMs >= n && sch.everyMs % n === 0) return t("crons.every", { interval: sch.everyMs / n + u });
+          return t("crons.every", { interval: sch.everyMs + " ms" });
         }
-        return sch.firstFireAt ? "once" : "—";
+        return sch.firstFireAt ? t("crons.once") : "—";
       }
       function destinationSummary(dest) {
-        if (!dest) return "None";
-        return (dest.type || "destination") + " -> " + (dest.target || "-");
+        if (!dest) return t("state.none");
+        return t("crons.destinationSummary", {
+          type: dest.type || t("common.destination"),
+          target: dest.target || "-",
+        });
       }
       function destinationDetails(dest) {
-        if (!dest) return "No delivery destination";
+        if (!dest) return t("crons.noneDestination");
         const bits = [];
         if (dest.audienceScopeId) bits.push(dest.audienceScopeId);
-        if (dest.onBehalfOf) bits.push("on behalf of " + dest.onBehalfOf);
+        if (dest.onBehalfOf) bits.push(t("crons.onBehalfOfSummary", { principal: dest.onBehalfOf }));
         return bits.join(" / ");
       }
       async function saveCronDestination(id, destination) {
         const path = "/api/crons/" + encodeURIComponent(id) + "/destination?scope=" + encodeURIComponent(scope);
         const r = await api("PUT", path, { destination });
         if (!r.ok) {
-          alert(r.data?.message || "Could not update destination.");
+          alert(r.data?.message || t("crons.updateDestinationFailed"));
           return false;
         }
         dataCache.clear();
@@ -8718,7 +8687,8 @@
         onBehalfOf.value = c.destination?.onBehalfOf || "";
         oboWrap.appendChild(onBehalfOf);
         function syncPlaceholders() {
-          target.placeholder = type.value === "principal" ? "principal id" : "Slack channel/thread id";
+          target.placeholder =
+            type.value === "principal" ? t("crons.principalPlaceholder") : t("crons.slackTargetPlaceholder");
           audienceScopeId.placeholder = type.value === "principal" ? "personal:U123" : "channel:C123";
           onBehalfOf.disabled = type.value !== "principal";
         }
@@ -8810,7 +8780,7 @@
           scopeWrap.appendChild(
             scopeIndexList(allCrons, {
               latestOf: lastRun,
-              noun: "cron",
+              countLabel: (count) => t("crons.count", { count: count.toLocaleString() }),
               empty: t("crons.noCrons"),
               extra: { cron: null },
             }),
@@ -8840,7 +8810,7 @@
                   },
                   title: shortName(scope),
                 }),
-            count: plural(crons.length, "cron"),
+            count: t("crons.count", { count: crons.length.toLocaleString() }),
             stats: [...(disabled ? [[disabled, "disabled"]] : []), ...(archived ? [[archived, "archived"]] : [])],
           },
           placeholder: index ? t("crons.searchAll") : t("crons.search"),
@@ -8910,12 +8880,12 @@
           (destinationDetails(c.destination) && c.destination ? " · " + destinationDetails(c.destination) : "");
         root.appendChild(
           factList([
-            ["Schedule", fmtSchedule(c.schedule)],
-            ["Destination", dest],
-            ["Owner", c.owner || c.createdBy || "—"],
-            ["Status", cronStatusText(c)],
-            ["Created", fmtTime(c.createdAt)],
-            ["Last fired", c.lastFiredAt ? relTime(c.lastFiredAt) : "never fired"],
+            [t("crons.schedule"), fmtSchedule(c.schedule)],
+            [t("common.destination"), dest],
+            [t("common.owner"), c.owner || c.createdBy || "—"],
+            [t("common.status"), cronStatusText(c)],
+            [t("common.created"), fmtTime(c.createdAt)],
+            [t("crons.lastFired"), c.lastFiredAt ? relTime(c.lastFiredAt) : t("crons.neverFired")],
             ["Id", c.id],
           ]),
         );
@@ -8926,22 +8896,19 @@
         if (prompt)
           root.appendChild(
             dataCard(
-              c.action ? "Prompt" : "Message",
-              c.action ? "Re-run as a fresh prompt at every fire." : "Delivered as-is at every fire.",
+              c.action ? t("crons.prompt") : t("crons.message"),
+              c.action ? t("crons.promptBody") : t("crons.messageBody"),
               clampedPrompt(prompt),
             ),
           );
         const firesWrap = document.createElement("div");
         firesWrap.appendChild(
-          Object.assign(document.createElement("div"), { className: "loadingline", textContent: "Loading fires..." }),
+          Object.assign(document.createElement("div"), {
+            className: "loadingline",
+            textContent: t("crons.loadingFires"),
+          }),
         );
-        root.appendChild(
-          dataCard(
-            "Recent fires",
-            "Each fire is a session — click one to read its transcript. Dimmed fires delivered nothing.",
-            firesWrap,
-          ),
-        );
+        root.appendChild(dataCard(t("crons.recentFires"), t("crons.recentFiresBody"), firesWrap));
         renderCronFires(firesWrap, c, cronId);
       }
       async function renderCronFires(container, c, cronId) {
@@ -8954,40 +8921,48 @@
           container.appendChild(
             Object.assign(document.createElement("p"), {
               className: "empty",
-              textContent: r.data?.message || `Failed to load fires (${r.status}).`,
+              textContent: r.data?.message || t("crons.loadFiresFailed", { status: r.status }),
             }),
           );
           return;
         }
         const fires = r.data.sessions || [];
-        const t = denseList(
+        const list = denseList(
           fires,
           (s) => {
             let delivery = "";
             if (typeof s.delivered === "number") {
-              delivery = "silent";
-              if (s.delivered) delivery = "delivered" + (s.delivered > 1 ? " ×" + s.delivered : "");
+              delivery = t("crons.silent");
+              if (s.delivered)
+                delivery =
+                  s.delivered > 1 ? t("history.deliveredTimes", { count: s.delivered }) : t("history.delivered");
             }
             return {
               name: relTime(s.createdAt || s.lastActivity),
-              preview: [delivery, plural(s.turns || 0, "turn"), s.lastMessage || s.firstMessage || "(no messages)"]
+              preview: [
+                delivery,
+                t("history.turnCount", { count: Number(s.turns || 0).toLocaleString() }),
+                s.lastMessage || s.firstMessage || t("history.noMessages"),
+              ]
                 .filter(Boolean)
                 .join(" · "),
-              time: plural(s.messages || 0, "entry", "entries"),
+              time: t("history.entryCount", { count: Number(s.messages || 0).toLocaleString() }),
               cls: typeof s.delivered === "number" && !s.delivered ? "dim" : "",
               href: stateToUrl({ view: "history", scope: s.scopeId || scope, session: s.id }),
             };
           },
           (s) => go({ view: "history", scope: s.scopeId || scope, session: s.id }),
-          "This cron has never fired.",
+          t("crons.neverFiredBody"),
         );
-        container.appendChild(t);
+        container.appendChild(list);
         const total = r.data.total || fires.length;
         if (total > limit) {
           const more = document.createElement("button");
           more.type = "button";
           more.className = "prompt-toggle";
-          more.textContent = t("crons.allFires", { count: plural(total, "fire") });
+          more.textContent = t("crons.allFires", {
+            count: t("history.fireCount", { count: Number(total).toLocaleString() }),
+          });
           more.onclick = () =>
             go({ view: "history", scope, session: null, page: 1, historyKind: "cron", cron: cronId });
           container.appendChild(more);
@@ -8999,7 +8974,7 @@
           (a, b) => (b.lastAccessAt || b.createdAt || 0) - (a.lastAccessAt || a.createdAt || 0),
         );
         const deployments = orgOwnView() ? allDeps.filter((dep) => scopeKind(dep.ownerScopeId) === "org") : allDeps;
-        const count = deployments.length ? plural(deployments.length, "deployment") : "";
+        const count = deployments.length ? t("deployments.count", { count: deployments.length.toLocaleString() }) : "";
         const previewOf = (dep) =>
           [
             titleCase(dep.status || "unknown"),
@@ -9022,11 +8997,11 @@
         };
         const lastTouch = (dep) => dep.lastAccessAt || dep.createdAt || 0;
         const names = deployments.map((dep) => (dep.name || dep.id).toLowerCase());
-        const t = denseList(
+        const list = denseList(
           deployments,
           depRow,
           openDep,
-          index ? "No deployments yet." : "No deployments in this scope.",
+          index ? t("deployments.noneYet") : t("deployments.noneScope"),
         );
         let scopeWrap = null;
         if (index) {
@@ -9034,8 +9009,8 @@
           scopeWrap.appendChild(
             scopeIndexList(allDeps, {
               latestOf: lastTouch,
-              noun: "deployment",
-              empty: "No deployments yet.",
+              countLabel: (count) => t("deployments.count", { count: count.toLocaleString() }),
+              empty: t("deployments.noneYet"),
             }),
           );
         }
@@ -9043,12 +9018,12 @@
         noMatch.className = "empty hidden";
         noMatch.textContent = t("deployments.noMatch");
         const listWrap = document.createElement("div");
-        listWrap.append(t, noMatch);
+        listWrap.append(list, noMatch);
         wireScopeSearch({
           key: "deployments",
           indexWrap: scopeWrap,
           listWrap,
-          rows: [...t.children],
+          rows: [...list.children],
           names,
           noMatch,
           total: deployments.length,
@@ -9065,7 +9040,7 @@
             title: index ? VIEW_TITLE.deployments : shortName(scope),
             count,
           },
-          placeholder: index ? "Search all deployments…" : "Search deployments…",
+          placeholder: index ? t("deployments.searchAll") : t("deployments.search"),
         });
         const card = bareDataCard(listWrap);
         if (scopeWrap) card.querySelector(".body").prepend(scopeWrap);
@@ -9174,7 +9149,9 @@
           .sort((a, b) => lastUse(b) - lastUse(a) || (a.name || "").localeCompare(b.name || ""));
         const skills = orgOwnView() ? allSkills.filter((s) => scopeKind(s.ownerScopeId) === "org") : allSkills;
         const count =
-          skills.length.toLocaleString() + " " + t(skills.length === 1 ? "skills.skillSingular" : "skills.skillPlural") +
+          skills.length.toLocaleString() +
+          " " +
+          t(skills.length === 1 ? "skills.skillSingular" : "skills.skillPlural") +
           (index && skills.length
             ? " · " + new Set(skills.map((s) => s.ownerScopeId)).size.toLocaleString() + " " + t("common.scope")
             : "");
@@ -9194,7 +9171,7 @@
           scopeWrap.appendChild(
             scopeIndexList(allSkills, {
               latestOf: lastUse,
-              noun: t("skills.skill"),
+              countLabel: (count) => t("skills.count", { count: count.toLocaleString() }),
               empty: t("skills.none"),
             }),
           );
@@ -9463,15 +9440,9 @@
         const url = mkInput(t("skills.registerPlaceholder"));
         const adv = document.createElement("div");
         adv.className = "pack-adv hidden";
-        const ref = mkInput(
-          t("skills.refPlaceholder"),
-          t("skills.refTitle"),
-        );
+        const ref = mkInput(t("skills.refPlaceholder"), t("skills.refTitle"));
         const excl = mkInput(t("skills.excludePlaceholder"), t("skills.excludeTitle"));
-        const slug = mkInput(
-          t("skills.tokenSlugPlaceholder"),
-          t("skills.tokenSlugTitle"),
-        );
+        const slug = mkInput(t("skills.tokenSlugPlaceholder"), t("skills.tokenSlugTitle"));
         const tier = document.createElement("select");
         tier.title = t("skills.trustTier");
         for (const tierValue of ["third-party", "internal"]) {
@@ -9578,13 +9549,13 @@
             if (title) st.title = title;
           };
           if (li && li.status === "error")
-            setStatusText(t("skills.syncError", { message: li.error || t("skills.syncFailed") }), "err", li.error || "");
-          else if (s.updateAvailable)
             setStatusText(
-              t("skills.updateAvailable"),
-              "dirty",
-              t("skills.updateAvailableTitle"),
+              t("skills.syncError", { message: li.error || t("skills.syncFailed") }),
+              "err",
+              li.error || "",
             );
+          else if (s.updateAvailable)
+            setStatusText(t("skills.updateAvailable"), "dirty", t("skills.updateAvailableTitle"));
           else setStatusText(li ? t("skills.upToDate") : t("skills.notImported"), "muted", delta);
           const isTracked = s.syncMode === "tracked";
           let busy = false;
@@ -9708,9 +9679,9 @@
             chip.style.cssText =
               "display:inline-flex; align-items:center; gap:5px; padding:2px 5px 2px 9px; border:1px solid var(--border); border-radius:12px; background:var(--subtle); font-size:12px; white-space:nowrap;";
             chip.title = id;
-            const t = document.createElement("span");
-            t.textContent = labelOf(id);
-            chip.appendChild(t);
+            const label = document.createElement("span");
+            label.textContent = labelOf(id);
+            chip.appendChild(label);
             const x = document.createElement("button");
             x.type = "button";
             x.textContent = "✕";
@@ -9919,53 +9890,50 @@
         let activeFilter = "all";
 
         const REASON = {
-          all: { label: "all", tone: "muted", help: "Show every skill." },
+          all: { label: t("skills.reasonAll"), tone: "muted", help: t("skills.helpAll") },
           eligible: {
-            label: "eligible",
+            label: t("skills.reasonEligible"),
             tone: "ok",
-            help: "Eligible and not yet in the selected scope(s) — importing adds it there.",
+            help: t("skills.helpEligible"),
           },
           imported: {
-            label: "imported",
+            label: t("skills.reasonImported"),
             tone: "info",
-            help: "Already imported into the selected scope(s) — Sync refreshes them; un-index to remove.",
+            help: t("skills.helpImported"),
           },
           scope: {
-            label: "personal-scoped",
+            label: t("skills.reasonPersonal"),
             tone: "muted",
-            help: "Held back: declares a personal/owner scope, so it isn't imported as a shared pack skill.",
+            help: t("skills.helpPersonal"),
           },
-          private: { label: "private", tone: "muted", help: "Held back: marked owner-only / agent-only." },
+          private: { label: t("skills.reasonPrivate"), tone: "muted", help: t("skills.helpPrivate") },
           collision: {
-            label: "collision",
+            label: t("skills.reasonCollision"),
             tone: "muted",
-            help: "Held back: the name matches an existing platform or seed skill.",
+            help: t("skills.helpCollision"),
           },
           "binary-asset": {
-            label: "binary files",
+            label: t("skills.reasonBinary"),
             tone: "muted",
-            help: "Held back: contains binary files (import is text-only).",
+            help: t("skills.helpBinary"),
           },
           malformed: {
-            label: "malformed",
+            label: t("skills.reasonMalformed"),
             tone: "muted",
-            help: "Held back: missing or unreadable SKILL.md frontmatter.",
+            help: t("skills.helpMalformed"),
           },
         };
-        const reasonLabel = (key) => (REASON[key] ? REASON[key].label : key || "excluded");
+        const reasonLabel = (key) => (REASON[key] ? REASON[key].label : key || t("skills.reasonExcluded"));
         const rowBadge = (c) => {
           if (importedInAll(c)) {
-            const b = badge("imported", "info");
-            b.title = "Already imported into the selected scope(s): " + (c.importedScopes || []).join(", ");
+            const b = badge(t("skills.reasonImported"), "info");
+            b.title = t("skills.importedScopes", { scopes: (c.importedScopes || []).join(", ") });
             return b;
           }
           if (c.eligible) {
-            const b = badge("eligible", "ok");
+            const b = badge(t("skills.reasonEligible"), "ok");
             if (importedInSome(c))
-              b.title =
-                "Imported into " +
-                (c.importedScopes || []).join(", ") +
-                " — importing adds it to the other selected scope(s).";
+              b.title = t("skills.importedSomeScopes", { scopes: (c.importedScopes || []).join(", ") });
             return b;
           }
           const b = badge(reasonLabel(c.excludeReason), "warn");
@@ -10067,7 +10035,7 @@
               b.style.color = "#fff";
               b.style.borderColor = "var(--text)";
             }
-            b.title = (meta.help ? meta.help + " " : "") + (key === "all" ? "" : "Click to show only these.");
+            b.title = (meta.help ? meta.help + " " : "") + (key === "all" ? "" : t("skills.filterOnly"));
             b.onclick = () => {
               activeFilter = key;
               recompute();
@@ -10086,9 +10054,11 @@
           tableHolder.textContent = "";
           tableHolder.appendChild(
             table(
-              [headCb, "Skill", ""],
+              [headCb, t("skills.skill"), ""],
               rows,
-              activeFilter === "all" ? "No skills found in this pack." : "No " + reasonLabel(activeFilter) + " skills.",
+              activeFilter === "all"
+                ? t("skills.noneInPack")
+                : t("skills.noneWithReason", { reason: reasonLabel(activeFilter) }),
             ),
           );
         };
@@ -10111,7 +10081,7 @@
         };
 
         const scopeChoices = [
-          { scopeId: orgScopeId, label: "org-wide" },
+          { scopeId: orgScopeId, label: t("common.organization") },
           ...scopeRows().map((row) => ({
             scopeId: row.scopeId,
             label: row.label || dirLabel(row.scopeId) || row.scopeId,
@@ -10129,11 +10099,7 @@
           const details = document.createElement("details");
           details.style.margin = "8px 0";
           const summary = document.createElement("summary");
-          summary.textContent =
-            bundlePaths.length +
-            " shared pack file" +
-            (bundlePaths.length === 1 ? "" : "s") +
-            " (contained under a pack-owned directory)";
+          summary.textContent = t("skills.sharedPackFiles", { count: bundlePaths.length });
           const pre = document.createElement("pre");
           pre.textContent = bundlePaths.join("\n");
           pre.style.cssText =
@@ -10156,11 +10122,7 @@
         bottomImport.style.marginTop = "10px";
         box.appendChild(bottomImport);
         recompute();
-        const card = dataCard(
-          "Browse — " + s.url,
-          "Choose target scopes, then import. Eligible skills are added to every selected scope; excluded skills show why. They appear on the Skills page once imported.",
-          box,
-        );
+        const card = dataCard(t("skills.browseTitle", { url: s.url }), t("skills.browseBody"), box);
 
         card.style.position = "relative";
         const close = document.createElement("button");
@@ -10188,7 +10150,10 @@
 
         if (scopeDir) {
           pageShell({
-            back: { label: t("memory.back"), onClick: () => go({ view: "memory", scope: "org:" + orgId, session: null }) },
+            back: {
+              label: t("memory.back"),
+              onClick: () => go({ view: "memory", scope: "org:" + orgId, session: null }),
+            },
             title: orgWideView() ? t("memory.orgWide") : shortName(scope),
           });
         }
@@ -10254,10 +10219,10 @@
           );
         pageShell({
           title: VIEW_TITLE.memory,
-          count: written.length ? plural(written.length, "notebook") : "",
+          count: written.length ? t("memory.notebookCount", { count: written.length.toLocaleString() }) : "",
           context: written.length && !hasTimestamps ? t("memory.sortedBySize") : "",
         });
-        const t = denseList(
+        const list = denseList(
           scopes,
           (s) => ({
             name: scopeKind(s.scopeId) === "org" ? "org" : s.label || shortName(s.scopeId),
@@ -10272,7 +10237,7 @@
           openScope,
           t("memory.noNotebooks"),
         );
-        root.appendChild(bareDataCard(t));
+        root.appendChild(bareDataCard(list));
       }
       function renderRetention(root, d) {
         const a = d.active || {};
@@ -10281,7 +10246,7 @@
             [a.dau ?? 0, "DAU"],
             [a.wau ?? 0, "WAU"],
             [a.mau ?? 0, "MAU"],
-            [(a.stickiness ?? 0) + "%", "Stickiness (DAU/MAU)"],
+            [(a.stickiness ?? 0) + "%", t("retention.stickiness") + " (DAU/MAU)"],
           ]),
         );
         const stick = document.createElement("div");
@@ -10366,7 +10331,7 @@
           p.textContent = emptyMsg;
           return p;
         }
-        const t = document.createElement("table");
+        const tableEl = document.createElement("table");
         const thead = document.createElement("thead");
         const htr = document.createElement("tr");
         headers.forEach((h) => {
@@ -10376,7 +10341,7 @@
           htr.appendChild(th);
         });
         thead.appendChild(htr);
-        t.appendChild(thead);
+        tableEl.appendChild(thead);
         const tb = document.createElement("tbody");
         items.forEach((it) => {
           const tr = document.createElement("tr");
@@ -10387,16 +10352,11 @@
           });
           tb.appendChild(tr);
         });
-        t.appendChild(tb);
-        return tableWrap(t);
+        tableEl.appendChild(tb);
+        return tableWrap(tableEl);
       }
       async function revokeGrant(g) {
-        if (
-          !confirm(
-            t("users.revokeConfirm", { principal: g.principalId }),
-          )
-        )
-          return;
+        if (!confirm(t("users.revokeConfirm", { principal: g.principalId }))) return;
         const r = await api(
           "DELETE",
           "/api/grants/" +
@@ -10435,13 +10395,7 @@
           const p = document.createElement("p");
           p.className = "empty";
           p.textContent = t("memory.keychainUnavailable");
-          root.appendChild(
-            dataCard(
-              t("keychain.unavailable"),
-              t("keychain.unavailableBody"),
-              p,
-            ),
-          );
+          root.appendChild(dataCard(t("keychain.unavailable"), t("keychain.unavailableBody"), p));
           return;
         }
         const people = d.people || [];
@@ -10540,7 +10494,13 @@
               t("keychain.credentials"),
               t("keychain.credentialsBody"),
               table(
-                [t("common.owner"), t("keychain.credential"), t("keychain.delivery"), t("common.account"), t("common.expiry")],
+                [
+                  t("common.owner"),
+                  t("keychain.credential"),
+                  t("keychain.delivery"),
+                  t("common.account"),
+                  t("common.expiry"),
+                ],
                 filteredCreds.map((c) => [
                   nodeCell(stacked(personName(c.ownerId), c.ownerId), "mono"),
                   nodeCell(stacked(c.service, c.id), "mono"),
@@ -10562,7 +10522,14 @@
               t("keychain.grants"),
               t("keychain.grantsBody"),
               table(
-                [t("common.owner"), t("keychain.credential"), t("common.audience"), t("keychain.mode"), t("common.status"), t("common.purpose")],
+                [
+                  t("common.owner"),
+                  t("keychain.credential"),
+                  t("common.audience"),
+                  t("keychain.mode"),
+                  t("common.status"),
+                  t("common.purpose"),
+                ],
                 filteredGrants.map((g) => {
                   const [label, kind] = keychainGrantStatus(g);
                   let labelKind = "";
@@ -10590,7 +10557,14 @@
               t("keychain.asks"),
               t("keychain.asksBody"),
               table(
-                [t("common.owner"), t("common.requester"), t("keychain.credential"), t("common.scope"), t("common.status"), t("common.purpose")],
+                [
+                  t("common.owner"),
+                  t("common.requester"),
+                  t("keychain.credential"),
+                  t("common.scope"),
+                  t("common.status"),
+                  t("common.purpose"),
+                ],
                 filteredAsks.map((a) => [
                   nodeCell(stacked(personName(a.ownerId), a.ownerId), "mono"),
                   nodeCell(stacked(personName(a.requesterId), a.requesterId), "mono"),
@@ -10718,8 +10692,7 @@
           impBtn.disabled = true;
           try {
             const members = await dirMembers(v);
-            if (members.length > 1)
-              return setStatus("st-imp", t("users.multipleMatches"), "err");
+            if (members.length > 1) return setStatus("st-imp", t("users.multipleMatches"), "err");
             await openWebUiAs(members[0]?.principalId ?? v);
           } catch (e) {
             setStatus(
@@ -10732,11 +10705,7 @@
           }
         };
         impForm.append(mkField("grow", t("users.principalOrName"), impInput), impBtn);
-        const impCard = dataCard(
-          t("users.impersonate"),
-          t("users.impersonateBody"),
-          impForm,
-        );
+        const impCard = dataCard(t("users.impersonate"), t("users.impersonateBody"), impForm);
         const impSt = document.createElement("p");
         impSt.className = "status";
         impSt.id = "st-imp";
@@ -10776,12 +10745,18 @@
             ],
             t("users.noAdmins"),
           );
-          lists.appendChild(
-            dataCard(t("users.admins"), t("users.adminsBody"), admins),
-          );
+          lists.appendChild(dataCard(t("users.admins"), t("users.adminsBody"), admins));
 
           const roster = openableTable(
-            [t("common.principal"), t("common.role"), t("common.lastSeen"), t("common.sessions"), t("common.turns"), "", ""],
+            [
+              t("common.principal"),
+              t("common.role"),
+              t("common.lastSeen"),
+              t("common.sessions"),
+              t("common.turns"),
+              "",
+              "",
+            ],
             filteredUsers,
             (u) => [
               { text: u.principalId, cls: "mono" },
@@ -10815,13 +10790,7 @@
             (u) => go({ view: "user", scope, session: null, principal: u.principalId }),
             t("users.noUsers"),
           );
-          lists.appendChild(
-            dataCard(
-              t("users.users"),
-              t("users.rosterBody"),
-              roster,
-            ),
-          );
+          lists.appendChild(dataCard(t("users.users"), t("users.rosterBody"), roster));
         };
         drawLists();
       }
@@ -11006,8 +10975,8 @@
           return div;
         };
         const addText = (s, depth) => {
-          const t = s.replace(/^[\s\n]+|[\s\n]+$/g, "");
-          if (t) appendInlineMarkdown(row("xml-text", depth), unescape(t));
+          const trimmed = s.replace(/^[\s\n]+|[\s\n]+$/g, "");
+          if (trimmed) appendInlineMarkdown(row("xml-text", depth), unescape(trimmed));
         };
         const tagRe = /<\/?[A-Za-z][\w-]*(?:\s+[\w-]+(?:="[^"]*")?)*\s*\/?>/g;
         let depth = 0,
@@ -11048,26 +11017,30 @@
         return tool;
       }
       function toolStatusMeta(tool, resultPayload, hasResult) {
-        if (!hasResult) return [metaChip("pending result")];
-        if (resultPayload.blocked === "needs_approval") return [metaChip("approval needed", "danger")];
-        if (resultPayload.denied === true) return [metaChip("denied", "danger")];
-        if (resultPayload.error) return [metaChip("error", "danger")];
+        if (!hasResult) return [metaChip(t("tool.pendingResult"))];
+        if (resultPayload.blocked === "needs_approval") return [metaChip(t("tool.approvalNeeded"), "danger")];
+        if (resultPayload.denied === true) return [metaChip(t("tool.denied"), "danger")];
+        if (resultPayload.error) return [metaChip(t("tool.error"), "danger")];
         const out = [];
         if (tool === "execute" && typeof resultPayload.code === "number") {
-          out.push(metaChip("exit " + resultPayload.code, resultPayload.code === 0 ? "" : "danger"));
-          if (resultPayload.timedOut) out.push(metaChip("timed out", "danger"));
+          out.push(
+            metaChip(t("tool.exitCode", { code: resultPayload.code }), resultPayload.code === 0 ? "" : "danger"),
+          );
+          if (resultPayload.timedOut) out.push(metaChip(t("tool.timedOut"), "danger"));
         } else if (resultPayload.status) {
           const status =
             typeof resultPayload.status === "object" && resultPayload.status !== null
               ? resultPayload.status.state || resultPayload.status.status || stringify(resultPayload.status)
               : resultPayload.status;
-          out.push(metaChip(titleCase(String(status)), status === "error" || status === "failed" ? "danger" : ""));
+          out.push(metaChip(statusLabel(String(status)), status === "error" || status === "failed" ? "danger" : ""));
         } else if (typeof resultPayload.found === "boolean") {
-          out.push(metaChip(resultPayload.found ? "found" : "missing", resultPayload.found ? "" : "danger"));
+          out.push(
+            metaChip(t(resultPayload.found ? "tool.found" : "tool.missing"), resultPayload.found ? "" : "danger"),
+          );
         }
         if (typeof resultPayload.bytes === "number") out.push(metaChip(fmtBytes(resultPayload.bytes)));
         if (typeof resultPayload.count === "number")
-          out.push(metaChip(resultPayload.count + " result" + (resultPayload.count === 1 ? "" : "s")));
+          out.push(metaChip(t("tool.resultCount", { count: resultPayload.count })));
         return out;
       }
       function toolTextValue(v) {
@@ -11264,8 +11237,8 @@
           p.textContent = emptyMsg;
           return p;
         }
-        const t = document.createElement("table");
-        if (opts.className) t.className = opts.className;
+        const tableEl = document.createElement("table");
+        if (opts.className) tableEl.className = opts.className;
         if (opts.cols?.length) {
           const cg = document.createElement("colgroup");
           opts.cols.forEach((width) => {
@@ -11273,7 +11246,7 @@
             col.style.width = width;
             cg.appendChild(col);
           });
-          t.appendChild(cg);
+          tableEl.appendChild(cg);
         }
         const thead = document.createElement("thead");
         const htr = document.createElement("tr");
@@ -11284,7 +11257,7 @@
           htr.appendChild(th);
         });
         thead.appendChild(htr);
-        t.appendChild(thead);
+        tableEl.appendChild(thead);
         const tb = document.createElement("tbody");
         items.forEach((it) => {
           const tr = document.createElement("tr");
@@ -11305,8 +11278,8 @@
           });
           tb.appendChild(tr);
         });
-        t.appendChild(tb);
-        return tableWrap(t);
+        tableEl.appendChild(tb);
+        return tableWrap(tableEl);
       }
 
       function renderScopeIndex() {
@@ -11354,18 +11327,16 @@
           };
           seg.appendChild(b);
         };
-        sortOpt("human", "Human activity");
-        sortOpt("all", "All activity");
+        sortOpt("human", t("history.humanActivity"));
+        sortOpt("all", t("history.allActivity"));
         sortControl.append(sortLabel, seg);
         pageShell({
           title: VIEW_TITLE.history,
-          count: activeRows.length
-            ? activeRows.length + (activeRows.length === 1 ? " active scope" : " active scopes")
-            : "",
+          count: activeRows.length ? t("history.activeScopes", { count: activeRows.length }) : "",
           actions: [sortControl],
         });
         const activityTime = (s) => (scopeSort === "human" ? s.lastConversationActivity || 0 : s.lastActivity || 0);
-        const t = denseList(
+        const list = denseList(
           activeRows,
           (s) => {
             const preview = document.createElement("span");
@@ -11382,9 +11353,9 @@
             };
           },
           (s) => selectScope(s.scopeId),
-          rows.length ? "No conversations yet." : "No scopes yet — nobody has talked to the agent.",
+          rows.length ? t("history.noConversationsYet") : t("history.noScopes"),
         );
-        root.appendChild(bareDataCard(t));
+        root.appendChild(bareDataCard(list));
         if (quietRows.length) {
           const quiet = document.createElement("details");
           quiet.className = "history-quiet";
@@ -11438,7 +11409,7 @@
         };
         const modeLabel = historyModeLabel(historyKind);
         const modeTab = (value) => ({
-          label: KIND_LABEL[value],
+          label: historyModeLabel(value),
           count: countForMode(value) || 0,
           active: historyKind === value,
           onClick: () => go({ view: "history", scope, session: null, page: 1, historyKind: value }),
@@ -11448,19 +11419,19 @@
         if (cronSel) {
           pageShell({
             back: {
-              label: "← Crons",
+              label: t("history.backCrons"),
               onClick: () => go({ view: "history", scope, session: null, page: 1, historyKind }),
             },
             title: cronName(d.cron?.cron || sessions[0]?.origin?.cron, true),
             context: scopeKind(scope) !== "org" ? shortName(scope) : "",
-            count: plural(total, "fire"),
+            count: t("history.fireCount", { count: Number(total).toLocaleString() }),
           });
         } else {
           pageShell({
             back:
               scopeKind(scope) !== "org"
                 ? {
-                    label: "← Sessions",
+                    label: t("history.backSessions"),
                     onClick: () => go({ view: "history", scope: "org:" + orgId, session: null, page: 1, historyKind }),
                   }
                 : undefined,
@@ -11472,23 +11443,23 @@
           if (!delivered) return null;
           const chip = document.createElement("span");
           chip.className = "delivery-chip";
-          chip.textContent = label || "\u2713 delivered";
+          chip.textContent = label || t("history.delivered");
           return chip;
         };
         if (historyKind === "cron" && !cronSel) {
           const crons = d.crons || [];
-          const t = denseList(
+          const list = denseList(
             crons,
             (c) => {
               const preview = document.createElement("span");
               preview.appendChild(
                 document.createTextNode(
-                  plural(c.sessions || 0, "fire") +
+                  t("history.fireCount", { count: Number(c.sessions || 0).toLocaleString() }) +
                     (typeof c.deliveredRuns === "number"
-                      ? ` \u00b7 ${Number(c.deliveredRuns).toLocaleString()} delivered`
+                      ? " \u00b7 " + t("history.deliveredCount", { count: Number(c.deliveredRuns).toLocaleString() })
                       : "") +
-                    " \u00b7 first fired " +
-                    fmtHistoryCreated(c.createdAt, c.lastActivity),
+                    " \u00b7 " +
+                    t("history.firstFired", { time: fmtHistoryCreated(c.createdAt, c.lastActivity) }),
                 ),
               );
               return {
@@ -11502,16 +11473,16 @@
             (c) => go({ view: "history", scope, session: null, page: 1, historyKind, cron: c.cronId }),
             t("crons.noScope"),
           );
-          root.appendChild(bareDataCard(t));
+          root.appendChild(bareDataCard(list));
           return;
         }
-        const t = denseList(
+        const list = denseList(
           sessions,
           (s) => {
             const originCron = s.origin?.kind === "cron" ? s.origin.cron : null;
             const isBackground = s.category === "background";
             const background = isBackground && !cronSel;
-            let name = s.firstMessage || s.lastMessage || "(no messages yet)";
+            let name = s.firstMessage || s.lastMessage || t("history.noMessagesYet");
             if (background)
               name = originCron ? cronName(originCron, true) : s.origin?.label || typeLabel(s.kind || s.type);
             const preview = document.createElement("span");
@@ -11521,7 +11492,7 @@
             if (isBackground && typeof s.delivered === "number") {
               const autoChip = cronDeliveryChip(
                 s.delivered > 0,
-                s.delivered > 1 ? `\u2713 delivered \u00d7${s.delivered}` : undefined,
+                s.delivered > 1 ? t("history.deliveredTimes", { count: s.delivered }) : undefined,
               );
               if (autoChip) preview.appendChild(autoChip);
             }
@@ -11535,9 +11506,9 @@
             };
           },
           (s) => go({ view: "history", scope, session: s.id, historyKind }),
-          `No ${modeLabel.toLowerCase()} in this scope.`,
+          t("history.noneInScope", { mode: modeLabel.toLowerCase() }),
         );
-        root.appendChild(bareDataCard(t));
+        root.appendChild(bareDataCard(list));
         root.appendChild(
           pager(total, limit, offset, (n) =>
             go({ view: "history", scope, session: null, page: n, historyKind, cron: cronSel }),
@@ -11554,7 +11525,7 @@
             note.className = "statline";
             const toggle = document.createElement("a");
             toggle.href = "#";
-            toggle.textContent = plural(total, "error") + " logged in this scope";
+            toggle.textContent = t("history.errorsLogged", { count: Number(total).toLocaleString() });
             note.appendChild(toggle);
             errNote.appendChild(note);
             let box = null;
@@ -11565,7 +11536,7 @@
                 box = null;
                 return;
               }
-              box = errorStripBox(errs, "Most recent errors", 20, (e) => {
+              box = errorStripBox(errs, t("errors.recent"), 20, (e) => {
                 if (!e.sessionId) return null;
                 const st = { view: "history", scope, session: e.sessionId, historyKind };
                 return { href: stateToUrl(st), go: () => go(st) };
@@ -11597,18 +11568,17 @@
           end: Math.min(offset + limit, total),
           total,
         });
-        wrap.append(
-          btn(t("users.previous"), cur - 1, cur <= 1),
-          info,
-          btn(t("users.next"), cur + 1, cur >= pages),
-        );
+        wrap.append(btn(t("users.previous"), cur - 1, cur <= 1), info, btn(t("users.next"), cur + 1, cur >= pages));
         return wrap;
       }
 
       async function showUserDetail(principalId) {
         const root = $("view-data");
         root.textContent = "";
-        pageShell({ back: { label: t("users.back"), onClick: () => history.back() }, title: principalId || t("users.user") });
+        pageShell({
+          back: { label: t("users.back"), onClick: () => history.back() },
+          title: principalId || t("users.user"),
+        });
         const detail = document.createElement("div");
         detail.className = "detail";
         detail.textContent = t("common.loadingEllipsis");
@@ -11660,7 +11630,10 @@
               nodeCell(stacked(latest, started, "history-conversation"), "history-conversation-cell"),
               historyScopeCell(s.scopeId),
               nodeCell(
-                stacked(plural(s.userTurns || 0, "turn"), plural(s.messages || 0, "entry", "entries")),
+                stacked(
+                  t("history.turnCount", { count: Number(s.userTurns || 0).toLocaleString() }),
+                  t("history.entryCount", { count: Number(s.messages || 0).toLocaleString() }),
+                ),
                 "num history-volume-cell",
               ),
               nodeCell(
@@ -11677,13 +11650,7 @@
           t("users.noConversations"),
           { className: "history-table", cols: ["52%", "18%", "10%", "20%"] },
         );
-        detail.appendChild(
-          dataCard(
-            t("users.recentConversations"),
-            t("users.recentConversationsBody"),
-            convTable,
-          ),
-        );
+        detail.appendChild(dataCard(t("users.recentConversations"), t("users.recentConversationsBody"), convTable));
 
         const files = d.files || [];
         const fileRows = files.map((f) => [
@@ -11737,12 +11704,12 @@
         const cronRows = crons.map((c) => [
           nodeCell(
             stacked(
-              c.title || c.action || c.message || "(empty)",
+              c.title || c.action || c.message || t("state.empty"),
               c.title ? c.action || c.message || shortId(c.id) : shortId(c.id),
             ),
           ),
           { text: fmtSchedule(c.schedule), cls: "num" },
-          { text: c.lastFiredAt ? fmtTime(c.lastFiredAt) : "never", cls: "num" },
+          { text: c.lastFiredAt ? fmtTime(c.lastFiredAt) : t("common.never"), cls: "num" },
           nodeCell(mutedText(cronStatusText(c))),
         ]);
         detail.appendChild(
@@ -11778,9 +11745,7 @@
                   t("users.customSoul"),
                   {
                     node: mutedText(
-                      cfg.hasSoul
-                        ? t("users.setVersion", { version: cfg.soulVersion || 1 })
-                        : t("users.default"),
+                      cfg.hasSoul ? t("users.setVersion", { version: cfg.soulVersion || 1 }) : t("users.default"),
                     ),
                   },
                 ],
@@ -11793,9 +11758,7 @@
                 [t("users.securityPosture"), cfg.securityPosture || "auto"],
                 [
                   t("users.egressOverrides"),
-                  allowN || denyN
-                    ? t("users.egressSummary", { allow: allowN, deny: denyN })
-                    : t("state.none"),
+                  allowN || denyN ? t("users.egressSummary", { allow: allowN, deny: denyN }) : t("state.none"),
                 ],
                 [t("users.baseModel"), cfg.baseModel || t("users.orgDefault")],
                 [t("users.connectorsLinked"), String((cfg.connectors || []).length)],
@@ -11830,8 +11793,7 @@
               return;
             }
             paintOb(r.data?.status || status);
-            obHint.textContent =
-              status === "not_started" ? t("users.resetOnboardingSaved") : t("users.statusSaved");
+            obHint.textContent = status === "not_started" ? t("users.resetOnboardingSaved") : t("users.statusSaved");
           } catch {
             obHint.textContent = t("common.networkError");
           } finally {
@@ -11861,10 +11823,7 @@
         const resetHint = document.createElement("p");
         resetHint.className = "hint";
         resetBtn.onclick = async () => {
-          if (
-            !confirm(t("users.deleteDmConfirm"))
-          )
-            return;
+          if (!confirm(t("users.deleteDmConfirm"))) return;
           resetBtn.disabled = true;
           obButtons.forEach((b) => (b.disabled = true));
           resetHint.textContent = t("users.resetting");
@@ -11887,13 +11846,7 @@
         obDivider.className = "obdivider";
         paintOb(d.onboarding || "not_started");
         obWrap.append(obStatusRow, obActions, obHint, obDivider, resetBtn, resetHint);
-        detail.appendChild(
-          dataCard(
-            t("users.onboarding"),
-            t("users.onboardingBody"),
-            obWrap,
-          ),
-        );
+        detail.appendChild(dataCard(t("users.onboarding"), t("users.onboardingBody"), obWrap));
 
         const cfgCard = dataCard(t("users.configuration"), t("users.configurationBody"), cfgWrap);
         const manage = document.createElement("button");
@@ -11908,7 +11861,10 @@
       async function showContextPage(sessionId, turnSeq) {
         const root = $("view-data");
         root.textContent = "";
-        pageShell({ back: { label: t("history.backTranscript"), onClick: () => history.back() }, title: t("history.sentToModel") });
+        pageShell({
+          back: { label: t("history.backTranscript"), onClick: () => history.back() },
+          title: t("history.sentToModel"),
+        });
         const detail = document.createElement("div");
         detail.className = "detail";
         detail.textContent = t("common.loadingEllipsis");
@@ -12379,9 +12335,7 @@
         const r = await api("GET", path);
         if (reqId !== slackReq || view !== "slack") return;
         if (!r.ok)
-          return void root.appendChild(
-            emptyPara(r.data?.message || t("slack.searchFailed", { status: r.status })),
-          );
+          return void root.appendChild(emptyPara(r.data?.message || t("slack.searchFailed", { status: r.status })));
         const messages = r.data.messages || [];
         if (!messages.length) return void root.appendChild(emptyPara(t("slack.noMatches")));
         const list = document.createElement("div");
@@ -12450,9 +12404,7 @@
           search: slackSearchBox(container),
           actions: [
             navLink(t("slack.judgments"), { view: "judgments", container }),
-            ...(scopeGo
-              ? [navLink(t("slack.governance"), { view: "governance", scope: scopeGo, session: null })]
-              : []),
+            ...(scopeGo ? [navLink(t("slack.governance"), { view: "governance", scope: scopeGo, session: null })] : []),
           ],
         });
         const loading = document.createElement("div");
@@ -12471,9 +12423,7 @@
         let r = await fetchPage(null);
         if (!r.ok) {
           root.textContent = "";
-          return void root.appendChild(
-            emptyPara(r.data?.message || t("slack.failedStatus", { status: r.status })),
-          );
+          return void root.appendChild(emptyPara(r.data?.message || t("slack.failedStatus", { status: r.status })));
         }
         let messages = r.data.messages || [];
         let hasMore = !!r.data.hasMore;
@@ -12779,10 +12729,7 @@
         box.className = "judg-prompt";
         const pre = document.createElement("pre");
         pre.textContent =
-          j.prompt ||
-          (j.decision === "fastlane"
-            ? t("judgments.formalMention")
-            : "(prompt not recorded)");
+          j.prompt || (j.decision === "fastlane" ? t("judgments.formalMention") : t("judgments.promptNotRecorded"));
         box.appendChild(pre);
         wrap.appendChild(box);
         return wrap;
@@ -12803,9 +12750,7 @@
         if (view !== "judgments" || urlToState().jid !== st.jid) return;
         detail.textContent = "";
         if (!r.ok)
-          return void detail.appendChild(
-            emptyPara(r.data?.message || t("slack.failedStatus", { status: r.status })),
-          );
+          return void detail.appendChild(emptyPara(r.data?.message || t("slack.failedStatus", { status: r.status })));
         const j = r.data.judgment;
         const scopeGo = slackContainerScope(j.container);
         pageShell({
@@ -12914,9 +12859,7 @@
         if (!r.ok)
           return void root.appendChild(
             emptyPara(
-              r.status === 403
-                ? t("ack.readDenied")
-                : r.data?.message || t("slack.failedStatus", { status: r.status }),
+              r.status === 403 ? t("ack.readDenied") : r.data?.message || t("slack.failedStatus", { status: r.status }),
             ),
           );
         const counts = r.data.counts || { picked: 0, declined: 0 };
@@ -12993,9 +12936,7 @@
         if (view !== "ackemoji" || urlToState().jid !== st.jid) return;
         detail.textContent = "";
         if (!r.ok)
-          return void detail.appendChild(
-            emptyPara(r.data?.message || t("slack.failedStatus", { status: r.status })),
-          );
+          return void detail.appendChild(emptyPara(r.data?.message || t("slack.failedStatus", { status: r.status })));
         const p = r.data.pick;
         const href = judgmentSlackHref(r.data.workspaceUrl, p.channel, p.ts);
         pageShell({
@@ -13362,8 +13303,8 @@
             let timingSegs = null;
             if (callEntry && resultEntry) {
               timingSegs = [
-                [durBySeq.get(callEntry.seq), "model"],
-                [(resultEntry.createdAt || 0) - (callEntry.createdAt || 0), "exec"],
+                [durBySeq.get(callEntry.seq), t("context.modelDuration")],
+                [(resultEntry.createdAt || 0) - (callEntry.createdAt || 0), t("context.executionDuration")],
               ];
             } else {
               timingSegs = [[durBySeq.get((callEntry || resultEntry)?.seq)]];
@@ -13420,8 +13361,8 @@
           const timingSegs =
             callEntry && resultEntry
               ? [
-                  [durBySeq.get(callEntry.seq), "model"],
-                  [(resultEntry.createdAt || 0) - (callEntry.createdAt || 0), "exec"],
+                  [durBySeq.get(callEntry.seq), t("context.modelDuration")],
+                  [(resultEntry.createdAt || 0) - (callEntry.createdAt || 0), t("context.executionDuration")],
                 ]
               : [[durBySeq.get((callEntry || resultEntry)?.seq)]];
           const timing = stepDurEl(timingSegs);
@@ -13771,11 +13712,11 @@
         return n ? Math.max(1, Math.round(n / 4)) : 0;
       }
       function fmtTokens(n) {
-        if (!n) return "0 tokens";
-        if (n < 20) return "< 20 tokens";
-        if (n < 1000) return n.toLocaleString() + " tokens";
-        if (n < 1000000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k tokens";
-        return (n / 1000000).toFixed(1) + "m tokens";
+        if (!n) return t("context.tokens", { count: 0 });
+        if (n < 20) return t("context.tokensUnder", { count: 20 });
+        if (n < 1000) return t("context.tokens", { count: n.toLocaleString() });
+        if (n < 1000000) return t("context.tokens", { count: (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" });
+        return t("context.tokens", { count: (n / 1000000).toFixed(1) + "m" });
       }
 
       function blockText(o) {
@@ -13823,12 +13764,18 @@
         let out = "",
           cacheSplit = false;
         system.forEach((b, i) => {
-          const t = b && typeof b === "object" && typeof b.text === "string" ? b.text : blockText(b);
-          out += (i ? "\n" : "") + t;
+          const text = b && typeof b === "object" && typeof b.text === "string" ? b.text : blockText(b);
+          out += (i ? "\n" : "") + text;
           const cc = b && typeof b === "object" ? b.cache_control : null;
           if (cc) {
             const ttl = cc && typeof cc === "object" && cc.ttl ? " " + cc.ttl : "";
-            out += "\n\n────── cache breakpoint (" + ((cc && cc.type) || "ephemeral") + ttl + ") ──────\n";
+            out +=
+              "\n\n────── " +
+              t("context.cacheBreakpoint") +
+              " (" +
+              ((cc && cc.type) || "ephemeral") +
+              ttl +
+              ") ──────\n";
             cacheSplit = true;
           }
         });
@@ -13841,10 +13788,7 @@
         const h = transport.headers;
         if (h && typeof h === "object") for (const [k, v] of Object.entries(h)) lines.push(k + ": " + v);
         if (!lines.length) return "";
-        return (
-          lines.join("\n") +
-          "\n\n(auth + anthropic-version headers are added by the provider SDK below the capture point, so they aren't shown)"
-        );
+        return lines.join("\n") + "\n\n(" + t("context.transportCaptureNote") + ")";
       }
       function contextSections(request, transport) {
         const req = request && typeof request === "object" ? request : {};
@@ -13855,29 +13799,34 @@
         }
         const sys = systemToText(req.system);
         const sections = [
-          { key: "transport", label: "Transport", note: "model + headers", text: transportText(transport) },
+          {
+            key: "transport",
+            label: t("context.transport"),
+            note: t("context.transportNote"),
+            text: transportText(transport),
+          },
           {
             key: "system",
-            label: "System prompt",
-            note: sys.cacheSplit ? "verbatim · cache split shown" : "verbatim",
+            label: t("context.systemPrompt"),
+            note: sys.cacheSplit ? t("context.verbatimCache") : t("context.verbatim"),
             text: sys.text,
           },
           {
             key: "messages",
-            label: "Messages",
-            note: messages.length + " message" + (messages.length === 1 ? "" : "s"),
+            label: t("context.messages"),
+            note: t("context.messageCount", { count: messages.length }),
             text: messages.map(messageEntryText).join("\n\n"),
           },
           {
             key: "tools",
-            label: "Tool schemas",
-            note: Array.isArray(req.tools) ? req.tools.length + " tool" + (req.tools.length === 1 ? "" : "s") : "tools",
+            label: t("context.toolSchemas"),
+            note: Array.isArray(req.tools) ? t("context.toolCount", { count: req.tools.length }) : t("context.tools"),
             text: req.tools == null ? "" : stringify(req.tools),
           },
           {
             key: "params",
-            label: "Request params",
-            note: Object.keys(params).length + " field" + (Object.keys(params).length === 1 ? "" : "s"),
+            label: t("context.requestParams"),
+            note: t("context.fieldCount", { count: Object.keys(params).length }),
             text: Object.keys(params).length ? stringify(params) : "",
           },
         ].filter((s) => s.text);
@@ -13896,7 +13845,7 @@
         const meta = document.createElement("span");
         meta.textContent = fmtTokens(section.tokens) + (section.note ? " · " + section.note : "");
         const pre = document.createElement("pre");
-        pre.textContent = section.text || "(empty)";
+        pre.textContent = section.text || t("state.empty");
         head.append(title, meta);
         wrap.append(head, pre);
         return wrap;
@@ -13994,8 +13943,8 @@
         if (!u) return [];
         const ratio = cacheHitRatio(u);
         const miss = isStablePrefixMiss(u);
-        const out = [metaChip("cache " + (ratio === null ? "—" : fmtPct(ratio)), miss ? "danger" : "")];
-        if (miss) out.push(metaChip("stable-prefix miss", "danger"));
+        const out = [metaChip(t("context.cache") + " " + (ratio === null ? "—" : fmtPct(ratio)), miss ? "danger" : "")];
+        if (miss) out.push(metaChip(t("context.stablePrefixMiss"), "danger"));
         return out;
       }
 
@@ -14026,7 +13975,7 @@
         });
         return el;
       }
-      function rawJsonLink(requests, label = "Raw JSON") {
+      function rawJsonLink(requests, label = t("common.rawJson")) {
         const a = document.createElement("a");
         a.className = "context-raw";
         let payload;
@@ -14079,7 +14028,7 @@
           note.textContent = t("history.payloadTruncated");
           wrap.appendChild(note);
         }
-        const renderedOverview = contextOverview(sections, "request context", (section, button, buttons) => {
+        const renderedOverview = contextOverview(sections, t("context.requestContext"), (section, button, buttons) => {
           showContextSection(selection, buttons, section, button);
         });
         selectButtons.push(...renderedOverview.buttons);
@@ -14104,8 +14053,8 @@
           const open = !block.classList.contains("collapsed");
           tog.textContent = open ? "▾" : "▸";
           tog.setAttribute("aria-expanded", String(open));
-          tog.setAttribute("aria-label", open ? "Collapse model context" : "Expand model context");
-          tog.title = open ? "Collapse model context" : "Expand model context";
+          tog.setAttribute("aria-label", open ? t("context.collapse") : t("context.expand"));
+          tog.title = open ? t("context.collapse") : t("context.expand");
         };
         tog.onclick = () => {
           block.classList.toggle("collapsed");
@@ -14150,11 +14099,11 @@
             time: fmtBytes(f.size || 0) + " · " + relTime(f.createdAt),
           }),
           downloadFile,
-          "No documents saved yet.",
+          t("files.noDocuments"),
         );
         const noMatch = document.createElement("p");
         noMatch.className = "empty hidden";
-        noMatch.textContent = capped ? "No files match — only the newest 2,000 are searched." : "No files match.";
+        noMatch.textContent = capped ? t("files.noMatchCapped") : t("files.noMatch");
 
         let scopeWrap = null;
         if (index) {
@@ -14162,8 +14111,8 @@
           scopeWrap.appendChild(
             scopeIndexList(all, {
               latestOf: (f) => f.createdAt || 0,
-              noun: "file",
-              empty: "No documents saved yet.",
+              countLabel: (count) => t("files.count", { count: count.toLocaleString() }),
+              empty: t("files.noDocuments"),
             }),
           );
           if (capped) {
@@ -14188,14 +14137,16 @@
               ? {}
               : {
                   back: {
-                    label: "← Files",
+                    label: "← " + t("view.files"),
                     onClick: () => go({ view: "files", scope: "org:" + orgId, own: null, session: null, page: 1 }),
                   },
                 }),
             title: index ? VIEW_TITLE.files : shortName(scope),
-            count: files.length ? plural(files.length, "file") + (capped ? ", newest shown" : "") : "",
+            count: files.length
+              ? t("files.count", { count: files.length.toLocaleString() }) + (capped ? t("files.newestShown") : "")
+              : "",
           },
-          placeholder: index ? "Search all files…" : "Search files…",
+          placeholder: index ? t("files.searchAll") : t("files.search"),
         });
         root.appendChild(fileUploadBox());
         const card = bareDataCard(fileWrap);
@@ -14227,7 +14178,7 @@
         if (!f.openable) return;
         const check = await api("GET", "/api/files/read?id=" + encodeURIComponent(f.id));
         if (!check.ok) {
-          alert(check.data?.message || `Couldn't open file (${check.status}).`);
+          alert(check.data?.message || t("files.openFailed", { status: check.status }));
           return;
         }
         const href = API_BASE + "/api/files/download?id=" + encodeURIComponent(f.id);
@@ -14251,14 +14202,14 @@
         const done = runs.filter((r) => r.status === "done").length;
         root.appendChild(
           kpis([
-            [d.active ?? 0, "Active now"],
-            [runs.length, "Recent runs"],
-            [failed, "Failed"],
-            [done, "Done"],
+            [d.active ?? 0, t("live.activeNow")],
+            [runs.length, t("live.recentRuns")],
+            [failed, t("state.failed")],
+            [done, t("state.done")],
           ]),
         );
         const rows = runs.map((r) => [
-          { node: stacked("Run " + shortId(r.id), r.threadRef || "no thread"), cls: "mono" },
+          { node: stacked(t("live.run") + " " + shortId(r.id), r.threadRef || t("live.noThread")), cls: "mono" },
           nodeCell(statusBadge(r.status)),
           r.sessionScope ? scopeCell(r.sessionScope) : { text: "-", cls: "mono" },
           nodeCell(typeBadge(r.sessionType)),
@@ -14278,9 +14229,19 @@
         root.appendChild(
           bareDataCard(
             table(
-              ["Run", "Status", "Scope", "Type", "Attempts", "Worker", "Duration", "Lease", "Started"],
+              [
+                t("live.run"),
+                t("common.status"),
+                t("common.scope"),
+                t("common.type"),
+                t("live.attempts"),
+                t("live.worker"),
+                t("live.duration"),
+                t("live.lease"),
+                t("live.started"),
+              ],
               rows,
-              "No runs.",
+              t("live.noRuns"),
             ),
           ),
         );
