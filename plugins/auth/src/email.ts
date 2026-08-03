@@ -71,9 +71,11 @@ export function mailerFor(cfg: AuthConfig): Mailer {
   return cfg.transport === "smtp" ? smtpMailer(cfg) : resendMailer(cfg);
 }
 
-function encodeHeader(value: string): string {
-  const clean = value.replace(/[\r\n]+/g, " ").trim();
-  if (/^[\x20-\x7E]*$/.test(clean)) return clean;
+function sanitizedHeader(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function encodeWords(clean: string): string {
   const chunks: string[] = [];
   let chunk = "";
   let bytes = 0;
@@ -91,6 +93,16 @@ function encodeHeader(value: string): string {
   return chunks.map((part) => `=?UTF-8?B?${Buffer.from(part, "utf8").toString("base64")}?=`).join("\r\n ");
 }
 
+function encodeHeader(value: string): string {
+  const clean = sanitizedHeader(value);
+  return /^[\x20-\x7E]*$/.test(clean) ? clean : encodeWords(clean);
+}
+
+function encodeSubject(value: string): string {
+  const clean = sanitizedHeader(value);
+  return /^[\x20-\x7E]*$/.test(clean) && clean.length <= 69 ? clean : encodeWords(clean);
+}
+
 function base64Body(value: string): string {
   return (
     Buffer.from(value.replace(/\r?\n/g, "\r\n"), "utf8")
@@ -105,7 +117,7 @@ export function renderMessage(cfg: AuthConfig, message: OutgoingEmail, nowMs = D
   const headers = [
     `From: ${encodeHeader(cfg.emailFrom)}`,
     `To: ${encodeHeader(message.to)}`,
-    `Subject: ${encodeHeader(message.subject)}`,
+    `Subject: ${encodeSubject(message.subject)}`,
     `Date: ${new Date(nowMs).toUTCString()}`,
     `Message-ID: <${randomBytes(16).toString("hex")}@${domain}>`,
     "MIME-Version: 1.0",
