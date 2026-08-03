@@ -51,6 +51,7 @@ class FakeElement {
   type = "";
   className = "";
   placeholder = "";
+  title = "";
   min = "";
   step = "";
   spellcheck = false;
@@ -71,6 +72,10 @@ class FakeElement {
 
   querySelector(): FakeElement {
     return new FakeElement();
+  }
+
+  querySelectorAll(): FakeElement[] {
+    return [];
   }
 
   remove(): void {}
@@ -433,6 +438,91 @@ test("Japanese keychain and skill renderers localize fallback copy and counts", 
       personCounts: ["number:ja-JP", "number:ja-JP", "number:ja-JP"],
       purpose: "目的 | 使用者 U2",
       askPurpose: "別目的 | 申請 A1",
+    },
+  );
+});
+
+test("Japanese skills renderer formats every visible sync count", async () => {
+  const context = createRuntime("ja", "en-US");
+  const packRows: unknown[][] = [];
+  const pack = {
+    id: "pack-1",
+    url: "https://github.com/acme/skills.git",
+    trustTier: "internal",
+    syncMode: "pinned",
+    available: 12345,
+    importedCount: 12345,
+    lastImport: {
+      status: "ok",
+      counts: { imported: 12345, updated: 12345, skipped: 12345, archived: 12345 },
+    },
+  };
+  Object.assign(context, { __pack: pack, __packRows: packRows });
+  vm.runInContext(
+    `view = "skills";
+     scope = "org:acme";
+     globalThis.orgWideView = () => true;
+     globalThis.orgOwnView = () => false;
+     globalThis.groupSkillsByIdentity = () => [];
+     globalThis.scopeIndexList = () => document.createElement("div");
+     globalThis.openableTable = () => document.createElement("table");
+     globalThis.wireScopeSearch = () => {};
+     globalThis.bareDataCard = (value) => value;
+     globalThis.table = (_headers, rows) => {
+       globalThis.__packRows.push(...rows);
+       return document.createElement("table");
+     };
+     globalThis.closeOvMenus = () => {};
+     globalThis.browsePack = () => {};
+     globalThis.dataCache = { clear() {} };
+     globalThis.renderData = () => {};
+     globalThis.setTimeout = () => 0;
+     globalThis.api = async (method) =>
+       method === "POST"
+         ? {
+             ok: true,
+             data: {
+               imported: Array(12345).fill("new"),
+               updated: Array(12345).fill("updated"),
+               archived: Array(12345).fill("archived")
+             }
+           }
+         : { ok: false, data: {} };`,
+    context,
+  );
+  vm.runInContext(
+    `${functionSource("packRepoLabel")}
+     ${functionSource("overflowMenu")}
+     ${functionSource("renderPacksSection")}
+     globalThis.fillPacksSection = (holder) => {
+       renderPacksSection(holder, [globalThis.__pack]);
+     };
+     ${functionSource("renderSkills")}
+     globalThis.__renderSkills = renderSkills;`,
+    context,
+  );
+  const root = new FakeElement();
+  Object.assign(context, { __root: root });
+  vm.runInContext("__renderSkills(__root, { skills: [] })", context);
+  const packNode = (packRows[0]?.[0] as { node?: FakeElement })?.node;
+  const statusNode = (packRows[0]?.[3] as { node?: FakeElement })?.node;
+  const menuWrap = (packRows[0]?.[4] as { node?: FakeElement })?.node;
+  const syncButton = menuWrap?.children[1]?.children.find((button) => button.textContent === "今すぐ同期");
+  assert.ok(syncButton, "sync action rendered");
+  (syncButton as unknown as { onclick(event: { stopPropagation(): void }): void }).onclick({ stopPropagation() {} });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(
+    {
+      packTitle: packNode?.title,
+      lastSync: statusNode?.title,
+      immediateSync: statusNode?.textContent,
+    },
+    {
+      packTitle:
+        "https://github.com/acme/skills.git\n最終同期: 新規number:ja-JP件、更新number:ja-JP件、スキップnumber:ja-JP件、削除number:ja-JP件",
+      lastSync: "最終同期: 新規number:ja-JP件、更新number:ja-JP件、スキップnumber:ja-JP件、削除number:ja-JP件",
+      immediateSync: "✓ 新規number:ja-JP件、更新number:ja-JP件、削除number:ja-JP件",
     },
   );
 });

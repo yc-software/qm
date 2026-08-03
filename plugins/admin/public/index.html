@@ -9521,9 +9521,9 @@
           const c = (li && li.counts) || {};
           const delta = li
             ? t("skills.lastSync", {
-                new: c.imported || 0,
-                updated: c.updated || 0,
-                skipped: c.skipped || 0,
+                new: fmtNumber(c.imported || 0),
+                updated: fmtNumber(c.updated || 0),
+                skipped: fmtNumber(c.skipped || 0),
                 removed: c.archived ? t("skills.removedSuffix", { count: fmtNumber(c.archived) }) : "",
               })
             : "";
@@ -9596,7 +9596,7 @@
                 setStatusText(
                   n || u || a
                     ? t("skills.syncResult", {
-                        new: n,
+                        new: fmtNumber(n),
                         updated: u ? t("skills.updatedSuffix", { count: fmtNumber(u) }) : "",
                         removed: a ? t("skills.removedSuffix", { count: fmtNumber(a) }) : "",
                       })
