@@ -1110,7 +1110,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   async function sendSteer(agent: Agent): Promise<void> {
     const text = composerState.draft.trim();
-    if (!text || !ctx.chat.hasLiveRun()) return;
+    if (!text) return;
     if (ctx.chat.state.threadRef) bumpSessionActivity(ctx.chat.state.threadRef);
     clearActiveDraft();
     composerState.draft = "";
@@ -1123,6 +1123,18 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     } as unknown as AgentMessage);
     ctx.chat.drawActiveChat(agent);
     clearComposerDom(agent);
+    if (!ctx.chat.hasLiveRun()) {
+      // The turn is between run states: submitted but /api/turn hasn't returned the
+      // run id yet, or the stream is tearing down. Dropping the message here is a
+      // silent no-op the user reads as a dead composer — hold it and deliver when
+      // the run slot settles (steer the live run, or resend as an ordinary prompt).
+      steerWhenLive(agent, text, 0);
+      return;
+    }
+    await deliverSteer(agent, text);
+  }
+
+  async function deliverSteer(agent: Agent, text: string): Promise<void> {
     try {
       const outcome = await ctx.chat.signalLiveRun("steer", text);
       if (!outcome.ok) recoverEndedRunSteer(agent, text, outcome);
@@ -1130,6 +1142,32 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       composerState.error = errMessage(err, "Could not steer the running task.");
       ctx.chat.drawActiveChat(agent);
     }
+  }
+
+  function steerWhenLive(agent: Agent, text: string, attempt: number): void {
+    if (agent !== ctx.chat.state.agent) return;
+    if (ctx.chat.hasLiveRun()) {
+      void deliverSteer(agent, text);
+      return;
+    }
+    if (!agent.state.isStreaming) {
+      // The run ended without the slot ever going live — recover exactly like a
+      // steer that raced the run's end: resend the text as an ordinary prompt.
+      recoverEndedRunSteer(agent, text, {});
+      return;
+    }
+    if (attempt < 40) {
+      window.setTimeout(() => steerWhenLive(agent, text, attempt + 1), 250);
+      return;
+    }
+    const last = agent.state.messages[agent.state.messages.length - 1] as
+      { role?: string; content?: unknown } | undefined;
+    if (last?.role === "user" && last.content === text) agent.state.messages.pop();
+    // Don't clobber anything typed while the message was held: put the held text
+    // back in front of the newer draft instead of overwriting it.
+    composerState.draft = composerState.draft.trim() ? `${text}\n\n${composerState.draft}` : text;
+    composerState.error = "Could not deliver the message — the running task never settled. It is back in the composer.";
+    ctx.chat.drawActiveChat(agent);
   }
 
   // The run ended before the steer landed (the client believed it was still live).
