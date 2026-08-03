@@ -118,6 +118,15 @@ const UPSTREAMS: Record<string, string> = {
 };
 const COOKIE_FOR: Record<string, string> = { "web-ui": "webuiuser", admin: "admin" };
 
+function isSlackIssuer(issuer: string): boolean {
+  try {
+    const host = new URL(issuer).hostname;
+    return host === "slack.com" || host.endsWith(".slack.com");
+  } catch {
+    return false;
+  }
+}
+
 const OIDC: OidcConfig = {
   authEndpoint: process.env.OIDC_AUTH_ENDPOINT ?? "https://slack.com/openid/connect/authorize",
   tokenEndpoint: process.env.OIDC_TOKEN_ENDPOINT ?? "https://slack.com/api/openid.connect.token",
@@ -1260,7 +1269,7 @@ export function bootChecks(): void {
     if (OIDC.expectedTeamId !== undefined && isMissingOrPlaceholder(OIDC.expectedTeamId)) {
       problems.push("PORTAL_EXPECTED_TEAM_ID is optional, but may not be a placeholder when configured");
     }
-    if (OIDC.issuer !== "https://slack.com" && !OIDC_JWKS_CONFIGURED) {
+    if (!isSlackIssuer(OIDC.issuer) && !OIDC_JWKS_CONFIGURED) {
       problems.push("OIDC_JWKS_URI is required for a non-Slack issuer");
     }
     if (SESSION_SECRET && CORE_SIGNING_SECRET && SESSION_SECRET === CORE_SIGNING_SECRET) {

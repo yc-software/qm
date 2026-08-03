@@ -84,6 +84,25 @@ test("apiUrl must be an http(s) origin URL; the trailing slash is stripped", () 
   }
 });
 
+test("publicUrl must be an http(s) origin URL on every target", () => {
+  withConfig({ publicUrl: "https://acme.example/" }, ({ path }) =>
+    assert.equal(loadConfigAt(path).config.publicUrl, "https://acme.example"),
+  );
+  for (const publicUrl of [
+    "",
+    "not a url",
+    "ftp://acme.example",
+    "https://acme.example/subpath",
+    "https://acme.example?x=1",
+    "https://user:pw@acme.example",
+    "https://acme.example.",
+  ]) {
+    withConfig({ publicUrl }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /"publicUrl" must be a non-empty http\(s\) origin URL/),
+    );
+  }
+});
+
 test("basePort must be a positive integer", () => {
   withConfig({ basePort: 9000 }, ({ path }) => assert.equal(loadConfigAt(path).config.basePort, 9000));
   withConfig({ basePort: -1 }, ({ path }) => assert.throws(() => loadConfigAt(path), /basePort/));
