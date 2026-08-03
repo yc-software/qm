@@ -107,6 +107,11 @@ const en = {
   "chat.couldNotFork": "Could not fork the conversation.",
   "chat.couldNotApprove": "Could not send the approval.",
   "chat.couldNotReconnect": "Could not reconnect to the running task.",
+  "chat.welcome":
+    "Hi — I'm your AI teammate 👋\n\nI run tasks on a computer of my own and work across your connected tools — Slack, Google Workspace, GitHub, Linear, and the open web — and I remember what we work on together.\n\nWant to get set up? Tell me your name and what you're working on, and I'll take it from there — or just ask me anything to dive straight in.",
+  "chat.noActiveRun": "No active run to signal.",
+  "chat.runFailed": "The agent run failed.",
+  "chat.runTimedOut": "Timed out waiting for the agent to respond.",
   "chat.connectorAccount": "your account",
   "chat.connectorConnected": "Connected {name}",
   "chat.connectorAuthorized": "Authorized — its tools work here now",
@@ -220,6 +225,7 @@ const en = {
   "approval.triggeredBy": "Triggered by",
   "approval.showCommand": "Show full command",
   "approval.deny": "Deny",
+  "approval.deniedStatus": "Denied.",
   "approval.allowOnce": "Allow once",
   "approval.allowSession": "Allow for session",
   "approval.allowAlways": "Allow always",
@@ -500,6 +506,8 @@ const en = {
     "To change the schedule, timezone, destination, or run mode, use the agent so it can validate the resulting behavior and permissions.",
   "cron.editHint.message":
     "To change the message, schedule, timezone, destination, or run mode, use the agent so it can validate the resulting behavior and permissions.",
+  "cron.agentDraft":
+    'Set up a cron for me: {task}\n\n(Sent from the web UI\'s New-cron pane — create it now with your scheduling API, use a calendar schedule with timezone for daily/weekly/monthly timing, give it a 2-5 word title naming what the cron is for and distinctive in a list, like "Gmail unread digest" or "GitLab CI watch" — not the command and not a generic word, and confirm what you created.)',
   "file.upload": "Upload",
   "file.download": "Download",
   "file.open": "Open",
@@ -1030,6 +1038,11 @@ const ja: Record<keyof typeof en, string> = {
   "chat.couldNotFork": "会話を分岐できませんでした。",
   "chat.couldNotApprove": "承認を送信できませんでした。",
   "chat.couldNotReconnect": "実行中のタスクに再接続できませんでした。",
+  "chat.welcome":
+    "こんにちは。AIチームメイトです 👋\n\n専用のコンピューターでタスクを実行し、連携したSlack、Google Workspace、GitHub、Linear、Webを横断して作業します。一緒に取り組んだ内容も覚えています。\n\nまず設定しますか？お名前と取り組んでいることを教えてください。あとは私が進めます。すぐに始めたい場合は、そのまま何でも依頼してください。",
+  "chat.noActiveRun": "操作できる実行中のタスクはありません。",
+  "chat.runFailed": "エージェントの実行に失敗しました。",
+  "chat.runTimedOut": "エージェントの応答を待機中にタイムアウトしました。",
   "chat.connectorAccount": "アカウント",
   "chat.connectorConnected": "{name}に接続しました",
   "chat.connectorAuthorized": "認証済みです。このチャットでツールを利用できます",
@@ -1145,6 +1158,7 @@ const ja: Record<keyof typeof en, string> = {
   "approval.triggeredBy": "該当箇所",
   "approval.showCommand": "コマンド全体を表示",
   "approval.deny": "拒否",
+  "approval.deniedStatus": "承認を拒否しました。",
   "approval.allowOnce": "今回のみ許可",
   "approval.allowSession": "このセッションで許可",
   "approval.allowAlways": "常に許可",
@@ -1425,6 +1439,8 @@ const ja: Record<keyof typeof en, string> = {
     "スケジュール、タイムゾーン、送信先、実行方法を変更するには、エージェントを使ってください。動作と権限を確認したうえで変更します。",
   "cron.editHint.message":
     "メッセージ、スケジュール、タイムゾーン、送信先、実行方法を変更するには、エージェントを使ってください。動作と権限を確認したうえで変更します。",
+  "cron.agentDraft":
+    "次の定期実行を設定してください: {task}\n\n（Web UIの「定期実行を作成」画面から送信されました。スケジュールAPIを使って今すぐ作成してください。毎日・毎週・毎月の実行にはタイムゾーン付きのカレンダースケジュールを使用してください。タイトルは、一覧で見分けられるように定期実行の目的を表す2〜5語にしてください。例:「Gmail未読まとめ」「GitLab CI監視」。コマンドそのものや「タスク」のような一般的な語は避け、作成内容を最後に確認してください。）",
   "file.upload": "アップロード",
   "file.download": "ダウンロード",
   "file.open": "開く",
@@ -1840,7 +1856,7 @@ const ja: Record<keyof typeof en, string> = {
   "deployment.dismissNotification": "通知を閉じる",
   "deployment.couldNotOpenLive": "公開中のアプリを開けませんでした。",
   "deployment.noLiveUrl": "このアプリの公開URLがありません。",
-  "deployment.agentDraft": "Deploy an app for me. ",
+  "deployment.agentDraft": "アプリを公開してください。 ",
   "deployment.failedLoad": "アプリの読み込みに失敗しました。",
   "deployment.emptyYours": "自分のアプリはありません。",
   "deployment.emptyShared": "共有されているアプリはありません。",

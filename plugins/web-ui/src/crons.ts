@@ -780,7 +780,5 @@ function onCreateCron(e: Event): void {
     return;
   }
   newChat();
-  void chatState.agent?.prompt(
-    `Set up a cron for me: ${text}\n\n(Sent from the web UI's New-cron pane — create it now with your scheduling API, use a calendar schedule with timezone for daily/weekly/monthly timing, give it a 2-5 word title naming what the cron is for and distinctive in a list, like "Gmail unread digest" or "GitLab CI watch" — not the command and not a generic word, and confirm what you created.)`,
-  );
+  void chatState.agent?.prompt(t("cron.agentDraft", { task: text }));
 }

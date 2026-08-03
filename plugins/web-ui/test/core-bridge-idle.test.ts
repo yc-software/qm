@@ -2,10 +2,12 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { AssistantMessage, Model, Api } from "@earendil-works/pi-ai";
+import { JSDOM } from "jsdom";
 import {
   makeRunResumeStreamFn,
   pollRun,
   setClock,
+  signalLiveRun,
   RUN_IDLE_MS,
   type Acc,
   type AssistantWork,
@@ -39,6 +41,18 @@ function freshAcc(t0: number): Acc {
 
 function drain(stream: ReturnType<typeof createAssistantMessageEventStream>): Promise<AssistantMessage> {
   return stream.result();
+}
+
+function setPageLocale(selected: "en" | "ja"): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: new JSDOM(`<meta name="qm-locale" content="${selected}">`).window.document,
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, "document", descriptor);
+    else delete (globalThis as { document?: Document }).document;
+  };
 }
 
 const realFetch = globalThis.fetch;
@@ -124,6 +138,63 @@ test("the idle deadline DOES fire after the idle window with no progress", async
 
   assert.equal(final.stopReason, "error", "a silent run past the idle window fails");
   assert.equal(final.errorMessage, "Timed out waiting for the agent to respond.");
+});
+
+test("the idle timeout uses the selected language", async () => {
+  const restore = setPageLocale("ja");
+  try {
+    let clock = 2_000_000;
+    setClock(() => clock);
+    instantSleep();
+    stubRuns([{ status: "running", result: null, partial: "stuck" }]);
+    const realF = globalThis.fetch;
+    let polls = 0;
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      polls++;
+      if (polls >= 2) clock += RUN_IDLE_MS + 1;
+      return realF(...args);
+    }) as typeof fetch;
+    const stream = createAssistantMessageEventStream();
+    const partial = blankAssistant();
+    const st = freshAcc(clock);
+    st.acc = "stuck";
+
+    await pollRun(stream, partial, "run-ja-timeout", st);
+    const final = await drain(stream);
+
+    assert.equal(final.errorMessage, "エージェントの応答を待機中にタイムアウトしました。");
+  } finally {
+    restore();
+  }
+});
+
+test("bridge status fallbacks use the selected language", async () => {
+  for (const row of [
+    { locale: "en", failed: "The agent run failed.", noActive: "No active run to signal." },
+    {
+      locale: "ja",
+      failed: "エージェントの実行に失敗しました。",
+      noActive: "操作できる実行中のタスクはありません。",
+    },
+  ] as const) {
+    const restore = setPageLocale(row.locale);
+    try {
+      globalThis.fetch = (async () => {
+        throw new Error("terminal snapshot should not poll");
+      }) as typeof fetch;
+      const streamFn = makeRunResumeStreamFn(`run-failed-${row.locale}`, {
+        status: "failed",
+        result: { status: "failed" },
+        partial: "",
+      });
+      const stream = await streamFn(MODEL, { systemPrompt: "", messages: [], tools: [] } as never);
+      const final = await drain(stream);
+      assert.equal(final.errorMessage, row.failed, `${row.locale} run failure`);
+      await assert.rejects(signalLiveRun("abort"), { message: row.noActive });
+    } finally {
+      restore();
+    }
+  }
 });
 
 test("a delta just before the window resets it — no premature timeout", async () => {
@@ -332,35 +403,44 @@ test("a reattached background wake that ended silent is a clean stop, never 'The
   assert.equal(work?.status, "complete");
 });
 
-test("approval denial is rendered as a normal status, not a stream error", async () => {
-  globalThis.fetch = (async () => {
-    throw new Error("approval denial terminal snapshot should not poll");
-  }) as typeof fetch;
+test("approval denial is a localized normal status with semantic denial state", async () => {
+  for (const row of [
+    { locale: "en", message: "Denied." },
+    { locale: "ja", message: "承認を拒否しました。" },
+  ] as const) {
+    const restore = setPageLocale(row.locale);
+    try {
+      globalThis.fetch = (async () => {
+        throw new Error("approval denial terminal snapshot should not poll");
+      }) as typeof fetch;
+      const streamFn = makeRunResumeStreamFn(`run-denied-${row.locale}`, {
+        status: "done",
+        result: { status: "refused", reason: "approval denied for git push --force origin main" },
+        partial: "",
+        activity: [
+          {
+            seq: 1,
+            type: "tool_call",
+            payload: { tool: "execute", command: "git push --force origin main" },
+            createdAt: 100,
+          },
+        ],
+        startedAt: 100,
+        finishedAt: 200,
+      });
+      const stream = await streamFn(MODEL, { systemPrompt: "", messages: [], tools: [] } as never);
+      const final = await drain(stream);
+      const block = final.content[0];
+      const work = (final as AssistantWork).work;
 
-  const streamFn = makeRunResumeStreamFn("run-denied", {
-    status: "done",
-    result: { status: "refused", reason: "approval denied for git push --force origin main" },
-    partial: "",
-    activity: [
-      {
-        seq: 1,
-        type: "tool_call",
-        payload: { tool: "execute", command: "git push --force origin main" },
-        createdAt: 100,
-      },
-    ],
-    startedAt: 100,
-    finishedAt: 200,
-  });
-  const stream = await streamFn(MODEL, { systemPrompt: "", messages: [], tools: [] } as never);
-  const final = await drain(stream);
-  const block = final.content[0];
-  const work = (final as AssistantWork).work;
-
-  assert.equal(final.stopReason, "stop");
-  assert.equal(final.errorMessage, undefined);
-  assert.equal((final as AssistantWork & { approvalDecision?: string }).approvalDecision, "denied");
-  assert.equal(block?.type === "text" ? block.text : "", "Denied.");
-  assert.equal(work?.status, "complete");
-  assert.equal(work?.activity.length, 1);
+      assert.equal(final.stopReason, "stop");
+      assert.equal(final.errorMessage, undefined);
+      assert.equal((final as AssistantWork & { approvalDecision?: string }).approvalDecision, "denied");
+      assert.equal(block?.type === "text" ? block.text : "", row.message, row.locale);
+      assert.equal(work?.status, "complete");
+      assert.equal(work?.activity.length, 1);
+    } finally {
+      restore();
+    }
+  }
 });

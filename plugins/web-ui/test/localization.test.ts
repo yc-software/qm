@@ -56,6 +56,11 @@ test("workspace feature controls have Japanese labels", () => {
   assert.equal(webMessage("ja", "skill.install"), "スキルを追加");
 });
 
+test("deployment chat drafts use the selected language", () => {
+  assert.equal(webMessage("en", "deployment.agentDraft"), "Deploy an app for me. ");
+  assert.equal(webMessage("ja", "deployment.agentDraft"), "アプリを公開してください。 ");
+});
+
 test("workspace localization preserves the established English navigation", () => {
   assert.equal(webMessage("en", "navigation.contexts"), "Projects");
   assert.equal(webMessage("en", "navigation.crons"), "Crons");

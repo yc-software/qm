@@ -695,13 +695,7 @@ function welcomeGreeting(): TemplateResult {
   return html`
     <article class="message-row assistant-row welcome-greeting">
       <div class="assistant-body">
-        <div class="streaming-text">
-          ${markdown(
-            "Hi — I'm your AI teammate 👋\n\n" +
-              "I run tasks on a computer of my own and work across your connected tools — Slack, Google Workspace, GitHub, Linear, and the open web — and I remember what we work on together.\n\n" +
-              "Want to get set up? Tell me your name and what you're working on, and I'll take it from there — or just ask me anything to dive straight in.",
-          )}
-        </div>
+        <div class="streaming-text">${markdown(t("chat.welcome"))}</div>
       </div>
     </article>
   `;
@@ -1025,7 +1019,7 @@ function chatMessage(message: AgentMessage, index: number, isStreaming = false):
     const work = isStreaming ? null : (msg as AssistantWork).work;
     const text = messageText(msg).trim();
     const hasText = Boolean(text);
-    const showWork = shouldShowApprovalWork(msg, work, text) && shouldShowWork(work, hasText);
+    const showWork = shouldShowApprovalWork(msg) && shouldShowWork(work, hasText);
     const deliveredFiles = (msg as AssistantWork).deliveredFiles;
     const hasVisibleContent =
       showWork ||
@@ -1279,11 +1273,8 @@ function shouldShowWork(work: WorkBlock | null | undefined, hasText: boolean): w
   return work.status === "thinking" && !hasText;
 }
 
-function shouldShowApprovalWork(message: AssistantMessage, work: WorkBlock | null | undefined, text: string): boolean {
-  if ((message as AssistantWork & { approvalDecision?: "denied" }).approvalDecision === "denied") return false;
-  if (text === "Denied." && work?.activity.some((a) => a.type === "tool_call" || a.type === "approval_request"))
-    return false;
-  return true;
+function shouldShowApprovalWork(message: AssistantMessage): boolean {
+  return (message as AssistantWork).approvalDecision !== "denied";
 }
 
 let readonlyRedraw: (() => void) | null = null;

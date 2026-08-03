@@ -245,7 +245,11 @@ export interface ApprovalDecision {
   approved: boolean;
   scope?: "once" | "session" | "always";
 }
-export type AssistantWork = AssistantMessage & { work?: WorkBlock; deliveredFiles?: DeliveredFile[] };
+export type AssistantWork = AssistantMessage & {
+  work?: WorkBlock;
+  deliveredFiles?: DeliveredFile[];
+  approvalDecision?: "denied";
+};
 
 export interface RunPoll {
   status: "pending" | "running" | "done" | "failed";
@@ -440,7 +444,7 @@ export function hasLiveRun(): boolean {
 
 export async function signalLiveRun(kind: "abort" | "steer", text?: string): Promise<void> {
   const run = liveRun;
-  if (!run) throw new Error("No active run to signal.");
+  if (!run) throw new Error(t("chat.noActiveRun"));
   await api(runPath(run.runId, "/signal"), {
     method: "POST",
     body: JSON.stringify({ kind, ...(text !== undefined ? { text } : {}) }),
@@ -739,12 +743,12 @@ function applyRun(
     return "terminal";
   }
   if (approvalDenied) {
-    (partial as AssistantWork & { approvalDecision?: "denied" }).approvalDecision = "denied";
+    (partial as AssistantWork).approvalDecision = "denied";
     finish(stream, partial, st, approvalDenied);
     return "terminal";
   }
   if (!paused && !quiet && (run.status === "failed" || (res && res.status !== "ok"))) {
-    fail(stream, partial, res?.reason ?? failureFallback ?? "The agent run failed.");
+    fail(stream, partial, res?.reason ?? failureFallback ?? t("chat.runFailed"));
     return "terminal";
   }
   finish(stream, partial, st, st.acc);
@@ -770,8 +774,7 @@ export async function pollRun(
     } catch (e) {
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) return fail(stream, partial, e.message);
       consecutiveFailures++;
-      if (now() - st.lastProgressAt > RUN_IDLE_MS)
-        return fail(stream, partial, "Timed out waiting for the agent to respond.");
+      if (now() - st.lastProgressAt > RUN_IDLE_MS) return fail(stream, partial, t("chat.runTimedOut"));
       await sleep(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), POLL_RETRY_MAX_MS));
       continue;
     }
@@ -780,8 +783,7 @@ export async function pollRun(
     else st.staleSince = undefined;
     if (run.alive === true || (st.staleSince !== undefined && now() - st.staleSince < STALE_GRACE_MS))
       st.lastProgressAt = now();
-    if (now() - st.lastProgressAt > RUN_IDLE_MS)
-      return fail(stream, partial, "Timed out waiting for the agent to respond.");
+    if (now() - st.lastProgressAt > RUN_IDLE_MS) return fail(stream, partial, t("chat.runTimedOut"));
     await sleep(POLL_MS);
   }
 }
@@ -985,8 +987,8 @@ function deliveredFilesFromAttachments(
 function approvalDeniedMessage(reason?: string): string | null {
   const trimmed = reason?.trim();
   if (!trimmed) return null;
-  if (trimmed === "approval denied") return "Denied.";
-  return trimmed.startsWith("approval denied for ") ? "Denied." : null;
+  if (trimmed === "approval denied") return t("approval.deniedStatus");
+  return trimmed.startsWith("approval denied for ") ? t("approval.deniedStatus") : null;
 }
 
 function sleep(ms: number): Promise<void> {
