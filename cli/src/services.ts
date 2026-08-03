@@ -90,9 +90,9 @@ export function orgEnv(service: string, orgId: string, publicUrl: string, hasPor
   return identity;
 }
 
-export function defaultLocaleEnv(service: string, locale: "en" | "ja"): Record<string, string> {
+export function defaultLocaleEnv(service: string, locale: "en" | "ja" | undefined): Record<string, string> {
   return service === "web-ui" || service === "admin" || service === "portal" || service === "auth"
-    ? { [DEFAULT_LOCALE_ENV]: locale }
+    ? { [DEFAULT_LOCALE_ENV]: locale ?? "en" }
     : {};
 }
 

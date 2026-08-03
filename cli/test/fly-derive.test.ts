@@ -36,6 +36,14 @@ test("Fly derives the default locale only for localized surfaces", () => {
   assert.doesNotMatch(derivedTomlFor(config, "core", repoRoot), /^\s*QM_DEFAULT_LOCALE = /m);
 });
 
+test("Fly keeps the English deployment default for configs that omit defaultLocale", () => {
+  const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
+  delete config.defaultLocale;
+  for (const service of ["web-ui", "admin", "portal"] as const) {
+    assert.match(derivedTomlFor(config, service, repoRoot), /^\s*QM_DEFAULT_LOCALE = "en"$/m);
+  }
+});
+
 const imageFromStack = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "imagefrom-stack.json");
 
 test("an imageFrom stack reuses the reference images and overrides only its own keys", () => {

@@ -152,6 +152,14 @@ test("Docker and AWS pass the default locale only to localized surfaces", () => 
   assert.equal(serviceEnvironment(aws, "core").QM_DEFAULT_LOCALE, undefined);
 });
 
+test("Docker keeps the English deployment default for configs that omit defaultLocale", () => {
+  const config = configWith(configText());
+  delete config.defaultLocale;
+  for (const service of ["web-ui", "admin", "portal", "auth"] as const) {
+    assert.equal(dockerServiceEnv(config, service).QM_DEFAULT_LOCALE, "en");
+  }
+});
+
 test("configured Japanese locale reaches every localized Docker and Fly service", () => {
   const docker = configWith(configText({ defaultLocale: "ja" }));
   for (const service of ["web-ui", "admin", "portal", "auth"] as const) {

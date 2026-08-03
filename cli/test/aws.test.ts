@@ -482,6 +482,14 @@ test("AWS derives the configured default locale only for localized surfaces", ()
   assert.equal(serviceEnvironment(japanese, "core").QM_DEFAULT_LOCALE, undefined);
 });
 
+test("AWS keeps the English deployment default for configs that omit defaultLocale", () => {
+  const legacy = { ...config };
+  delete legacy.defaultLocale;
+  for (const service of ["web-ui", "admin", "portal"] as const) {
+    assert.equal(serviceEnvironment(legacy, service).QM_DEFAULT_LOCALE, "en");
+  }
+});
+
 test("AWS omits managed locale overrides from core and plugins", () => {
   const unsafe: QmConfig = {
     ...config,

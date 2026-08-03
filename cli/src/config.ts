@@ -133,7 +133,7 @@ export interface QmConfig {
   contract: typeof CONTRACT_VERSION;
   orgId: string;
   publicUrl: string;
-  defaultLocale: "en" | "ja";
+  defaultLocale?: "en" | "ja";
   apiUrl?: string;
   target: Target;
   model?: string;
