@@ -1,0 +1,20 @@
+granola connector
+
+Hey — we're deploying QM for our consulting firm (UK healthcare / life sciences).
+We already use Granola heavily for meeting notes. It would be really useful if
+QM had a first-class Granola connector the same way Google / Slack / GitHub work
+(Admin → Connectors + Keychain per-user connect).
+
+What we'd want, roughly:
+- users connect their own Granola account from Keychain
+- agent can search / read meeting notes and transcripts in-scope for that user
+- ideally read-only to start
+
+Today we can approximate this with a sandbox skill or by piping notes into our
+own knowledge graph, but a native connector would be much cleaner for the whole
+company.
+
+Happy for you to shape the API surface however fits the existing connector
+model. Not a security report — just a product ask.
+
+— Robert (r3.digital)
