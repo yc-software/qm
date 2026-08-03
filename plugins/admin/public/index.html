@@ -2483,7 +2483,7 @@
         border-radius: 6px;
       }
       .context-page .context-selection:empty::after {
-        content: "Pick a section above to read it verbatim.";
+        content: "{{t:history.pickContextSection}}";
         color: var(--muted);
         font-size: 12px;
       }
@@ -4157,7 +4157,7 @@
                         ><span
                           class="v"
                           id="egress-effective"
-                          title="Organization and selected-scope rules; audience-specific policies may narrow this further"
+                          title="{{t:governance.effectiveRulesTitle}}"
                           >{{t:state.loading}}</span
                         >
                       </div>
@@ -4409,7 +4409,7 @@
                       <p class="hint" id="sc-form-title">{{t:credentials.add}}</p>
                       <span class="badge muted" id="sc-form-mode">{{t:state.new}}</span>
                     </div>
-                    <div class="sc-semantics" aria-label="Blank value semantics">
+                    <div class="sc-semantics" aria-label="{{t:credentials.blankSemantics}}">
                       <div>
                         <strong>{{t:credentials.blankSecret}}</strong
                         ><span id="sc-secret-semantics">{{t:credentials.blankSecretBody}}</span>
@@ -4484,11 +4484,11 @@
                         <div class="sc-broker-only" style="display: flex; gap: 10px">
                           <label style="display: block; margin-bottom: 8px; flex: 1"
                             >{{t:credentials.authHeader}} <span class="hint">{{t:credentials.authHeaderHint}}</span
-                            ><input type="text" id="sc-header" placeholder="Default: Authorization" style="width: 100%"
+                            ><input type="text" id="sc-header" placeholder="{{t:credentials.defaultAuthorization}}" style="width: 100%"
                           /></label>
                           <label style="display: block; margin-bottom: 8px; flex: 1"
                             >{{t:credentials.valuePrefix}} <span class="hint">{{t:credentials.valuePrefixHint}}</span
-                            ><input type="text" id="sc-scheme" placeholder="Default: Bearer" style="width: 100%"
+                            ><input type="text" id="sc-scheme" placeholder="{{t:credentials.defaultBearer}}" style="width: 100%"
                           /></label>
                         </div>
                         <label style="display: block; margin-bottom: 8px" class="sc-broker-only"
@@ -4532,7 +4532,7 @@
                           id="sc-people"
                           class="sc-broker-only"
                           list="sc-people-options"
-                          placeholder="Principal IDs, comma-separated"
+                          placeholder="{{t:credentials.principalIdsPlaceholder}}"
                           style="width: 100%"
                         />
                         <datalist id="sc-people-options"></datalist>
@@ -4606,7 +4606,7 @@
                     type="text"
                     id="conn-client-id"
                     autocomplete="off"
-                    placeholder="OAuth client ID"
+                    placeholder="{{t:connectors.clientIdPlaceholder}}"
                     style="width: 100%"
                 /></label>
                 <label style="display: block; margin-bottom: 8px"
@@ -4615,7 +4615,7 @@
                     type="password"
                     id="conn-client-secret"
                     autocomplete="off"
-                    placeholder="(write-only)"
+                    placeholder="{{t:credentials.writeOnlyPlaceholder}}"
                     style="width: 100%"
                 /></label>
                 <p class="field-hint" id="conn-secret-hint">
@@ -4716,7 +4716,10 @@
         { views: ["history", "slack", "judgments"] },
         { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
         { label: "System", views: ["metrics"] },
-        { label: "Admin", views: ["onboarding", "governance", "connectors", "users", "keychain", "egress", "audit"] },
+        {
+          label: "Admin",
+          views: ["onboarding", "governance", "connectors", "users", "keychain", "egress", "audit"],
+        },
         { label: "Insights", views: ["retention"] },
       ];
 
@@ -4777,7 +4780,7 @@
         document.querySelector('meta[name="brand-self-label"]')?.getAttribute("content") || "Agent";
       // The header's product name and the tab title follow the org's assistant label.
       document.getElementById("brand-product").textContent = brandSelfLabel();
-      document.title = `${brandSelfLabel()} Admin`;
+      document.title = t("adminTitle", { brand: brandSelfLabel() });
       let page = 1;
 
       const FOCUS_STALE_MS = 60000;
@@ -5618,12 +5621,12 @@
       });
 
       let scopeDir = null;
-      let scopeDirNote = "Loading scopes…";
+      let scopeDirNote = t("scope.loading");
       async function loadScopeDirectory() {
         const r = await api("GET", "/api/scopes");
         if (!r.ok) {
           scopeDirNote =
-            r.status === 403 ? "Only an org admin can list scopes." : r.data?.message || "Failed to load scopes.";
+            r.status === 403 ? t("scope.listDenied") : r.data?.message || t("scope.loadFailed");
           if (historyIsIndex()) renderScopeIndex();
           return;
         }
@@ -5747,7 +5750,8 @@
       function renderTranscriptHeaderControls(onChange) {
         const controls = $("header-controls");
         controls.textContent = "";
-        const checkbox = (label, key) => {
+        const checkbox = (labelKey, key) => {
+          const label = t(labelKey);
           const wrap = document.createElement("label");
           wrap.className = "header-check";
           const input = document.createElement("input");
@@ -5758,13 +5762,13 @@
             transcriptVisibility[key] = input.checked;
             onChange();
           };
-          const prefix = document.createElement("span");
-          prefix.className = "header-check-prefix";
-          prefix.textContent = t("common.show", { item: "" });
-          wrap.append(input, prefix, document.createTextNode(label));
+          wrap.append(input, document.createTextNode(t("common.show", { item: label })));
           return wrap;
         };
-        controls.append(checkbox("thinking", "thinking"), checkbox("tool results", "toolResults"));
+        controls.append(
+          checkbox("transcript.thinking", "thinking"),
+          checkbox("transcript.toolResults", "toolResults"),
+        );
       }
       function transcriptEntryHidden(entryTypes, hasDelivery, visibility = transcriptVisibility) {
         return (
@@ -6059,7 +6063,12 @@
         let postureTone = "ok";
         if (posture === "dangerous") postureTone = "danger";
         else if (posture === "auto") postureTone = "warn";
-        setGovernanceStatus("governance-status-posture", titleCase(posture), "Effective security posture", postureTone);
+        setGovernanceStatus(
+          "governance-status-posture",
+          titleCase(posture),
+          t("governance.effectivePosture"),
+          postureTone,
+        );
         const allowCount = (data.egress?.allowedHosts || []).length;
         const denyCount = (data.egress?.deniedHosts || []).length;
         const enforcement = data.egressEnforcement || {
@@ -6071,63 +6080,71 @@
         const policyCount = allowCount + denyCount;
         const inactiveEgressDetail =
           enforcement.reason === "control_plane_unconfigured"
-            ? "Backend supports policy; control plane inactive"
-            : "Backend cannot enforce host policy";
+            ? t("governance.backendInactive")
+            : t("governance.backendUnsupported");
         let egressDetail = inactiveEgressDetail;
         if (enforcement.active) {
           egressDetail = policyCount
-            ? plural(policyCount, "effective rule")
-            : "Policy enforced by " + enforcement.backend;
+            ? t("governance.effectiveRules", { count: policyCount })
+            : t("governance.enforcedBy", { backend: enforcement.backend });
         } else if (policyCount) {
-          egressDetail = plural(policyCount, "draft rule") + " · " + inactiveEgressDetail;
+          egressDetail = t("governance.draftRules", { count: policyCount }) + " · " + inactiveEgressDetail;
         }
         setGovernanceStatus(
           "governance-status-egress",
-          enforcement.active ? titleCase(enforcement.fidelity) + " enforced" : "Open egress",
+          enforcement.active
+            ? t("governance.enforced", { fidelity: titleCase(enforcement.fidelity) })
+            : t("governance.openEgress"),
           egressDetail,
           enforcement.active ? "ok" : "warn",
         );
         const capability = $("egress-capability");
         capability.classList.toggle("enforced", !!enforcement.active);
-        let enforcementTitle = "Policy is draft only";
-        if (enforcement.active) enforcementTitle = "Policy is enforced";
-        else if (enforcement.reason === "control_plane_unconfigured") enforcementTitle = "Enforcement is not activated";
+        let enforcementTitle = t("governance.policyDraftOnly");
+        if (enforcement.active) enforcementTitle = t("governance.policyEnforced");
+        else if (enforcement.reason === "control_plane_unconfigured")
+          enforcementTitle = t("governance.enforcementInactive");
         capability.querySelector("strong").textContent = enforcementTitle;
-        let enforcementSummary =
-          titleCase(enforcement.backend) +
-          " supports " +
-          (enforcement.declaredFidelity || enforcement.fidelity).replace("_", "-") +
-          " fidelity, which cannot enforce outbound host policy. Agents still have open outbound access.";
+        let enforcementSummary = t("governance.unsupportedSummary", {
+          backend: titleCase(enforcement.backend),
+          fidelity: (enforcement.declaredFidelity || enforcement.fidelity).replace("_", "-"),
+        });
         if (enforcement.active) {
-          enforcementSummary =
-            titleCase(enforcement.backend) +
-            " enforces this policy at " +
-            enforcement.fidelity.replace("_", "-") +
-            " fidelity.";
+          enforcementSummary = t("governance.enforcedSummary", {
+            backend: titleCase(enforcement.backend),
+            fidelity: enforcement.fidelity.replace("_", "-"),
+          });
         } else if (enforcement.reason === "control_plane_unconfigured") {
-          enforcementSummary =
-            titleCase(enforcement.backend) +
-            " supports domain policy, but the control plane cannot mint a reachable proxy token. Agents still have open outbound access.";
+          enforcementSummary = t("governance.controlPlaneSummary", {
+            backend: titleCase(enforcement.backend),
+          });
         }
         capability.querySelector("span").textContent = enforcementSummary;
-        sectionButton("egress").textContent = enforcement.active ? "Save policy" : "Save draft";
+        sectionButton("egress").textContent = enforcement.active
+          ? t("governance.savePolicy")
+          : t("governance.saveDraft");
         if ("externalSlackParticipants" in data) {
           const external = !!data.externalSlackParticipants;
           setGovernanceStatus(
             "governance-status-audience",
-            external ? "External enabled" : "Internal only",
-            external ? "Guests may see agent output" : "Organization boundary",
+            external ? t("governance.externalEnabled") : t("governance.internalOnly"),
+            external ? t("governance.guestsSeeOutput") : t("governance.organizationBoundary"),
             external ? "danger" : "ok",
           );
         } else {
-          setGovernanceStatus("governance-status-audience", "Inherited", "Resolved at organization scope", "neutral");
+          setGovernanceStatus(
+            "governance-status-audience",
+            t("governance.inherited"),
+            t("governance.resolvedOrg"),
+            "neutral",
+          );
         }
-        const model = data.baseModel || data.baseModelDefault || "Deployment default";
+        const model = data.baseModel || data.baseModelDefault || t("governance.deploymentDefault");
         const option = (data.baseModelOptions || []).find((candidate) => candidate.id === model);
         setGovernanceStatus(
           "governance-status-model",
           option?.name || model,
-          data.baseModel ? "Local override" : "Effective default",
+          data.baseModel ? t("governance.localOverride") : t("governance.effectiveDefault"),
           "neutral",
         );
       }
@@ -6155,7 +6172,7 @@
         if (!r.ok) {
           setStatus(
             "st-policy",
-            r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.",
+            r.status === 403 ? t("governance.scopeDenied") : r.data?.message || t("governance.loadFailed"),
             "err",
           );
           return;
@@ -6188,27 +6205,28 @@
         populateEgress(r.data.egress);
         const enforcement = r.data.egressEnforcement || { backend: "unknown", fidelity: "none", active: false };
         $("egress-backend").textContent = enforcement.backend;
-        let enforcementLabel = "None — rules are drafts";
+        let enforcementLabel = t("governance.rulesDraft");
         if (enforcement.active) {
-          enforcementLabel = enforcement.fidelity === "domain" ? "Domain-aware firewall" : "IP and port firewall";
+          enforcementLabel =
+            enforcement.fidelity === "domain" ? t("governance.domainFirewall") : t("governance.ipFirewall");
         }
         $("egress-enforcement").textContent = enforcementLabel;
         const effectiveEgress = r.data.egressEffective || r.data.egress || {};
         const effectiveAllowCount = (effectiveEgress.allowedHosts || []).length;
         const effectiveDenyCount = (effectiveEgress.deniedHosts || []).length;
-        let effectiveEgressLabel = "Open outbound access";
+        let effectiveEgressLabel = t("governance.openOutbound");
         if (effectiveAllowCount) {
-          effectiveEgressLabel =
-            plural(effectiveAllowCount, "allowed host") +
-            " · " +
-            plural(effectiveDenyCount, "explicitly denied host") +
-            " · deny rules first · all other hosts denied";
+          effectiveEgressLabel = t("governance.allowSummary", {
+            allowed: effectiveAllowCount,
+            denied: effectiveDenyCount,
+          });
         } else if (effectiveDenyCount) {
-          effectiveEgressLabel = plural(effectiveDenyCount, "denied host") + " · all other hosts allowed";
+          effectiveEgressLabel = t("governance.denySummary", { denied: effectiveDenyCount });
         }
         $("egress-effective").textContent = effectiveEgressLabel;
         const egressSave = sectionButton("egress");
-        if (egressSave) egressSave.textContent = enforcement.active ? "Save policy" : "Save draft";
+        if (egressSave)
+          egressSave.textContent = enforcement.active ? t("governance.savePolicy") : t("governance.saveDraft");
 
         const showExternalSlack = scope.startsWith("org:") && "externalSlackParticipants" in r.data;
         $("card-external-slack").classList.toggle("hidden", !showExternalSlack);
@@ -6480,26 +6498,30 @@
           name.textContent = c.name || c.slug;
           title.append(name, badge(c.slug, "muted"));
           const orgWide = (c.grantees || []).some((g) => g.startsWith("org:"));
-          const who = orgWide ? "Organization-wide" : plural((c.grantees || []).length, "principal");
+          const who = orgWide
+            ? t("credentials.organizationWide")
+            : t("credentials.principalCount", { count: (c.grantees || []).length });
           const meta = document.createElement("div");
           meta.className = "hint";
-          const usageWindow = c.usageCount ? " since " + fmtTime(c.usageSince) : " in retained broker history";
+          const usageWindow = c.usageCount
+            ? t("credentials.usageSince", { time: fmtTime(c.usageSince) })
+            : t("credentials.usageRetained");
           const target =
             c.delivery === "env"
-              ? "sandbox env $" + (c.envKey || "?")
+              ? t("credentials.sandboxEnv", { key: c.envKey || "?" })
               : c.host + " · " + (c.allowedMethods && c.allowedMethods.length ? c.allowedMethods.join("/") : "GET");
           meta.textContent =
             target +
             " · " +
-            (c.usageTruncated ? "at least " : "") +
-            plural(c.usageCount || 0, "successful use") +
+            (c.usageTruncated ? t("credentials.atLeast") : "") +
+            t("credentials.successfulUses", { count: c.usageCount || 0 }) +
             usageWindow;
           const badges = document.createElement("div");
           badges.className = "credential-badges";
           badges.append(
-            badge(c.delivery === "env" ? "Env" : "Broker", "info"),
-            badge(c.enabled === false ? "Disabled" : "Enabled", c.enabled === false ? "warn" : "ok"),
-            badge(c.hasSecret ? "Secret set" : "Secret missing", c.hasSecret ? "ok" : "err"),
+            badge(c.delivery === "env" ? t("credentials.env") : t("credentials.broker"), "info"),
+            badge(c.enabled === false ? t("state.disabled") : t("state.enabled"), c.enabled === false ? "warn" : "ok"),
+            badge(c.hasSecret ? t("credentials.secretSet") : t("credentials.secretMissing"), c.hasSecret ? "ok" : "err"),
             badge(who, orgWide ? "info" : "muted"),
           );
           left.append(title, meta, badges);
@@ -6539,13 +6561,15 @@
         $("sc-envkey").value = c.envKey || "";
         syncScDelivery();
         $("sc-secret").value = "";
-        $("sc-secret").placeholder = c.hasSecret ? "Stored secret retained when blank" : "Write-only secret";
+        $("sc-secret").placeholder = c.hasSecret
+          ? t("credentials.storedSecretPlaceholder")
+          : t("credentials.writeOnlyPlaceholder");
         $("sc-secret-hint").textContent = c.hasSecret
-          ? "Stored secret is set. Leave blank to keep it; enter a new value to replace it."
-          : "No stored secret yet. Enter one to make this credential usable.";
+          ? t("credentials.storedSecretHint")
+          : t("credentials.noSecretHint");
         $("sc-secret-semantics").textContent = c.hasSecret
-          ? "Keeps the stored secret unchanged."
-          : "A secret is required before saving.";
+          ? t("credentials.keepSecret")
+          : t("credentials.newSecretRequired");
         $("sc-header").value = (c.injection && c.injection.header) || "";
         $("sc-scheme").value = (c.injection && c.injection.scheme) || "";
         $("sc-methods").value = (c.allowedMethods || []).join(", ");
@@ -6579,7 +6603,7 @@
         $("sc-envkey").value = "";
         syncScDelivery();
         $("sc-secret").value = "";
-        $("sc-secret").placeholder = "(write-only)";
+        $("sc-secret").placeholder = t("credentials.writeOnlyPlaceholder");
         $("sc-secret-hint").textContent = t("credentials.secretWriteOnly");
         $("sc-secret-semantics").textContent = t("credentials.newSecretRequired");
         $("sc-header").value = "";
@@ -6606,7 +6630,9 @@
       function syncScPeople() {
         const orgWide = $("sc-share-org").checked;
         $("sc-people").disabled = orgWide;
-        $("sc-people").placeholder = orgWide ? "Organization-wide access selected" : "Principal IDs, comma-separated";
+        $("sc-people").placeholder = orgWide
+          ? t("credentials.orgAccessSelected")
+          : t("credentials.principalIdsPlaceholder");
         renderServiceCredentialCapability();
       }
       function serviceCredentialGrantees() {
@@ -6628,12 +6654,12 @@
                 if (names.length === 1) return "personal:" + names[0].principalId;
                 if (names.length > 1 || identifiers.length > 1)
                   serviceCredentialResolutionError =
-                    "\u201c" + id + "\u201d matches multiple people. Use an exact principal ID.";
+                    t("credentials.multiplePeople", { id });
                 return "personal:" + id;
               });
       }
       function serviceCredentialPrincipalLabel(grantee) {
-        if (grantee.startsWith("org:")) return "Everyone in this organization";
+        if (grantee.startsWith("org:")) return t("credentials.everyone");
         const id = grantee.startsWith("personal:") ? grantee.slice("personal:".length) : grantee;
         const member = serviceCredDirectory.find(
           (candidate) => candidate.principalId === id || candidate.slackId === id,
@@ -6654,32 +6680,35 @@
         const header = $("sc-header").value.trim() || "Authorization";
         const envDelivery = $("sc-delivery").value === "env";
         $("sc-cap-state").textContent = $("sc-enabled").checked
-          ? "Enabled"
+          ? t("credentials.enabledState")
           : envDelivery
-            ? "Disabled — never injected"
-            : "Disabled — broker requests refused";
+            ? t("credentials.disabledEnv")
+            : t("credentials.disabledBroker");
         if (envDelivery) {
           $("sc-cap-host").textContent = $("sc-envkey").value.trim()
-            ? "Sandbox env $" + $("sc-envkey").value.trim()
-            : "Env var not set";
-          $("sc-cap-auth").textContent = "Injected into all-internal conversations; rooms with externals get nothing";
+            ? t("credentials.sandboxEnv", { key: $("sc-envkey").value.trim() })
+            : t("credentials.envNotSet");
+          $("sc-cap-auth").textContent = t("credentials.envInjected");
           $("sc-cap-methods").textContent = "—";
-          $("sc-cap-paths").textContent = "Never served by the credential broker";
+          $("sc-cap-paths").textContent = t("credentials.notBrokered");
         } else {
           $("sc-cap-host").textContent = $("sc-host").value.trim()
-            ? $("sc-host").value.trim() + " and its subdomains"
-            : "Not set";
-          $("sc-cap-auth").textContent = header + " header · prefix “" + ($("sc-scheme").value || "Bearer") + "”";
+            ? t("credentials.hostAndSubdomains", { host: $("sc-host").value.trim() })
+            : t("credentials.notSet");
+          $("sc-cap-auth").textContent = t("credentials.headerPrefix", {
+            header,
+            prefix: $("sc-scheme").value || "Bearer",
+          });
           $("sc-cap-methods").textContent = (methods.length ? methods : ["GET"]).join(", ");
-          $("sc-cap-paths").textContent = paths.length ? paths.join(", ") : "Any path on this host";
+          $("sc-cap-paths").textContent = paths.length ? paths.join(", ") : t("credentials.anyPath");
         }
         $("sc-cap-principals").textContent = envDelivery
-          ? "Every all-internal conversation — grants don't gate env delivery"
-          : grantees.map(serviceCredentialPrincipalLabel).join(", ") || "No principal selected";
+          ? t("credentials.envAudience")
+          : grantees.map(serviceCredentialPrincipalLabel).join(", ") || t("credentials.noPrincipal");
         const editing = serviceCredList.find((c) => c.slug === scEditing);
-        let secretStatus = "Required before first save";
-        if ($("sc-secret").value) secretStatus = "Will replace the stored secret";
-        else if (editing?.hasSecret) secretStatus = "Stored secret retained";
+        let secretStatus = t("credentials.secretFirstSave");
+        if ($("sc-secret").value) secretStatus = t("credentials.replaceSecret");
+        else if (editing?.hasSecret) secretStatus = t("credentials.secretRetained");
         $("sc-cap-secret").textContent = secretStatus;
         const chips = $("sc-people-chips");
         chips.textContent = "";
@@ -6691,11 +6720,11 @@
             chip.textContent = label;
             if (/^(channel|group):/.test(grantee)) {
               const unsupported = document.createElement("small");
-              unsupported.textContent = "unsupported · remove before saving";
+              unsupported.textContent = t("credentials.unsupported");
               chip.appendChild(unsupported);
             } else if (label === grantee) {
               const unresolved = document.createElement("small");
-              unresolved.textContent = "unresolved";
+              unresolved.textContent = t("credentials.unresolved");
               chip.appendChild(unresolved);
             }
             chips.appendChild(chip);
@@ -6746,25 +6775,21 @@
         setScFormDirty(serviceCredentialSnapshot() !== scSnapshot);
       }
       function validateServiceCredential(body) {
-        if (!body.slug) return "Slug is required.";
-        if (!body.name) return "Name is required.";
+        if (!body.slug) return t("credentials.slugRequired");
+        if (!body.name) return t("credentials.nameRequired");
         if (body.delivery === "env") {
-          if (!body.envKey) return "Env delivery needs an env var name.";
-          if (!/^[A-Z][A-Z0-9_]*$/.test(body.envKey)) return "Env var must be UPPER_SNAKE_CASE.";
-          if (body.envKey.startsWith("AGENT_")) return "AGENT_* env vars are reserved for the platform.";
-        } else if (!body.host) return "Host is required.";
+          if (!body.envKey) return t("credentials.envNameRequired");
+          if (!/^[A-Z][A-Z0-9_]*$/.test(body.envKey)) return t("credentials.envFormat");
+          if (body.envKey.startsWith("AGENT_")) return t("credentials.envReserved");
+        } else if (!body.host) return t("credentials.hostRequired");
         if (body.delivery !== "env" && !$("sc-share-org").checked && !body.grantees.length)
-          return "Add at least one person or choose org-wide access.";
+          return t("credentials.granteeRequired");
         if (body.delivery !== "env" && serviceCredentialResolutionError) return serviceCredentialResolutionError;
         const unsupported = body.grantees.find(
           (grantee) => /^(channel|group):/.test(grantee) || /^personal:[^,]*:/.test(grantee),
         );
         if (unsupported)
-          return (
-            "Remove unsupported legacy grant \u201c" +
-            unsupported +
-            "\u201d before saving. Shared credentials support people, teams, or the organization."
-          );
+          return t("credentials.unsupportedGrant", { grant: unsupported });
         return "";
       }
       async function deleteSc(credential) {
@@ -6775,26 +6800,25 @@
         };
         const targetScope = scope;
         const principals = c.grantees.some((g) => g.startsWith("org:"))
-          ? "everyone in the organization"
+          ? t("credentials.everyone")
           : c.grantees.map(serviceCredentialPrincipalLabel).join(", ");
         const recent = c.recentUsagePrincipals.length
-          ? " Recent users in the retained window: " +
-            c.recentUsagePrincipals.map((id) => serviceCredentialPrincipalLabel("personal:" + id)).join(", ") +
-            "."
-          : " No successful use appears in the retained window.";
+          ? t("credentials.recentUsers", {
+              users: c.recentUsagePrincipals
+                .map((id) => serviceCredentialPrincipalLabel("personal:" + id))
+                .join(", "),
+            })
+          : t("credentials.noRecentUse");
         const confirmed = await reviewGovernanceChange({
-          title: "Delete “" + (c.name || c.slug) + "”?",
-          subtitle: "This credential currently grants broker access to " + principals + "." + recent,
+          title: t("credentials.deleteReviewTitle", { name: c.name || c.slug }),
+          subtitle: t("credentials.deleteReviewSubtitle", { principals, recent }),
           facts: [
-            ["Scope", governanceScopeName(targetScope)],
-            ["Credential", c.name || c.slug],
-            ["Slug", c.slug],
+            [t("common.scope"), governanceScopeName(targetScope)],
+            [t("credentials.credential"), c.name || c.slug],
+            [t("credentials.slug"), c.slug],
           ],
-          warning:
-            "Deletion immediately revokes every grant and removes the stored secret. Existing agent work that depends on “" +
-            c.slug +
-            "” will fail. This cannot be undone.",
-          confirmLabel: "Delete credential",
+          warning: t("credentials.deleteWarning", { slug: c.slug }),
+          confirmLabel: t("credentials.deleteTitle"),
           danger: true,
         });
         if (!confirmed) return;
@@ -6806,14 +6830,14 @@
         if (r.ok) {
           resetScForm();
           await loadScope();
-          setStatus("st-service-credentials", "Deleted", "ok");
+          setStatus("st-service-credentials", t("common.deleted"), "ok");
         } else {
           const conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
-          let message = r.data?.message || "Delete failed.";
+          let message = r.data?.message || t("credentials.deleteFailed");
           if (r.status === 409) {
             message = conflictState
-              ? "Credential changed; the latest state is shown. Review it before deleting."
-              : "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.";
+              ? t("credentials.deleteConflict")
+              : t("credentials.deleteConflictLoadFailed");
           }
           setStatus("st-service-credentials", message, "err");
         }
@@ -6827,7 +6851,7 @@
           return;
         }
         $("sc-save").disabled = true;
-        setStatus("st-service-credentials", "Saving...", "saving", true);
+        setStatus("st-service-credentials", t("state.saving"), "saving", true);
         let r;
         try {
           r = await api("PUT", "/api/scopes/" + encodeURIComponent(scope) + "/service-credentials", body);
@@ -6835,7 +6859,7 @@
           updateScFormDirty();
           setStatus(
             "st-service-credentials",
-            "Save failed because the admin service could not be reached. Your draft is preserved; try again.",
+            t("credentials.adminUnavailable"),
             "err",
             true,
           );
@@ -6844,7 +6868,7 @@
         if (r.ok) {
           resetScForm();
           await loadScope();
-          setStatus("st-service-credentials", "Saved", "ok");
+          setStatus("st-service-credentials", t("state.saved"), "ok");
         } else {
           let conflictState = false;
           try {
@@ -6853,25 +6877,23 @@
             updateScFormDirty();
             setStatus(
               "st-service-credentials",
-              "Save failed because the admin service could not be reached. Your draft is preserved; try again.",
+              t("credentials.adminUnavailable"),
               "err",
               true,
             );
             return;
           }
           updateScFormDirty();
-          let message = r.data?.message || "Save failed.";
+          let message = r.data?.message || t("memory.saveFailed");
           if (r.status === 403) {
-            message = "Not authorized for this scope.";
+            message = t("credentials.notAuthorized");
           } else if (r.status === 409) {
             if (conflictState === "missing") {
-              message =
-                "This credential was deleted elsewhere. Your draft is preserved, but it remains an edit and cannot recreate the credential. Cancel the edit before creating a new credential.";
+              message = t("credentials.deletedConflict");
             } else if (conflictState === "present") {
-              message = "Credential changed; latest revision loaded and your draft was preserved.";
+              message = t("credentials.changedConflict");
             } else {
-              message =
-                "Credential changed, but the latest revision could not be loaded. Your draft is preserved; refresh the page before retrying.";
+              message = t("credentials.changedConflictLoadFailed");
             }
           }
           setStatus("st-service-credentials", message, "err");
@@ -7462,7 +7484,7 @@
         del.type = "button";
         del.className = "rowbtn danger";
         del.textContent = "×";
-        del.title = "Remove this command policy rule";
+        del.title = t("governance.removeRule");
         del.setAttribute("aria-label", "Remove command policy rule");
         del.onclick = () => {
           tr.remove();
@@ -7523,8 +7545,8 @@
         const del = document.createElement("button");
         del.type = "button";
         del.className = "rowbtn danger";
-        del.textContent = "Remove";
-        del.title = "Remove this bot from the ledger";
+        del.textContent = t("action.remove");
+        del.title = t("governance.removeBot");
         del.setAttribute("aria-label", "Remove bot ledger entry");
         del.onclick = () => {
           tr.remove();
@@ -7597,7 +7619,7 @@
         const result = $("policy-result");
         if (!command.trim()) {
           result.dataset.tone = "";
-          result.textContent = "Enter a sample command first.";
+          result.textContent = t("governance.enterCommand");
           return;
         }
         let policy;
@@ -7605,12 +7627,12 @@
           policy = collectPolicy();
         } catch (err) {
           result.dataset.tone = "danger";
-          result.textContent = err instanceof Error ? err.message : "Policy is invalid.";
+          result.textContent = err instanceof Error ? err.message : t("governance.invalidPolicy");
           return;
         }
         $("policy-simulate").disabled = true;
         result.dataset.tone = "";
-        result.textContent = "Evaluating with the server’s command scanner…";
+        result.textContent = t("governance.evaluatingCommand");
         const simulateBody = { command };
         if (loadedCommandPolicyPresent || $("card-command-policy").classList.contains("dirty"))
           simulateBody.policy = policy;
@@ -7622,7 +7644,7 @@
         $("policy-simulate").disabled = false;
         if (!response.ok) {
           result.dataset.tone = "danger";
-          result.textContent = response.data?.message || "Simulation failed.";
+          result.textContent = response.data?.message || t("governance.simulationFailed");
           return;
         }
         const decision = response.data.decision;
@@ -7886,14 +7908,14 @@
           try {
             body = SAVE[key]();
           } catch (err) {
-            setStatus(SAVE_ST[key], err instanceof Error ? err.message : "Could not save.", "err");
+            setStatus(SAVE_ST[key], err instanceof Error ? err.message : t("common.saveFailed"), "err");
             return;
           }
           if (!(await governanceSaveReview(key, body)) || requestedScope !== scope) return;
           const saveRequest = String(++governanceSaveSeq);
           btn.dataset.saveRequest = saveRequest;
           btn.disabled = true;
-          setStatus(SAVE_ST[key], "Saving...", "saving", true);
+          setStatus(SAVE_ST[key], t("state.saving"), "saving", true);
           const r = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + key, body);
           if (requestedScope !== scope) {
             if (btn.dataset.saveRequest === saveRequest) {
@@ -7909,7 +7931,7 @@
               const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
               if (!fresh.ok) {
                 updateSectionDirty(key);
-                setStatus(SAVE_ST[key], "Saved, but could not refresh the applied value.", "err");
+                setStatus(SAVE_ST[key], t("common.savedRefreshFailed"), "err");
                 return;
               }
               renderGovernanceOverview(fresh.data);
@@ -7928,7 +7950,7 @@
               if (key === "command-policy") loadedCommandPolicyPresent = true;
               captureSection(key);
             }
-            setStatus(SAVE_ST[key], "Saved", "ok");
+            setStatus(SAVE_ST[key], t("state.saved"), "ok");
           } else {
             if (key === "soul" && r.status === 409) await refreshSoulConflict();
             updateSectionDirty(key);
@@ -8010,7 +8032,7 @@
           root.textContent = "";
           const loading = document.createElement("div");
           loading.className = "loadingline";
-          loading.textContent = "Loading " + (VIEW_TITLE[view] || view).toLowerCase() + "...";
+          loading.textContent = t("history.loading", { view: VIEW_TITLE[view] || view });
           root.appendChild(loading);
         }
         const r = await api("GET", path);
@@ -8054,33 +8076,33 @@
         return d;
       }
 
-      const PHASE_META = {
-        total: ["Total turn", "End-to-end wall time, request to reply"],
-        ttft: ["First token", "Time until the first streamed token"],
-        slackInflight: ["Slack pickup", "Socket receive to submit — how long the message sat in the Slack plugin"],
-        intakePreamble: ["Intake preamble", "Surface-side work before the request left for core"],
-        queue: ["Queue wait", "Waiting for a worker to claim the run"],
-        dispatch: ["Dispatch", "Surface receive to core hand-off"],
-        ingress: ["Ingress", "Core receive to model start: parse, resolve, prepare"],
-        detect: ["Reply decision", "Deciding whether to speak in a channel"],
-        compact: ["History compaction", "Compacting a long transcript before the model call"],
-        provision: ["Machine provision", "Booting or resuming the sandbox machine"],
-        materialize: ["Skills materialize", "Copying resolved skills onto the machine"],
-        creds: ["Credentials restore", "Restoring keychain credentials onto the machine"],
-        layers: ["Workspace layers", "Restoring workspace layers at provision time"],
-        compile: ["Prompt compile", "Assembling the system prompt"],
-        recall: ["Memory recall", "Injecting durable memory into the prompt"],
-        lease: ["Session lease", "Loading the session and acquiring the writer lease"],
-        exec: ["Command exec", "Commands the agent ran in the machine"],
-        stream: ["Stream + append", "Streaming tokens out and appending the turn"],
-        deliver: ["Slack deliver", "The final Slack post/update round-trip"],
-        capture: ["Memory capture", "Post-turn fact extraction, off the critical path"],
-      };
-      const phaseLabel = (key) => (PHASE_META[key] || [titleCase(key)])[0];
-      const phaseDesc = (key) => (PHASE_META[key] || [])[1] || "";
+      const PHASE_KEYS = new Set([
+        "total",
+        "ttft",
+        "slackInflight",
+        "intakePreamble",
+        "queue",
+        "dispatch",
+        "ingress",
+        "detect",
+        "compact",
+        "provision",
+        "materialize",
+        "creds",
+        "layers",
+        "compile",
+        "recall",
+        "lease",
+        "exec",
+        "stream",
+        "deliver",
+        "capture",
+      ]);
+      const phaseLabel = (key) => (PHASE_KEYS.has(key) ? t("metrics.phase." + key + ".label") : titleCase(key));
+      const phaseDesc = (key) => (PHASE_KEYS.has(key) ? t("metrics.phase." + key + ".desc") : "");
       function turnKindWords(s) {
-        if (s.provisioned === true) return s.coldStart === true ? "cold machine boot" : "warm machine";
-        if (s.provisioned === false) return "no machine";
+        if (s.provisioned === true) return s.coldStart === true ? t("metrics.coldBoot") : t("metrics.warmMachine");
+        if (s.provisioned === false) return t("metrics.noMachineShort");
         return "";
       }
       function sparkline(daily) {
@@ -8120,7 +8142,7 @@
         const phases = d.phases || [];
         root.appendChild(
           openableTable(
-            ["Phase", "p50", "p95", "p99", "Turns", "Trend"],
+            [t("metrics.phase"), "p50", "p95", "p99", t("common.turns"), t("metrics.trend")],
             phases,
             (p) => [
               nodeCell(stacked(phaseLabel(p.phase), phaseDesc(p.phase))),
@@ -8131,7 +8153,7 @@
               nodeCell(sparkline(p.daily), "num"),
             ],
             (p) => go({ view: "metrics", scope, session: null, phase: p.phase }),
-            "No turn metrics in this scope yet.",
+            t("metrics.noTurns"),
           ),
         );
         renderTurnMix(root, d);
@@ -8172,7 +8194,7 @@
         const share = (n) => (c.totalTurns ? fmtPct((n || 0) / c.totalTurns) : "—");
         const rows = [
           [
-            nodeCell(stacked("Turns that never touched a machine", "pure conversation, no tools")),
+            nodeCell(stacked(t("metrics.noMachine"), t("metrics.noMachineBody"))),
             { text: share(a.samples), cls: "num" },
             { text: String(a.samples || 0), cls: "num" },
             { text: fmtMs(a.total && a.total.p50), cls: "num" },
@@ -8182,7 +8204,7 @@
           [
             nodeCell(
               stacked(
-                "Turns that used a machine",
+                t("metrics.usedMachine"),
                 (b.warm || 0) +
                   " on a warm machine (" +
                   fmtMs(b.provisionWarm && b.provisionWarm.p50) +
@@ -8200,7 +8222,7 @@
             { text: fmtX(b.toolCalls && b.toolCalls.avg), cls: "num" },
           ],
           [
-            nodeCell(stacked("All turns", "the blended average")),
+            nodeCell(stacked(t("metrics.allTurns"), t("metrics.blendedAverage"))),
             { text: "100%", cls: "num" },
             { text: String(c.totalTurns || 0), cls: "num" },
             { text: fmtMs(c.total && c.total.p50), cls: "num" },
@@ -8210,9 +8232,20 @@
         ];
         root.appendChild(
           dataCard(
-            "Turn mix",
-            "How often turns provision a machine, and what each kind of turn costs.",
-            table(["Kind of turn", "Share", "Turns", "Median", "Model calls", "Tool calls"], rows, "No turns sampled."),
+            t("metrics.turnMix"),
+            t("metrics.turnMixBody"),
+            table(
+              [
+                t("metrics.turnKind"),
+                t("metrics.share"),
+                t("common.turns"),
+                t("metrics.median"),
+                t("metrics.modelCalls"),
+                t("metrics.toolCalls"),
+              ],
+              rows,
+              t("metrics.noTurnsSampled"),
+            ),
           ),
         );
       }
@@ -8226,7 +8259,7 @@
         if (!rows.length) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = "No samples.";
+          p.textContent = t("common.noSamples");
           return p;
         }
         const max = Math.max(...rows.map((b) => b.count), 1);
@@ -8255,14 +8288,14 @@
       function renderPhaseDrill(root, d, phaseKey) {
         const p = (d.phases || []).find((x) => x.phase === phaseKey);
         pageShell({
-          back: { label: "← Metrics", onClick: () => go({ view: "metrics", scope, session: null }) },
+          back: { label: t("metrics.back"), onClick: () => go({ view: "metrics", scope, session: null }) },
           title: phaseLabel(phaseKey),
           context: phaseDesc(phaseKey),
         });
         if (!p || !p.count) {
           const e = document.createElement("p");
           e.className = "empty";
-          e.textContent = "No " + phaseLabel(phaseKey).toLowerCase() + " samples in this scope yet.";
+          e.textContent = t("metrics.noPhaseSamples", { phase: phaseLabel(phaseKey).toLowerCase() });
           root.appendChild(e);
           return;
         }
@@ -8274,7 +8307,7 @@
             fmtMs(p.p99) + " p99",
           ]),
         );
-        root.appendChild(dataCard("Distribution", "Where the samples land.", distChart(p.dist)));
+        root.appendChild(dataCard(t("metrics.distribution"), t("metrics.distributionBody"), distChart(p.dist)));
         const dailyRows = (p.daily || [])
           .slice()
           .reverse()
@@ -8287,19 +8320,25 @@
           ]);
         root.appendChild(
           dataCard(
-            "By day",
-            "Daily percentiles (UTC).",
-            table(["Day", "Turns", "p50", "p95", "p99"], dailyRows, "No daily samples."),
+            t("metrics.byDay"),
+            t("metrics.byDayBody"),
+            table([t("metrics.day"), t("common.turns"), "p50", "p95", "p99"], dailyRows, t("metrics.noDaily")),
           ),
         );
         const linkable = (t) => !!t.sessionId;
         const anyLinkable = (p.worst || []).some(linkable);
         root.appendChild(
           dataCard(
-            "Worst recent turns",
-            anyLinkable ? "The slowest samples — each opens the turn's transcript." : "The slowest samples.",
+            t("metrics.worst"),
+            anyLinkable ? t("metrics.worstLinkedBody") : t("metrics.worstBody"),
             openableTable(
-              [phaseLabel(phaseKey), "Total turn", "Scope", "Machine", "Time"],
+              [
+                phaseLabel(phaseKey),
+                t("metrics.totalTurn"),
+                t("common.scope"),
+                t("metrics.machine"),
+                t("audit.time"),
+              ],
               p.worst || [],
               (t) => [
                 { text: fmtMs(t.ms), cls: "num" },
@@ -8317,7 +8356,7 @@
                     ...(t.turnSeq != null ? { turn: t.turnSeq } : {}),
                   });
               },
-              "No samples.",
+              t("common.noSamples"),
               { rowClassOf: (t) => (linkable(t) ? "" : "unlinkable") },
             ),
           ),
@@ -8337,9 +8376,15 @@
         root.appendChild(
           bareDataCard(
             table(
-              ["Admin", "Action", "Resource", ...(all ? ["Scope"] : []), "Time"],
+              [
+                t("section.admin"),
+                t("audit.action"),
+                t("audit.resource"),
+                ...(all ? [t("common.scope")] : []),
+                t("audit.time"),
+              ],
               rows,
-              all ? "No admin activity yet." : "No admin activity for this scope.",
+              all ? t("audit.noActivity") : t("audit.noScopeActivity"),
             ),
           ),
         );
@@ -8388,18 +8433,20 @@
           }
           const msg = document.createElement("span");
           msg.className = "mono";
-          msg.textContent = firstLine(e.message || "(no message)", 160);
+          msg.textContent = firstLine(e.message || t("errors.noMessage"), 160);
           msg.title = e.message || "";
           const meta = document.createElement("span");
           meta.className = "subline";
-          meta.textContent = [e.category || "uncategorized", e.code, relTime(e.ts)].filter(Boolean).join(" · ");
+          meta.textContent = [e.category || t("errors.uncategorized"), e.code, relTime(e.ts)]
+            .filter(Boolean)
+            .join(" · ");
           row.append(msg, meta);
           box.appendChild(row);
         });
         if (errs.length > max) {
           const more = document.createElement("div");
           more.className = "subline";
-          more.textContent = "…and " + (errs.length - max) + " more";
+          more.textContent = t("errors.more", { count: (errs.length - max).toLocaleString() });
           box.appendChild(more);
         }
         return box;
@@ -8427,9 +8474,9 @@
         const bs = d.bySource || {};
         defaultShell({
           stats: [
-            [String(d.total ?? recs.length), "Calls"],
-            [String(d.denied ?? 0), "Denied"],
-            [String(d.hosts ?? 0), "Hosts"],
+            [String(d.total ?? recs.length), t("egress.calls")],
+            [String(d.denied ?? 0), t("egress.denied")],
+            [String(d.hosts ?? 0), t("egress.hosts")],
             [String(bs.broker ?? 0), "Broker"],
             [String(bs.firewall ?? 0), "Firewall"],
           ],
@@ -8446,9 +8493,17 @@
         root.appendChild(
           bareDataCard(
             table(
-              ["Host", "Status", "Source", ...(all ? ["Scope"] : []), "Principal", "Detail", "Time"],
+              [
+                t("credentials.host"),
+                t("common.status"),
+                t("audit.source"),
+                ...(all ? [t("common.scope")] : []),
+                t("audit.principal"),
+                t("audit.detail"),
+                t("audit.time"),
+              ],
               rows,
-              "No egress in this scope yet.",
+              t("egress.noRecords"),
             ),
           ),
         );
@@ -8819,10 +8874,10 @@
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "prompt-toggle";
-        toggle.textContent = "Show more";
+        toggle.textContent = t("common.showMore");
         toggle.onclick = () => {
           const clamped = body.classList.toggle("clamped");
-          toggle.textContent = clamped ? "Show more" : "Show less";
+          toggle.textContent = clamped ? t("common.showMore") : t("common.showLess");
         };
         wrap.appendChild(toggle);
 
@@ -8986,7 +9041,7 @@
         }
         const noMatch = document.createElement("p");
         noMatch.className = "empty hidden";
-        noMatch.textContent = "No deployments match.";
+        noMatch.textContent = t("deployments.noMatch");
         const listWrap = document.createElement("div");
         listWrap.append(t, noMatch);
         wireScopeSearch({
@@ -9072,20 +9127,22 @@
 
       function skillRemoveAction(records) {
         const live = (records || []).filter((r) => r.status !== "archived");
-        if (!live.length) return badge("archived", "muted");
+        if (!live.length) return badge(t("skills.archived"), "muted");
         const rm = document.createElement("button");
         rm.type = "button";
         rm.className = "rowbtn danger";
-        rm.textContent = "Remove";
+        rm.textContent = t("action.remove");
         rm.onclick = async (e) => {
           e.stopPropagation();
-          const name = (records[0] && (records[0].name || records[0].id)) || "this skill";
-          const where =
+          const name = (records[0] && (records[0].name || records[0].id)) || t("skills.skill");
+          const prompt =
             live.length === 1
-              ? "from " + (dirLabel(live[0].ownerScopeId) || live[0].ownerScopeId)
-              : "from all " + live.length + " scopes";
-          if (!confirm("Remove '" + name + "' " + where + "? It stops being available to agents (kept for audit)."))
-            return;
+              ? t("skills.removeConfirm", {
+                  name,
+                  scope: dirLabel(live[0].ownerScopeId) || live[0].ownerScopeId,
+                })
+              : t("skills.removeManyConfirm", { name, count: live.length });
+          if (!confirm(prompt)) return;
           rm.disabled = true;
           let failed = 0;
           for (const r of live) {
@@ -9097,7 +9154,7 @@
           }
           dataCache.clear();
           renderData();
-          if (failed) alert(failed + " scope(s) could not be removed.");
+          if (failed) alert(t("skills.removeFailed", { count: failed }));
         };
         return rm;
       }
@@ -9117,16 +9174,18 @@
           .sort((a, b) => lastUse(b) - lastUse(a) || (a.name || "").localeCompare(b.name || ""));
         const skills = orgOwnView() ? allSkills.filter((s) => scopeKind(s.ownerScopeId) === "org") : allSkills;
         const count =
-          plural(skills.length, "skill") +
-          (index && skills.length ? " · " + plural(new Set(skills.map((s) => s.ownerScopeId)).size, "scope") : "");
+          skills.length.toLocaleString() + " " + t(skills.length === 1 ? "skills.skillSingular" : "skills.skillPlural") +
+          (index && skills.length
+            ? " · " + new Set(skills.map((s) => s.ownerScopeId)).size.toLocaleString() + " " + t("common.scope")
+            : "");
 
         const recordsByKey = new Map(groupSkillsByIdentity(allSkills).map((g) => [g.key, g.records]));
         const openSkill = (s) => openSkillDetail(detail, s, recordsByKey.get(skillIdentityKey(s)) || [s]);
         const names = skills.map((s) => ((s.name || s.id) + " " + (s.description || "")).toLowerCase());
         const lastUsedText = (s) => {
           if (s.lastUsedAt) return fmtHistoryTime(s.lastUsedAt);
-          if (lastUse(s)) return "never · imported " + fmtHistoryTime(lastUse(s));
-          return "never";
+          if (lastUse(s)) return t("skills.neverImported", { time: fmtHistoryTime(lastUse(s)) });
+          return t("skills.never");
         };
 
         let scopeWrap = null;
@@ -9135,13 +9194,20 @@
           scopeWrap.appendChild(
             scopeIndexList(allSkills, {
               latestOf: lastUse,
-              noun: "skill",
-              empty: "No skills yet.",
+              noun: t("skills.skill"),
+              empty: t("skills.none"),
             }),
           );
         }
-        const t = openableTable(
-          ["Skill", ...(index ? ["Scope"] : []), "Status", "Created by", "Last used", ""],
+        const skillTable = openableTable(
+          [
+            t("skills.skill"),
+            ...(index ? [t("common.scope")] : []),
+            t("common.status"),
+            t("skills.createdBy"),
+            t("skills.lastUsed"),
+            "",
+          ],
           skills,
           (s) => [
             nodeCell(stacked(s.name || s.id, s.description || shortId(s.id))),
@@ -9155,19 +9221,19 @@
             nodeCell(skillRemoveAction([s])),
           ],
           openSkill,
-          index ? "No skills yet." : "No skills in this scope.",
+          index ? t("skills.none") : t("skills.noneScope"),
           { className: "skills-table" },
         );
         const noMatch = document.createElement("p");
         noMatch.className = "empty hidden";
-        noMatch.textContent = "No skills match.";
+        noMatch.textContent = t("skills.noMatch");
         const tableWrap = document.createElement("div");
-        tableWrap.append(t, noMatch);
+        tableWrap.append(skillTable, noMatch);
         wireScopeSearch({
           key: "skills",
           indexWrap: scopeWrap,
           listWrap: tableWrap,
-          rows: [...t.querySelectorAll("tbody tr")],
+          rows: [...skillTable.querySelectorAll("tbody tr")],
           names,
           noMatch,
           total: skills.length,
@@ -9183,7 +9249,7 @@
             title: index ? VIEW_TITLE.skills : shortName(scope),
             count,
           },
-          placeholder: index ? "Search all skills…" : "Search skills…",
+          placeholder: index ? t("skills.searchAll") : t("skills.search"),
         });
         const card = bareDataCard(tableWrap);
         if (scopeWrap) card.querySelector(".body").prepend(scopeWrap);
@@ -9195,7 +9261,7 @@
         holder.textContent = "";
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Loading " + (rep.name || rep.id) + "…";
+        loading.textContent = t("skills.loading", { name: rep.name || rep.id });
         holder.appendChild(loading);
 
         const r = await api(
@@ -9206,20 +9272,26 @@
         if (!r.ok || !r.data) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = r.status === 403 ? "You don't administer this skill's scope." : "Couldn't load this skill.";
+          p.textContent = r.status === 403 ? t("skills.scopeDenied") : t("skills.loadFailed");
           holder.appendChild(p);
           return;
         }
         const k = r.data;
         const box = document.createElement("div");
-        let byFact = ["by " + (k.createdBy || "—"), "muted"];
-        if (k.pack) byFact = ["from " + (packRepoLabel(k.pack.url) || "pack " + shortId(k.pack.id, 8)), "muted"];
-        else if (k.createdBy && k.createdBy.indexOf("system:") === 0) byFact = ["built-in", "muted"];
+        let byFact = [t("skills.by", { name: k.createdBy || "—" }), "muted"];
+        if (k.pack)
+          byFact = [
+            t("skills.fromPack", {
+              pack: packRepoLabel(k.pack.url) || t("skills.packFallback", { id: shortId(k.pack.id, 8) }),
+            }),
+            "muted",
+          ];
+        else if (k.createdBy && k.createdBy.indexOf("system:") === 0) byFact = [t("skills.builtIn"), "muted"];
         const facts = [
           { node: statusBadge(k.status) },
           ["v" + k.version, "muted"],
           byFact,
-          ["skill " + shortId(k.id, 16), "muted"],
+          [t("skills.skillId", { id: shortId(k.id, 16) }), "muted"],
         ];
         box.appendChild(badgeList(facts));
         if (k.description) {
@@ -9244,59 +9316,62 @@
           ]);
         box.appendChild(
           dataCard(
-            "Scopes (" + group.length + ")",
-            "Every scope this skill is installed in. Remove takes it out of that scope only.",
-            table(["Scope", "Status", "Version", ""], detailScopeRows, "—"),
+            t("skills.scopes", { count: group.length }),
+            t("skills.scopesBody"),
+            table([t("common.scope"), t("common.status"), t("common.version"), ""], detailScopeRows, "—"),
           ),
         );
         const capRows = (k.requiredCapabilities || []).map((c) => [
           { text: c, cls: "mono" },
-          nodeCell((k.grantedCapabilities || []).includes(c) ? badge("granted", "ok") : badge("not granted", "warn")),
+          nodeCell(
+            (k.grantedCapabilities || []).includes(c)
+              ? badge(t("skills.granted"), "ok")
+              : badge(t("skills.notGranted"), "warn"),
+          ),
         ]);
         box.appendChild(
           dataCard(
-            "Capabilities",
-            "What the skill is allowed to reach. Granted at review time.",
-            table(["Capability", "Status"], capRows, "Requires no capabilities."),
+            t("skills.capabilities"),
+            t("skills.capabilitiesBody"),
+            table([t("skills.capability"), t("common.status")], capRows, t("skills.noCapabilities")),
           ),
         );
         if ((k.approvals || []).length)
           box.appendChild(
             dataCard(
-              "Approvals",
-              "Reviewers who signed off on this skill.",
+              t("skills.approvals"),
+              t("skills.approvalsBody"),
               table(
-                ["Reviewer"],
+                [t("skills.reviewer")],
                 k.approvals.map((a) => [{ text: a, cls: "mono" }]),
               ),
             ),
           );
         const pre = document.createElement("pre");
         pre.className = "skillbody";
-        pre.textContent = k.body || "(empty)";
+        pre.textContent = k.body || t("state.empty");
         pre.style.whiteSpace = "pre-wrap";
         pre.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, monospace";
         pre.style.fontSize = "12px";
         pre.style.margin = "0";
-        box.appendChild(dataCard("Instructions", "The SKILL.md the agent reads when this skill is in play.", pre));
+        box.appendChild(dataCard(t("skills.instructions"), t("skills.instructionsBody"), pre));
         holder.appendChild(dataCard(k.name || k.id, "", box));
         holder.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
 
       function skillScopeAction(g) {
-        if (g.status === "archived") return badge("archived", "muted");
+        if (g.status === "archived") return badge(t("skills.archived"), "muted");
         const rm = document.createElement("button");
         rm.type = "button";
         rm.className = "rowbtn danger";
-        rm.textContent = "Remove";
+        rm.textContent = t("action.remove");
         rm.onclick = async () => {
           if (
             !confirm(
-              "Remove '" +
-                (g.name || g.id) +
-                "' from " +
-                (dirLabel(g.ownerScopeId) || g.ownerScopeId) +
-                "? It stops being available to agents in that scope (kept for audit).",
+              t("skills.removeConfirm", {
+                name: g.name || g.id,
+                scope: dirLabel(g.ownerScopeId) || g.ownerScopeId,
+              }),
             )
           )
             return;
@@ -9308,7 +9383,7 @@
             dataCache.clear();
             renderData();
           } else {
-            alert(r.data?.message || "Failed (" + r.status + ").");
+            alert(r.data?.message || t("common.failedStatus", { status: r.status }));
           }
         };
         return rm;
@@ -9336,7 +9411,7 @@
         btn.type = "button";
         btn.className = "rowbtn";
         btn.textContent = "⋯";
-        btn.setAttribute("aria-label", "Actions");
+        btn.setAttribute("aria-label", t("skills.actions"));
         btn.setAttribute("aria-haspopup", "menu");
         btn.setAttribute("aria-expanded", "false");
         const menu = document.createElement("div");
@@ -9385,24 +9460,24 @@
         };
         const row = document.createElement("div");
         row.className = "pack-register";
-        const url = mkInput("Register a pack — paste a git repo URL of SKILL.md files, then Browse it into scopes");
+        const url = mkInput(t("skills.registerPlaceholder"));
         const adv = document.createElement("div");
         adv.className = "pack-adv hidden";
         const ref = mkInput(
-          "ref (branch or SHA)",
-          "Pin to a branch or full 40-hex commit SHA. Blank = the repo's default branch.",
+          t("skills.refPlaceholder"),
+          t("skills.refTitle"),
         );
-        const excl = mkInput("exclude globs, comma-separated", "e.g. trusted/*");
+        const excl = mkInput(t("skills.excludePlaceholder"), t("skills.excludeTitle"));
         const slug = mkInput(
-          "deploy-token slug",
-          "Private-repo deploy-token credential slug. Blank = your connected GitHub account.",
+          t("skills.tokenSlugPlaceholder"),
+          t("skills.tokenSlugTitle"),
         );
         const tier = document.createElement("select");
-        tier.title = "Trust tier";
-        for (const t of ["third-party", "internal"]) {
+        tier.title = t("skills.trustTier");
+        for (const tierValue of ["third-party", "internal"]) {
           const o = document.createElement("option");
-          o.value = t;
-          o.textContent = "trust: " + t;
+          o.value = tierValue;
+          o.textContent = t("skills.trustValue", { tier: tierValue });
           tier.appendChild(o);
         }
         adv.append(ref, excl, slug, tier);
@@ -9415,7 +9490,7 @@
           Boolean(ref.value.trim() || excl.value.trim() || slug.value.trim() || tier.value !== "third-party");
         const paintAdvToggle = () => {
           const open = !adv.classList.contains("hidden");
-          advToggle.textContent = "Advanced" + (!open && advHasValues() ? " •" : "");
+          advToggle.textContent = t("common.advanced") + (!open && advHasValues() ? " •" : "");
           advToggle.classList.toggle("open", open);
           advToggle.setAttribute("aria-expanded", String(open));
         };
@@ -9430,16 +9505,16 @@
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "primary";
-        btn.textContent = "Register";
+        btn.textContent = t("common.register");
         btn.onclick = async () => {
           if (!url.value.trim()) {
             status.className = "status err";
-            status.textContent = "A repo URL is required.";
+            status.textContent = t("skills.repoRequired");
             return;
           }
           btn.disabled = true;
           status.className = "status";
-          status.textContent = "Registering…";
+          status.textContent = t("common.registering");
           const body = { url: url.value.trim() };
           if (ref.value.trim()) body.ref = ref.value.trim();
           const ex = excl.value
@@ -9453,7 +9528,7 @@
           btn.disabled = false;
           if (!r.ok) {
             status.className = "status err";
-            status.textContent = r.data?.message || "Failed (" + r.status + ").";
+            status.textContent = r.data?.message || t("common.failedStatus", { status: r.status });
             return;
           }
           dataCache.clear();
@@ -9466,14 +9541,12 @@
           const li = s.lastImport;
           const c = (li && li.counts) || {};
           const delta = li
-            ? "last sync: " +
-              (c.imported || 0) +
-              " new · " +
-              (c.updated || 0) +
-              " updated · " +
-              (c.skipped || 0) +
-              " skipped" +
-              (c.archived ? " · " + c.archived + " removed" : "")
+            ? t("skills.lastSync", {
+                new: c.imported || 0,
+                updated: c.updated || 0,
+                skipped: c.skipped || 0,
+                removed: c.archived ? t("skills.removedSuffix", { count: c.archived }) : "",
+              })
             : "";
           const packNode = document.createElement("span");
           packNode.className = "pack-name";
@@ -9488,10 +9561,15 @@
           }
           packNode.title = s.url + (delta ? "\n" + delta : "");
           const skillsNode = document.createElement("span");
-          skillsNode.textContent = s.available != null ? (s.importedCount || 0) + " of " + s.available : "—";
+          skillsNode.textContent =
+            s.available != null
+              ? t("skills.available", { imported: s.importedCount || 0, available: s.available })
+              : "—";
           if (s.available != null)
-            skillsNode.title =
-              (s.importedCount || 0) + " imported · " + s.available + " available (eligible) in this pack";
+            skillsNode.title = t("skills.availableTitle", {
+              imported: s.importedCount || 0,
+              available: s.available,
+            });
           const st = document.createElement("span");
           st.className = "status";
           const setStatusText = (text, cls, title) => {
@@ -9500,30 +9578,33 @@
             if (title) st.title = title;
           };
           if (li && li.status === "error")
-            setStatusText("error — " + (li.error || "sync failed"), "err", li.error || "");
+            setStatusText(t("skills.syncError", { message: li.error || t("skills.syncFailed") }), "err", li.error || "");
           else if (s.updateAvailable)
             setStatusText(
-              "update available",
+              t("skills.updateAvailable"),
               "dirty",
-              "Upstream advanced past the imported commit — Sync now (or turn on Auto-sync) to apply.",
+              t("skills.updateAvailableTitle"),
             );
-          else setStatusText(li ? "up to date" : "not imported", "muted", delta);
+          else setStatusText(li ? t("skills.upToDate") : t("skills.notImported"), "muted", delta);
           const isTracked = s.syncMode === "tracked";
           let busy = false;
           const menu = overflowMenu([
-            { label: "Browse skills…", onClick: () => browsePack(s, detail) },
+            { label: t("skills.browse"), onClick: () => browsePack(s, detail) },
             {
-              label: "Sync now",
-              title:
-                "Pull the pack's latest commit and refresh already-imported skills (update changed, archive removed). Does NOT add new skills — use Browse for that.",
+              label: t("skills.syncNow"),
+              title: t("skills.syncNowTitle"),
               onClick: async () => {
                 if (busy) return;
                 busy = true;
-                setStatusText("syncing…", "saving");
+                setStatusText(t("skills.syncing"), "saving");
                 const r = await api("POST", "/api/skill-packs/" + encodeURIComponent(s.id) + "/sync", {});
                 busy = false;
                 if (!r.ok) {
-                  setStatusText("sync failed — " + (r.data?.message || r.status), "err", r.data?.message || "");
+                  setStatusText(
+                    t("skills.syncFailedDetail", { message: r.data?.message || r.status }),
+                    "err",
+                    r.data?.message || "",
+                  );
                   return;
                 }
                 const d = r.data || {};
@@ -9532,8 +9613,12 @@
                   a = (d.archived || []).length;
                 setStatusText(
                   n || u || a
-                    ? "✓ " + n + " new" + (u ? " · " + u + " updated" : "") + (a ? " · " + a + " removed" : "")
-                    : "✓ up to date",
+                    ? t("skills.syncResult", {
+                        new: n,
+                        updated: u ? t("skills.updatedSuffix", { count: u }) : "",
+                        removed: a ? t("skills.removedSuffix", { count: a }) : "",
+                      })
+                    : "✓ " + t("skills.upToDate"),
                   "ok",
                 );
                 setTimeout(() => {
@@ -9543,10 +9628,8 @@
               },
             },
             {
-              label: isTracked ? "Turn off auto-sync" : "Turn on auto-sync",
-              title: isTracked
-                ? "Auto-sync is ON — re-imports when the upstream advances."
-                : "Auto-sync is OFF — manual Sync only.",
+              label: isTracked ? t("skills.autoSyncOff") : t("skills.autoSyncOn"),
+              title: isTracked ? t("skills.autoSyncOnTitle") : t("skills.autoSyncOffTitle"),
               onClick: async () => {
                 if (busy) return;
                 busy = true;
@@ -9555,7 +9638,7 @@
                 });
                 busy = false;
                 if (!r.ok) {
-                  alert(r.data?.message || "Failed (" + r.status + ").");
+                  alert(r.data?.message || t("common.failedStatus", { status: r.status }));
                   return;
                 }
                 dataCache.clear();
@@ -9563,11 +9646,11 @@
               },
             },
             {
-              label: "Remove pack",
+              label: t("skills.removePack"),
               danger: true,
               onClick: async () => {
                 if (busy) return;
-                if (!confirm("Remove this pack and archive its imported skills?")) return;
+                if (!confirm(t("skills.removePackConfirm"))) return;
                 busy = true;
                 const r = await api("DELETE", "/api/skill-packs/" + encodeURIComponent(s.id));
                 busy = false;
@@ -9581,12 +9664,18 @@
           return [
             { node: packNode },
             { node: skillsNode, cls: "num" },
-            { text: s.trustTier + (isTracked ? " · auto-sync" : ""), cls: "subline" },
+            { text: s.trustTier + (isTracked ? " · " + t("skills.autoSync") : ""), cls: "subline" },
             { node: st },
             { node: menu, cls: "num" },
           ];
         });
-        box.appendChild(table(["Pack", "Skills", "Trust", "Status", ""], rows, "No packs yet — register one above."));
+        box.appendChild(
+          table(
+            [t("skills.pack"), t("view.skills"), t("skills.trust"), t("common.status"), ""],
+            rows,
+            t("skills.noPacks"),
+          ),
+        );
         root.appendChild(bareDataCard(box));
         root.appendChild(detail);
       }
@@ -9610,7 +9699,7 @@
           if (!selected.size) {
             const none = document.createElement("span");
             none.style.cssText = "font-size:12px; color:var(--muted);";
-            none.textContent = "no scopes selected";
+            none.textContent = t("skills.noScopesSelected");
             chips.appendChild(none);
             return;
           }
@@ -9625,7 +9714,7 @@
             const x = document.createElement("button");
             x.type = "button";
             x.textContent = "✕";
-            x.setAttribute("aria-label", "Remove " + labelOf(id));
+            x.setAttribute("aria-label", t("skills.removeScope", { scope: labelOf(id) }));
             x.style.cssText =
               "border:none; background:transparent; cursor:pointer; color:var(--muted); font-size:11px; line-height:1; padding:0 1px;";
             x.onclick = (e) => {
@@ -9643,7 +9732,7 @@
         const addBtn = document.createElement("button");
         addBtn.type = "button";
         addBtn.className = "rowbtn";
-        addBtn.textContent = "+ Add scope ▾";
+        addBtn.textContent = t("skills.addScope");
         addBtn.setAttribute("aria-haspopup", "listbox");
         addBtn.setAttribute("aria-expanded", "false");
 
@@ -9654,7 +9743,7 @@
         filterWrap.className = "scope-filter";
         const filter = document.createElement("input");
         filter.type = "text";
-        filter.placeholder = "Filter scopes…";
+        filter.placeholder = t("skills.filterScopes");
         filter.spellcheck = false;
         filter.setAttribute("autocapitalize", "none");
         filter.style.cssText =
@@ -9675,13 +9764,13 @@
           return b;
         };
         bulk.append(
-          mkLink("Select all", () => {
+          mkLink(t("skills.selectAllScopes"), () => {
             choices.forEach((c) => selected.add(c.scopeId));
             renderChips();
             renderList();
             onChange();
           }),
-          mkLink("Clear", () => {
+          mkLink(t("skills.clearScopes"), () => {
             selected.clear();
             renderChips();
             renderList();
@@ -9698,7 +9787,7 @@
           if (!shown.length) {
             const p = document.createElement("div");
             p.className = "scope-note";
-            p.textContent = "No scopes match.";
+            p.textContent = t("skills.noScopesMatch");
             list.appendChild(p);
             return;
           }
@@ -9767,14 +9856,14 @@
         holder.textContent = "";
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Fetching " + s.url + "…";
+        loading.textContent = t("skills.fetching", { url: s.url });
         holder.appendChild(loading);
         const r = await api("GET", "/api/skill-packs/" + encodeURIComponent(s.id) + "/catalog");
         holder.textContent = "";
         if (!r.ok || !r.data) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = r.data?.message || "Couldn't browse (" + r.status + ").";
+          p.textContent = r.data?.message || t("skills.browseFailed", { status: r.status });
           holder.appendChild(p);
           return;
         }
@@ -9807,7 +9896,7 @@
 
         const headCb = document.createElement("input");
         headCb.type = "checkbox";
-        headCb.title = "Select / deselect all importable skills";
+        headCb.title = t("skills.selectAll");
         const syncHead = () => {
           const n = checks.length,
             sel = checks.filter((cb) => cb.checked).length;
@@ -9890,19 +9979,19 @@
           const names = checks.filter((b) => b.checked).map((b) => b.dataset.name);
           if (!scopes.length) {
             status.className = "status err";
-            status.textContent = "Pick at least one scope to add skills to.";
+            status.textContent = t("skills.pickScope");
             return;
           }
           if (!names.length) {
             status.className = "status err";
-            status.textContent = "Select at least one skill.";
+            status.textContent = t("skills.selectSkill");
             return;
           }
           importButtons.forEach((b) => {
             b.disabled = true;
           });
           status.className = "status";
-          status.textContent = "Importing…";
+          status.textContent = t("skills.importing");
           const allEligible = checks.length === names.length;
           const r2 = await api("POST", "/api/skill-packs/" + encodeURIComponent(s.id) + "/import", {
             selected: allEligible ? "all" : names,
@@ -9913,18 +10002,16 @@
           });
           if (!r2.ok) {
             status.className = "status err";
-            status.textContent = r2.data?.message || "Import failed (" + r2.status + ").";
+            status.textContent = r2.data?.message || t("skills.importFailed", { status: r2.status });
             return;
           }
           const added = r2.data.imported?.length ?? 0;
           status.className = "status ok";
-          status.textContent =
-            "✓ " +
-            added +
-            " skill" +
-            (added === 1 ? "" : "s") +
-            " added" +
-            (scopes.length > 1 ? " across " + scopes.length + " scopes" : "");
+          status.textContent = t("skills.importResult", {
+            count: added,
+            skills: t(added === 1 ? "skills.skillSingular" : "skills.skillPlural"),
+            scopes: scopes.length > 1 ? t("skills.scopeSuffix", { count: scopes.length }) : "",
+          });
           dataCache.clear();
           setTimeout(() => renderData(), 1500);
         };
@@ -9934,7 +10021,7 @@
           const btn = document.createElement("button");
           btn.type = "button";
           btn.className = "primary";
-          btn.textContent = "Import selected";
+          btn.textContent = t("skills.importSelected");
           btn.onclick = () => doImport(status);
           importButtons.push(btn);
 
@@ -10033,7 +10120,7 @@
         const scopeRow = document.createElement("div");
         scopeRow.style.cssText = "display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:2px 0 4px;";
         const scopeLab = document.createElement("span");
-        scopeLab.textContent = "Add to scopes:";
+        scopeLab.textContent = t("skills.addToScopes");
         scopeLab.style.cssText = "font-size:12px; opacity:0.7;";
         scopeRow.append(scopeLab, buildScopeMultiSelect(scopeChoices, selectedScopes, recompute));
         box.appendChild(scopeRow);
@@ -10079,8 +10166,8 @@
         const close = document.createElement("button");
         close.type = "button";
         close.textContent = "✕";
-        close.title = "Close";
-        close.setAttribute("aria-label", "Close browse");
+        close.title = t("common.close");
+        close.setAttribute("aria-label", t("skills.closeBrowse"));
         close.style.cssText =
           "position:absolute;top:10px;right:12px;border:none;background:transparent;cursor:pointer;font-size:18px;line-height:1;color:var(--text);opacity:0.55;padding:4px;";
         close.onmouseenter = () => {
@@ -10101,8 +10188,8 @@
 
         if (scopeDir) {
           pageShell({
-            back: { label: "← Memory", onClick: () => go({ view: "memory", scope: "org:" + orgId, session: null }) },
-            title: orgWideView() ? "Org-wide" : shortName(scope),
+            back: { label: t("memory.back"), onClick: () => go({ view: "memory", scope: "org:" + orgId, session: null }) },
+            title: orgWideView() ? t("memory.orgWide") : shortName(scope),
           });
         }
         const server = d.content || "";
@@ -10114,17 +10201,17 @@
         ta.style.minHeight = "340px";
         ta.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, monospace";
         ta.style.fontSize = "12px";
-        ta.placeholder = "No memory stored for this scope yet. Anything you write here, the agent will remember.";
+        ta.placeholder = t("memory.placeholder");
         const foot = document.createElement("div");
         foot.className = "foot";
         const save = document.createElement("button");
         save.className = "primary";
-        save.textContent = "Save";
+        save.textContent = t("action.save");
         const st = document.createElement("span");
         st.className = "status";
         st.id = "st-memory";
         const syncHint = () => {
-          if (ta.value !== server) setStatus("st-memory", "Unsaved changes", "");
+          if (ta.value !== server) setStatus("st-memory", t("common.unsavedChanges"), "");
         };
         ta.oninput = () => {
           memDraft = ta.value;
@@ -10138,11 +10225,11 @@
           if (r.ok) {
             memDraft = null;
             memDraftScope = null;
-            setStatus("st-memory", "Saved ✓", "ok");
+            setStatus("st-memory", t("state.saved") + " ✓", "ok");
           } else
             setStatus(
               "st-memory",
-              r.status === 403 ? "You don't administer this scope." : r.data?.message || "Save failed.",
+              r.status === 403 ? t("memory.scopeDenied") : r.data?.message || t("memory.saveFailed"),
               "err",
             );
         };
@@ -10168,13 +10255,13 @@
         pageShell({
           title: VIEW_TITLE.memory,
           count: written.length ? plural(written.length, "notebook") : "",
-          context: written.length && !hasTimestamps ? "sorted by size (this backend keeps no edit history)" : "",
+          context: written.length && !hasTimestamps ? t("memory.sortedBySize") : "",
         });
         const t = denseList(
           scopes,
           (s) => ({
             name: scopeKind(s.scopeId) === "org" ? "org" : s.label || shortName(s.scopeId),
-            preview: s.hasMemory ? fmtBytes(s.bytes || 0) : "empty",
+            preview: s.hasMemory ? fmtBytes(s.bytes || 0) : t("memory.empty"),
             time: s.updatedAt ? relTime(s.updatedAt) : "—",
             href: stateToUrl(
               scopeKind(s.scopeId) === "org"
@@ -10183,7 +10270,7 @@
             ),
           }),
           openScope,
-          "No notebooks yet — the agent hasn't remembered anything.",
+          t("memory.noNotebooks"),
         );
         root.appendChild(bareDataCard(t));
       }
@@ -10202,22 +10289,22 @@
         let stickinessTone = "muted";
         if ((a.stickiness ?? 0) >= 30) stickinessTone = "ok";
         else if ((a.stickiness ?? 0) >= 10) stickinessTone = "warn";
-        stick.append("Stickiness", badge(String(a.stickiness ?? 0) + "%", stickinessTone));
+        stick.append(t("retention.stickiness"), badge(String(a.stickiness ?? 0) + "%", stickinessTone));
         root.appendChild(stick);
         const nvr = d.newVsReturning || {};
         root.appendChild(
           dataCard(
-            "New vs returning",
-            `Distinct active users in the trailing ${nvr.window || "30d"}.`,
+            t("retention.newVsReturning"),
+            t("retention.activeWindow", { window: nvr.window || "30d" }),
             table(
-              ["New", "Returning"],
+              [t("retention.new"), t("retention.returning")],
               [
                 [
                   { text: String(nvr.newUsers ?? 0), cls: "num" },
                   { text: String(nvr.returning ?? 0), cls: "num" },
                 ],
               ],
-              "No activity yet.",
+              t("retention.noActivity"),
             ),
           ),
         );
@@ -10234,32 +10321,40 @@
         ]);
         root.appendChild(
           dataCard(
-            "Weekly retention cohorts",
-            "Of users first active in a week, the share active in following weeks. Channel attribution is approximate.",
-            table(["Cohort (week of)", "Users", "W0", "W1", "W2", "W3", "W4"], cohortRows, "No cohorts yet."),
+            t("retention.weeklyCohorts"),
+            t("retention.weeklyBody"),
+            table(
+              [t("retention.cohortWeek"), t("users.users"), "W0", "W1", "W2", "W3", "W4"],
+              cohortRows,
+              t("retention.noCohorts"),
+            ),
           ),
         );
         const pu = d.perUser || { sessions: {}, turns: {} };
         const dist = table(
-          ["Metric", "p50", "p95"],
+          [t("retention.metric"), "p50", "p95"],
           [
             [
-              "Sessions / user",
+              t("retention.sessionsPerUser"),
               { text: String(pu.sessions?.p50 ?? 0), cls: "num" },
               { text: String(pu.sessions?.p95 ?? 0), cls: "num" },
             ],
             [
-              "Turns / user",
+              t("retention.turnsPerUser"),
               { text: String(pu.turns?.p50 ?? 0), cls: "num" },
               { text: String(pu.turns?.p95 ?? 0), cls: "num" },
             ],
           ],
-          "No users yet.",
+          t("retention.noUsers"),
         );
         root.appendChild(
           dataCard(
-            "Per-user distribution",
-            `${d.totals?.users ?? 0} users · ${d.totals?.sessions ?? 0} sessions. ${d.attribution || ""}`,
+            t("retention.distribution"),
+            t("retention.distributionBody", {
+              users: d.totals?.users ?? 0,
+              sessions: d.totals?.sessions ?? 0,
+              attribution: d.attribution || "",
+            }),
             dist,
           ),
         );
@@ -10298,9 +10393,7 @@
       async function revokeGrant(g) {
         if (
           !confirm(
-            'Revoke admin access for "' +
-              g.principalId +
-              '"? The core will refuse this if it would remove the last org admin.',
+            t("users.revokeConfirm", { principal: g.principalId }),
           )
         )
           return;
@@ -10317,7 +10410,7 @@
         else
           setStatus(
             "st-users",
-            r.status === 403 ? "Only an org admin may revoke." : r.data?.message || "Revoke failed.",
+            r.status === 403 ? t("users.orgAdminRevokeOnly") : r.data?.message || t("users.revokeFailed"),
             "err",
           );
       }
@@ -10331,9 +10424,8 @@
         return [g.status || "unknown", kind];
       }
       function keychainExpiry(ts) {
-        if (!ts) return "No expiry";
-        const prefix = ts <= Date.now() ? "Expired " : "Expires ";
-        return prefix + fmtTime(ts);
+        if (!ts) return t("common.noExpiry");
+        return t(ts <= Date.now() ? "common.expiredAt" : "common.expiresAt", { time: fmtTime(ts) });
       }
       function keychainPersonLabel(p) {
         return p.displayName ? `${p.displayName} (${p.principalId})` : p.principalId;
@@ -10342,11 +10434,11 @@
         if (d.enabled === false) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = "Keychain is not configured for this deployment.";
+          p.textContent = t("memory.keychainUnavailable");
           root.appendChild(
             dataCard(
-              "Keychain unavailable",
-              "Stable key material is required before the core can store keychain records.",
+              t("keychain.unavailable"),
+              t("keychain.unavailableBody"),
               p,
             ),
           );
@@ -10361,13 +10453,13 @@
         let filterVal = "";
         defaultShell({
           stats: [
-            [people.length, "People"],
-            [credentials.length, "Credentials"],
-            [activeGrants.length, "Active grants"],
-            [pendingAsks.length, "Pending asks"],
+            [people.length, t("keychain.people")],
+            [credentials.length, t("keychain.credentials")],
+            [activeGrants.length, t("keychain.activeGrants")],
+            [pendingAsks.length, t("keychain.pendingAsks")],
           ],
           search: {
-            placeholder: "person, service, audience, purpose",
+            placeholder: t("keychain.search"),
             onInput: (v) => {
               filterVal = v;
               drawLists();
@@ -10428,27 +10520,27 @@
 
           lists.appendChild(
             dataCard(
-              "People",
-              "Everyone known through sessions, admin grants, keychain records, grants, or asks.",
+              t("keychain.people"),
+              t("keychain.peopleBody"),
               table(
-                ["Person", "Keychain", "Active grants", "Pending asks"],
+                [t("keychain.person"), t("keychain.keychain"), t("keychain.activeGrants"), t("keychain.pendingAsks")],
                 filteredPeople.map((p) => [
                   nodeCell(stacked(p.displayName || p.principalId, p.displayName ? p.principalId : ""), "mono"),
                   { text: String(p.credentialCount || 0), cls: "num" },
                   { text: String(p.activeGrantCount || 0), cls: "num" },
                   { text: String(p.pendingAskCount || 0), cls: "num" },
                 ]),
-                "No people match.",
+                t("keychain.noPeople"),
               ),
             ),
           );
 
           lists.appendChild(
             dataCard(
-              "Credentials",
-              "Metadata only. Secret material and encrypted values are never returned to admin.",
+              t("keychain.credentials"),
+              t("keychain.credentialsBody"),
               table(
-                ["Owner", "Credential", "Delivery", "Account", "Expiry"],
+                [t("common.owner"), t("keychain.credential"), t("keychain.delivery"), t("common.account"), t("common.expiry")],
                 filteredCreds.map((c) => [
                   nodeCell(stacked(personName(c.ownerId), c.ownerId), "mono"),
                   nodeCell(stacked(c.service, c.id), "mono"),
@@ -10460,17 +10552,17 @@
                   c.accountLabel || c.host || "-",
                   { text: keychainExpiry(c.expiresAt), cls: "num" },
                 ]),
-                "No keychain credentials match.",
+                t("keychain.noCredentials"),
               ),
             ),
           );
 
           lists.appendChild(
             dataCard(
-              "Grants",
-              "Purpose-bound keychain grants from an owner to an audience scope.",
+              t("keychain.grants"),
+              t("keychain.grantsBody"),
               table(
-                ["Owner", "Credential", "Audience", "Mode", "Status", "Purpose"],
+                [t("common.owner"), t("keychain.credential"), t("common.audience"), t("keychain.mode"), t("common.status"), t("common.purpose")],
                 filteredGrants.map((g) => {
                   const [label, kind] = keychainGrantStatus(g);
                   let labelKind = "";
@@ -10488,17 +10580,17 @@
                     nodeCell(stacked(g.purpose || "-", purposeDetail)),
                   ];
                 }),
-                "No keychain grants match.",
+                t("keychain.noGrants"),
               ),
             ),
           );
 
           lists.appendChild(
             dataCard(
-              "Asks",
-              "Outstanding and resolved cross-conversation consent requests.",
+              t("keychain.asks"),
+              t("keychain.asksBody"),
               table(
-                ["Owner", "Requester", "Credential", "Scope", "Status", "Purpose"],
+                [t("common.owner"), t("common.requester"), t("keychain.credential"), t("common.scope"), t("common.status"), t("common.purpose")],
                 filteredAsks.map((a) => [
                   nodeCell(stacked(personName(a.ownerId), a.ownerId), "mono"),
                   nodeCell(stacked(personName(a.requesterId), a.requesterId), "mono"),
@@ -10507,7 +10599,7 @@
                   nodeCell(mutedText(a.status || "unknown", a.status === "pending" ? "warn" : "")),
                   nodeCell(stacked(a.purpose || "-", a.expiresAt ? keychainExpiry(a.expiresAt) : "")),
                 ]),
-                "No keychain asks match.",
+                t("keychain.noAsks"),
               ),
             ),
           );
@@ -10520,11 +10612,11 @@
         let filterVal = "";
         defaultShell({
           stats: [
-            [users.length, "Users"],
-            [grants.length, "Admins"],
+            [users.length, t("users.users")],
+            [grants.length, t("users.admins")],
           ],
           search: {
-            placeholder: "principal, role, or scope",
+            placeholder: t("users.search"),
             onInput: (v) => {
               filterVal = v;
               drawLists();
@@ -10544,16 +10636,16 @@
         };
         const pInput = document.createElement("input");
         pInput.type = "text";
-        pInput.placeholder = "principal id (e.g. U07ABCD)";
+        pInput.placeholder = t("users.principalPlaceholder");
         pInput.spellcheck = false;
         pInput.autocapitalize = "none";
         const grantBtn = document.createElement("button");
         grantBtn.className = "primary";
         grantBtn.type = "button";
-        grantBtn.textContent = "Grant";
+        grantBtn.textContent = t("common.grant");
         grantBtn.onclick = async () => {
           const principalId = pInput.value.trim();
-          if (!principalId) return setStatus("st-users", "Principal id required.", "err");
+          if (!principalId) return setStatus("st-users", t("users.principalRequired"), "err");
           const r = await api("POST", "/api/grants", { principalId, role: "org_admin", scopeId: "org:" + orgId });
           if (r.ok) {
             pInput.value = "";
@@ -10561,12 +10653,12 @@
           } else
             setStatus(
               "st-users",
-              r.status === 403 ? "Only an org admin may grant." : r.data?.message || "Grant failed.",
+              r.status === 403 ? t("users.orgAdminGrantOnly") : r.data?.message || t("users.grantFailed"),
               "err",
             );
         };
-        form.append(mkField("grow", "Principal id", pInput), grantBtn);
-        const formCard = dataCard("Grant org admin", "Promote a principal to org admin. Org admins only.", form);
+        form.append(mkField("grow", t("users.principal"), pInput), grantBtn);
+        const formCard = dataCard(t("users.grantAdmin"), t("users.grantAdminBody"), form);
         const st = document.createElement("p");
         st.className = "status";
         st.id = "st-users";
@@ -10578,7 +10670,7 @@
         impForm.className = "grant-form";
         const impInput = document.createElement("input");
         impInput.type = "text";
-        impInput.placeholder = "principal id or name (e.g. dana@example.com)";
+        impInput.placeholder = t("users.principalOrNamePlaceholder");
         impInput.spellcheck = false;
         impInput.autocapitalize = "none";
         impInput.setAttribute("list", "imp-suggest");
@@ -10587,13 +10679,13 @@
         const impBtn = document.createElement("button");
         impBtn.className = "primary";
         impBtn.type = "button";
-        impBtn.textContent = "Open web UI as ↗";
+        impBtn.textContent = t("users.openAs");
         let impTimer = null,
           impSeq = 0;
 
         const dirMembers = async (q) => {
           const r = await api("GET", "/api/directory?q=" + encodeURIComponent(q));
-          if (!r.ok) throw new Error(r.data?.message || "directory lookup failed (" + r.status + ")");
+          if (!r.ok) throw new Error(r.data?.message || t("users.directoryLookupFailed") + " (" + r.status + ")");
           return r.data?.members || [];
         };
         impInput.addEventListener("input", () => {
@@ -10621,24 +10713,28 @@
 
         impBtn.onclick = async () => {
           const v = impInput.value.trim();
-          if (!v) return setStatus("st-imp", "Principal id or name required.", "err");
+          if (!v) return setStatus("st-imp", t("users.impersonationRequired"), "err");
           setStatus("st-imp", "");
           impBtn.disabled = true;
           try {
             const members = await dirMembers(v);
             if (members.length > 1)
-              return setStatus("st-imp", "Matches several people — pick one from the suggestions.", "err");
+              return setStatus("st-imp", t("users.multipleMatches"), "err");
             await openWebUiAs(members[0]?.principalId ?? v);
           } catch (e) {
-            setStatus("st-imp", "Couldn't resolve that (" + (e?.message || "directory lookup failed") + ").", "err");
+            setStatus(
+              "st-imp",
+              t("users.resolveFailed", { message: e?.message || t("users.directoryLookupFailed") }),
+              "err",
+            );
           } finally {
             impBtn.disabled = false;
           }
         };
-        impForm.append(mkField("grow", "Principal id or name", impInput), impBtn);
+        impForm.append(mkField("grow", t("users.principalOrName"), impInput), impBtn);
         const impCard = dataCard(
-          "Impersonate a user",
-          "Open the assistant Web UI as any principal — for support, debugging, or onboarding tests. Time-boxed and audited.",
+          t("users.impersonate"),
+          t("users.impersonateBody"),
           impForm,
         );
         const impSt = document.createElement("p");
@@ -10661,7 +10757,7 @@
           );
 
           const admins = actionTable(
-            ["Principal", "Role", "Scope", "Granted by", ""],
+            [t("common.principal"), t("common.role"), t("common.scope"), t("common.grantedBy"), ""],
             filteredGrants,
             (g) => [
               { text: g.principalId, cls: "mono" },
@@ -10670,22 +10766,22 @@
               g.grantedBy || "-",
               {
                 action: {
-                  label: "Revoke",
+                  label: t("common.revoke"),
                   danger: true,
                   disabled: orgAdminCount <= 1 && g.role === "org_admin",
-                  title: orgAdminCount <= 1 ? "The last org admin cannot be revoked." : "",
+                  title: orgAdminCount <= 1 ? t("users.lastAdmin") : "",
                   run: () => revokeGrant(g),
                 },
               },
             ],
-            "No admins match.",
+            t("users.noAdmins"),
           );
           lists.appendChild(
-            dataCard("Admins", "Who can govern this org. Revoking removes their admin rights immediately.", admins),
+            dataCard(t("users.admins"), t("users.adminsBody"), admins),
           );
 
           const roster = openableTable(
-            ["Principal", "Role", "Last seen", "Sessions", "Turns", "", ""],
+            [t("common.principal"), t("common.role"), t("common.lastSeen"), t("common.sessions"), t("common.turns"), "", ""],
             filteredUsers,
             (u) => [
               { text: u.principalId, cls: "mono" },
@@ -10695,7 +10791,7 @@
               { text: String(u.turnCount), cls: "num" },
               {
                 action: {
-                  label: "Impersonate ↗",
+                  label: t("common.impersonate"),
                   run: (ev) => {
                     ev?.stopPropagation?.();
                     openWebUiAs(u.principalId);
@@ -10706,7 +10802,7 @@
                 ? { text: "" }
                 : {
                     action: {
-                      label: "Make admin",
+                      label: t("common.makeAdmin"),
                       run: (ev) => {
                         ev?.stopPropagation?.();
                         pInput.value = u.principalId;
@@ -10717,12 +10813,12 @@
                   },
             ],
             (u) => go({ view: "user", scope, session: null, principal: u.principalId }),
-            "No users match.",
+            t("users.noUsers"),
           );
           lists.appendChild(
             dataCard(
-              "Users",
-              "Everyone who has used the agent — click a row for their activity, artifacts, and config.",
+              t("users.users"),
+              t("users.rosterBody"),
               roster,
             ),
           );
@@ -11045,7 +11141,7 @@
         btn.onclick = async (ev) => {
           ev.stopPropagation();
           const ok = await copyText(getText());
-          btn.textContent = ok ? "Copied" : "Copy failed";
+          btn.textContent = ok ? t("common.copied") : t("common.copyFailed");
           if (ok) btn.classList.add("copied");
           setTimeout(() => {
             btn.textContent = label;
@@ -11080,7 +11176,7 @@
         who.append(
           when,
           status,
-          copyButton("Copy", () => toolCopyText(callEntry, resultEntry)),
+          copyButton(t("common.copy"), () => toolCopyText(callEntry, resultEntry)),
         );
         const body = document.createElement("div");
         body.className = "tool-body";
@@ -11092,7 +11188,7 @@
           const syncExpanded = () => {
             const expanded = block.classList.contains("expanded");
             card.setAttribute("aria-expanded", String(expanded));
-            card.title = expanded ? "Click to collapse tool text" : "Click to expand tool text";
+            card.title = expanded ? t("history.collapseEntry") : t("history.expandEntry");
             if (truncated) card.textContent = expanded ? primaryText : preview;
           };
           card.tabIndex = 0;
@@ -11118,30 +11214,38 @@
           drow.className = "who";
           const dlabel = document.createElement("span");
           dlabel.className = "entry-label important";
-          dlabel.textContent = delivery.shadow ? "Shadow delivery" : "Slack delivery";
+          dlabel.textContent = delivery.shadow ? t("history.shadowDelivery") : t("history.slackDelivery");
           drow.appendChild(dlabel);
           if (delivery.shadow) {
             const sb = document.createElement("span");
             sb.className = "entry-label";
-            sb.title = "Recorded for observability — never sent to the human (shadow-mode rollout)";
-            sb.textContent = "not sent";
+            sb.title = t("slack.notSentTitle");
+            sb.textContent = t("slack.notSent");
             drow.appendChild(sb);
           }
           drow.appendChild(badge(delivery.destination?.type === "principal" ? "Slack DM" : "Slack", "info"));
           const mirror = slackMirrorRef(delivery);
           if (mirror) {
-            const ml = navLink("View in Slack mirror ↗", { view: "slack", container: mirror.container, ts: mirror.ts });
-            ml.title = "Jump to this message in the mirrored Slack channel " + mirror.container;
+            const ml = navLink(t("history.viewSlackMirror"), {
+              view: "slack",
+              container: mirror.container,
+              ts: mirror.ts,
+            });
+            ml.title = t("history.slackMirrorTitle", { channel: mirror.container });
             drow.appendChild(ml);
           }
           const dwhen = document.createElement("span");
           dwhen.className = "when";
-          dwhen.textContent = `${delivery.shadow ? "shadow" : "delivered"} · ${fmtTime(delivery.createdAt)}`;
+          dwhen.textContent = `${t(delivery.shadow ? "history.shadowState" : "history.deliveredState")} · ${fmtTime(delivery.createdAt)}`;
           drow.appendChild(dwhen);
           const pre = document.createElement("pre");
-          const from = delivery.destination?.onBehalfOf ? `from ${delivery.destination.onBehalfOf}\n` : "";
-          const to = delivery.destination?.target ? `to ${delivery.destination.target}\n` : "";
-          const recipientLine = delivery.recipientThreadRef ? `recipient thread ${delivery.recipientThreadRef}\n` : "";
+          const from = delivery.destination?.onBehalfOf
+            ? t("history.from", { value: delivery.destination.onBehalfOf })
+            : "";
+          const to = delivery.destination?.target ? t("history.to", { value: delivery.destination.target }) : "";
+          const recipientLine = delivery.recipientThreadRef
+            ? t("history.recipientThread", { value: delivery.recipientThreadRef })
+            : "";
           pre.textContent = `${from}${to}${recipientLine}${delivery.text || ""}`.trim();
           dv.append(drow, pre);
           const files = deliveryFileBadges(delivery.attachments);
@@ -11234,7 +11338,7 @@
         sortControl.className = "shell-sort";
         const sortLabel = document.createElement("span");
         sortLabel.className = "shell-sort-label";
-        sortLabel.textContent = "Sort:";
+        sortLabel.textContent = t("common.sort");
         const seg = document.createElement("div");
         seg.className = "segmented";
         const sortOpt = (value, label) => {
@@ -11285,7 +11389,7 @@
           const quiet = document.createElement("details");
           quiet.className = "history-quiet";
           const summary = document.createElement("summary");
-          summary.textContent = `${quietRows.length} known scope${quietRows.length === 1 ? "" : "s"} without conversations`;
+          summary.textContent = t("history.knownQuietScopes", { count: quietRows.length });
           const chips = document.createElement("div");
           chips.className = "history-empty-scopes";
           quietRows.forEach((s) => {
@@ -11488,32 +11592,44 @@
         };
         const info = document.createElement("span");
         info.className = "pageinfo";
-        info.textContent = `${offset + 1}–${Math.min(offset + limit, total)} of ${total}`;
-        wrap.append(btn("← Prev", cur - 1, cur <= 1), info, btn("Next →", cur + 1, cur >= pages));
+        info.textContent = t("users.pageOf", {
+          start: offset + 1,
+          end: Math.min(offset + limit, total),
+          total,
+        });
+        wrap.append(
+          btn(t("users.previous"), cur - 1, cur <= 1),
+          info,
+          btn(t("users.next"), cur + 1, cur >= pages),
+        );
         return wrap;
       }
 
       async function showUserDetail(principalId) {
         const root = $("view-data");
         root.textContent = "";
-        pageShell({ back: { label: "← Users", onClick: () => history.back() }, title: principalId || "User" });
+        pageShell({ back: { label: t("users.back"), onClick: () => history.back() }, title: principalId || t("users.user") });
         const detail = document.createElement("div");
         detail.className = "detail";
-        detail.textContent = "Loading…";
+        detail.textContent = t("common.loadingEllipsis");
         root.appendChild(detail);
         const r = await api("GET", "/api/users/" + encodeURIComponent(principalId));
         if (!r.ok) {
           detail.textContent =
-            r.status === 403 ? "You don't have admin access." : r.data?.message || `Failed to load user (${r.status}).`;
+            r.status === 403
+              ? t("users.accessDenied")
+              : r.data?.message || t("users.loadUserFailed", { status: r.status });
           return;
         }
         detail.textContent = "";
         const d = r.data || {};
 
         pageShell({
-          back: { label: "← Users", onClick: () => history.back() },
+          back: { label: t("users.back"), onClick: () => history.back() },
           title: d.displayName || d.principalId || principalId,
-          context: [d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId || ""].filter(Boolean).join(" · "),
+          context: [d.admin?.isAdmin ? labelRole(d.admin.role) : t("common.member"), d.scopeId || ""]
+            .filter(Boolean)
+            .join(" · "),
         });
         const userActions = document.createElement("div");
         userActions.style.margin = "0 0 14px";
@@ -11523,16 +11639,16 @@
         const stats = d.stats || {};
         detail.appendChild(
           kpis([
-            [String(stats.sessions ?? 0), "Conversations"],
-            [String(stats.turns ?? 0), "Turns"],
-            [stats.firstSeenAt ? fmtTime(stats.firstSeenAt) : "—", "First seen"],
-            [stats.lastSeenAt ? fmtTime(stats.lastSeenAt) : "—", "Last seen"],
+            [String(stats.sessions ?? 0), t("users.conversations")],
+            [String(stats.turns ?? 0), t("common.turns")],
+            [stats.firstSeenAt ? fmtTime(stats.firstSeenAt) : "—", t("users.firstSeen")],
+            [stats.lastSeenAt ? fmtTime(stats.lastSeenAt) : "—", t("common.lastSeen")],
           ]),
         );
 
         const convs = d.conversations || [];
         const convTable = openableTable(
-          ["Conversation", "Scope", "Volume", "Last activity"],
+          [t("users.conversation"), t("common.scope"), t("users.volume"), t("users.lastActivity")],
           convs,
           (s) => {
             const latest = s.lastMessage || s.firstMessage || "(no messages yet)";
@@ -11558,13 +11674,13 @@
             ];
           },
           (s) => go({ view: "history", scope: s.scopeId, session: s.id }),
-          "No conversations yet.",
+          t("users.noConversations"),
           { className: "history-table", cols: ["52%", "18%", "10%", "20%"] },
         );
         detail.appendChild(
           dataCard(
-            "Recent conversations",
-            "Every conversation this person took part in — click a row to read the transcript.",
+            t("users.recentConversations"),
+            t("users.recentConversationsBody"),
             convTable,
           ),
         );
@@ -11577,14 +11693,18 @@
           nodeCell(mutedText(f.direction === "out" ? "agent" : "upload")),
           { text: f.createdAt ? fmtTime(f.createdAt) : "—", cls: "num" },
           f.openable
-            ? { action: { label: "Download", run: () => downloadFile({ ...f, openable: true }) } }
+            ? { action: { label: t("users.download"), run: () => downloadFile({ ...f, openable: true }) } }
             : { text: "—", cls: "num" },
         ]);
         detail.appendChild(
           dataCard(
-            "Files",
-            "Documents in this person's personal workspace — saved by the agent or uploaded.",
-            table(["Name", "Kind", "Size", "Source", "Created", ""], fileRows, "No files in their personal workspace."),
+            t("view.files"),
+            t("users.filesBody"),
+            table(
+              [t("common.name"), t("common.kind"), t("common.size"), t("audit.source"), t("common.created"), ""],
+              fileRows,
+              t("files.personalEmpty"),
+            ),
           ),
         );
 
@@ -11603,9 +11723,13 @@
         ]);
         detail.appendChild(
           dataCard(
-            "Deployments",
-            "Apps this person published from their personal workspace.",
-            table(["Deployment", "Status", "Version", "Last access"], depRows, "No deployments."),
+            t("view.deployments"),
+            t("users.deploymentsBody"),
+            table(
+              [t("view.deployments"), t("common.status"), t("common.version"), t("common.lastAccess")],
+              depRows,
+              t("deployments.none"),
+            ),
           ),
         );
 
@@ -11623,8 +11747,8 @@
         ]);
         detail.appendChild(
           dataCard(
-            "Crons",
-            "Scheduled prompts and reminders this person owns.",
+            t("view.crons"),
+            t("users.cronsBody"),
             table(
               [t("crons.what"), t("crons.schedule"), t("crons.lastFired"), t("common.status")],
               cronRows,
@@ -11639,7 +11763,7 @@
           cfgWrap.appendChild(
             Object.assign(document.createElement("p"), {
               className: "empty",
-              textContent: "Config store not available.",
+              textContent: t("users.configUnavailable"),
             }),
           );
         else {
@@ -11648,30 +11772,44 @@
           const denyN = (cfg.egress?.deniedHosts || []).length;
           cfgWrap.appendChild(
             table(
-              ["Setting", "Value"],
+              [t("users.setting"), t("users.value")],
               [
-                ["Custom soul", { node: mutedText(cfg.hasSoul ? "set · v" + (cfg.soulVersion || 1) : "default") }],
                 [
-                  "Command policy",
+                  t("users.customSoul"),
+                  {
+                    node: mutedText(
+                      cfg.hasSoul
+                        ? t("users.setVersion", { version: cfg.soulVersion || 1 })
+                        : t("users.default"),
+                    ),
+                  },
+                ],
+                [
+                  t("users.commandPolicy"),
                   cfg.commandPolicy
                     ? ruleN + " rule" + (ruleN === 1 ? "" : "s") + " · " + (cfg.commandPolicy.mode || "denylist")
-                    : "default",
+                    : t("users.default"),
                 ],
-                ["Security posture", cfg.securityPosture || "auto"],
-                ["Egress overrides", allowN || denyN ? allowN + " allow · " + denyN + " deny" : "none"],
-                ["Base model", cfg.baseModel || "org default"],
-                ["Connectors linked", String((cfg.connectors || []).length)],
+                [t("users.securityPosture"), cfg.securityPosture || "auto"],
+                [
+                  t("users.egressOverrides"),
+                  allowN || denyN
+                    ? t("users.egressSummary", { allow: allowN, deny: denyN })
+                    : t("state.none"),
+                ],
+                [t("users.baseModel"), cfg.baseModel || t("users.orgDefault")],
+                [t("users.connectorsLinked"), String((cfg.connectors || []).length)],
               ],
-              "No config.",
+              t("users.noConfig"),
             ),
           );
         }
         const OB_KIND = { completed: "ok", dismissed: "muted", pending: "warn", not_started: "info" };
         const OB_LABEL = {
-          completed: "completed",
-          dismissed: "dismissed",
-          pending: "pending",
-          not_started: "not started",
+          completed: t("state.completed"),
+          dismissed: t("state.dismissed"),
+          pending: t("state.pending"),
+          not_started: t("state.notStarted"),
         };
         const obWrap = document.createElement("div");
         const obStatusRow = document.createElement("div");
@@ -11679,23 +11817,23 @@
         const obHint = document.createElement("p");
         obHint.className = "hint";
         function paintOb(status) {
-          obStatusRow.textContent = "Current status: ";
+          obStatusRow.textContent = t("users.currentStatus");
           obStatusRow.appendChild(badge(OB_LABEL[status] || status, OB_KIND[status] || "muted"));
         }
         async function applyOb(status) {
           obButtons.forEach((b) => (b.disabled = true));
-          obHint.textContent = "Saving…";
+          obHint.textContent = t("state.saving");
           try {
             const r = await api("PUT", "/api/users/" + encodeURIComponent(principalId) + "/onboarding", { status });
             if (!r.ok) {
-              obHint.textContent = r.data?.message || "Failed (" + r.status + ").";
+              obHint.textContent = r.data?.message || t("common.failedStatus", { status: r.status });
               return;
             }
             paintOb(r.data?.status || status);
             obHint.textContent =
-              status === "not_started" ? "Reset — onboarding will run on this person's next DM." : "Saved.";
+              status === "not_started" ? t("users.resetOnboardingSaved") : t("users.statusSaved");
           } catch {
-            obHint.textContent = "Network error — try again.";
+            obHint.textContent = t("common.networkError");
           } finally {
             obButtons.forEach((b) => (b.disabled = false));
           }
@@ -11709,9 +11847,9 @@
           return b;
         };
         const obButtons = [
-          mkOb("Reset (re-run on next DM)", "not_started", true),
-          mkOb("Mark completed", "completed"),
-          mkOb("Mark dismissed", "dismissed"),
+          mkOb(t("users.resetOnboarding"), "not_started", true),
+          mkOb(t("users.markCompleted"), "completed"),
+          mkOb(t("users.markDismissed"), "dismissed"),
         ];
         const obActions = document.createElement("div");
         obActions.className = "obactions";
@@ -11719,29 +11857,27 @@
         const resetBtn = document.createElement("button");
         resetBtn.type = "button";
         resetBtn.className = "danger-link";
-        resetBtn.textContent = "Reset to brand-new (delete this person's DMs) →";
+        resetBtn.textContent = t("users.reset");
         const resetHint = document.createElement("p");
         resetHint.className = "hint";
         resetBtn.onclick = async () => {
           if (
-            !confirm(
-              "Delete this person's personal DM sessions — transcripts included — and clear their onboarding?\n\nThis is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.",
-            )
+            !confirm(t("users.deleteDmConfirm"))
           )
             return;
           resetBtn.disabled = true;
           obButtons.forEach((b) => (b.disabled = true));
-          resetHint.textContent = "Resetting…";
+          resetHint.textContent = t("users.resetting");
           try {
             const r = await api("POST", "/api/users/" + encodeURIComponent(principalId) + "/reset");
             if (!r.ok) {
-              resetHint.textContent = r.data?.message || "Failed (" + r.status + ").";
+              resetHint.textContent = r.data?.message || t("common.failedStatus", { status: r.status });
               return;
             }
 
             showUserDetail(principalId);
           } catch {
-            resetHint.textContent = "Network error — try again.";
+            resetHint.textContent = t("common.networkError");
           } finally {
             resetBtn.disabled = false;
             obButtons.forEach((b) => (b.disabled = false));
@@ -11753,17 +11889,17 @@
         obWrap.append(obStatusRow, obActions, obHint, obDivider, resetBtn, resetHint);
         detail.appendChild(
           dataCard(
-            "Onboarding",
-            "Personal-DM onboarding state — reset to re-trigger the flow on this person's next DM, or wipe their DMs to replay the full new-user experience.",
+            t("users.onboarding"),
+            t("users.onboardingBody"),
             obWrap,
           ),
         );
 
-        const cfgCard = dataCard("Configuration", "Policy and connectors for this person's personal scope.", cfgWrap);
+        const cfgCard = dataCard(t("users.configuration"), t("users.configurationBody"), cfgWrap);
         const manage = document.createElement("button");
         manage.type = "button";
         manage.className = "link";
-        manage.textContent = "Manage in Governance →";
+        manage.textContent = t("users.manageGovernance");
         manage.onclick = () => go({ view: "governance", scope: d.scopeId || "personal:" + principalId, session: null });
         cfgCard.querySelector(".body").appendChild(manage);
         detail.appendChild(cfgCard);
@@ -11772,10 +11908,10 @@
       async function showContextPage(sessionId, turnSeq) {
         const root = $("view-data");
         root.textContent = "";
-        pageShell({ back: { label: "← Back to transcript", onClick: () => history.back() }, title: "Sent to model" });
+        pageShell({ back: { label: t("history.backTranscript"), onClick: () => history.back() }, title: t("history.sentToModel") });
         const detail = document.createElement("div");
         detail.className = "detail";
-        detail.textContent = "Loading…";
+        detail.textContent = t("common.loadingEllipsis");
         root.appendChild(detail);
 
         const lr = await api(
@@ -11788,23 +11924,26 @@
             encodeURIComponent(scope),
         );
         if (!lr.ok) {
-          detail.textContent = lr.data?.message || `Failed to load context (${lr.status}).`;
+          detail.textContent = lr.data?.message || t("history.contextFailed", { status: lr.status });
           return;
         }
         const reqs = (lr.data.requests || []).slice().sort((a, b) => (a.step || 0) - (b.step || 0));
-        const turnLabel = turnSeq === "orphan" ? "unattributed context" : `turn #${turnSeq}`;
+        const turnLabel =
+          turnSeq === "orphan" ? t("history.unattributedContext") : t("history.turnNumber", { number: turnSeq });
         detail.textContent = "";
         const head = document.createElement("div");
         head.className = "context-page-head";
         const title = document.createElement("h2");
         title.textContent =
-          reqs.length > 1 ? `Sent to model · ${turnLabel} · ${reqs.length} steps` : `Sent to model · ${turnLabel}`;
+          reqs.length > 1
+            ? t("history.sentSteps", { turn: turnLabel, count: reqs.length })
+            : t("history.sentTurn", { turn: turnLabel });
         head.appendChild(title);
         if (!reqs.length) {
           detail.appendChild(head);
           const p = document.createElement("p");
           p.className = "context-empty";
-          p.textContent = "No context was captured for this turn.";
+          p.textContent = t("history.noContext");
           detail.appendChild(p);
           return;
         }
@@ -12127,12 +12266,12 @@
         return frag;
       }
       function slackAuthorLabel(m) {
-        return m.self ? brandSelfLabel() : m.authorName || m.authorId || "unknown";
+        return m.self ? brandSelfLabel() : m.authorName || m.authorId || t("slack.unknownAuthor");
       }
       function slackSearchBox(container) {
         let timer = null;
         return {
-          placeholder: container ? "Search this channel…" : "Search all mirrored messages…",
+          placeholder: container ? t("slack.searchThis") : t("slack.searchAll"),
           onInput: (value) => {
             clearTimeout(timer);
             timer = setTimeout(() => renderSlackSearchResults(value.trim(), container), 250);
@@ -12174,22 +12313,22 @@
           author.textContent = slackAuthorLabel(m);
           head.appendChild(author);
           if (m.self) {
-            const t = document.createElement("span");
-            t.className = "sm-tag sm-tag-agent";
-            t.textContent = "agent";
-            head.appendChild(t);
+            const tag = document.createElement("span");
+            tag.className = "sm-tag sm-tag-agent";
+            tag.textContent = t("slack.agent");
+            head.appendChild(tag);
           } else if (m.bot) {
-            const t = document.createElement("span");
-            t.className = "sm-tag";
-            t.textContent = "bot";
-            head.appendChild(t);
+            const tag = document.createElement("span");
+            tag.className = "sm-tag";
+            tag.textContent = t("slack.botTag");
+            head.appendChild(tag);
           }
           if (m.sub && m.sub !== m.ts) {
-            const t = document.createElement("span");
-            t.className = "sm-tag";
-            t.textContent = "↳ thread";
-            t.title = "Reply in the thread rooted at " + m.sub;
-            head.appendChild(t);
+            const tag = document.createElement("span");
+            tag.className = "sm-tag";
+            tag.textContent = t("slack.thread");
+            tag.title = t("slack.threadTitle", { id: m.sub });
+            head.appendChild(tag);
           }
           if (opts.containerLabel) {
             const c = document.createElement("span");
@@ -12210,14 +12349,14 @@
         if (m.editedAt) {
           const e = document.createElement("span");
           e.className = "sm-flag";
-          e.textContent = "(edited)";
+          e.textContent = t("slack.edited");
           e.title = fmtTime(m.editedAt);
           text.appendChild(e);
         }
         if (m.deleted) {
           const e = document.createElement("span");
           e.className = "sm-flag";
-          e.textContent = "(deleted in Slack)";
+          e.textContent = t("slack.deleted");
           text.appendChild(e);
         }
         body.appendChild(text);
@@ -12239,9 +12378,12 @@
           (container ? "&container=" + encodeURIComponent(container) : "");
         const r = await api("GET", path);
         if (reqId !== slackReq || view !== "slack") return;
-        if (!r.ok) return void root.appendChild(emptyPara(r.data?.message || `Search failed (${r.status}).`));
+        if (!r.ok)
+          return void root.appendChild(
+            emptyPara(r.data?.message || t("slack.searchFailed", { status: r.status })),
+          );
         const messages = r.data.messages || [];
-        if (!messages.length) return void root.appendChild(emptyPara("No matches in the mirror."));
+        if (!messages.length) return void root.appendChild(emptyPara(t("slack.noMatches")));
         const list = document.createElement("div");
         list.className = "sm-stream";
         for (const m of messages) {
@@ -12259,10 +12401,10 @@
         const root = $("view-data");
         root.textContent = "";
         if (!st.container) {
-          pageShell({ title: "Slack", search: slackSearchBox(null) });
+          pageShell({ title: t("view.slack"), search: slackSearchBox(null) });
           const loading = document.createElement("div");
           loading.className = "loadingline";
-          loading.textContent = "Loading Slack mirror...";
+          loading.textContent = t("slack.loadingMirror");
           root.appendChild(loading);
           const r = await loadSlackContainers();
           if (view !== "slack" || urlToState().container) return;
@@ -12271,13 +12413,13 @@
             return void root.appendChild(
               emptyPara(
                 r.status === 403
-                  ? "Only an org admin can read the Slack mirror."
-                  : r.data?.message || `Failed to load (${r.status}).`,
+                  ? t("slack.readDenied")
+                  : r.data?.message || t("slack.failedStatus", { status: r.status }),
               ),
             );
           viewLoadedAt.slack = Date.now();
           const containers = slackContainers || [];
-          pageShell({ title: "Slack", count: containers.length, search: slackSearchBox(null) });
+          pageShell({ title: t("view.slack"), count: containers.length, search: slackSearchBox(null) });
           root.appendChild(
             denseList(
               containers,
@@ -12292,7 +12434,7 @@
                 };
               },
               (c) => go({ view: "slack", container: c.container }),
-              "Nothing mirrored yet — the surface pushes messages here as it sees them.",
+              t("slack.nothingYet"),
             ),
           );
           return;
@@ -12307,13 +12449,15 @@
           context: container,
           search: slackSearchBox(container),
           actions: [
-            navLink("Judgments →", { view: "judgments", container }),
-            ...(scopeGo ? [navLink("Governance →", { view: "governance", scope: scopeGo, session: null })] : []),
+            navLink(t("slack.judgments"), { view: "judgments", container }),
+            ...(scopeGo
+              ? [navLink(t("slack.governance"), { view: "governance", scope: scopeGo, session: null })]
+              : []),
           ],
         });
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Loading messages...";
+        loading.textContent = t("slack.loadingMessages");
         root.appendChild(loading);
         const fetchPage = (before) =>
           api(
@@ -12327,7 +12471,9 @@
         let r = await fetchPage(null);
         if (!r.ok) {
           root.textContent = "";
-          return void root.appendChild(emptyPara(r.data?.message || `Failed to load (${r.status}).`));
+          return void root.appendChild(
+            emptyPara(r.data?.message || t("slack.failedStatus", { status: r.status })),
+          );
         }
         let messages = r.data.messages || [];
         let hasMore = !!r.data.hasMore;
@@ -12346,8 +12492,8 @@
         rawLink.href = "/api/slack-mirror/messages?container=" + encodeURIComponent(container);
         rawLink.target = "_blank";
         rawLink.rel = "noopener";
-        rawLink.textContent = "Raw feed ↗";
-        rawLink.title = "Open the raw mirrored JSON rows for this container in a new tab";
+        rawLink.textContent = t("slack.rawFeed");
+        rawLink.title = t("slack.rawFeedTitle");
         rawFeed.appendChild(rawLink);
         root.appendChild(rawFeed);
         const stream = document.createElement("div");
@@ -12358,7 +12504,7 @@
           sep.className = "sm-day";
           sep.textContent =
             dayOf(m) === new Date().toDateString()
-              ? "Today"
+              ? t("slack.today")
               : new Date(m.createdAt).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
           return sep;
         };
@@ -12380,14 +12526,14 @@
         };
         const renderInto = (msgs) => {
           stream.textContent = "";
-          if (!msgs.length) return void stream.appendChild(emptyPara("Nothing mirrored for this channel yet."));
+          if (!msgs.length) return void stream.appendChild(emptyPara(t("slack.nothingChannel")));
           buildRows(msgs, stream);
         };
         if (hasMore) {
           const older = document.createElement("button");
           older.type = "button";
           older.className = "load-earlier more";
-          older.textContent = "Load earlier messages";
+          older.textContent = t("slack.loadEarlier");
           older.onclick = async () => {
             older.disabled = true;
             const prev = await fetchPage(messages[0]?.ts);
@@ -12432,10 +12578,7 @@
           else {
             const note = document.createElement("div");
             note.className = "sm-day";
-            note.textContent =
-              "Message " +
-              st.ts +
-              " isn't in the loaded window — it may be older than what's shown (use “Load earlier messages”) or was never mirrored.";
+            note.textContent = t("slack.messageNotLoaded", { id: st.ts });
             root.insertBefore(note, root.firstChild);
           }
         } else {
@@ -12450,15 +12593,15 @@
       }
 
       const JUDGMENT_TABS = [
-        { key: "act,ignore", label: "Judged", counts: ["act", "ignore"] },
-        { key: "act", label: "Woke", counts: ["act"] },
-        { key: "ignore", label: "Silent", counts: ["ignore"] },
-        { key: "fastlane", label: "Fastlane", counts: ["fastlane"] },
+        { key: "act,ignore", labelKey: "judgments.judged", counts: ["act", "ignore"] },
+        { key: "act", labelKey: "judgments.woke", counts: ["act"] },
+        { key: "ignore", labelKey: "judgments.silent", counts: ["ignore"] },
+        { key: "fastlane", labelKey: "judgments.fastlane", counts: ["fastlane"] },
       ];
       function judgmentBadge(d) {
-        if (d === "act") return badge("woke", "ok");
-        if (d === "ignore") return badge("silent", "muted");
-        return badge("fastlane", "accent");
+        if (d === "act") return badge(t("judgments.woke"), "ok");
+        if (d === "ignore") return badge(t("judgments.silent"), "muted");
+        return badge(t("judgments.fastlane"), "accent");
       }
       async function renderAmbientJudgments(st) {
         const root = $("view-data");
@@ -12469,21 +12612,21 @@
         const backTo = (over) => go({ view: "judgments", container: null, decision: st.decision, jid: null, ...over });
         const shell = (extra) =>
           pageShell({
-            title: "Judgments",
+            title: t("view.judgments"),
             ...(st.container
               ? {
-                  back: { label: "← Judgments", onClick: () => backTo({}) },
+                  back: { label: t("judgments.back"), onClick: () => backTo({}) },
                   context: slackContainerLabel(st.container),
                   contextGo: { view: "slack", container: st.container },
                 }
               : {}),
-            actions: [navLink("Ack emoji →", { view: "ackemoji" })],
+            actions: [navLink(t("judgments.ackEmoji"), { view: "ackemoji" })],
             ...extra,
           });
         shell({});
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Loading judgments…";
+        loading.textContent = t("judgments.loading");
         root.appendChild(loading);
         const path =
           "/api/ambient-judgments?decision=" +
@@ -12496,27 +12639,27 @@
           return void root.appendChild(
             emptyPara(
               r.status === 403
-                ? "Only an org admin can read ambient judgments."
-                : r.data?.message || `Failed to load (${r.status}).`,
+                ? t("judgments.readDenied")
+                : r.data?.message || t("slack.failedStatus", { status: r.status }),
             ),
           );
         const counts = r.data.counts || { act: 0, ignore: 0, fastlane: 0 };
         shell({
-          tabs: JUDGMENT_TABS.map((t) => ({
-            label: t.label,
-            count: t.counts.reduce((n, k) => n + (counts[k] || 0), 0),
-            active: t.key === decision,
+          tabs: JUDGMENT_TABS.map((tab) => ({
+            label: t(tab.labelKey),
+            count: tab.counts.reduce((n, k) => n + (counts[k] || 0), 0),
+            active: tab.key === decision,
             onClick: () =>
               go({
                 view: "judgments",
                 container: st.container,
-                decision: t.key === "act,ignore" ? null : t.key,
+                decision: tab.key === "act,ignore" ? null : tab.key,
                 jid: null,
               }),
           })),
         });
         let judgments = r.data.judgments || [];
-        if (!judgments.length) return void root.appendChild(emptyPara("No judgments recorded for this filter yet."));
+        if (!judgments.length) return void root.appendChild(emptyPara(t("judgments.noneFilter")));
         const open = (j) =>
           go({ view: "judgments", container: st.container, decision: st.decision, jid: String(j.id) });
         const rowOf = (j) => {
@@ -12525,7 +12668,7 @@
           prev.appendChild(judgmentBadge(j.decision));
           const txt = document.createElement("span");
           txt.className = "pill";
-          txt.textContent = j.reason || (j.decision === "fastlane" ? "@mention — routed past the judge" : "—");
+          txt.textContent = j.reason || (j.decision === "fastlane" ? t("judgments.mentionRouted") : "—");
           prev.appendChild(txt);
           if (j.latencyMs != null) {
             const l = document.createElement("span");
@@ -12551,7 +12694,7 @@
           const more = document.createElement("button");
           more.type = "button";
           more.className = "load-earlier more";
-          more.textContent = "Load earlier judgments";
+          more.textContent = t("judgments.loadEarlier");
           more.onclick = async () => {
             more.disabled = true;
             const last = judgments[judgments.length - 1];
@@ -12574,7 +12717,7 @@
         const wrap = document.createElement("div");
         const title = document.createElement("div");
         title.className = "judg-pane-title";
-        title.appendChild(document.createTextNode("Slack mirror"));
+        title.appendChild(document.createTextNode(t("judgments.slackMirror")));
         const href = judgmentSlackHref(workspaceUrl, j.container, j.tsFrom);
         if (href) {
           const a = document.createElement("a");
@@ -12582,8 +12725,8 @@
           a.target = "_blank";
           a.rel = "noopener";
           a.className = "judg-extlink";
-          a.setAttribute("aria-label", "Open in Slack");
-          a.title = "Jump to this moment in Slack to scroll up for more context";
+          a.setAttribute("aria-label", t("common.openSlack"));
+          a.title = t("judgments.jumpTitle");
           a.innerHTML =
             '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3.5H3.5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3"/><path d="M9.5 2.5h4v4"/><path d="M7 9 13.5 2.5"/></svg>';
           title.appendChild(a);
@@ -12605,12 +12748,15 @@
           );
           if (view !== "judgments" || urlToState().jid !== String(j.id)) return;
           box.textContent = "";
-          if (!r.ok) return void box.appendChild(emptyPara(r.data?.message || `Failed to load mirror (${r.status}).`));
+          if (!r.ok)
+            return void box.appendChild(
+              emptyPara(r.data?.message || t("judgments.mirrorFailed", { status: r.status })),
+            );
           const from = j.tsFrom,
             to = j.tsTo;
 
           const messages = (r.data.messages || []).filter((m) => !to || m.ts <= to);
-          if (!messages.length) return void box.appendChild(emptyPara("Nothing mirrored for this window."));
+          if (!messages.length) return void box.appendChild(emptyPara(t("judgments.mirrorEmpty")));
           const stream = document.createElement("div");
           stream.className = "sm-stream";
           for (const m of messages) {
@@ -12627,7 +12773,7 @@
         const wrap = document.createElement("div");
         const title = document.createElement("div");
         title.className = "judg-pane-title";
-        title.textContent = "Judge context";
+        title.textContent = t("judgments.context");
         wrap.appendChild(title);
         const box = document.createElement("div");
         box.className = "judg-prompt";
@@ -12635,7 +12781,7 @@
         pre.textContent =
           j.prompt ||
           (j.decision === "fastlane"
-            ? "Routed past the judge (formal @mention) — no prompt was rendered."
+            ? t("judgments.formalMention")
             : "(prompt not recorded)");
         box.appendChild(pre);
         wrap.appendChild(box);
@@ -12645,26 +12791,31 @@
         const root = $("view-data");
         root.textContent = "";
         const back = {
-          label: "← Judgments",
+          label: t("judgments.back"),
           onClick: () => go({ view: "judgments", container: st.container, decision: st.decision, jid: null }),
         };
-        pageShell({ back, title: "Judgment" });
+        pageShell({ back, title: t("judgments.title") });
         const detail = document.createElement("div");
         detail.className = "detail judg-detail";
-        detail.textContent = "Loading…";
+        detail.textContent = t("common.loadingEllipsis");
         root.appendChild(detail);
         const r = await api("GET", "/api/ambient-judgments?id=" + encodeURIComponent(st.jid));
         if (view !== "judgments" || urlToState().jid !== st.jid) return;
         detail.textContent = "";
-        if (!r.ok) return void detail.appendChild(emptyPara(r.data?.message || `Failed to load (${r.status}).`));
+        if (!r.ok)
+          return void detail.appendChild(
+            emptyPara(r.data?.message || t("slack.failedStatus", { status: r.status })),
+          );
         const j = r.data.judgment;
         const scopeGo = slackContainerScope(j.container);
         pageShell({
           back,
-          title: "Judgment",
+          title: t("judgments.title"),
           context: slackContainerLabel(j.container),
           contextGo: { view: "slack", container: j.container, ts: j.tsFrom },
-          actions: scopeGo ? [navLink("Governance →", { view: "governance", scope: scopeGo, session: null })] : [],
+          actions: scopeGo
+            ? [navLink(t("slack.governance"), { view: "governance", scope: scopeGo, session: null })]
+            : [],
         });
         const split = document.createElement("div");
         split.className = "judg-split";
@@ -12676,7 +12827,7 @@
         const head = document.createElement("div");
         head.className = "badges";
         head.appendChild(judgmentBadge(j.decision));
-        if (j.askedBy) head.appendChild(badge("asked by " + j.askedBy, "accent"));
+        if (j.askedBy) head.appendChild(badge(t("judgments.askedBy", { principal: j.askedBy }), "accent"));
         const meta = document.createElement("span");
         meta.className = "shell-context";
         meta.textContent = [j.model, j.latencyMs != null ? j.latencyMs + "ms" : null, fmtTime(j.createdAt)]
@@ -12686,17 +12837,17 @@
         dec.appendChild(head);
         const p = document.createElement("p");
         let reason = "—";
-        if (j.decision === "ignore") reason = "Stayed silent.";
-        else if (j.decision === "fastlane") reason = "@mention — routed past the judge.";
+        if (j.decision === "ignore") reason = t("judgments.stayedSilent");
+        else if (j.decision === "fastlane") reason = t("judgments.mentionRouted");
         p.textContent = j.reason || reason;
         dec.appendChild(p);
         detail.appendChild(dec);
       }
 
       const ACK_PICK_TABS = [
-        { key: null, label: "All", counts: ["picked", "declined"] },
-        { key: "picked", label: "Picked", counts: ["picked"] },
-        { key: "declined", label: "Declined", counts: ["declined"] },
+        { key: null, labelKey: "ack.all", counts: ["picked", "declined"] },
+        { key: "picked", labelKey: "ack.picked", counts: ["picked"] },
+        { key: "declined", labelKey: "ack.declined", counts: ["declined"] },
       ];
 
       function ackEmojiTag(name, icon) {
@@ -12720,7 +12871,7 @@
         return s;
       }
       function ackPickBadge(o) {
-        return o === "picked" ? badge("picked", "ok") : badge("declined", "muted");
+        return o === "picked" ? badge(t("ack.picked"), "ok") : badge(t("ack.declined"), "muted");
       }
       async function renderAckEmojiPicks(st) {
         const root = $("view-data");
@@ -12730,11 +12881,11 @@
         const outcome = st.decision || null;
         const shell = (extra) =>
           pageShell({
-            title: "Ack emoji",
+            title: t("view.ackemoji"),
             ...(st.container
               ? {
                   back: {
-                    label: "← Ack emoji",
+                    label: t("ack.back"),
                     onClick: () => go({ view: "ackemoji", container: null, decision: st.decision, jid: null }),
                   },
                   context: slackContainerLabel(st.container),
@@ -12742,7 +12893,7 @@
                 }
               : {
                   back: {
-                    label: "← Judgments",
+                    label: t("judgments.back"),
                     onClick: () => go({ view: "judgments", container: null, decision: null, jid: null }),
                   },
                 }),
@@ -12751,7 +12902,7 @@
         shell({});
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Loading ack-emoji picks…";
+        loading.textContent = t("ack.loading");
         root.appendChild(loading);
         const path =
           "/api/ack-emoji-picks?" +
@@ -12764,21 +12915,21 @@
           return void root.appendChild(
             emptyPara(
               r.status === 403
-                ? "Only an org admin can read ack-emoji picks."
-                : r.data?.message || `Failed to load (${r.status}).`,
+                ? t("ack.readDenied")
+                : r.data?.message || t("slack.failedStatus", { status: r.status }),
             ),
           );
         const counts = r.data.counts || { picked: 0, declined: 0 };
         shell({
-          tabs: ACK_PICK_TABS.map((t) => ({
-            label: t.label,
-            count: t.counts.reduce((n, k) => n + (counts[k] || 0), 0),
-            active: (t.key || null) === outcome,
-            onClick: () => go({ view: "ackemoji", container: st.container, decision: t.key, jid: null }),
+          tabs: ACK_PICK_TABS.map((tab) => ({
+            label: t(tab.labelKey),
+            count: tab.counts.reduce((n, k) => n + (counts[k] || 0), 0),
+            active: (tab.key || null) === outcome,
+            onClick: () => go({ view: "ackemoji", container: st.container, decision: tab.key, jid: null }),
           })),
         });
         let picks = r.data.picks || [];
-        if (!picks.length) return void root.appendChild(emptyPara("No ack-emoji picks recorded for this filter yet."));
+        if (!picks.length) return void root.appendChild(emptyPara(t("ack.noneFilter")));
         const open = (p) => go({ view: "ackemoji", container: st.container, decision: st.decision, jid: String(p.id) });
         const rowOf = (p) => {
           const prev = document.createElement("span");
@@ -12812,7 +12963,7 @@
           const more = document.createElement("button");
           more.type = "button";
           more.className = "load-earlier more";
-          more.textContent = "Load earlier picks";
+          more.textContent = t("ack.loadEarlier");
           more.onclick = async () => {
             more.disabled = true;
             const last = picks[picks.length - 1];
@@ -12830,23 +12981,26 @@
         const root = $("view-data");
         root.textContent = "";
         const back = {
-          label: "← Ack emoji",
+          label: t("ack.back"),
           onClick: () => go({ view: "ackemoji", container: st.container, decision: st.decision, jid: null }),
         };
-        pageShell({ back, title: "Ack emoji" });
+        pageShell({ back, title: t("view.ackemoji") });
         const detail = document.createElement("div");
         detail.className = "detail judg-detail";
-        detail.textContent = "Loading…";
+        detail.textContent = t("common.loadingEllipsis");
         root.appendChild(detail);
         const r = await api("GET", "/api/ack-emoji-picks?id=" + encodeURIComponent(st.jid));
         if (view !== "ackemoji" || urlToState().jid !== st.jid) return;
         detail.textContent = "";
-        if (!r.ok) return void detail.appendChild(emptyPara(r.data?.message || `Failed to load (${r.status}).`));
+        if (!r.ok)
+          return void detail.appendChild(
+            emptyPara(r.data?.message || t("slack.failedStatus", { status: r.status })),
+          );
         const p = r.data.pick;
         const href = judgmentSlackHref(r.data.workspaceUrl, p.channel, p.ts);
         pageShell({
           back,
-          title: "Ack emoji",
+          title: t("view.ackemoji"),
           context: slackContainerLabel(p.channel),
           contextGo: { view: "slack", container: p.channel, ts: p.ts },
         });
@@ -12867,24 +13021,24 @@
           a.target = "_blank";
           a.rel = "noopener";
           a.className = "judg-extlink";
-          a.textContent = "Open in Slack ↗";
+          a.textContent = t("common.openSlack");
           head.appendChild(a);
         }
         dec.appendChild(head);
         const msgTitle = document.createElement("div");
         msgTitle.className = "judg-pane-title";
-        msgTitle.textContent = "Message";
+        msgTitle.textContent = t("common.message");
         detail.appendChild(dec);
         detail.appendChild(msgTitle);
         const msg = document.createElement("div");
         msg.className = "judg-prompt";
         const mpre = document.createElement("pre");
-        mpre.textContent = p.message || "(not recorded)";
+        mpre.textContent = p.message || t("ack.notRecorded");
         msg.appendChild(mpre);
         detail.appendChild(msg);
         const candTitle = document.createElement("div");
         candTitle.className = "judg-pane-title";
-        candTitle.textContent = "Candidate slate";
+        candTitle.textContent = t("ack.candidateSlate");
         detail.appendChild(candTitle);
         const cand = document.createElement("div");
         cand.className = "badges";
@@ -12893,7 +13047,7 @@
           if (name === p.picked) tag.classList.add("accent");
           cand.appendChild(tag);
         }
-        if (!(p.candidates || "").trim()) cand.appendChild(emptyPara("(candidate slate not recorded)"));
+        if (!(p.candidates || "").trim()) cand.appendChild(emptyPara(t("ack.candidateNotRecorded")));
         detail.appendChild(cand);
       }
       async function showTranscript(sessionId, limit, expand) {
@@ -12902,14 +13056,14 @@
         const root = $("view-data");
         root.textContent = "";
         pageShell({
-          back: { label: "← Conversations", onClick: () => history.back() },
-          title: "Conversation",
+          back: { label: t("history.backConversations"), onClick: () => history.back() },
+          title: t("history.conversation"),
           context: shortName(scope),
         });
         renderTranscriptHeaderControls(() => applyTranscriptControls());
         const detail = document.createElement("div");
         detail.className = "detail";
-        detail.textContent = "Loading…";
+        detail.textContent = t("common.loadingEllipsis");
         root.appendChild(detail);
 
         const llmPromise = api(
@@ -12926,7 +13080,7 @@
             reqLimit,
         );
         if (!r.ok) {
-          detail.textContent = r.data?.message || `Failed to load transcript (${r.status}).`;
+          detail.textContent = r.data?.message || t("history.transcriptFailed", { status: r.status });
           return;
         }
         detail.textContent = "";
@@ -12941,10 +13095,11 @@
             ? session.scopeId.slice("personal:".length)
             : null;
         pageShell({
-          back: { label: "← Conversations", onClick: () => history.back() },
-          title: origin?.label || "Conversation",
+          back: { label: t("history.backConversations"), onClick: () => history.back() },
+          title: origin?.label || t("history.conversation"),
           context:
-            shortName(session.scopeId || scope) + (session.createdAt ? " · created " + relTime(session.createdAt) : ""),
+            shortName(session.scopeId || scope) +
+            (session.createdAt ? " · " + t("history.created", { time: relTime(session.createdAt) }) : ""),
           actions: ownerPrincipal ? [webUiAsButton(ownerPrincipal)] : [],
         });
         const errStrip = document.createElement("div");
@@ -12954,7 +13109,7 @@
             "scope=" + encodeURIComponent(scope) + "&sessionId=" + encodeURIComponent(sessionId),
           );
           if (!errs.length || !errStrip.isConnected) return;
-          errStrip.appendChild(errorStripBox(errs, plural(errs.length, "error") + " logged in this session", 5));
+          errStrip.appendChild(errorStripBox(errs, t("history.sessionErrors", { count: errs.length }), 5));
         })();
 
         const originPromptSeq = origin && !serverHasMore ? entries.find((e) => e.type === "user")?.seq : null;
@@ -12974,7 +13129,7 @@
         if (!entries.length && !deliveryEvents.length) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = "No entries.";
+          p.textContent = t("history.noEntries");
           detail.appendChild(p);
           return;
         }
@@ -13096,8 +13251,8 @@
 
         const messageEntryLabel = (e) => {
           if (e.type === "assistant") return brandSelfLabel();
-          if (e.type !== "user") return titleCase(e.type || "entry");
-          return payloadName(e.payload) || "User";
+          if (e.type !== "user") return titleCase(e.type || t("history.entry"));
+          return payloadName(e.payload) || t("history.user");
         };
         const entryLabel = (e) => {
           const s = document.createElement("span");
@@ -13108,7 +13263,7 @@
           } else if (e.type === "user" || e.type === "assistant") {
             s.textContent = messageEntryLabel(e);
           } else {
-            s.textContent = titleCase(e.type || "entry");
+            s.textContent = titleCase(e.type || t("history.entry"));
           }
           return s;
         };
@@ -13118,7 +13273,7 @@
           const link = document.createElement("button");
           link.type = "button";
           link.className = "link";
-          link.textContent = "View cron";
+          link.textContent = t("crons.view");
           link.onclick = () =>
             go({
               view: "crons",
@@ -13136,7 +13291,10 @@
             link.type = "button";
             link.className = "origin-link";
             link.textContent = label;
-            link.title = `Open origin session ${shortId(event.sourceSession.id)} · ${provenance?.fireKey || event.idempotencyKey || ""}`;
+            link.title = t("history.openOrigin", {
+              id: shortId(event.sourceSession.id),
+              key: provenance?.fireKey || event.idempotencyKey || "",
+            });
             link.onclick = () => go({ view: "history", scope, session: event.sourceSession.id });
             return link;
           }
@@ -13150,7 +13308,7 @@
           const link = document.createElement("button");
           link.type = "button";
           link.className = "link";
-          link.textContent = "View cron";
+          link.textContent = t("crons.view");
           const cron = event.origin.cron || null;
           link.onclick = () =>
             go({ view: "crons", scope: cron?.ownerScopeId || scope, session: null, cron: event.origin.cronId });
@@ -13166,8 +13324,11 @@
             const open = !panel.classList.contains("collapsed");
             btn.classList.toggle("active", open);
             btn.setAttribute("aria-expanded", String(open));
-            btn.setAttribute("aria-label", (open ? "Hide" : "Show") + " context");
-            btn.title = `${open ? "Hide" : "Show"} context · ${requests.length} request${requests.length === 1 ? "" : "s"}`;
+            btn.setAttribute("aria-label", t(open ? "history.hideContext" : "history.showContext"));
+            btn.title =
+              t(open ? "history.hideContext" : "history.showContext") +
+              " · " +
+              t("history.contextRequestCount", { count: requests.length });
           };
           btn.onclick = () => {
             panel.classList.toggle("collapsed");
@@ -13183,8 +13344,8 @@
           btn.className = "context-icon";
           btn.innerHTML =
             '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5c-2.1 0-3.7 1.3-3.7 3.1 0 .2 0 .4.1.6A3.6 3.6 0 0 0 6 11.5c0 1 .4 2 1.1 2.6-.1.3-.1.5-.1.8 0 2 1.8 3.6 4 3.6h1.9c2.2 0 4-1.6 4-3.6 0-.3 0-.6-.1-.8.7-.7 1.1-1.6 1.1-2.6 0-1.5-.9-2.8-2.3-3.3 0-.2.1-.4.1-.6 0-1.8-1.6-3.1-3.7-3.1Z"/><path d="M9.2 9.2c.9.1 1.6.6 2 1.4"/><path d="M14.8 9.2c-.9.1-1.6.6-2 1.4"/><path d="M12 10.7v7.8"/></svg>';
-          btn.setAttribute("aria-label", "View context sent to the model");
-          btn.title = `View context sent to the model · ${count} request${count === 1 ? "" : "s"}`;
+          btn.setAttribute("aria-label", t("history.viewContext"));
+          btn.title = t("history.viewContext") + " · " + t("history.contextRequestCount", { count });
           btn.onclick = (ev) => {
             ev.stopPropagation();
             go({ view: "history", scope, session: sessionId, turn: turnSeq });
@@ -13280,7 +13441,7 @@
           row.append(
             when,
             status,
-            copyButton("Copy", () => toolCopyText(callEntry, resultEntry)),
+            copyButton(t("common.copy"), () => toolCopyText(callEntry, resultEntry)),
           );
           const sync = () => {
             const open = block.classList.contains("open");
@@ -13289,7 +13450,7 @@
           };
           row.tabIndex = 0;
           row.setAttribute("role", "button");
-          row.title = "Toggle full tool card";
+          row.title = t("history.toggleTool");
           row.onclick = (ev) => {
             if (ev.target.closest(".copy")) return;
             block.classList.toggle("open");
@@ -13317,7 +13478,7 @@
             who.className = "who";
             const role = document.createElement("span");
             role.className = "role";
-            role.textContent = "captured context";
+            role.textContent = t("history.capturedContext");
             who.append(contextNavButton("orphan", unit.reqs.length), role);
             block.appendChild(who);
             return { node: block, meta: null };
@@ -13332,23 +13493,23 @@
             const slackDelivery = outbound || event.type === "principal_delivery";
             const label = document.createElement("span");
             label.className = "entry-label important";
-            let deliveryLabel = "Delivery event";
-            if (event.shadow) deliveryLabel = "Shadow delivery";
-            else if (slackDelivery) deliveryLabel = "Slack delivery";
+            let deliveryLabel = t("history.deliveryEvent");
+            if (event.shadow) deliveryLabel = t("history.shadowDelivery");
+            else if (slackDelivery) deliveryLabel = t("history.slackDelivery");
             label.textContent = deliveryLabel;
             const when = document.createElement("span");
             when.className = "when";
-            let deliveryState = "delivery";
-            if (event.shadow) deliveryState = "shadow";
-            else if (slackDelivery) deliveryState = "delivered";
+            let deliveryState = t("history.deliveryState");
+            if (event.shadow) deliveryState = t("history.shadowState");
+            else if (slackDelivery) deliveryState = t("history.deliveredState");
             when.textContent = `${deliveryState} · ${fmtTime(event.createdAt)}`;
             const text = event.text || "";
             who.append(label);
             if (event.shadow) {
               const sb = document.createElement("span");
               sb.className = "entry-label";
-              sb.title = "Recorded for observability — never sent to the human (shadow-mode rollout)";
-              sb.textContent = "not sent";
+              sb.title = t("slack.notSentTitle");
+              sb.textContent = t("slack.notSent");
               who.append(sb);
             }
             if (slackDelivery)
@@ -13359,12 +13520,12 @@
             if (originLink) who.appendChild(originLink);
             const mirror = slackMirrorRef(event);
             if (mirror) {
-              const ml = navLink("View in Slack mirror ↗", {
+              const ml = navLink(t("history.viewSlackMirror"), {
                 view: "slack",
                 container: mirror.container,
                 ts: mirror.ts,
               });
-              ml.title = "Jump to this message in the mirrored Slack channel " + mirror.container;
+              ml.title = t("history.slackMirrorTitle", { channel: mirror.container });
               who.appendChild(ml);
             }
             let contextPanel = null;
@@ -13378,17 +13539,22 @@
             }
             who.append(
               when,
-              copyButton("Copy", () => text),
+              copyButton(t("common.copy"), () => text),
             );
             const body = document.createElement("pre");
-            const from = event.destination?.onBehalfOf ? `from ${event.destination.onBehalfOf}\n` : "";
-            const to = outbound && event.destination?.target ? `to ${event.destination.target}\n` : "";
+            const from = event.destination?.onBehalfOf
+              ? t("history.from", { value: event.destination.onBehalfOf })
+              : "";
+            const to =
+              outbound && event.destination?.target ? t("history.to", { value: event.destination.target }) : "";
             const originLine =
               event.provenance?.fireKey || event.origin?.fireKey
-                ? `origin ${event.provenance?.fireKey || event.origin.fireKey}\n`
+                ? t("history.origin", { value: event.provenance?.fireKey || event.origin.fireKey })
                 : "";
             const recipientLine =
-              outbound && event.recipientThreadRef ? `recipient thread ${event.recipientThreadRef}\n` : "";
+              outbound && event.recipientThreadRef
+                ? t("history.recipientThread", { value: event.recipientThreadRef })
+                : "";
             body.textContent = `${from}${to}${originLine}${recipientLine}${text}`.trim();
             block.appendChild(who);
             if (contextPanel) block.appendChild(contextPanel);
@@ -13435,8 +13601,8 @@
               const open = !block.classList.contains("collapsed");
               tog.textContent = open ? "▾" : "▸";
               tog.setAttribute("aria-expanded", String(open));
-              tog.setAttribute("aria-label", open ? "Collapse entry" : "Expand entry");
-              tog.title = open ? "Collapse entry" : "Expand entry";
+              tog.setAttribute("aria-label", t(open ? "history.collapseEntry" : "history.expandEntry"));
+              tog.title = open ? t("history.collapseEntry") : t("history.expandEntry");
             };
             syncDisclosure = sync;
             tog.onclick = () => {
@@ -13451,7 +13617,7 @@
           if (cronLink) who.appendChild(cronLink);
           who.append(
             when,
-            copyButton("Copy", () => text),
+            copyButton(t("common.copy"), () => text),
           );
           if (unit.llmReqs?.length) {
             who.insertBefore(contextNavButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length), who.firstChild);
@@ -13490,7 +13656,7 @@
         const sentinel = document.createElement("div");
         sentinel.className = "load-earlier";
         sentinel.setAttribute("aria-hidden", "true");
-        sentinel.textContent = "Loading earlier messages…";
+        sentinel.textContent = t("history.loadingEarlier");
         stream.appendChild(sentinel);
         let firstRendered = units.length;
 
@@ -13502,7 +13668,7 @@
           }
           sentinel.classList.add("more");
           sentinel.removeAttribute("aria-hidden");
-          sentinel.textContent = "Load earlier messages";
+          sentinel.textContent = t("history.loadEarlier");
           sentinel.setAttribute("role", "button");
           sentinel.tabIndex = 0;
           const load = () => showTranscript(sessionId, reqLimit * 4, true);
@@ -13537,7 +13703,7 @@
         function pauseFilteredReveal() {
           sentinel.classList.add("more");
           sentinel.removeAttribute("aria-hidden");
-          sentinel.textContent = "Load earlier messages";
+          sentinel.textContent = t("history.loadEarlier");
           sentinel.setAttribute("role", "button");
           sentinel.tabIndex = 0;
           sentinel.onclick = revealEarlier;
@@ -13555,7 +13721,7 @@
           sentinel.setAttribute("aria-hidden", "true");
           sentinel.removeAttribute("role");
           sentinel.removeAttribute("tabindex");
-          sentinel.textContent = "Loading earlier messages…";
+          sentinel.textContent = t("history.loadingEarlier");
           sentinel.onclick = null;
           sentinel.onkeydown = null;
           const from = snapStart(Math.max(0, firstRendered - RENDER_WINDOW));
@@ -13901,7 +14067,7 @@
           const head = document.createElement("div");
           head.className = "context-request-head";
           const title = document.createElement("strong");
-          title.textContent = "Request " + (i + 1);
+          title.textContent = t("history.request", { number: i + 1 });
           const meta = document.createElement("span");
           meta.textContent = (q.model || "?") + " · " + fmtContextSize(q, sections);
           head.append(title, meta);
@@ -13910,7 +14076,7 @@
         if (q.truncated) {
           const note = document.createElement("p");
           note.className = "context-note";
-          note.textContent = "Stored payload was truncated.";
+          note.textContent = t("history.payloadTruncated");
           wrap.appendChild(note);
         }
         const renderedOverview = contextOverview(sections, "request context", (section, button, buttons) => {
@@ -13931,7 +14097,7 @@
         tog.className = "disclosure";
         const role = document.createElement("span");
         role.className = "role";
-        role.textContent = "sent to model";
+        role.textContent = t("history.sentRole");
         const latest = requests[requests.length - 1] || { request: {} };
         const latestSections = opts.latestSections || contextSections(latest.request, latest.transport);
         const sync = () => {
@@ -14003,7 +14169,7 @@
           if (capped) {
             const note = document.createElement("p");
             note.className = "empty";
-            note.textContent = "Only the newest 2,000 files are indexed — a scope with only older files won't appear.";
+            note.textContent = t("files.indexCapped");
             scopeWrap.appendChild(note);
           }
         }
@@ -14052,7 +14218,7 @@
             box.appendChild(img);
           } else {
             box.textContent = "img";
-            box.title = "Large image — click to preview full size";
+            box.title = t("files.largeImage");
           }
         }
         return box;

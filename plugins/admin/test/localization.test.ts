@@ -52,6 +52,16 @@ test("Japanese Admin workflow terms use the operator vocabulary", () => {
   assert.equal(adminMessage("ja", "action.cancel"), "キャンセル");
 });
 
+test("Japanese Admin operational messages render dynamic values without interpreting them as markup", () => {
+  assert.equal(adminMessage("ja", "transcript.thinking"), "思考");
+  assert.equal(adminMessage("ja", "retention.newVsReturning"), "新規利用者と継続利用者");
+  assert.equal(adminMessage("ja", "history.contextRequestCount", { count: 3 }), "モデルへ送信したリクエスト 3件");
+  assert.equal(
+    adminMessage("ja", "users.resolveFailed", { message: '<img src=x onerror="alert(1)">' }),
+    '利用者を特定できませんでした（<img src=x onerror="alert(1)">）。',
+  );
+});
+
 test("Japanese Admin shell renders localized onboarding and governance copy", async () => {
   const html = await (await fetch(`${base}/onboarding`, { headers: { "x-qm-locale": "ja" } })).text();
   assert.match(html, /<h1>初期設定<\/h1>/);
