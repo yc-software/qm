@@ -41,6 +41,7 @@ process.env.WEB_UI_UPSTREAM = surfaceUrl;
 process.env.ADMIN_UPSTREAM = surfaceUrl;
 process.env.CORE_API_URL = surfaceUrl;
 process.env.AUTH_BROKER_UPSTREAM = brokerUrl;
+process.env.QM_DEFAULT_LOCALE = "ja";
 
 const { server, brokerRouteFor, clientIpOf, isPrivateNetworkUrl } = await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -61,6 +62,14 @@ test("the broker's sign-in pages are reachable without a session", async () => {
     "/authorize?client_id=qm-portal&state=s",
     "the /idp prefix is stripped before the broker sees it",
   );
+});
+
+test("the broker receives the portal-resolved locale instead of a client-forged header", async () => {
+  const page = await fetch(`${base}/idp/authorize?client_id=qm-portal&state=s`, {
+    headers: { "accept-language": "en-US", "x-qm-locale": "en" },
+  });
+  assert.equal(page.status, 200);
+  assert.equal(seen.at(-1)!.headers["x-qm-locale"], "ja");
 });
 
 test("the verify redirect is relayed back to the browser", async () => {

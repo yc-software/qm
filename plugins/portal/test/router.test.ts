@@ -82,7 +82,7 @@ process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 
-const { server } = await import("../src/index.ts");
+const { server, localeOf } = await import("../src/index.ts");
 const { deriveKey, seal, open } = await import("../src/session.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -102,6 +102,67 @@ test.after(() => {
 test("healthz is unauthenticated", async () => {
   const r = await fetch(`${base}/healthz`);
   assert.equal(r.status, 200);
+});
+
+test("locale preference is validated, durable, and safely redirected", async () => {
+  const response = await fetch(`${base}/locale`, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      origin: PUBLIC,
+      "sec-fetch-site": "same-origin",
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ locale: "ja", returnTo: "/admin/?tab=users" }),
+  });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "/admin/?tab=users");
+  assert.match(response.headers.get("set-cookie") ?? "", /qm_locale=ja/);
+  assert.match(response.headers.get("set-cookie") ?? "", /HttpOnly/);
+  assert.match(response.headers.get("set-cookie") ?? "", /SameSite=Lax/);
+  assert.match(response.headers.get("set-cookie") ?? "", /Path=\//);
+  assert.match(response.headers.get("set-cookie") ?? "", /Max-Age=31536000/);
+});
+
+test("locale preference rejects invalid values and cross-origin writes", async () => {
+  const invalid = await fetch(`${base}/locale`, {
+    method: "POST",
+    headers: { origin: PUBLIC, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ locale: "fr" }),
+  });
+  assert.equal(invalid.status, 400);
+
+  const crossOrigin = await fetch(`${base}/locale`, {
+    method: "POST",
+    headers: { origin: "https://evil.test", "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ locale: "en" }),
+  });
+  assert.equal(crossOrigin.status, 403);
+});
+
+test("locale preference contains redirect escapes and request bodies", async () => {
+  const escaped = await fetch(`${base}/locale`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { origin: PUBLIC, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ locale: "en", returnTo: "https://evil.test/steal" }),
+  });
+  assert.equal(escaped.status, 303);
+  assert.equal(escaped.headers.get("location"), "/");
+
+  const oversized = await fetch(`${base}/locale`, {
+    method: "POST",
+    headers: { origin: PUBLIC, "content-type": "application/x-www-form-urlencoded" },
+    body: `locale=ja&returnTo=/${"x".repeat(1024)}`,
+  });
+  assert.equal(oversized.status, 413);
+});
+
+test("locale resolution prefers the cookie and then the browser when no deployment default exists", () => {
+  const request = (headers: Record<string, string | undefined>): IncomingMessage => ({ headers }) as IncomingMessage;
+  assert.equal(localeOf(request({ cookie: "qm_locale=en", "accept-language": "ja-JP" })), "en");
+  assert.equal(localeOf(request({ "accept-language": "ja-JP" })), "ja");
+  assert.equal(localeOf(request({})), "en");
 });
 
 test("favicon: served unauthenticated as an SVG of the pirate-flag emoji", async () => {
@@ -133,9 +194,10 @@ test("legacy /web-ui prefix redirects permanently to the same path at the root",
 test("valid session: upstream receives ONLY the synthesized cookie, prefix stripped, forged identity dropped", async () => {
   const r = await fetch(`${base}/web-ui/api/x?q=1`, {
     headers: {
-      cookie: `${sessionCookie("U1")}; webuiuser=EVIL; admin=EVIL`,
+      cookie: `${sessionCookie("U1")}; qm_locale=ja; webuiuser=EVIL; admin=EVIL`,
       "x-as-principal": "EVIL",
       "x-admin-actor": "EVIL@acme",
+      "x-qm-locale": "en",
     },
   });
   assert.equal(r.status, 200);
@@ -144,6 +206,7 @@ test("valid session: upstream receives ONLY the synthesized cookie, prefix strip
   assert.equal(body.cookie, "webuiuser=U1");
   assert.equal(body.headers["x-as-principal"], undefined);
   assert.equal(body.headers["x-admin-actor"], undefined);
+  assert.equal(body.headers["x-qm-locale"], "ja");
 });
 
 test("web-ui /app-edit drops x-frame-options so its own frame-ancestors CSP can allow the app origin", async () => {

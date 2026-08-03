@@ -127,10 +127,11 @@ export function clearCookie(name: string, path: string, secure: boolean, domain?
   return parts.join("; ");
 }
 
-export function readCookie(header: string | undefined, name: string): string | null {
-  if (!header) return null;
+export function readCookie(header: string | readonly string[] | undefined, name: string): string | null {
+  const value = typeof header === "string" ? header : header?.join("; ");
+  if (!value) return null;
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = header.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]+)`));
+  const m = value.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]+)`));
   if (!m) return null;
   try {
     return decodeURIComponent(m[1] ?? "");

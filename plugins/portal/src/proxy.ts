@@ -1,5 +1,6 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
+import { LOCALE_HEADER, type Locale } from "../../chassis/src/locale.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 const IDENTITY_TTL_MS = 60_000;
@@ -79,6 +80,7 @@ export interface SurfaceTarget {
   search: string;
   cookieName: string;
   principal: string;
+  locale: Locale;
   displayName?: string;
   impersonator?: string;
   identitySecret?: string;
@@ -91,7 +93,7 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
     `${t.cookieName}=${encodeURIComponent(t.principal)}` +
     (t.displayName ? `; ${t.cookieName}_name=${encodeURIComponent(t.displayName)}` : "") +
     (t.impersonator ? `; webui_impersonator=${encodeURIComponent(t.impersonator)}` : "");
-  const base: Record<string, string> = { host: upstream.host, cookie };
+  const base: Record<string, string> = { host: upstream.host, cookie, [LOCALE_HEADER]: t.locale };
   if (t.identitySecret) {
     const now = t.nowMs ?? Date.now();
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
@@ -139,6 +141,7 @@ export interface DeploymentTarget {
   subPath: string;
   search: string;
   principal: string;
+  locale: Locale;
   signingSecret: string | undefined;
   identitySecret?: string;
 }
@@ -148,7 +151,12 @@ export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: 
   const corePath = `/d/${encodeURIComponent(t.id)}${t.subPath}${t.search}`;
   const core = new URL(t.coreBase);
   const signed = signedHeaders(t.signingSecret, method, corePath, "", t.principal);
-  const base: Record<string, string> = { host: core.host, "x-as-principal": t.principal, ...signed };
+  const base: Record<string, string> = {
+    host: core.host,
+    "x-as-principal": t.principal,
+    [LOCALE_HEADER]: t.locale,
+    ...signed,
+  };
   if (t.identitySecret)
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
       { p: t.principal, exp: Date.now() + IDENTITY_TTL_MS },

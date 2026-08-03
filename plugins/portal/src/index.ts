@@ -40,7 +40,8 @@ import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-clien
 import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
-import { json, escapeHtml, serveEmojiFavicon } from "../../chassis/src/http.ts";
+import { json, escapeHtml, PayloadTooLargeError, readBody, serveEmojiFavicon } from "../../chassis/src/http.ts";
+import { LOCALE_COOKIE, LOCALE_HEADER, normalizeLocale, resolveLocale, type Locale } from "../../chassis/src/locale.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -57,6 +58,8 @@ const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.ma
 const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const COOKIE_DOMAIN = process.env.PORTAL_COOKIE_DOMAIN || undefined;
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || undefined;
+const DEFAULT_LOCALE = process.env.QM_DEFAULT_LOCALE;
+const LOCALE_TTL_S = 31_536_000;
 const IS_PROD = process.env.NODE_ENV === "production";
 const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
 const ORIGIN = (() => {
@@ -252,6 +255,14 @@ function sameOriginRequest(req: IncomingMessage): boolean {
   const site = req.headers["sec-fetch-site"];
   if (typeof site !== "string") return originMatches;
   return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
+}
+
+export function localeOf(req: IncomingMessage): Locale {
+  return resolveLocale({
+    explicit: readCookie(req.headers.cookie, LOCALE_COOKIE),
+    defaultLocale: DEFAULT_LOCALE,
+    acceptLanguage: req.headers["accept-language"],
+  });
 }
 
 function wantsHtml(req: IncomingMessage): boolean {
@@ -719,6 +730,16 @@ function sessionCookieSet(value: string): string[] {
   return COOKIE_DOMAIN ? [set, clearCookie("portal_session", "/", SECURE_COOKIES)] : [set];
 }
 
+function localeCookieSet(locale: Locale): string[] {
+  const set = setCookie(LOCALE_COOKIE, locale, {
+    path: "/",
+    maxAge: LOCALE_TTL_S,
+    secure: SECURE_COOKIES,
+    ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
+  });
+  return COOKIE_DOMAIN ? [set, clearCookie(LOCALE_COOKIE, "/", SECURE_COOKIES)] : [set];
+}
+
 function setSession(res: ServerResponse, headers: string[]): void {
   res.setHeader("set-cookie", headers);
 }
@@ -837,6 +858,27 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return serveEmojiFavicon(res, process.env.PORTAL_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "max-age=86400");
   }
 
+  if (pathname === "/locale") {
+    if (method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+    if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+    let body: string;
+    try {
+      body = await readBody(req, 1024);
+    } catch (error) {
+      if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "payload_too_large" });
+      throw error;
+    }
+    const form = new URLSearchParams(body);
+    const locale = normalizeLocale(form.get("locale"));
+    if (!locale) return json(res, 400, { error: "bad_request", message: "locale must be en or ja" });
+    setSession(res, localeCookieSet(locale));
+    res.writeHead(303, {
+      location: sanitizeReturnTo(form.get("returnTo"), PUBLIC_URL, APPS_DOMAIN),
+      "cache-control": "no-store",
+    });
+    return void res.end();
+  }
+
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
   if (pathname === "/auth/logout" && method === "POST") {
@@ -865,7 +907,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       res,
       { baseUrl: AUTH_BROKER_UPSTREAM, path: brokerPath, search: url.search },
       FORWARD_BROKER_HEADERS,
-      { "x-qm-client-ip": clientIpOf(req) },
+      { "x-qm-client-ip": clientIpOf(req), [LOCALE_HEADER]: localeOf(req) },
     );
   }
 
@@ -1030,6 +1072,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       subPath,
       search: url.search,
       principal: session.sub,
+      locale: localeOf(req),
       signingSecret: CORE_SIGNING_SECRET,
       ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
     });
@@ -1080,6 +1123,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     search: url.search,
     cookieName: COOKIE_FOR[key]!,
     principal,
+    locale: localeOf(req),
     ...(!impersonator && session.name ? { displayName: session.name } : {}),
     ...(impersonator ? { impersonator } : {}),
     ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
