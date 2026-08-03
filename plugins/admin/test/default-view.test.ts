@@ -233,8 +233,14 @@ test("stale governance reads cannot overwrite a newer scope", () => {
 });
 
 test("effective egress summary preserves deny-before-allow semantics", () => {
-  assert.match(html, /t\("governance\.allowSummary", \{\s*allowed: effectiveAllowCount,\s*denied: effectiveDenyCount/);
-  assert.match(html, /effectiveEgressLabel = t\("governance\.denySummary", \{ denied: effectiveDenyCount \}\)/);
+  assert.match(
+    html,
+    /t\("governance\.allowSummary", \{\s*allowed: fmtNumber\(effectiveAllowCount\),\s*denied: fmtNumber\(effectiveDenyCount\)/,
+  );
+  assert.match(
+    html,
+    /effectiveEgressLabel = t\("governance\.denySummary", \{ denied: fmtNumber\(effectiveDenyCount\) \}\)/,
+  );
 });
 
 test("egress validation follows programmatic reloads and successful saves", () => {

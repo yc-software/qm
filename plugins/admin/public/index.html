@@ -5108,7 +5108,7 @@
       function fileKind(path) {
         const name = String(path || "");
         const ext = name.includes(".") ? name.split(".").pop() : "";
-        return ext ? "." + ext.toLowerCase() : "file";
+        return ext ? "." + ext.toLowerCase() : t("files.file");
       }
       function fileName(path) {
         return (
@@ -5744,7 +5744,7 @@
         } else if (opts.count != null && opts.count !== "") {
           const c = document.createElement("span");
           c.className = "shell-count";
-          c.textContent = String(opts.count);
+          c.textContent = typeof opts.count === "number" ? fmtNumber(opts.count) : String(opts.count);
           bar.appendChild(c);
         }
         const spacer = document.createElement("span");
@@ -6096,10 +6096,10 @@
         let egressDetail = inactiveEgressDetail;
         if (enforcement.active) {
           egressDetail = policyCount
-            ? t("governance.effectiveRules", { count: policyCount })
+            ? t("governance.effectiveRules", { count: fmtNumber(policyCount) })
             : t("governance.enforcedBy", { backend: enforcement.backend });
         } else if (policyCount) {
-          egressDetail = t("governance.draftRules", { count: policyCount }) + " · " + inactiveEgressDetail;
+          egressDetail = t("governance.draftRules", { count: fmtNumber(policyCount) }) + " · " + inactiveEgressDetail;
         }
         setGovernanceStatus(
           "governance-status-egress",
@@ -6228,11 +6228,11 @@
         let effectiveEgressLabel = t("governance.openOutbound");
         if (effectiveAllowCount) {
           effectiveEgressLabel = t("governance.allowSummary", {
-            allowed: effectiveAllowCount,
-            denied: effectiveDenyCount,
+            allowed: fmtNumber(effectiveAllowCount),
+            denied: fmtNumber(effectiveDenyCount),
           });
         } else if (effectiveDenyCount) {
-          effectiveEgressLabel = t("governance.denySummary", { denied: effectiveDenyCount });
+          effectiveEgressLabel = t("governance.denySummary", { denied: fmtNumber(effectiveDenyCount) });
         }
         $("egress-effective").textContent = effectiveEgressLabel;
         const egressSave = sectionButton("egress");
@@ -6513,7 +6513,7 @@
           const orgWide = (c.grantees || []).some((g) => g.startsWith("org:"));
           const who = orgWide
             ? t("credentials.organizationWide")
-            : t("credentials.principalCount", { count: (c.grantees || []).length });
+            : t("credentials.principalCount", { count: fmtNumber((c.grantees || []).length) });
           const meta = document.createElement("div");
           meta.className = "hint";
           const usageWindow = c.usageCount
@@ -6527,7 +6527,7 @@
             target +
             " · " +
             (c.usageTruncated ? t("credentials.atLeast") : "") +
-            t("credentials.successfulUses", { count: c.usageCount || 0 }) +
+            t("credentials.successfulUses", { count: fmtNumber(c.usageCount || 0) }) +
             usageWindow;
           const badges = document.createElement("div");
           badges.className = "credential-badges";
@@ -8036,7 +8036,7 @@
           d.className = "kpi";
           const a = document.createElement("div");
           a.className = "n";
-          a.textContent = n;
+          a.textContent = typeof n === "number" ? fmtNumber(n) : n;
           const b = document.createElement("div");
           b.className = "k";
           b.textContent = k;
@@ -8172,7 +8172,7 @@
           [
             nodeCell(stacked(t("metrics.noMachine"), t("metrics.noMachineBody"))),
             { text: share(a.samples), cls: "num" },
-            { text: String(a.samples || 0), cls: "num" },
+            { text: fmtNumber(a.samples || 0), cls: "num" },
             { text: fmtMs(a.total && a.total.p50), cls: "num" },
             { text: fmtX(a.modelCalls && a.modelCalls.avg), cls: "num" },
             { text: fmtX(a.toolCalls && a.toolCalls.avg), cls: "num" },
@@ -8190,7 +8190,7 @@
               ),
             ),
             { text: share(b.samples), cls: "num" },
-            { text: String(b.samples || 0), cls: "num" },
+            { text: fmtNumber(b.samples || 0), cls: "num" },
             { text: fmtMs(b.total && b.total.p50), cls: "num" },
             { text: fmtX(b.modelCalls && b.modelCalls.avg), cls: "num" },
             { text: fmtX(b.toolCalls && b.toolCalls.avg), cls: "num" },
@@ -8198,7 +8198,7 @@
           [
             nodeCell(stacked(t("metrics.allTurns"), t("metrics.blendedAverage"))),
             { text: "100%", cls: "num" },
-            { text: String(c.totalTurns || 0), cls: "num" },
+            { text: fmtNumber(c.totalTurns || 0), cls: "num" },
             { text: fmtMs(c.total && c.total.p50), cls: "num" },
             { text: fmtX(c.modelCalls && c.modelCalls.avg), cls: "num" },
             { text: fmtX(c.toolCalls && c.toolCalls.avg), cls: "num" },
@@ -8442,11 +8442,11 @@
         const bs = d.bySource || {};
         defaultShell({
           stats: [
-            [String(d.total ?? recs.length), t("egress.calls")],
-            [String(d.denied ?? 0), t("egress.denied")],
-            [String(d.hosts ?? 0), t("egress.hosts")],
-            [String(bs.broker ?? 0), t("egress.broker")],
-            [String(bs.firewall ?? 0), t("egress.firewall")],
+            [fmtNumber(d.total ?? recs.length), t("egress.calls")],
+            [fmtNumber(d.denied ?? 0), t("egress.denied")],
+            [fmtNumber(d.hosts ?? 0), t("egress.hosts")],
+            [fmtNumber(bs.broker ?? 0), t("egress.broker")],
+            [fmtNumber(bs.firewall ?? 0), t("egress.firewall")],
           ],
         });
         const rows = recs.map((r) => [
@@ -8810,7 +8810,10 @@
                   title: shortName(scope),
                 }),
             count: t("crons.count", { count: fmtNumber(crons.length) }),
-            stats: [...(disabled ? [[disabled, "disabled"]] : []), ...(archived ? [[archived, "archived"]] : [])],
+            stats: [
+              ...(disabled ? [[fmtNumber(disabled), t("crons.disabled")]] : []),
+              ...(archived ? [[fmtNumber(archived), t("crons.archived")]] : []),
+            ],
           },
           placeholder: index ? t("crons.searchAll") : t("crons.search"),
         });
@@ -8934,7 +8937,9 @@
               delivery = t("crons.silent");
               if (s.delivered)
                 delivery =
-                  s.delivered > 1 ? t("history.deliveredTimes", { count: s.delivered }) : t("history.delivered");
+                  s.delivered > 1
+                    ? t("history.deliveredTimes", { count: fmtNumber(s.delivered) })
+                    : t("history.delivered");
             }
             return {
               name: relTime(s.createdAt || s.lastActivity),
@@ -9063,7 +9068,11 @@
         }
       }
       function createdByCell(s) {
-        if (s.pack) return { text: packRepoLabel(s.pack.url) || "pack " + shortId(s.pack.id, 8), cls: "mono" };
+        if (s.pack)
+          return {
+            text: packRepoLabel(s.pack.url) || t("skills.packFallback", { id: shortId(s.pack.id, 8) }),
+            cls: "mono",
+          };
         if (s.createdBy && s.createdBy.indexOf("system:") === 0) return { text: t("skills.builtIn"), cls: "subline" };
         return { text: s.createdBy || "—", cls: "mono" };
       }
@@ -9115,7 +9124,7 @@
                   name,
                   scope: dirLabel(live[0].ownerScopeId) || live[0].ownerScopeId,
                 })
-              : t("skills.removeManyConfirm", { name, count: live.length });
+              : t("skills.removeManyConfirm", { name, count: fmtNumber(live.length) });
           if (!confirm(prompt)) return;
           rm.disabled = true;
           let failed = 0;
@@ -9128,7 +9137,7 @@
           }
           dataCache.clear();
           renderData();
-          if (failed) alert(t("skills.removeFailed", { count: failed }));
+          if (failed) alert(t("skills.removeFailed", { count: fmtNumber(failed) }));
         };
         return rm;
       }
@@ -9292,7 +9301,7 @@
           ]);
         box.appendChild(
           dataCard(
-            t("skills.scopes", { count: group.length }),
+            t("skills.scopes", { count: fmtNumber(group.length) }),
             t("skills.scopesBody"),
             table([t("common.scope"), t("common.status"), t("common.version"), ""], detailScopeRows, "—"),
           ),
@@ -9515,7 +9524,7 @@
                 new: c.imported || 0,
                 updated: c.updated || 0,
                 skipped: c.skipped || 0,
-                removed: c.archived ? t("skills.removedSuffix", { count: c.archived }) : "",
+                removed: c.archived ? t("skills.removedSuffix", { count: fmtNumber(c.archived) }) : "",
               })
             : "";
           const packNode = document.createElement("span");
@@ -9533,12 +9542,15 @@
           const skillsNode = document.createElement("span");
           skillsNode.textContent =
             s.available != null
-              ? t("skills.available", { imported: s.importedCount || 0, available: s.available })
+              ? t("skills.available", {
+                  imported: fmtNumber(s.importedCount || 0),
+                  available: fmtNumber(s.available),
+                })
               : "—";
           if (s.available != null)
             skillsNode.title = t("skills.availableTitle", {
-              imported: s.importedCount || 0,
-              available: s.available,
+              imported: fmtNumber(s.importedCount || 0),
+              available: fmtNumber(s.available),
             });
           const st = document.createElement("span");
           st.className = "status";
@@ -9585,8 +9597,8 @@
                   n || u || a
                     ? t("skills.syncResult", {
                         new: n,
-                        updated: u ? t("skills.updatedSuffix", { count: u }) : "",
-                        removed: a ? t("skills.removedSuffix", { count: a }) : "",
+                        updated: u ? t("skills.updatedSuffix", { count: fmtNumber(u) }) : "",
+                        removed: a ? t("skills.removedSuffix", { count: fmtNumber(a) }) : "",
                       })
                     : "✓ " + t("skills.upToDate"),
                   "ok",
@@ -9975,9 +9987,9 @@
           const added = r2.data.imported?.length ?? 0;
           status.className = "status ok";
           status.textContent = t("skills.importResult", {
-            count: added,
+            count: fmtNumber(added),
             skills: t(added === 1 ? "skills.skillSingular" : "skills.skillPlural"),
-            scopes: scopes.length > 1 ? t("skills.scopeSuffix", { count: scopes.length }) : "",
+            scopes: scopes.length > 1 ? t("skills.scopeSuffix", { count: fmtNumber(scopes.length) }) : "",
           });
           dataCache.clear();
           setTimeout(() => renderData(), 1500);
@@ -10098,7 +10110,7 @@
           const details = document.createElement("details");
           details.style.margin = "8px 0";
           const summary = document.createElement("summary");
-          summary.textContent = t("skills.sharedPackFiles", { count: bundlePaths.length });
+          summary.textContent = t("skills.sharedPackFiles", { count: fmtNumber(bundlePaths.length) });
           const pre = document.createElement("pre");
           pre.textContent = bundlePaths.join("\n");
           pre.style.cssText =
@@ -10242,9 +10254,9 @@
         const a = d.active || {};
         root.appendChild(
           kpis([
-            [a.dau ?? 0, "DAU"],
-            [a.wau ?? 0, "WAU"],
-            [a.mau ?? 0, "MAU"],
+            [fmtNumber(a.dau ?? 0), "DAU"],
+            [fmtNumber(a.wau ?? 0), "WAU"],
+            [fmtNumber(a.mau ?? 0), "MAU"],
             [(a.stickiness ?? 0) + "%", t("retention.stickiness") + " (DAU/MAU)"],
           ]),
         );
@@ -10264,8 +10276,8 @@
               [t("retention.new"), t("retention.returning")],
               [
                 [
-                  { text: String(nvr.newUsers ?? 0), cls: "num" },
-                  { text: String(nvr.returning ?? 0), cls: "num" },
+                  { text: fmtNumber(nvr.newUsers ?? 0), cls: "num" },
+                  { text: fmtNumber(nvr.returning ?? 0), cls: "num" },
                 ],
               ],
               t("retention.noActivity"),
@@ -10280,7 +10292,7 @@
         };
         const cohortRows = (d.cohorts || []).map((c) => [
           c.week,
-          { text: String(c.size), cls: "num" },
+          { text: fmtNumber(c.size), cls: "num" },
           ...(c.retained || []).map(retentionCell),
         ]);
         root.appendChild(
@@ -10300,13 +10312,13 @@
           [
             [
               t("retention.sessionsPerUser"),
-              { text: String(pu.sessions?.p50 ?? 0), cls: "num" },
-              { text: String(pu.sessions?.p95 ?? 0), cls: "num" },
+              { text: fmtNumber(pu.sessions?.p50 ?? 0), cls: "num" },
+              { text: fmtNumber(pu.sessions?.p95 ?? 0), cls: "num" },
             ],
             [
               t("retention.turnsPerUser"),
-              { text: String(pu.turns?.p50 ?? 0), cls: "num" },
-              { text: String(pu.turns?.p95 ?? 0), cls: "num" },
+              { text: fmtNumber(pu.turns?.p50 ?? 0), cls: "num" },
+              { text: fmtNumber(pu.turns?.p95 ?? 0), cls: "num" },
             ],
           ],
           t("retention.noUsers"),
@@ -10315,8 +10327,8 @@
           dataCard(
             t("retention.distribution"),
             t("retention.distributionBody", {
-              users: d.totals?.users ?? 0,
-              sessions: d.totals?.sessions ?? 0,
+              users: fmtNumber(d.totals?.users ?? 0),
+              sessions: fmtNumber(d.totals?.sessions ?? 0),
               attribution: d.attribution || "",
             }),
             dist,
@@ -10406,10 +10418,10 @@
         let filterVal = "";
         defaultShell({
           stats: [
-            [people.length, t("keychain.people")],
-            [credentials.length, t("keychain.credentials")],
-            [activeGrants.length, t("keychain.activeGrants")],
-            [pendingAsks.length, t("keychain.pendingAsks")],
+            [fmtNumber(people.length), t("keychain.people")],
+            [fmtNumber(credentials.length), t("keychain.credentials")],
+            [fmtNumber(activeGrants.length), t("keychain.activeGrants")],
+            [fmtNumber(pendingAsks.length), t("keychain.pendingAsks")],
           ],
           search: {
             placeholder: t("keychain.search"),
@@ -10479,9 +10491,9 @@
                 [t("keychain.person"), t("keychain.keychain"), t("keychain.activeGrants"), t("keychain.pendingAsks")],
                 filteredPeople.map((p) => [
                   nodeCell(stacked(p.displayName || p.principalId, p.displayName ? p.principalId : ""), "mono"),
-                  { text: String(p.credentialCount || 0), cls: "num" },
-                  { text: String(p.activeGrantCount || 0), cls: "num" },
-                  { text: String(p.pendingAskCount || 0), cls: "num" },
+                  { text: fmtNumber(p.credentialCount || 0), cls: "num" },
+                  { text: fmtNumber(p.activeGrantCount || 0), cls: "num" },
+                  { text: fmtNumber(p.pendingAskCount || 0), cls: "num" },
                 ]),
                 t("keychain.noPeople"),
               ),
@@ -10535,8 +10547,8 @@
                   if (kind === "err") labelKind = "err";
                   else if (kind === "warn") labelKind = "warn";
                   let purposeDetail = "";
-                  if (g.usedBy) purposeDetail = "used by " + g.usedBy;
-                  else if (g.askId) purposeDetail = "ask " + g.askId;
+                  if (g.usedBy) purposeDetail = t("keychain.usedBy", { principal: g.usedBy });
+                  else if (g.askId) purposeDetail = t("keychain.askReference", { id: g.askId });
                   return [
                     nodeCell(stacked(personName(g.ownerId), g.ownerId), "mono"),
                     nodeCell(stacked(credName(g.credentialId), g.credentialId), "mono"),
@@ -10585,8 +10597,8 @@
         let filterVal = "";
         defaultShell({
           stats: [
-            [users.length, t("users.users")],
-            [grants.length, t("users.admins")],
+            [fmtNumber(users.length), t("users.users")],
+            [fmtNumber(grants.length), t("users.admins")],
           ],
           search: {
             placeholder: t("users.search"),
@@ -10761,8 +10773,8 @@
               { text: u.principalId, cls: "mono" },
               nodeCell(mutedText(u.admin?.isAdmin ? labelRole(u.admin.role) : "member")),
               u.lastSeenAt ? timeCell(u.lastSeenAt) : { text: "-", cls: "num" },
-              { text: String(u.sessionCount), cls: "num" },
-              { text: String(u.turnCount), cls: "num" },
+              { text: fmtNumber(u.sessionCount), cls: "num" },
+              { text: fmtNumber(u.turnCount), cls: "num" },
               {
                 action: {
                   label: t("common.impersonate"),
@@ -11039,7 +11051,7 @@
         }
         if (typeof resultPayload.bytes === "number") out.push(metaChip(fmtBytes(resultPayload.bytes)));
         if (typeof resultPayload.count === "number")
-          out.push(metaChip(t("tool.resultCount", { count: resultPayload.count })));
+          out.push(metaChip(t("tool.resultCount", { count: fmtNumber(resultPayload.count) })));
         return out;
       }
       function toolTextValue(v) {
@@ -11331,7 +11343,7 @@
         sortControl.append(sortLabel, seg);
         pageShell({
           title: VIEW_TITLE.history,
-          count: activeRows.length ? t("history.activeScopes", { count: activeRows.length }) : "",
+          count: activeRows.length ? t("history.activeScopes", { count: fmtNumber(activeRows.length) }) : "",
           actions: [sortControl],
         });
         const activityTime = (s) => (scopeSort === "human" ? s.lastConversationActivity || 0 : s.lastActivity || 0);
@@ -11359,7 +11371,7 @@
           const quiet = document.createElement("details");
           quiet.className = "history-quiet";
           const summary = document.createElement("summary");
-          summary.textContent = t("history.knownQuietScopes", { count: quietRows.length });
+          summary.textContent = t("history.knownQuietScopes", { count: fmtNumber(quietRows.length) });
           const chips = document.createElement("div");
           chips.className = "history-empty-scopes";
           quietRows.forEach((s) => {
@@ -11491,7 +11503,7 @@
             if (isBackground && typeof s.delivered === "number") {
               const autoChip = cronDeliveryChip(
                 s.delivered > 0,
-                s.delivered > 1 ? t("history.deliveredTimes", { count: s.delivered }) : undefined,
+                s.delivered > 1 ? t("history.deliveredTimes", { count: fmtNumber(s.delivered) }) : undefined,
               );
               if (autoChip) preview.appendChild(autoChip);
             }
@@ -11563,9 +11575,9 @@
         const info = document.createElement("span");
         info.className = "pageinfo";
         info.textContent = t("users.pageOf", {
-          start: offset + 1,
-          end: Math.min(offset + limit, total),
-          total,
+          start: fmtNumber(offset + 1),
+          end: fmtNumber(Math.min(offset + limit, total)),
+          total: fmtNumber(total),
         });
         wrap.append(btn(t("users.previous"), cur - 1, cur <= 1), info, btn(t("users.next"), cur + 1, cur >= pages));
         return wrap;
@@ -11608,8 +11620,8 @@
         const stats = d.stats || {};
         detail.appendChild(
           kpis([
-            [String(stats.sessions ?? 0), t("users.conversations")],
-            [String(stats.turns ?? 0), t("common.turns")],
+            [fmtNumber(stats.sessions ?? 0), t("users.conversations")],
+            [fmtNumber(stats.turns ?? 0), t("common.turns")],
             [stats.firstSeenAt ? fmtTime(stats.firstSeenAt) : "—", t("users.firstSeen")],
             [stats.lastSeenAt ? fmtTime(stats.lastSeenAt) : "—", t("common.lastSeen")],
           ]),
@@ -11751,16 +11763,18 @@
                 [
                   t("users.commandPolicy"),
                   cfg.commandPolicy
-                    ? ruleN + " rule" + (ruleN === 1 ? "" : "s") + " · " + (cfg.commandPolicy.mode || "denylist")
+                    ? t("users.ruleCount", { count: fmtNumber(ruleN) }) + " · " + (cfg.commandPolicy.mode || "denylist")
                     : t("users.default"),
                 ],
                 [t("users.securityPosture"), cfg.securityPosture || "auto"],
                 [
                   t("users.egressOverrides"),
-                  allowN || denyN ? t("users.egressSummary", { allow: allowN, deny: denyN }) : t("state.none"),
+                  allowN || denyN
+                    ? t("users.egressSummary", { allow: fmtNumber(allowN), deny: fmtNumber(denyN) })
+                    : t("state.none"),
                 ],
                 [t("users.baseModel"), cfg.baseModel || t("users.orgDefault")],
-                [t("users.connectorsLinked"), String((cfg.connectors || []).length)],
+                [t("users.connectorsLinked"), fmtNumber((cfg.connectors || []).length)],
               ],
               t("users.noConfig"),
             ),
@@ -11891,7 +11905,7 @@
         const title = document.createElement("h2");
         title.textContent =
           reqs.length > 1
-            ? t("history.sentSteps", { turn: turnLabel, count: reqs.length })
+            ? t("history.sentSteps", { turn: turnLabel, count: fmtNumber(reqs.length) })
             : t("history.sentTurn", { turn: turnLabel });
         head.appendChild(title);
         if (!reqs.length) {
@@ -12373,7 +12387,7 @@
             );
           viewLoadedAt.slack = Date.now();
           const containers = slackContainers || [];
-          pageShell({ title: t("view.slack"), count: containers.length, search: slackSearchBox(null) });
+          pageShell({ title: t("view.slack"), count: fmtNumber(containers.length), search: slackSearchBox(null) });
           root.appendChild(
             denseList(
               containers,
@@ -13053,7 +13067,7 @@
             "scope=" + encodeURIComponent(scope) + "&sessionId=" + encodeURIComponent(sessionId),
           );
           if (!errs.length || !errStrip.isConnected) return;
-          errStrip.appendChild(errorStripBox(errs, t("history.sessionErrors", { count: errs.length }), 5));
+          errStrip.appendChild(errorStripBox(errs, t("history.sessionErrors", { count: fmtNumber(errs.length) }), 5));
         })();
 
         const originPromptSeq = origin && !serverHasMore ? entries.find((e) => e.type === "user")?.seq : null;
@@ -13272,7 +13286,7 @@
             btn.title =
               t(open ? "history.hideContext" : "history.showContext") +
               " · " +
-              t("history.contextRequestCount", { count: requests.length });
+              t("history.contextRequestCount", { count: fmtNumber(requests.length) });
           };
           btn.onclick = () => {
             panel.classList.toggle("collapsed");
@@ -13289,7 +13303,7 @@
           btn.innerHTML =
             '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5c-2.1 0-3.7 1.3-3.7 3.1 0 .2 0 .4.1.6A3.6 3.6 0 0 0 6 11.5c0 1 .4 2 1.1 2.6-.1.3-.1.5-.1.8 0 2 1.8 3.6 4 3.6h1.9c2.2 0 4-1.6 4-3.6 0-.3 0-.6-.1-.8.7-.7 1.1-1.6 1.1-2.6 0-1.5-.9-2.8-2.3-3.3 0-.2.1-.4.1-.6 0-1.8-1.6-3.1-3.7-3.1Z"/><path d="M9.2 9.2c.9.1 1.6.6 2 1.4"/><path d="M14.8 9.2c-.9.1-1.6.6-2 1.4"/><path d="M12 10.7v7.8"/></svg>';
           btn.setAttribute("aria-label", t("history.viewContext"));
-          btn.title = t("history.viewContext") + " · " + t("history.contextRequestCount", { count });
+          btn.title = t("history.viewContext") + " · " + t("history.contextRequestCount", { count: fmtNumber(count) });
           btn.onclick = (ev) => {
             ev.stopPropagation();
             go({ view: "history", scope, session: sessionId, turn: turnSeq });
@@ -13715,8 +13729,8 @@
         return n ? Math.max(1, Math.round(n / 4)) : 0;
       }
       function fmtTokens(n) {
-        if (!n) return t("context.tokens", { count: 0 });
-        if (n < 20) return t("context.tokensUnder", { count: 20 });
+        if (!n) return t("context.tokens", { count: fmtNumber(0) });
+        if (n < 20) return t("context.tokensUnder", { count: fmtNumber(20) });
         if (n < 1000) return t("context.tokens", { count: fmtNumber(n) });
         if (n < 1000000) return t("context.tokens", { count: (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" });
         return t("context.tokens", { count: (n / 1000000).toFixed(1) + "m" });
@@ -13817,19 +13831,21 @@
           {
             key: "messages",
             label: t("context.messages"),
-            note: t("context.messageCount", { count: messages.length }),
+            note: t("context.messageCount", { count: fmtNumber(messages.length) }),
             text: messages.map(messageEntryText).join("\n\n"),
           },
           {
             key: "tools",
             label: t("context.toolSchemas"),
-            note: Array.isArray(req.tools) ? t("context.toolCount", { count: req.tools.length }) : t("context.tools"),
+            note: Array.isArray(req.tools)
+              ? t("context.toolCount", { count: fmtNumber(req.tools.length) })
+              : t("context.tools"),
             text: req.tools == null ? "" : stringify(req.tools),
           },
           {
             key: "params",
             label: t("context.requestParams"),
-            note: t("context.fieldCount", { count: Object.keys(params).length }),
+            note: t("context.fieldCount", { count: fmtNumber(Object.keys(params).length) }),
             text: Object.keys(params).length ? stringify(params) : "",
           },
         ].filter((s) => s.text);
@@ -14160,7 +14176,7 @@
         const box = document.createElement("span");
         box.className = "file-thumb";
         const kind = fileKind(f.name || f.path);
-        box.textContent = kind === "file" ? "" : kind.slice(1);
+        box.textContent = kind === t("files.file") ? "" : kind.slice(1);
         if (f.openable && /^image\/(png|jpeg|gif|webp|avif|bmp)$/.test(f.mimetype || "")) {
           if (!f.size || f.size <= 200 * 1024) {
             const img = document.createElement("img");
@@ -14205,10 +14221,10 @@
         const done = runs.filter((r) => r.status === "done").length;
         root.appendChild(
           kpis([
-            [d.active ?? 0, t("live.activeNow")],
-            [runs.length, t("live.recentRuns")],
-            [failed, t("state.failed")],
-            [done, t("state.done")],
+            [fmtNumber(d.active ?? 0), t("live.activeNow")],
+            [fmtNumber(runs.length), t("live.recentRuns")],
+            [fmtNumber(failed), t("state.failed")],
+            [fmtNumber(done), t("state.done")],
           ]),
         );
         const rows = runs.map((r) => [

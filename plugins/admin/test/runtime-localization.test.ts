@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
-import { ADMIN_MESSAGES, type AdminMessageKey } from "../src/messages.ts";
+import { ADMIN_MESSAGES } from "../src/messages.ts";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
 function functionSource(name: string): string {
-  const start = html.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, `${name} exists`);
+  const functionStart = html.indexOf(`function ${name}(`);
+  assert.ok(functionStart >= 0, `${name} exists`);
+  const start = html.slice(functionStart - 6, functionStart) === "async " ? functionStart - 6 : functionStart;
   const open = html.indexOf("{", start);
   let depth = 0;
   let quote = "";
@@ -33,8 +34,17 @@ function functionSource(name: string): string {
 
 class FakeElement {
   readonly children: FakeElement[] = [];
-  readonly classList = { toggle() {} };
+  readonly classList = {
+    toggle() {},
+    add() {},
+    contains() {
+      return false;
+    },
+  };
   readonly content = { textContent: "" };
+  readonly style: Record<string, string> = {};
+  readonly dataset: Record<string, string> = {};
+  readonly nodeType = 1;
   textContent = "";
   value: string | number = "";
   disabled = false;
@@ -55,64 +65,18 @@ class FakeElement {
     this.children.push(...children);
   }
 
+  prepend(...children: FakeElement[]): void {
+    this.children.unshift(...children);
+  }
+
+  querySelector(): FakeElement {
+    return new FakeElement();
+  }
+
+  remove(): void {}
   setAttribute(): void {}
   addEventListener(): void {}
   requestSubmit(): void {}
-}
-
-function runtimeMessages(locale: "en" | "ja"): Record<string, string> {
-  const views = [
-    "onboarding",
-    "governance",
-    "connectors",
-    "users",
-    "keychain",
-    "user",
-    "metrics",
-    "egress",
-    "history",
-    "files",
-    "memory",
-    "live",
-    "audit",
-    "skills",
-    "crons",
-    "deployments",
-    "retention",
-    "slack",
-    "judgments",
-    "ackemoji",
-  ];
-  const messages = Object.fromEntries(views.map((view) => [`view.${view}`, view]));
-  return {
-    ...messages,
-    adminTitle: "{brand} Admin",
-    pageControls: "controls",
-    "common.allow": "allow",
-    "common.deny": "deny",
-    "common.requireApproval": "approval",
-    "action.remove": "remove",
-    "time.now": locale === "ja" ? "今" : "now",
-    "time.minute": "{count}",
-    "time.minutes": "{count}",
-    "time.today": "{time}",
-    "time.yesterday": "{time}",
-    "crons.dailyAt": "{time}",
-    "crons.weekdaysAt": "{time}",
-    "crons.daysAt": "{days} {time}",
-    "crons.hourly": "hourly",
-    "crons.hourlyAt": "{minute}",
-    ...Object.fromEntries(Array.from({ length: 7 }, (_, day) => [`crons.day${day}`, String(day)])),
-    "history.conversationCount": locale === "ja" ? "会話 {count}件" : "{count} conversation(s)",
-    "history.backgroundCount": locale === "ja" ? "バックグラウンド {count}件" : "{count} background run(s)",
-    "history.noConversations": locale === "ja" ? "会話なし" : "no conversations",
-    "governance.botMode.ignore": locale === "ja" ? "無視 — 判定を起動しない" : "ignore — never wakes the judge",
-    "governance.botMode.rollup": locale === "ja" ? "集約 — 定期的にまとめて判定" : "rollup — batch, judge periodically",
-    "governance.botMode.action": locale === "ja" ? "操作 — 投稿を起点にする" : "action — posts are triggers",
-    "governance.botMode.user": locale === "ja" ? "利用者 — 人の投稿として読む" : "user — read like a person",
-    "governance.botNamePlaceholder": "name",
-    "governance.removeBot": "remove bot",
-  };
 }
 
 function createRuntime(locale: "en" | "ja", defaultLocale: string): vm.Context {
@@ -121,7 +85,7 @@ function createRuntime(locale: "en" | "ja", defaultLocale: string): vm.Context {
     if (!elements.has(id)) elements.set(id, new FakeElement());
     return elements.get(id) as FakeElement;
   };
-  element("locale-messages").content.textContent = JSON.stringify(runtimeMessages(locale));
+  element("locale-messages").content.textContent = JSON.stringify(ADMIN_MESSAGES[locale]);
   class TrackingDate extends Date {
     constructor(
       value?: string | number | Date,
@@ -198,13 +162,16 @@ for (const [locale, defaultLocale, intlLocale] of [
     assert.equal(output.full, `date:${intlLocale}`);
     assert.equal(output.clock, `time:${intlLocale}`);
     assert.match(output.relativeDate, new RegExp(`day:${intlLocale}.*time:${intlLocale}`));
-    assert.equal(output.relativeNumber, `number:${intlLocale}`);
+    assert.equal(output.relativeNumber, locale === "ja" ? `number:${intlLocale}分前` : `number:${intlLocale} mins`);
 
     vm.runInContext(
       `${functionSource("cronFieldSet")}\n${functionSource("humanCron")}\nglobalThis.__humanCron = humanCron;`,
       context,
     );
-    assert.equal(vm.runInContext('__humanCron("5 9 * * *")', context), `time:${intlLocale}`);
+    assert.equal(
+      vm.runInContext('__humanCron("5 9 * * *")', context),
+      locale === "ja" ? `毎日 time:${intlLocale}` : `daily time:${intlLocale}`,
+    );
   });
 }
 
@@ -236,17 +203,236 @@ test("Japanese runtime renders localized bot behavior options", () => {
   ]);
 });
 
-test("Japanese catalogs cover representative dynamic Admin state and count copy", () => {
-  const expected = {
-    "metrics.runCount": "実行 {count}件",
-    "metrics.failureRate": "失敗率 {rate}",
-    "users.fileSourceAgent": "エージェント",
-    "users.fileSourceUpload": "アップロード",
-    "deployments.versionCount": "{count}版",
-    "slack.peopleCount": "{count}人",
-    "slack.mirrorSummary": "ミラー済み {messages}件 · メンバー {members}人",
-  } as const;
-  for (const [key, value] of Object.entries(expected)) {
-    assert.equal((ADMIN_MESSAGES.ja as Record<string, string>)[key as AdminMessageKey], value);
-  }
+test("Japanese metrics renderer uses localized labels and ja-JP counts", () => {
+  const context = createRuntime("ja", "en-US");
+  vm.runInContext(
+    `globalThis.urlToState = () => ({});
+     globalThis.renderTurnMix = () => {};
+     globalThis.openableTable = () => document.createElement("div");
+     globalThis.nodeCell = (value) => value;
+     globalThis.stacked = (...values) => values.join(" | ");
+     globalThis.phaseLabel = (value) => value;
+     globalThis.phaseDesc = () => "";
+     globalThis.fmtPct = (value) => String((value || 0) * 100) + "%";
+     globalThis.fmtTokens = (value) => fmtNumber(value);
+     globalThis.sparkline = () => document.createElement("div");
+     globalThis.go = () => {};
+     globalThis.statline = (parts) => {
+       const node = document.createElement("div");
+       node.textContent = parts.join(" | ");
+       return node;
+     };`,
+    context,
+  );
+  vm.runInContext(
+    `${functionSource("renderCacheHealth")}\n${functionSource("renderMetrics")}\nglobalThis.__renderMetrics = renderMetrics;`,
+    context,
+  );
+  const root = new FakeElement();
+  Object.assign(context, { __root: root });
+  vm.runInContext(
+    `__renderMetrics(__root, {
+       phases: [],
+       throughput: { total: 12345, done: 12000, failed: 345, failureRate: 0.028 },
+       cache: { samples: 12345, missTurns: 345, avgHitRatio: 0.9, pooledHitRatio: 0.8, missRate: 0.1 }
+     })`,
+    context,
+  );
+  assert.deepEqual(root.children.map((child) => child.textContent).filter(Boolean), [
+    "プロンプトキャッシュのヒット率 90% | トークン加重 80% | 安定した接頭辞のミス率 10% | キャッシュミス number:ja-JP件 | キャッシュデータあり number:ja-JP件 | 読み取り number:ja-JP | 書き込み number:ja-JP",
+    "実行 number:ja-JP件 | 完了 number:ja-JP件 | 失敗 number:ja-JP件 | 失敗率 2.8000000000000003%",
+  ]);
+});
+
+test("Japanese user renderer localizes fallback copy and every displayed count", async () => {
+  const context = createRuntime("ja", "en-US");
+  const tables: Array<{ headers: unknown[]; rows: unknown[][] }> = [];
+  const kpiValues: unknown[][][] = [];
+  const userData = {
+    principalId: "U1",
+    displayName: "利用者",
+    scopeId: "personal:U1",
+    stats: { sessions: 12345, turns: 23456 },
+    conversations: [],
+    files: [{ name: "README", path: "README", size: 0, direction: "out", openable: false }],
+    deployments: [],
+    crons: [],
+    config: {
+      commandPolicy: { mode: "denylist", rules: Array.from({ length: 12345 }, () => ({})) },
+      egress: {
+        allowedHosts: Array.from({ length: 12345 }, () => "allowed.example"),
+        deniedHosts: Array.from({ length: 23456 }, () => "denied.example"),
+      },
+      connectors: Array.from({ length: 12345 }, () => ({})),
+      securityPosture: "auto",
+    },
+    onboarding: "not_started",
+  };
+  Object.assign(context, { __tables: tables, __kpis: kpiValues, __userData: userData });
+  vm.runInContext(
+    `globalThis.api = async () => ({ ok: true, data: globalThis.__userData });
+     globalThis.pageShell = () => {};
+     globalThis.webUiAsButton = () => document.createElement("button");
+     globalThis.kpis = (items) => {
+       globalThis.__kpis.push(items);
+       return document.createElement("div");
+     };
+     globalThis.openableTable = (headers, items, rowOf) => {
+       globalThis.__tables.push({ headers, rows: items.map(rowOf) });
+       return document.createElement("div");
+     };
+     globalThis.table = (headers, rows) => {
+       globalThis.__tables.push({ headers, rows });
+       return document.createElement("div");
+     };
+     globalThis.dataCard = () => document.createElement("div");
+     globalThis.nodeCell = (value) => value;
+     globalThis.stacked = (...values) => values.filter(Boolean).join(" | ");
+     globalThis.mutedText = (value) => String(value);
+     globalThis.historyScopeCell = (value) => value;
+     globalThis.fmtHistoryTime = () => "時刻";
+     globalThis.fmtHistoryCreated = () => "作成時刻";
+     globalThis.fmtBytes = () => "0 B";
+     globalThis.deploymentHref = () => "";
+     globalThis.statusBadge = () => document.createElement("span");
+     globalThis.fmtSchedule = () => "—";
+     globalThis.cronStatusText = () => "";
+     globalThis.badge = () => document.createElement("span");
+     globalThis.go = () => {};
+     globalThis.history = { back() {} };
+     globalThis.confirm = () => false;`,
+    context,
+  );
+  vm.runInContext(
+    `${functionSource("fileKind")}\n${functionSource("showUserDetail")}\nglobalThis.__showUserDetail = showUserDetail;`,
+    context,
+  );
+  await vm.runInContext('__showUserDetail("U1")', context);
+  const rows = tables.flatMap((entry) => entry.rows);
+  const configValue = (label: string) => rows.find((row) => row[0] === label)?.[1];
+  const fileKindCell = rows.find((row) => (row[0] as string)?.includes?.("README"))?.[1] as { text?: string };
+  assert.deepEqual(
+    {
+      sessionCount: kpiValues[0]?.[0]?.[0],
+      turnCount: kpiValues[0]?.[1]?.[0],
+      fileKind: fileKindCell?.text,
+      commandPolicy: configValue("コマンドポリシー"),
+      egress: configValue("外部通信の上書き"),
+      connectors: configValue("接続済みコネクター"),
+    },
+    {
+      sessionCount: "number:ja-JP",
+      turnCount: "number:ja-JP",
+      fileKind: "ファイル",
+      commandPolicy: "ルール number:ja-JP件 · denylist",
+      egress: "許可number:ja-JP件、拒否number:ja-JP件",
+      connectors: "number:ja-JP",
+    },
+  );
+});
+
+test("Japanese Slack renderer formats its visible container count", async () => {
+  const context = createRuntime("ja", "en-US");
+  const containers = [
+    { container: "G1", kind: "group", members: ["U1", "U2"], messageCount: 12345, updatedAt: 0 },
+    ...Array.from({ length: 1233 }, (_, index) => ({
+      container: `C${index}`,
+      kind: "channel",
+      name: `channel-${index}`,
+      members: [],
+      messageCount: 0,
+      updatedAt: 0,
+    })),
+  ];
+  const shells: Array<Record<string, unknown>> = [];
+  const rows: Array<Record<string, unknown>> = [];
+  Object.assign(context, { __containers: containers, __shells: shells, __slackRows: rows });
+  vm.runInContext(
+    `let slackReq = 0;
+     let slackContainers = globalThis.__containers;
+     view = "slack";
+     globalThis.loadSlackContainers = async () => ({ ok: true });
+     globalThis.urlToState = () => ({});
+     globalThis.slackSearchBox = () => ({});
+     globalThis.pageShell = (options) => globalThis.__shells.push(options);
+     globalThis.denseList = (items, rowOf) => {
+       globalThis.__slackRows.push(rowOf(items[0]));
+       return document.createElement("div");
+     };
+     globalThis.stateToUrl = () => "/admin/slack";
+     globalThis.go = () => {};`,
+    context,
+  );
+  vm.runInContext(
+    `${functionSource("slackContainerMeta")}\n${functionSource("slackContainerLabel")}\n${functionSource("slackContainerScope")}\n${functionSource("renderSlackMirror")}\nglobalThis.__renderSlackMirror = renderSlackMirror;`,
+    context,
+  );
+  await vm.runInContext("__renderSlackMirror({})", context);
+  assert.deepEqual(
+    { count: shells.at(-1)?.count, name: rows[0]?.name, preview: rows[0]?.preview },
+    {
+      count: "number:ja-JP",
+      name: "number:ja-JP人",
+      preview: "ミラー済み number:ja-JP件 · メンバー number:ja-JP人",
+    },
+  );
+});
+
+test("Japanese keychain and skill renderers localize fallback copy and counts", () => {
+  const context = createRuntime("ja", "en-US");
+  const tables: Array<{ headers: unknown[]; rows: unknown[][] }> = [];
+  const shells: Array<Record<string, unknown>> = [];
+  Object.assign(context, { __tables: tables, __shells: shells });
+  vm.runInContext(
+    `globalThis.defaultShell = (options) => globalThis.__shells.push(options);
+     globalThis.table = (headers, rows) => {
+       globalThis.__tables.push({ headers, rows });
+       return document.createElement("div");
+     };
+     globalThis.dataCard = (_title, _body, content) => content;
+     globalThis.nodeCell = (value) => value;
+     globalThis.stacked = (...values) => values.filter(Boolean).join(" | ");
+     globalThis.mutedText = (value) => String(value);
+     globalThis.badge = () => document.createElement("span");
+     globalThis.shortId = (value, length = 8) => String(value || "").slice(0, length);`,
+    context,
+  );
+  vm.runInContext(
+    `${functionSource("scopeKind")}\n${functionSource("keychainGrantStatus")}\n${functionSource("keychainExpiry")}\n${functionSource("keychainPersonLabel")}\n${functionSource("renderKeychain")}\n${functionSource("packRepoLabel")}\n${functionSource("createdByCell")}\nglobalThis.__renderKeychain = renderKeychain; globalThis.__createdByCell = createdByCell;`,
+    context,
+  );
+  const root = new FakeElement();
+  Object.assign(context, { __root: root });
+  vm.runInContext(
+    `__renderKeychain(__root, {
+       people: [{ principalId: "U1", credentialCount: 12345, activeGrantCount: 12345, pendingAskCount: 12345 }],
+       credentials: [{ id: "cred", ownerId: "U1", service: "service", kind: "token", targets: [] }],
+       grants: [
+         { ownerId: "U1", credentialId: "cred", audienceScopeId: "org:o", mode: "once", status: "used", purpose: "目的", usedBy: "U2" },
+         { ownerId: "U1", credentialId: "cred", audienceScopeId: "org:o", mode: "once", status: "active", purpose: "別目的", askId: "A1" }
+       ],
+       asks: []
+     })`,
+    context,
+  );
+  const rows = tables.flatMap((entry) => entry.rows);
+  const peopleRow = rows.find((row) => row[0] === "U1");
+  const grantRow = rows.find((row) => (row.at(-1) as string)?.startsWith?.("目的"));
+  const askGrantRow = rows.find((row) => (row.at(-1) as string)?.startsWith?.("別目的"));
+  assert.deepEqual(
+    {
+      pack: vm.runInContext('__createdByCell({ pack: { url: "", id: "abcdefghi" } }).text', context),
+      shellCounts: Array.from(shells[0]?.stats as unknown[][], (entry) => entry[0]),
+      personCounts: Array.from(peopleRow?.slice(1) || [], (cell) => (cell as { text?: string }).text),
+      purpose: grantRow?.at(-1),
+      askPurpose: askGrantRow?.at(-1),
+    },
+    {
+      pack: "パック abcdefgh",
+      shellCounts: ["number:ja-JP", "number:ja-JP", "number:ja-JP", "number:ja-JP"],
+      personCounts: ["number:ja-JP", "number:ja-JP", "number:ja-JP"],
+      purpose: "目的 | 使用者 U2",
+      askPurpose: "別目的 | 申請 A1",
+    },
+  );
 });
