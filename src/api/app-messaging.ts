@@ -152,7 +152,10 @@ export function createMessagingMethods(
         const members = patch.members ?? before.members;
         if (!members?.length) throw new Error("scopeShared requires a member snapshot");
       }
-      const updated = await deps.crons.update(id, patch);
+      const grantsReaffirmed = patch.unattendedGrants !== undefined;
+      const guardedPatch =
+        (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
+      const updated = await deps.crons.update(id, guardedPatch);
       deps.auditLog.record({
         at: Date.now(),
         principalId: before.owner,

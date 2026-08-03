@@ -64,7 +64,12 @@ describe("capability-token control plane (crons + SOUL)", () => {
         signingSecret: SECRET,
       }),
     );
-    server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler, config: built.config });
+    server = createServer(built.app, {
+      signingSecret: SECRET,
+      scheduler: built.scheduler,
+      config: built.config,
+      admin: built.admin,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
@@ -106,6 +111,111 @@ describe("capability-token control plane (crons + SOUL)", () => {
       },
       SECRET,
     );
+
+  it("enforces unattended grant creation and privileged-cron tamper rules at the HTTP boundary", async () => {
+    const body = {
+      schedule: { everyMs: 60_000 },
+      action: "scan transcripts",
+      unattendedGrants: ["admin.sessions.read"],
+    };
+    assert.equal((await post("/v1/crons", body, { "x-agent-capability": await capFor("admin-alice") })).status, 403);
+    assert.equal(
+      (
+        await post("/v1/crons", body, {
+          "x-agent-capability": await capFor("U1", scopeId("personal", "U1"), { liveActor: true }),
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await post(
+          "/v1/crons",
+          { ...body, unattendedGrants: ["admin.everything"] },
+          {
+            "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), {
+              liveActor: true,
+            }),
+          },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await post(
+          "/v1/crons",
+          { ...body, runAs: "scopeFloor" },
+          {
+            "x-agent-capability": await capFor("admin-alice", scopeId("channel", "C"), {
+              liveActor: true,
+              members: [{ id: "admin-alice", type: "internal" }],
+            }),
+          },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await post(
+          "/v1/crons",
+          { ...body, runAs: "scopeShared" },
+          {
+            "x-agent-capability": await capFor("admin-alice", scopeId("channel", "C"), {
+              liveActor: true,
+              members: [{ id: "admin-alice", type: "internal" }],
+            }),
+          },
+        )
+      ).status,
+      400,
+    );
+    const create = await post("/v1/crons", body, {
+      "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
+    });
+    assert.equal(create.status, 200);
+    const { cron } = (await create.json()) as { cron: { id: string; unattendedGrants?: string[] } };
+    assert.deepEqual(cron.unattendedGrants, ["admin.sessions.read"]);
+    const got = (await (
+      await get(`/v1/crons/${cron.id}`, {
+        "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
+      })
+    ).json()) as { cron: { unattendedGrants?: string[] } };
+    assert.deepEqual(got.cron.unattendedGrants, ["admin.sessions.read"]);
+    const listed = (await (
+      await get("/v1/crons", {
+        "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
+      })
+    ).json()) as { crons: Array<{ id: string; unattendedGrants?: string[] }> };
+    assert.deepEqual(listed.crons.find((candidate) => candidate.id === cron.id)?.unattendedGrants, [
+      "admin.sessions.read",
+    ]);
+    assert.equal(
+      (
+        await patch(
+          `/v1/crons/${cron.id}`,
+          { action: "tamper" },
+          {
+            "x-agent-capability": await capFor("admin-alice"),
+          },
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await patch(
+          `/v1/crons/${cron.id}`,
+          { unattendedGrants: [] },
+          {
+            "x-agent-capability": await capFor("admin-bob", scopeId("personal", "admin-bob"), { liveActor: true }),
+          },
+        )
+      ).status,
+      403,
+    );
+  });
 
   it("creates a cron as the TOKEN's actor, ignoring a forged owner in the body", async () => {
     const res = await post(

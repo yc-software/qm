@@ -47,6 +47,7 @@ function isCreateCron(b: unknown): b is CreateCronInput {
     isObj(b) &&
     scheduleFromBody(b.schedule) !== null &&
     (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
+    (b as { unattendedGrants?: unknown }).unattendedGrants === undefined &&
     typeof b.ownerScopeId === "string" &&
     typeof b.owner === "string" &&
     typeof b.createdBy === "string" &&
@@ -69,6 +70,7 @@ type CapabilityCronBody = {
   participants?: unknown;
   scope?: unknown;
   unfurlLinks?: unknown;
+  unattendedGrants?: unknown;
 };
 
 function taskText(b: CapabilityCronBody): string | undefined {
@@ -126,6 +128,7 @@ function isCronPatch(b: unknown): b is {
   archived?: boolean;
   unfurlLinks?: boolean;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
+  unattendedGrants?: string[];
 } {
   if (!isObj(b)) return false;
   const hasTitle = b.title !== undefined;
@@ -136,6 +139,7 @@ function isCronPatch(b: unknown): b is {
   const hasArchived = b.archived !== undefined;
   const hasUnfurlLinks = b.unfurlLinks !== undefined;
   const hasRunAs = b.runAs !== undefined;
+  const hasUnattendedGrants = b.unattendedGrants !== undefined;
   if (
     !hasTitle &&
     !hasAction &&
@@ -144,7 +148,8 @@ function isCronPatch(b: unknown): b is {
     !hasEnabled &&
     !hasArchived &&
     !hasUnfurlLinks &&
-    !hasRunAs
+    !hasRunAs &&
+    !hasUnattendedGrants
   )
     return false;
   if (hasTitle && typeof b.title !== "string") return false;
@@ -154,6 +159,11 @@ function isCronPatch(b: unknown): b is {
   if (hasArchived && typeof b.archived !== "boolean") return false;
   if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
   if (hasRunAs && b.runAs !== "owner" && b.runAs !== "scopeFloor" && b.runAs !== "scopeShared") return false;
+  if (
+    hasUnattendedGrants &&
+    (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
+  )
+    return false;
   if (hasSchedule && scheduleFromBody(b.schedule) === null) return false;
   return true;
 }
@@ -180,6 +190,15 @@ async function createCron(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
   if (capability) {
     const b = body as CapabilityCronBody;
+    if (
+      b.unattendedGrants !== undefined &&
+      (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
+    ) {
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "unattendedGrants must be an array of recognized grant strings",
+      });
+    }
     const schedule = scheduleFromBody(b.schedule, defaultTimezoneFor(capability));
     const task = taskText(b);
     const text = exactText(b);
@@ -205,6 +224,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
         ...(typeof b.destinationKey === "string" ? { destinationKey: b.destinationKey } : {}),
         ...(b.runAs === "owner" || b.runAs === "scopeFloor" || b.runAs === "scopeShared" ? { runAs: b.runAs } : {}),
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
+        ...(Array.isArray(b.unattendedGrants) ? { unattendedGrants: b.unattendedGrants } : {}),
       },
       capability,
     );
@@ -360,6 +380,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ...(body.archived !== undefined ? { archived: body.archived } : {}),
         ...(body.unfurlLinks !== undefined ? { unfurlLinks: body.unfurlLinks } : {}),
         ...(body.runAs !== undefined ? { runAs: body.runAs } : {}),
+        ...(body.unattendedGrants !== undefined ? { unattendedGrants: body.unattendedGrants } : {}),
       },
       capability,
     );
@@ -377,6 +398,12 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   if (method === "DELETE") {
     await app.deleteCron(id);
     return sendJson(res, 200, { ok: true });
+  }
+  if ((cron.unattendedGrants?.length ?? 0) > 0) {
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "a privileged cron may only be patched by its owner from a live turn",
+    });
   }
   if (!isCronPatch(body)) return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_BAD_REQUEST });
   if (body.runAs !== undefined)

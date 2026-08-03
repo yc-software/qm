@@ -203,6 +203,37 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
 });
 
 describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
+  it("threads grants for owner mode but omits them for scopeFloor and scopeShared", async () => {
+    const requests: TurnRequest[] = [];
+    const d = deps(async (request) => {
+      requests.push(request);
+      return { status: "ok" };
+    });
+    const base = {
+      owner: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+      input: "scan",
+      surface: "cron",
+      unattendedGrants: ["admin.sessions.read"],
+    };
+    await runTrigger(d, { ...base, fireKey: "cron:owner" });
+    await runTrigger(d, {
+      ...base,
+      fireKey: "cron:floor",
+      runAs: "scopeFloor",
+      members: [{ id: "U1", type: "internal" }],
+    });
+    await runTrigger(d, {
+      ...base,
+      fireKey: "cron:shared",
+      runAs: "scopeShared",
+      members: [{ id: "U1", type: "internal" }],
+    });
+    assert.deepEqual(requests[0]?.unattendedGrants, ["admin.sessions.read"]);
+    assert.equal(requests[1]?.unattendedGrants, undefined);
+    assert.equal(requests[2]?.unattendedGrants, undefined);
+  });
+
   it("a destination-bearing cron keeps the compose-then-enqueue path: no surface tools, one delivery", async () => {
     let req: TurnRequest | undefined;
     const d = deps(async (r) => {

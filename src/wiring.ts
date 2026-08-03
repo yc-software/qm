@@ -1274,7 +1274,7 @@ export function buildApp(
       : {}),
   });
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
-  orchestratorDeps.control = createControlService(app, scheduler);
+  orchestratorDeps.control = createControlService(app, scheduler, admin);
   const monitorPoller: MonitorPoller | null =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({

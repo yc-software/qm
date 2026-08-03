@@ -225,6 +225,7 @@ export interface Cron extends TriggerBase {
   createdAt: number;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
   members?: Principal[];
+  unattendedGrants?: string[];
   fireLog?: CronFireLogEntry[];
 }
 
@@ -387,6 +388,7 @@ export interface TurnRequest {
   entryTs?: string;
   gatewayContext?: GatewayContext;
   triggered?: boolean;
+  unattendedGrants?: string[];
   securityScreenData?: string;
   triggerDestination?: Destination;
   ownerKeychainUnion?: boolean;

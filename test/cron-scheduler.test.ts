@@ -52,6 +52,20 @@ function harness(
 
 const member = (id: string) => ({ id, type: "internal" as const });
 
+test("scheduler threads stored unattended grants into owner-mode turns", async () => {
+  const { crons, calls, scheduler } = harness();
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "scan transcripts",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    unattendedGrants: ["admin.sessions.read"],
+  });
+  await scheduler.runNow(cron.id);
+  assert.deepEqual(calls[0]?.unattendedGrants, ["admin.sessions.read"]);
+});
+
 test("a channel cron runs in the channel scope and delivers its real output to the channel", async () => {
   const { crons, deliveries, calls, scheduler } = harness();
   const cron = await crons.create({

@@ -10,6 +10,7 @@ import { sendConsentNotice } from "../triggers/consent-notice.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { AdminError } from "../admin/admin-service.ts";
+import type { AdminService } from "../admin/admin-service.ts";
 import {
   livePersonCapability,
   resolveShareTarget,
@@ -32,6 +33,7 @@ export interface CronCreateRequest {
   destinationKey?: string;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
   unfurlLinks?: boolean;
+  unattendedGrants?: string[];
 }
 
 export type CronCreateResult =
@@ -55,6 +57,7 @@ export type CronCreateResult =
         | "identity_unverified"
         | "unknown_destination"
         | "members_unavailable"
+        | "forbidden"
         | "cron_create_failed";
       message: string;
       candidates?: Array<{ id: string; label: string }>;
@@ -69,6 +72,7 @@ export interface CronPatchRequest {
   archived?: boolean;
   unfurlLinks?: boolean;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
+  unattendedGrants?: string[];
 }
 
 export interface CronRunsRequest {
@@ -208,12 +212,14 @@ async function patchFromCronPatchRequest(
     req.enabled === undefined &&
     req.archived === undefined &&
     req.unfurlLinks === undefined &&
+    req.unattendedGrants === undefined &&
     !changesMode
   ) {
     return {
       ok: false,
       code: "bad_request",
-      message: "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, or runAs",
+      message:
+        "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, runAs, or unattendedGrants",
     };
   }
   if (req.unfurlLinks !== undefined && !before.destination) {
@@ -243,7 +249,29 @@ async function patchFromCronPatchRequest(
   };
 }
 
-export function createControlService(app: App, scheduler?: Scheduler): ControlService {
+const UNATTENDED_GRANTS = new Set(["admin.sessions.read"]);
+
+function validateUnattendedGrants(grants: string[]): string | null {
+  if (!grants.every((grant) => UNATTENDED_GRANTS.has(grant))) return "unknown unattended grant";
+  return null;
+}
+
+async function unattendedGrantRefusal(
+  app: App,
+  admin: AdminService | undefined,
+  cron: Pick<Cron, "owner" | "ownerScopeId" | "runAs">,
+  capability: CapabilityClaims,
+): Promise<string | null> {
+  if (capability.liveActor !== true) return "unattended grants require a live turn started by the cron owner";
+  if (!(await app.samePerson(cron.owner, capability.actorId))) return "only the cron owner may set unattended grants";
+  if (!cron.ownerScopeId.startsWith("personal:") || (cron.runAs !== undefined && cron.runAs !== "owner"))
+    return "unattended grants require a personal-scope cron that runs as its owner";
+  const status = await admin?.adminStatusOf({ id: capability.actorId, type: "internal" }).catch(() => undefined);
+  if (!status?.isAdmin) return "unattended grants require the cron owner to be a current org admin";
+  return null;
+}
+
+export function createControlService(app: App, scheduler?: Scheduler, admin?: AdminService): ControlService {
   const notifyEdit = (
     cron: Cron,
     cap: CapabilityClaims,
@@ -260,6 +288,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     });
   return {
     async createCron(req, capability): Promise<CronCreateResult> {
+      if (req.unattendedGrants !== undefined) {
+        const invalid = validateUnattendedGrants(req.unattendedGrants);
+        if (invalid) return { ok: false, code: "bad_request", message: invalid };
+      }
       if (req.action === undefined && req.text === undefined) {
         return { ok: false, code: "bad_request", message: "task (what to do) or text (exact text to send) required" };
       }
@@ -391,6 +423,18 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             "scopeShared needs a private channel or group DM you're in — not a public channel, a DM, or a different named channel",
         };
       }
+      if (req.unattendedGrants !== undefined) {
+        const refusal = await unattendedGrantRefusal(
+          app,
+          admin,
+          { owner: capability.actorId, ownerScopeId, runAs },
+          capability,
+        );
+        if (refusal) {
+          const code = refusal.includes("personal-scope") ? "bad_request" : "forbidden";
+          return { ok: false, code, message: refusal };
+        }
+      }
 
       if (req.unfurlLinks !== undefined && !destination) {
         return {
@@ -417,6 +461,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           ? { recipientConsent: { recipientId: consentRecipient, status: "pending" as const } }
           : {}),
         ...(runAs === "scopeFloor" || runAs === "scopeShared" ? { runAs, members: capability.members } : {}),
+        ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),
       };
       try {
         const cron = await app.createCron(input);
@@ -482,8 +527,30 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!before) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, before, capability.actorId, capability.scopeId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
+      if (req.unattendedGrants !== undefined) {
+        const invalid = validateUnattendedGrants(req.unattendedGrants);
+        if (invalid) return { ok: false, code: "bad_request", message: invalid };
+      }
+      if ((before.unattendedGrants?.length ?? 0) > 0 || req.unattendedGrants !== undefined) {
+        const refusal = await unattendedGrantRefusal(
+          app,
+          admin,
+          {
+            owner: before.owner,
+            ownerScopeId: before.ownerScopeId,
+            runAs: req.runAs ?? before.runAs,
+          },
+          capability,
+        );
+        if (refusal) {
+          const code = refusal.includes("personal-scope") ? "bad_request" : "forbidden";
+          return { ok: false, code, message: refusal };
+        }
+      }
       const patch = await patchFromCronPatchRequest(app, before, req, capability);
       if ("ok" in patch) return patch;
+      if (req.unattendedGrants !== undefined) patch.unattendedGrants = req.unattendedGrants;
+      else if ((before.unattendedGrants?.length ?? 0) > 0) patch.unattendedGrants = before.unattendedGrants;
       try {
         const cron = await app.updateCron(id, patch);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
@@ -519,6 +586,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId, capability.scopeId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
+      if (enabled && (cron.unattendedGrants?.length ?? 0) > 0) {
+        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
+        if (refusal) return { ok: false, code: "forbidden", message: refusal };
+      }
       await app.setCronEnabled(id, enabled);
       await notifyEdit(cron, capability, [`enabled=${enabled}`], `enabled=${enabled}`);
       const after = await app.getCron(id);
@@ -530,6 +601,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId, capability.scopeId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
+      if ((cron.unattendedGrants?.length ?? 0) > 0) {
+        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
+        if (refusal) return { ok: false, code: "forbidden", message: refusal };
+      }
       if (!scheduler)
         return {
           ok: false,
@@ -551,6 +626,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId, capability.scopeId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
+      if ((cron.unattendedGrants?.length ?? 0) > 0) {
+        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
+        if (refusal) return { ok: false, code: "forbidden", message: refusal };
+      }
       const resolved = resolveCapabilityDestination(capability, destinationKey);
       if (!resolved.ok) {
         return {
