@@ -177,7 +177,7 @@ export function sanitizeReturnTo(value: string | null | undefined, publicOrigin:
   try {
     const base = new URL(publicOrigin).origin;
     const u = new URL(value, base);
-    if (u.origin !== base) return "/";
+    if (u.origin !== base || u.pathname.startsWith("//")) return "/";
     return `${u.pathname}${u.search}${u.hash}`;
   } catch {
     return "/";

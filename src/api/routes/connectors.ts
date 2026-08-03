@@ -60,7 +60,13 @@ function parseOAuthRoute(pathname: string): { provider: string; action: "start" 
 
 function safeReturnTo(value: string | null): string | undefined {
   if (!value || !value.startsWith("/") || value.startsWith("//")) return undefined;
-  return value;
+  try {
+    const target = new URL(value, "http://localhost");
+    if (target.origin !== "http://localhost" || target.pathname.startsWith("//")) return undefined;
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return undefined;
+  }
 }
 
 type HostStatus = OAuthTokenStatus & { host: string };

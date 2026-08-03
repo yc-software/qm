@@ -120,7 +120,7 @@ function sanitizeLocaleReturnTo(value: string | null): string {
   if (/[\\\x00-\x1f]/.test(value) || /%2f%2f|%5c/i.test(value)) return "/";
   try {
     const target = new URL(value, PUBLIC_ORIGIN);
-    if (target.origin !== PUBLIC_ORIGIN) return "/";
+    if (target.origin !== PUBLIC_ORIGIN || target.pathname.startsWith("//")) return "/";
     return `${target.pathname}${target.search}${target.hash}`;
   } catch {
     return "/";

@@ -158,3 +158,45 @@ test("changing the broker language preserves the portal destination and active O
   assert.equal(callback.headers.get("location"), destination);
   assert.match(callback.headers.get("set-cookie") ?? "", /portal_session=/);
 });
+
+test("OIDC callback contains return paths that normalize into scheme-relative URLs", async () => {
+  for (const destination of ["/a/..//evil.test/x", "/%2e%2e//evil.test/x"]) {
+    const login = await fetch(`${base}/auth/login?returnTo=${encodeURIComponent(destination)}`, {
+      redirect: "manual",
+    });
+    assert.equal(login.status, 302);
+    const browserCookies = cookie(login, "portal_oidc_tmp");
+    const authorization = new URL(login.headers.get("location") ?? "", PUBLIC);
+    const signIn = await fetch(`${base}${publicPath(authorization.href)}`, { headers: { cookie: browserCookies } });
+    const request = hiddenRequestToken(await signIn.text());
+    await fetch(`${base}/idp/authorize`, {
+      method: "POST",
+      headers: {
+        origin: PUBLIC,
+        cookie: browserCookies,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ request, email: "admin@example.com" }),
+    });
+    await auth.settle();
+    const mailed = new URL(linkFrom(auth.mailer));
+    const linkToken = decodeURIComponent(mailed.hash.replace(/^#token=/, ""));
+    const verified = await fetch(`${base}/idp/verify`, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        origin: PUBLIC,
+        cookie: browserCookies,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ token: linkToken }),
+    });
+    assert.equal(verified.status, 302);
+    const callback = await fetch(`${base}${publicPath(verified.headers.get("location") ?? "")}`, {
+      redirect: "manual",
+      headers: { cookie: browserCookies },
+    });
+    assert.equal(callback.status, 302);
+    assert.equal(callback.headers.get("location"), "/", destination);
+  }
+});

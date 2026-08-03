@@ -47,6 +47,14 @@ test("local auth bypass signs in loopback portal requests without OIDC", async (
   assert.equal(body.cookie, "admin=local-admin");
 });
 
+test("local auth bypass contains return paths that normalize into scheme-relative URLs", async () => {
+  for (const returnTo of ["/a/..//evil.test/x", "/%2e%2e//evil.test/x"]) {
+    const login = await fetch(`${base}/auth/login?returnTo=${encodeURIComponent(returnTo)}`, { redirect: "manual" });
+    assert.equal(login.status, 302);
+    assert.equal(login.headers.get("location"), "/", returnTo);
+  }
+});
+
 test("local auth bypass only treats loopback client addresses as local", () => {
   assert.equal(isLoopbackAddress("127.0.0.1"), true);
   assert.equal(isLoopbackAddress("127.4.5.6"), true);

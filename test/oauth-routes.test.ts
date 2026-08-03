@@ -104,6 +104,33 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
   }
 });
 
+test("OAuth callback contains return paths that normalize into scheme-relative URLs", async () => {
+  const srv = start(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ access_token: "at-google", refresh_token: "rt-google", expires_in: 3600 }),
+  }));
+  try {
+    const redirectUri = `${srv.base}/v1/connectors/oauth/google/callback`;
+    for (const returnTo of ["/a/..//evil.test/x", "/%2e%2e//evil.test/x"]) {
+      const startPath =
+        `/v1/connectors/oauth/google/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}` +
+        `&returnTo=${encodeURIComponent(returnTo)}`;
+      const started = await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) });
+      assert.equal(started.status, 200);
+      const authorization = new URL(((await started.json()) as { authorizeUrl: string }).authorizeUrl);
+      const state = authorization.searchParams.get("state");
+      assert.ok(state);
+      const callbackPath = `/v1/connectors/oauth/google/callback?code=code-123&state=${encodeURIComponent(state)}`;
+      const callback = await fetch(`${srv.base}${callbackPath}`, { redirect: "manual" });
+      assert.equal(callback.status, 200, returnTo);
+      assert.equal(callback.headers.get("location"), null, returnTo);
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
 test("revoke clears a connector linked under a non-default account type", async () => {
   const srv = start(async () => {
     throw new Error("no token exchange expected");

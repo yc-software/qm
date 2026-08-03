@@ -98,7 +98,14 @@ test("POST /locale requires form content and an accepted locale", async () => {
 });
 
 test("POST /locale contains unsafe redirects and oversized bodies", async () => {
-  for (const returnTo of ["https://evil.test/steal", "//evil.test/steal", "/%2f%2fevil.test/steal", "/a\\b"]) {
+  for (const returnTo of [
+    "https://evil.test/steal",
+    "//evil.test/steal",
+    "/%2f%2fevil.test/steal",
+    "/a\\b",
+    "/a/..//evil.test/x",
+    "/%2e%2e//evil.test/x",
+  ]) {
     const response = await changeLocale("ja", returnTo);
     assert.equal(response.status, 303, returnTo);
     assert.equal(response.headers.get("location"), "/", returnTo);
