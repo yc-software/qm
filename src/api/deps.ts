@@ -101,6 +101,7 @@ export interface ServerDeps {
   sandboxBackend?: string;
   egressDeclaredEnforcement?: EgressEnforcement;
   egressEnforcement?: EgressEnforcement;
+  egressControlPlaneConfigured?: boolean;
   sandboxMigration?: SandboxMigrationRunner;
   sandbox?: Sandbox;
   advisoryLock?: AdvisoryLock;

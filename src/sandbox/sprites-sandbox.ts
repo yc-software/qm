@@ -16,7 +16,7 @@ import {
   posixJoin,
 } from "./exec-file-ops.ts";
 import { ephemeralCredLinkScript, type CredentialPathSpec } from "../credentials/resident-paths.ts";
-import { DROPPED_PROXY_ENV, proxyExportPrefix } from "./sandbox-env.ts";
+import { DROPPED_PROXY_ENV, forceThroughProxyEnv, proxyExportPrefix } from "./sandbox-env.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../auth/capability-token.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../api/contract.ts";
@@ -198,20 +198,6 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     if (!check.ok || !bound)
       throw new Error(`sprites egress policy ${name}: readback mismatch (${JSON.stringify(got).slice(0, 200)})`);
     egressPolicyByName.set(name, want);
-  }
-
-  function spritesProxyEnv(token: string): Record<string, string> {
-    const u = new URL(opts.egressProxyUrl!);
-    const url = `${u.protocol}//x:${token}@${u.host}`;
-    const noProxy = "localhost,127.0.0.1,::1";
-    return {
-      HTTPS_PROXY: url,
-      HTTP_PROXY: url,
-      NO_PROXY: noProxy,
-      https_proxy: url,
-      http_proxy: url,
-      no_proxy: noProxy,
-    };
   }
 
   async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
@@ -404,7 +390,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
       );
-      const env = { ...turnEnv, ...(forceEgress ? spritesProxyEnv(provOpts!.egressToken!) : {}) };
+      const env = {
+        ...turnEnv,
+        ...(forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!) : {}),
+      };
       const handle: SandboxHandle = {
         id: name,
         rootDir: workspaceDir,

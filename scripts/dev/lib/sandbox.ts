@@ -7,7 +7,7 @@ import { ensureDockerDaemon } from "./postgres.ts";
 import { bestEffortValue, sleep } from "./util.ts";
 
 export interface SandboxResolution {
-  backend: "local" | "sprites";
+  backend: "local" | "sprites" | "smolmachines";
   env: Record<string, string>;
   detail: string;
   publicApiUrl: string | null;
@@ -24,7 +24,7 @@ async function localImagePresent(image: string): Promise<boolean> {
 
 export async function resolveSandbox(opts: {
   worktree: string;
-  requested: "local" | "sprites" | "auto";
+  requested: "local" | "sprites" | "smolmachines" | "auto";
   corePort: number;
   lock: string;
   baseEnv: Record<string, string>;
@@ -59,6 +59,42 @@ export async function resolveSandbox(opts: {
       },
       detail: `local Docker (${image})`,
       publicApiUrl,
+      warnings,
+    };
+  }
+
+  if (backend === "smolmachines") {
+    const smolToken = opts.baseEnv.SMOLMACHINES_TOKEN;
+    if (!smolToken)
+      throw new Error(
+        "--sandbox smolmachines requires SMOLMACHINES_TOKEN in the environment (create an API key in the smolmachines console)",
+      );
+    let smolApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
+    if (!smolApiUrl) {
+      smolApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      if (!smolApiUrl)
+        warnings.push(
+          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
+        );
+    }
+    const smolEnv: Record<string, string> = {
+      SANDBOX_BACKEND: "smolmachines",
+      SMOLMACHINES_TOKEN: smolToken,
+      SMOLMACHINES_NAME_PREFIX: opts.baseEnv.SMOLMACHINES_NAME_PREFIX || "qmdev",
+    };
+    if (opts.baseEnv.SMOLMACHINES_IMAGE) smolEnv.SMOLMACHINES_IMAGE = opts.baseEnv.SMOLMACHINES_IMAGE;
+    if (opts.baseEnv.SMOLMACHINES_EGRESS_PROXY_URL)
+      smolEnv.SMOLMACHINES_EGRESS_PROXY_URL = opts.baseEnv.SMOLMACHINES_EGRESS_PROXY_URL;
+    else
+      warnings.push(
+        "SMOLMACHINES_EGRESS_PROXY_URL unset -- smolmachines sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
+      );
+    if (smolApiUrl) smolEnv.PUBLIC_API_URL = smolApiUrl;
+    return {
+      backend: "smolmachines",
+      env: smolEnv,
+      detail: "smolmachines (api.smolmachines.com)",
+      publicApiUrl: smolApiUrl,
       warnings,
     };
   }

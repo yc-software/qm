@@ -79,6 +79,7 @@ const server = createServer(built.app, {
     signingSecret: config.signingSecret,
     apiBaseUrl: config.apiBaseUrl,
   }),
+  egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
   sandbox: built.sandbox,
   advisoryLock: built.advisoryLock,
   ...(built.processes ? { processes: built.processes } : {}),

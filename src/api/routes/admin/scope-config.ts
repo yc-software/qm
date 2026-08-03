@@ -280,8 +280,11 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   for (const r of ADMIN_RESOURCES) {
     if (r.readKey && r.get) values[r.readKey] = await r.get(deps, targetScope);
   }
-  const declaredEgress = deps.egressDeclaredEnforcement ?? deps.egressEnforcement ?? "none";
-  const effectiveEgressFidelity = deps.egressEnforcement ?? "none";
+  const scopeProfile = (await deps.sandbox?.profileFor?.(targetScope)) ?? deps.sandbox?.profile;
+  const declaredEgress =
+    scopeProfile?.egressEnforcement ?? deps.egressDeclaredEnforcement ?? deps.egressEnforcement ?? "none";
+  const controlPlaneConfigured = deps.egressControlPlaneConfigured ?? deps.egressEnforcement === declaredEgress;
+  const effectiveEgressFidelity = controlPlaneConfigured ? declaredEgress : "none";
   let egressReason = "ready";
   if (declaredEgress !== "domain") egressReason = "backend_unsupported";
   else if (effectiveEgressFidelity !== "domain") egressReason = "control_plane_unconfigured";
@@ -332,7 +335,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
       modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
     ),
     egressEnforcement: {
-      backend: deps.sandboxBackend ?? "unknown",
+      backend: scopeProfile?.backend ?? deps.sandboxBackend ?? "unknown",
       declaredFidelity: declaredEgress,
       effectiveFidelity: effectiveEgressFidelity,
       fidelity: effectiveEgressFidelity,
