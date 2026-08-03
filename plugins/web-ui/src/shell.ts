@@ -427,6 +427,12 @@ function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | und
   return mode === "dev" ? { kind: "dev" } : { kind: "portal" };
 }
 
+function setLocaleReturnTo(event: Event): void {
+  const form = event.currentTarget as HTMLFormElement;
+  const returnTo = form.elements.namedItem("returnTo");
+  if (returnTo instanceof HTMLInputElement) returnTo.value = `${location.pathname}${location.search}${location.hash}`;
+}
+
 export function mountShell(): void {
   if (embedMode) {
     render(
@@ -470,7 +476,7 @@ export function mountShell(): void {
               <span class="avatar">${initials(appState.me?.user ?? "?")}</span>
               <span class="user-name">${appState.me?.user ?? ""}</span>
             </div>
-            <form class="language-form" action="/locale" method="post">
+            <form class="language-form" action="/locale" method="post" @submit=${setLocaleReturnTo}>
               <label class="sr-only" for="web-ui-locale">${t("language")}</label>
               <select
                 id="web-ui-locale"
@@ -482,7 +488,7 @@ export function mountShell(): void {
                 <option value="en">${t("english")}</option>
                 <option value="ja">${t("japanese")}</option>
               </select>
-              <input type="hidden" name="returnTo" .value=${`${location.pathname}${location.search}${location.hash}`} />
+              <input type="hidden" name="returnTo" value="" />
             </form>
             <a class="icon-btn subtle" href=${ADMIN_HOME_URL} title="Back to admin" aria-label="Back to admin"
               >${icon(ArrowLeft, 17)}</a

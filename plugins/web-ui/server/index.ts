@@ -179,6 +179,7 @@ const UNTRUSTED_CONTENT_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-p
 interface ViteDevServer {
   middlewares(req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void): void;
   transformIndexHtml(url: string, html: string): Promise<string>;
+  close(): Promise<void>;
 }
 
 type CreateViteServer = (opts: Record<string, unknown>) => Promise<ViteDevServer>;
@@ -699,6 +700,11 @@ async function createVite(server: Server): Promise<ViteDevServer | undefined> {
       hmr: { server },
     },
   });
+}
+
+export async function startVite(server: Server): Promise<ViteDevServer | undefined> {
+  vite = await createVite(server);
+  return vite;
 }
 
 async function serveVite(req: IncomingMessage, res: ServerResponse, path: string): Promise<boolean> {
@@ -1940,9 +1946,8 @@ const server = createServer((req, res) => {
 });
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  createVite(server)
-    .then((v) => {
-      vite = v;
+  startVite(server)
+    .then(() => {
       server.listen(PORT, () => {
         console.log(
           `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
