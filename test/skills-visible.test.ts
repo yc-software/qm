@@ -9,6 +9,8 @@ import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 
 function freshApp() {
   const config: Config = testConfig({
@@ -77,4 +79,45 @@ test("an unpublished (draft/reviewed) skill is not visible", async () => {
 
   const visible = await app.listVisibleSkills("U1");
   assert.ok(!visible.some((r) => r.skill!.manifest.name === "wip"));
+});
+
+test("visibleFor reads the full skills table once, not once per skill name", async () => {
+  const backing = createMemoryMap<Skill>();
+  let allReads = 0;
+  const originalAll = backing.all.bind(backing);
+  backing.all = () => {
+    allReads += 1;
+    return originalAll();
+  };
+  const skills = createSkillStore({ backing });
+
+  const org = scopeId("org", "default-org");
+  const personal = scopeId("personal", "U1");
+  for (let i = 0; i < 200; i++) {
+    const scope = i % 2 === 0 ? org : personal;
+    const sk = await skills.create({
+      scopeId: scope,
+      manifest: { name: `skill-${i}`, description: `skill ${i}`, requiredCapabilities: [], body: `# skill-${i}` },
+      createdBy: "author",
+    });
+    await skills.review(sk.id, "reviewer-1", []);
+    await skills.publish(sk.id);
+  }
+  const shadowing = await skills.create({
+    scopeId: personal,
+    manifest: { name: "skill-0", description: "personal override", requiredCapabilities: [], body: "# skill-0" },
+    createdBy: "U1",
+  });
+  await skills.review(shadowing.id, "reviewer-1", []);
+  await skills.publish(shadowing.id);
+
+  allReads = 0;
+  const visible = await skills.visibleFor([personal, org]);
+
+  assert.equal(allReads, 1, "one full skills read per visibleFor call");
+  assert.equal(visible.length, 200);
+  const shadowed = visible.find((r) => r.skill!.manifest.name === "skill-0")!;
+  assert.equal(shadowed.skill!.scopeId, personal);
+  assert.equal(shadowed.shadowed.length, 1);
+  assert.equal(shadowed.shadowed[0]!.scopeId, org);
 });

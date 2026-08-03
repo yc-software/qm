@@ -94,6 +94,15 @@ function scopeKind(scopeId: ScopeId): string {
   return parseScopeId(scopeId).kind ?? scopeId;
 }
 
+function resolveFromCatalog(all: Skill[], name: string, orderedScopes: ScopeId[]): SkillResolution {
+  if (!isSafeSkillName(name)) return { skill: null, shadowed: [] };
+  const published = orderedScopes
+    .map((sc) => all.find((s) => s.status === "published" && s.manifest.name === name && s.scopeId === sc))
+    .filter((s): s is Skill => Boolean(s));
+  const [skill, ...shadowed] = published;
+  return { skill: skill ?? null, shadowed };
+}
+
 export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   const skills = opts.backing ?? createMemoryMap<Skill>();
   const secret = opts.signingSecret ?? randomUUID();
@@ -203,25 +212,22 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
 
     async resolve(name, orderedScopes) {
       if (!isSafeSkillName(name)) return { skill: null, shadowed: [] };
-      const all = await skills.all();
-      const published = orderedScopes
-        .map((sc) => all.find((s) => s.status === "published" && s.manifest.name === name && s.scopeId === sc))
-        .filter((s): s is Skill => Boolean(s));
-      const [skill, ...shadowed] = published;
-      return { skill: skill ?? null, shadowed };
+      return resolveFromCatalog(await skills.all(), name, orderedScopes);
     },
 
     async visibleFor(orderedScopes) {
+      const all = await skills.all();
       const inScope = new Set(orderedScopes);
       const names = [
         ...new Set(
-          (await skills.all())
+          all
             .filter((s) => s.status === "published" && inScope.has(s.scopeId) && isSafeSkillName(s.manifest.name))
             .map((s) => s.manifest.name),
         ),
       ];
-      const resolved = await Promise.all(names.map((n) => this.resolve(n, orderedScopes)));
-      return resolved.filter((r): r is SkillResolution & { skill: Skill } => r.skill !== null);
+      return names
+        .map((n) => resolveFromCatalog(all, n, orderedScopes))
+        .filter((r): r is SkillResolution & { skill: Skill } => r.skill !== null);
     },
 
     async promote(id, targetScopeId) {
