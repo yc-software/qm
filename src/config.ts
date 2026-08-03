@@ -19,6 +19,8 @@ import {
   type ModelProvider,
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
+import { parseServicePrincipals } from "./directory/service-principals.ts";
+import type { DirectoryMember } from "./directory/directory-store.ts";
 
 export interface Config {
   production: boolean;
@@ -26,6 +28,7 @@ export interface Config {
   port: number;
   dataDir: string;
   orgId: string;
+  servicePrincipals: DirectoryMember[];
   sessionStore: "memory" | "postgres";
   databaseUrl?: string;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
@@ -688,6 +691,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
+    servicePrincipals: parseServicePrincipals(env.DIRECTORY_SERVICE_PRINCIPALS),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     harness: harnessEnvStrict(env.HARNESS),
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),

@@ -68,6 +68,29 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
   });
 
+  it("configured service principals are seeded and survive roster replacement", async () => {
+    const servicePrincipal = member("agent@example.com");
+    const configured = buildApp(
+      testConfig({
+        dataDir: mkdtempSync(join(tmpdir(), "service-principal-")),
+        servicePrincipals: [{ ...servicePrincipal, displayName: "Configured Agent" }],
+      }),
+    );
+    await configured.identity.hydrate();
+
+    assert.deepEqual(await configured.directory.list(), [{ ...servicePrincipal, displayName: "Configured Agent" }]);
+
+    await configured.app.upsertDirectory([member("U-human"), { ...servicePrincipal, displayName: "Roster Name" }]);
+    assert.deepEqual(await configured.directory.get("agent@example.com"), {
+      ...servicePrincipal,
+      displayName: "Configured Agent",
+    });
+
+    await configured.app.upsertDirectory([member("U-human")]);
+    assert.equal(configured.identity.classify("agent@example.com").type, "internal");
+    assert.equal((await configured.directory.get("agent@example.com"))?.displayName, "Configured Agent");
+  });
+
   it("the deactivate/reactivate routes flip classification and are audited", async () => {
     const off = await signedPost("/v1/principals/U-manual/deactivate");
     assert.equal(off.status, 200);

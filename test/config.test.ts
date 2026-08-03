@@ -24,6 +24,37 @@ test("ORG_BRAND_* parses into a validated branding default", () => {
   assert.equal(loadConfig({ ORG_BRAND_SELF_LABEL: "x".repeat(80) }).brandingDefault?.selfLabel?.length, 40);
 });
 
+test("DIRECTORY_SERVICE_PRINCIPALS parses validated internal members", () => {
+  assert.deepEqual(
+    loadConfig({
+      DIRECTORY_SERVICE_PRINCIPALS: JSON.stringify([
+        { principalId: "agent@example.com", displayName: "Agent", slackId: "U123" },
+      ]),
+    }).servicePrincipals,
+    [{ principalId: "agent@example.com", displayName: "Agent", type: "internal", slackId: "U123" }],
+  );
+  assert.throws(() => loadConfig({ DIRECTORY_SERVICE_PRINCIPALS: "{}" }), /must be a JSON array/);
+  assert.throws(
+    () =>
+      loadConfig({
+        DIRECTORY_SERVICE_PRINCIPALS: JSON.stringify([
+          { principalId: "agent@example.com", displayName: "Agent" },
+          { principalId: "AGENT@example.com", displayName: "Duplicate" },
+        ]),
+      }),
+    /identity collision/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        DIRECTORY_SERVICE_PRINCIPALS: JSON.stringify([
+          { principalId: "agent@example.com", displayName: "Agent", slackId: 42 },
+        ]),
+      }),
+    /slackId must be a non-empty string/,
+  );
+});
+
 test("store kinds default to memory and accept postgres", () => {
   const def = loadConfig({});
   assert.equal(def.sessionStore, "memory");

@@ -59,6 +59,7 @@ import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { createDirectoryStore, type DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
+import { withServicePrincipals } from "./directory/service-principals.ts";
 import {
   createMemoryEnvironmentStore,
   createPostgresEnvironmentStore,
@@ -806,7 +807,10 @@ export function buildApp(
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }),
   });
-  const directory = config.databaseUrl ? createPostgresDirectoryStore(config.databaseUrl) : createDirectoryStore();
+  const directory = withServicePrincipals(
+    config.databaseUrl ? createPostgresDirectoryStore(config.databaseUrl) : createDirectoryStore(),
+    config.servicePrincipals,
+  );
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
