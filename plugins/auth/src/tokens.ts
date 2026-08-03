@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { jwtVerify, SignJWT, type JWTPayload } from "jose";
+import { decodeJwt, jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 import { normalizeLocale, type Locale } from "../../chassis/src/locale.ts";
 
@@ -107,6 +107,26 @@ export class TokenSigner {
     } catch {
       return null;
     }
+  }
+
+  async openDisplayLocale(purpose: "request" | "link", token: string): Promise<Locale | null> {
+    let untrusted: JWTPayload;
+    try {
+      untrusted = decodeJwt(token);
+    } catch {
+      return null;
+    }
+    if (
+      typeof untrusted.iat !== "number" ||
+      !Number.isFinite(untrusted.iat) ||
+      typeof untrusted.exp !== "number" ||
+      !Number.isFinite(untrusted.exp) ||
+      untrusted.exp <= untrusted.iat
+    ) {
+      return null;
+    }
+    const payload = await this.open(purpose, token, untrusted.iat * 1000);
+    return payload ? normalizeLocale(payload.lo) : null;
   }
 
   async sealRequest(request: AuthRequest, ttlS: number, nowMs?: number): Promise<SealedToken> {

@@ -463,13 +463,15 @@ test("the sign-in link never puts its token anywhere a server or proxy logs it",
   await requestLink(h);
   const link = new URL(linkFrom(h.mailer));
 
-  assert.equal(link.search, "", "no query string — the request target is what lands in an access log");
+  assert.deepEqual([...link.searchParams], [["locale", "en"]], "only a non-secret display locale may enter logs");
+  assert.equal(link.searchParams.has("token"), false, "the authentication token must stay out of the query string");
   assert.match(link.hash, /^#token=/, "the token rides in the fragment, which browsers never send to a server");
   const token = tokenOf(link.href);
   assert.ok(token.length > 0);
 
-  const confirm = await fetch(`${h.base}/verify`);
-  assert.equal(confirm.status, 200, "the query-less URL a scanner or proxy sees still renders the confirmation");
+  const confirm = await fetch(`${h.base}/verify${link.search}`);
+  assert.equal(confirm.status, 200, "the token-free request target a scanner or proxy sees renders the confirmation");
+  assert.equal(confirm.headers.get("referrer-policy"), "no-referrer");
   const page = await confirm.text();
   assert.ok(!page.includes(token), "the page the server renders cannot contain a token it was never sent");
   assert.match(page, /location\.hash/, "the browser moves the token from the fragment into the form");

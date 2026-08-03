@@ -205,7 +205,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       return;
     }
     const sealed = await signer.sealLink({ ...request, locale, email }, cfg.linkTtlS, nowMs);
-    const link = `${cfg.issuer}/verify#token=${encodeURIComponent(sealed.token)}`;
+    const link = `${cfg.issuer}/verify?locale=${locale}#token=${encodeURIComponent(sealed.token)}`;
     try {
       const receipt = await mailer.send(
         renderSignInEmail({ locale, to: email, brandName: cfg.brandName, link, ttlMinutes: linkTtlMinutes }),
@@ -227,9 +227,11 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       throw e;
     }
     const form = new URLSearchParams(raw);
-    const request = await signer.openRequest(form.get("request") ?? "", now());
+    const requestToken = form.get("request") ?? "";
+    const request = await signer.openRequest(requestToken, now());
     if (!request) {
-      return problem(res, 400, incomingLocale, "error.expiredPageHeading", "error.expiredPageMessage");
+      const locale = (await signer.openDisplayLocale("request", requestToken)) ?? incomingLocale;
+      return problem(res, 400, locale, "error.expiredPageHeading", "error.expiredPageMessage");
     }
     const locale = signedLocale(request);
     const email = normalizeEmail(form.get("email") ?? "");
@@ -252,8 +254,8 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     background(() => sendLink(request, email, ip));
   }
 
-  function confirmVerify(req: IncomingMessage, res: ServerResponse): void {
-    const locale = localeOf(req);
+  function confirmVerify(req: IncomingMessage, res: ServerResponse, params: URLSearchParams): void {
+    const locale = normalizeLocale(params.get("locale")) ?? localeOf(req);
     return sendHtml(
       res,
       200,
@@ -270,8 +272,12 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     } catch {
       return problem(res, 413, incomingLocale, "error.failedHeading", "error.formTooLarge");
     }
-    const opened = await signer.openLink(new URLSearchParams(raw).get("token") ?? "", now());
-    if (!opened) return staleLink(res, incomingLocale);
+    const linkToken = new URLSearchParams(raw).get("token") ?? "";
+    const opened = await signer.openLink(linkToken, now());
+    if (!opened) {
+      const locale = (await signer.openDisplayLocale("link", linkToken)) ?? incomingLocale;
+      return staleLink(res, locale);
+    }
     const { claims: link } = opened;
     const locale = signedLocale(link);
     if (!(await claimOnce(claims, `link:${opened.jti}`, opened.expiresAtMs))) return staleLink(res, locale);
@@ -404,7 +410,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     if (method === "GET" && path === "/.well-known/openid-configuration") return discovery(res);
     if (method === "GET" && path === "/authorize") return authorizeForm(req, res, url.searchParams);
     if (method === "POST" && path === "/authorize") return authorizeSubmit(req, res);
-    if (method === "GET" && path === "/verify") return confirmVerify(req, res);
+    if (method === "GET" && path === "/verify") return confirmVerify(req, res, url.searchParams);
     if (method === "POST" && path === "/verify") return verify(req, res);
     if (method === "POST" && path === "/token") return token(req, res);
     if ((method === "GET" || method === "POST") && path === "/userinfo") return userinfo(req, res);

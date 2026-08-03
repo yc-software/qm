@@ -84,6 +84,32 @@ test("the Japanese sign-in subject is RFC 2047 encoded", () => {
   assert.equal(Buffer.from(encoded, "base64").toString("utf8"), "qmにサインイン");
 });
 
+test("a long Unicode sign-in subject is folded into decodable RFC 2047 encoded-words", () => {
+  const brandName = "エージェント管理基盤🚀".repeat(12);
+  const message = renderSignInEmail({
+    locale: "ja",
+    to: "a@b.test",
+    brandName,
+    link: "https://agent.example.test/idp/verify?locale=ja#token=abc",
+    ttlMinutes: 15,
+  });
+  const raw = renderMessage(cfg, message);
+  const folded = /\r\nSubject: ([^\r\n]+(?:\r\n [^\r\n]+)*)\r\nDate:/.exec(raw)?.[1];
+  assert.ok(folded);
+  const words = folded.split("\r\n ");
+  assert.ok(words.length > 1);
+  assert.ok(words.every((word) => word.length <= 75));
+  assert.ok([`Subject: ${words[0]}`, ...words.slice(1).map((word) => ` ${word}`)].every((line) => line.length <= 78));
+  const decoded = words
+    .map((word) => {
+      const encoded = /^=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=$/.exec(word)?.[1];
+      assert.ok(encoded);
+      return Buffer.from(encoded, "base64").toString("utf8");
+    })
+    .join("");
+  assert.equal(decoded, message.subject);
+});
+
 test("the Resend transport reports the provider's message id and surfaces refusals", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const ok = resendMailer(cfg, (async (url: string, init: RequestInit) => {

@@ -73,7 +73,22 @@ export function mailerFor(cfg: AuthConfig): Mailer {
 
 function encodeHeader(value: string): string {
   const clean = value.replace(/[\r\n]+/g, " ").trim();
-  return /^[\x20-\x7E]*$/.test(clean) ? clean : `=?UTF-8?B?${Buffer.from(clean, "utf8").toString("base64")}?=`;
+  if (/^[\x20-\x7E]*$/.test(clean)) return clean;
+  const chunks: string[] = [];
+  let chunk = "";
+  let bytes = 0;
+  for (const character of clean) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (chunk && bytes + characterBytes > 42) {
+      chunks.push(chunk);
+      chunk = "";
+      bytes = 0;
+    }
+    chunk += character;
+    bytes += characterBytes;
+  }
+  if (chunk) chunks.push(chunk);
+  return chunks.map((part) => `=?UTF-8?B?${Buffer.from(part, "utf8").toString("base64")}?=`).join("\r\n ");
 }
 
 function base64Body(value: string): string {

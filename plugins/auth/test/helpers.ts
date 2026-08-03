@@ -163,7 +163,7 @@ export function hiddenRequestToken(html: string): string {
 export function linkFrom(mailer: { sent: OutgoingEmail[] }): string {
   const last = mailer.sent.at(-1);
   if (!last) throw new Error("no email was sent");
-  const match = /(https?:\/\/\S*\/verify#token=[^"\s<]+)/.exec(last.text);
+  const match = /(https?:\/\/[^\s"<]+\/verify(?:\?[^\s"#<]*)?#token=[^"\s<]+)/.exec(last.text);
   if (!match) throw new Error("no sign-in link in the message");
   return match[1]!;
 }

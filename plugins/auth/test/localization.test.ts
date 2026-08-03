@@ -4,7 +4,15 @@ import { TokenSigner } from "../src/tokens.ts";
 import { catalogProblems } from "../../chassis/src/locale.ts";
 import { AUTH_MESSAGES } from "../src/messages.ts";
 import { problemPage } from "../src/pages.ts";
-import { authorizeQuery, CLIENT_ID, hiddenRequestToken, pkcePair, REDIRECT_URI, startHarness } from "./helpers.ts";
+import {
+  authorizeQuery,
+  CLIENT_ID,
+  hiddenRequestToken,
+  linkFrom,
+  pkcePair,
+  REDIRECT_URI,
+  startHarness,
+} from "./helpers.ts";
 
 const form = (entries: Record<string, string>): RequestInit => ({
   method: "POST",
@@ -190,4 +198,110 @@ test("raw problem details stay escaped and untranslated inside a localized page"
 
 test("the Auth message catalogs keep identical keys and placeholders", () => {
   assert.deepEqual(catalogProblems(AUTH_MESSAGES.en, AUTH_MESSAGES.ja), []);
+});
+
+test("an expired Japanese request keeps its signed locale only for the refusal page", async (t) => {
+  const h = await startHarness();
+  t.after(() => h.close());
+  const request = await requestToken(h, "ja");
+  h.now.ms += (h.cfg.requestTtlS + 60) * 1000;
+  const response = await fetch(`${h.base}/authorize`, {
+    ...form({ request, email: "admin@example.com" }),
+    headers: { "content-type": "application/x-www-form-urlencoded", "x-qm-locale": "en" },
+  });
+  assert.equal(response.status, 400);
+  const html = await response.text();
+  assert.match(html, /<html lang="ja">/);
+  assert.match(html, /有効期限が切れました/);
+  assert.equal(h.mailer.sent.length, 0);
+});
+
+test("an expired Japanese link keeps its signed locale without consuming a claim", async (t) => {
+  const h = await startHarness();
+  t.after(() => h.close());
+  const request = await requestToken(h, "ja");
+  await fetch(`${h.base}/authorize`, form({ request, email: "admin@example.com" }));
+  await h.settle();
+  const mailed = new URL(linkFrom(h.mailer));
+  const token = new URLSearchParams(mailed.hash.slice(1)).get("token")!;
+  h.now.ms += (h.cfg.linkTtlS + 60) * 1000;
+  const response = await fetch(`${h.base}/verify?locale=en`, {
+    ...form({ token }),
+    headers: { "content-type": "application/x-www-form-urlencoded", "x-qm-locale": "en" },
+  });
+  assert.equal(response.status, 400);
+  const html = await response.text();
+  assert.match(html, /<html lang="ja">/);
+  assert.match(html, /サインインリンクは使用できません/);
+  assert.equal(
+    h.claims.calls.some((ids) => ids[0]?.startsWith("link:")),
+    false,
+  );
+});
+
+test("a tampered expired request cannot supply a display locale", async (t) => {
+  const h = await startHarness({ env: { QM_DEFAULT_LOCALE: "ja" } });
+  t.after(() => h.close());
+  const request = await requestToken(h, "ja");
+  const [header, payload, signature] = request.split(".");
+  const changed = signature!.at(-2) === "A" ? "B" : "A";
+  const tampered = `${header}.${payload}.${signature!.slice(0, -2)}${changed}${signature!.at(-1)}`;
+  h.now.ms += (h.cfg.requestTtlS + 60) * 1000;
+  const response = await fetch(`${h.base}/authorize`, {
+    ...form({ request: tampered, email: "admin@example.com" }),
+    headers: { "content-type": "application/x-www-form-urlencoded", "x-qm-locale": "en" },
+  });
+  assert.equal(response.status, 400);
+  const html = await response.text();
+  assert.match(html, /<html lang="en">/);
+  assert.match(html, /This sign-in page expired/);
+  assert.equal(h.mailer.sent.length, 0);
+});
+
+test("a tampered expired link cannot supply a display locale or consume a claim", async (t) => {
+  const h = await startHarness({ env: { QM_DEFAULT_LOCALE: "ja" } });
+  t.after(() => h.close());
+  const request = await requestToken(h, "ja");
+  await fetch(`${h.base}/authorize`, form({ request, email: "admin@example.com" }));
+  await h.settle();
+  const mailed = new URL(linkFrom(h.mailer));
+  const token = new URLSearchParams(mailed.hash.slice(1)).get("token")!;
+  const [header, payload, signature] = token.split(".");
+  const changed = signature!.at(-2) === "A" ? "B" : "A";
+  const tampered = `${header}.${payload}.${signature!.slice(0, -2)}${changed}${signature!.at(-1)}`;
+  h.now.ms += (h.cfg.linkTtlS + 60) * 1000;
+  const response = await fetch(`${h.base}/verify?locale=ja`, {
+    ...form({ token: tampered }),
+    headers: { "content-type": "application/x-www-form-urlencoded", "x-qm-locale": "en" },
+  });
+  assert.equal(response.status, 400);
+  const html = await response.text();
+  assert.match(html, /<html lang="en">/);
+  assert.match(html, /This sign-in link no longer works/);
+  assert.equal(
+    h.claims.calls.some((ids) => ids[0]?.startsWith("link:")),
+    false,
+  );
+});
+
+test("the non-secret locale hint in a Japanese email controls only the confirmation display", async (t) => {
+  const h = await startHarness();
+  t.after(() => h.close());
+  const request = await requestToken(h, "ja");
+  await fetch(`${h.base}/authorize`, form({ request, email: "admin@example.com" }));
+  await h.settle();
+  const mailed = new URL(linkFrom(h.mailer));
+  assert.equal(mailed.searchParams.get("locale"), "ja");
+  assert.equal(mailed.searchParams.has("token"), false);
+  assert.match(mailed.hash, /^#token=/);
+  const page = await fetch(`${h.base}/verify${mailed.search}`, {
+    headers: { "x-qm-locale": "en", "accept-language": "en-US" },
+  });
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /<html lang="ja">/);
+
+  const tamperedHint = await fetch(`${h.base}/verify?locale=not-a-locale`, {
+    headers: { "x-qm-locale": "en" },
+  });
+  assert.match(await tamperedHint.text(), /<html lang="en">/);
 });
