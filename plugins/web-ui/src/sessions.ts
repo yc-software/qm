@@ -971,6 +971,7 @@ function renameInput(menuKey: string, ariaLabel: string, commit: () => Promise<v
         renameDraft = (e.currentTarget as HTMLInputElement).value;
       }}
       @keydown=${(e: KeyboardEvent) => {
+        if (e.isComposing || e.keyCode === 229) return;
         if (e.key === "Enter") {
           e.preventDefault();
           void commit();

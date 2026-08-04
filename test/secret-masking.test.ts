@@ -54,3 +54,13 @@ test("empty or absent env is a passthrough", () => {
   assert.equal(createSecretValueMasker(undefined)("echo hi"), "echo hi");
   assert.equal(createSecretValueMasker({})("echo hi"), "echo hi");
 });
+
+test("a JWT-shaped (base64url) form of a secret is masked", () => {
+  const value = "secret+value/with=chars";
+  const mask = createSecretValueMasker({ VAULT_PASS: value });
+  const b64url = Buffer.from(value, "utf8").toString("base64url");
+  assert.equal(
+    mask(`curl -H "authorization: Bearer ${b64url}"`),
+    'curl -H "authorization: Bearer <redacted:VAULT_PASS>"',
+  );
+});

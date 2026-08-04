@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
@@ -19,7 +20,7 @@ import {
   type BenchResult,
 } from "../src/memory/bench.ts";
 
-const FIXTURE_DIR = new URL("./memory-bench/conversations/", import.meta.url).pathname;
+const FIXTURE_DIR = fileURLToPath(new URL("./memory-bench/conversations/", import.meta.url));
 
 test("every bench fixture parses and has at least two turns", () => {
   const files = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith(".json"));

@@ -183,7 +183,13 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
       const now = Date.now();
       const window = await readLogWindow(scopeId, now, LOG_RETENTION_DAYS);
       if (window.length && deps.harness.oneShot) {
-        const longTerm = stripMarker(await base.read(scopeId));
+        // Promotion is a read → model round-trip → write. A save that lands
+        // during the round-trip must not be silently reverted by the write,
+        // so the write is compare-and-set against the revision we read; on a
+        // lost race we skip — the next promotion pass will pick everything up.
+        const head = base.readHead ? await base.readHead(scopeId) : null;
+        const raw = head ? head.content : await base.read(scopeId);
+        const longTerm = stripMarker(raw);
         const scratch = window.map(({ date, body }) => `## ${date}\n${body}`).join("\n\n");
         const out = (
           (await deps.harness.oneShot(
@@ -191,7 +197,13 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
             `Current notebook:\n${longTerm || "(empty)"}\n\nScratch log:\n${scratch}`,
           )) ?? ""
         ).trim();
-        if (out && !/^none$/i.test(out)) await base.replace(scopeId, out);
+        if (out && !/^none$/i.test(out)) {
+          if (head && base.replaceIfRevision) {
+            await base.replaceIfRevision(scopeId, out, head.revision);
+          } else {
+            await base.replace(scopeId, out);
+          }
+        }
       }
       const cutoff = dateStr(now - LOG_RETENTION_DAYS * 86_400_000);
       for (const abs of await workspace.list(scopeId)) {

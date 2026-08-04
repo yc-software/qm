@@ -148,6 +148,20 @@ test("redactCommand strips secret-bearing flags", () => {
   assert.match(redactCommand("svc --client-secret=shh"), /<redacted>/);
 });
 
+test("redactCommand hides a token piped into --with-token", () => {
+  for (const cmd of [
+    "echo ghp_secretvalue12345 | gh auth login --with-token",
+    'echo "ghp_secretvalue12345" | gh auth login --with-token',
+    "printf ghp_secretvalue12345 | gh auth login --with-token",
+    "echo -n ghp_secretvalue12345 | gh auth login --hostname x.test --with-token",
+  ]) {
+    const out = redactCommand(cmd);
+    assert.ok(!out.includes("ghp_secretvalue12345"), `leaked in: ${out}`);
+    assert.match(out, /<redacted>/);
+    assert.match(out, /--with-token/);
+  }
+});
+
 test("redactCommand masks known injected env values the pattern layer misses", () => {
   const env = { GITHUB_TOKEN: "ghp_secretvalue12345" };
   for (const cmd of [
