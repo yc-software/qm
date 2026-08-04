@@ -1063,7 +1063,7 @@ export function createChatSurface(
                 </div>`
               : nothing
           }
-          ${glanceTier ? nothing : sessionTopbar(agent)}
+          ${glanceTier ? nothing : sessionTopbar()}
           ${
             glanceTier
               ? paneGlance(agent, messages, glanceTier)
@@ -1125,12 +1125,7 @@ export function createChatSurface(
     return null;
   }
 
-  function pillState(needsYou: boolean, working: boolean): "needs-you" | "working" | null {
-    if (needsYou) return "needs-you";
-    return working ? "working" : null;
-  }
-
-  function sessionTopbar(agent: Agent): TemplateResult {
+  function sessionTopbar(): TemplateResult {
     const scope = chatState.scopeId;
     const session = sessionsState.list.find((s) =>
       chatState.sessionId
@@ -1139,13 +1134,20 @@ export function createChatSurface(
     );
     const title = session?.title?.trim() || "New chat";
     const crumb = scope && !scope.startsWith("personal:") ? scopeTitle(scope, chatState.contextName) : null;
-    const needsYou = activePendingApprovals().length > 0;
-    const working = !needsYou && (agent.state.isStreaming || chatState.resolvingApprovals.size > 0);
+    const forkedFrom =
+      chatState.forkSession && chatState.sessionId === chatState.forkSession.id
+        ? chatState.forkSession.forkedFrom
+        : undefined;
     return sessionTopbarTpl({
       crumb,
       title,
+      fork: forkedFrom
+        ? {
+            title: forkedFrom.title?.trim() || "another conversation",
+            onClick: () => void forkOriginController.navigate(),
+          }
+        : null,
       onCrumb: crumb && scope ? () => openProjectPage(scope) : null,
-      pill: pillState(needsYou, working),
       cronCount: scope ? scopeCronCount(scope, () => drawActiveChat()) : null,
       onTool: (tool) => {
         setScopedSession({
@@ -1155,8 +1157,8 @@ export function createChatSurface(
           title,
           crumb,
         });
-        if (scope && tool !== "memory") contextsState.selected = scope;
-        switchView(tool);
+        if (scope && (tool === "crons" || tool === "files" || tool === "apps")) contextsState.selected = scope;
+        switchView(tool === "apps" ? "deploys" : tool);
       },
     });
   }

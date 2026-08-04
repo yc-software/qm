@@ -6,6 +6,7 @@ import { errMessage } from "../../chassis/src/errors";
 import { copyText, fieldSelect, icon, relTime } from "./ui";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
+import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { mainConversation } from "./conversations";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
@@ -293,15 +294,20 @@ function drawDeploysPage(): void {
           : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
       ]
     : [];
+  const scoped = Boolean(scopedSession.active);
+  deployPageHost.classList.toggle("scoped-view", scoped);
   render(
     html`
+      ${scopedViewTopbar("apps", drawDeploysPage)}
       ${listPageTpl({
         title: "Apps",
         scope: deployScope,
-        onScope: (scope) => {
-          deployScope = scope;
-          drawDeploysPage();
-        },
+        onScope: scoped
+          ? undefined
+          : (scope) => {
+              deployScope = scope;
+              drawDeploysPage();
+            },
         onRefresh: () => void renderDeploys(),
         action: { label: "Deploy with Agent", onClick: deployWithAgent },
         controls: html`<label class="deploy-sort"
@@ -883,7 +889,10 @@ export async function renderDeploys(): Promise<void> {
   archiveCandidate = null;
   archiveFocusTarget = null;
   setDeployBackgroundInert(false);
-  if (contextsState.selected) {
+  if (scopedSession.active) {
+    deployScope = scopedSession.active.scopeId;
+    contextsState.selected = null;
+  } else if (contextsState.selected) {
     deployScope = contextsState.selected;
     contextsState.selected = null;
   }

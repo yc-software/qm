@@ -4,6 +4,7 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
 import { appState, replacePanePreservingFocus } from "./shell";
+import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { isActiveGrant, isExpiredCredential, KeychainOperations, keychainSummary } from "./keychain-state";
 
@@ -500,9 +501,10 @@ function drawConnectors(loading = false): void {
   });
   if (!appState.mainEl) return;
   const host = document.createElement("div");
-  host.className = "pane keychain-page";
+  host.className = scopedSession.active ? "pane keychain-page scoped-view" : "pane keychain-page";
   render(
     html`
+      ${scopedViewTopbar("keychain", () => drawConnectors())}
       <div class="kc-page-content" ?inert=${Boolean(confirmation)}>
         <header class="kc-hero">
           <div class="kc-hero-copy">

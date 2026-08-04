@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { Brain, Clock3, Files } from "lucide";
+import { Box, Brain, Clock3, Files, GitFork, KeyRound, Rocket } from "lucide";
 import { api } from "./core-bridge";
 import { icon } from "./ui";
 
@@ -56,14 +56,14 @@ export function scopeCronCount(scope: string, onReady: () => void): number | nul
   return hit?.count ?? null;
 }
 
-export type SessionTool = "crons" | "files" | "memory";
+export type SessionTool = "crons" | "files" | "memory" | "apps" | "skills" | "keychain";
 
 export interface SessionTopbarOpts {
   crumb: string | null;
   title: string;
-  pill?: "working" | "needs-you" | null;
   activeTool?: SessionTool | null;
   cronCount?: number | null;
+  fork?: { title: string; onClick?: (() => void) | null } | null;
   onTitle?: (() => void) | null;
   onCrumb?: (() => void) | null;
   onTool: (tool: SessionTool) => void;
@@ -89,10 +89,19 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
     ${crumbTpl}
     <span class="session-title">${o.title}</span>
     ${
-      o.pill
-        ? html`<span class="session-pill ${o.pill === "needs-you" ? "needs-you" : "working"}"
-            ><span class="pill-dot"></span>${o.pill === "needs-you" ? "needs you" : "working"}</span
-          >`
+      o.fork
+        ? html`<button
+            class="session-fork-badge"
+            type="button"
+            title="Forked from ${o.fork.title}${o.fork.onClick ? " — open the original" : ""}"
+            ?disabled=${!o.fork.onClick}
+            @click=${(e: Event) => {
+              e.stopPropagation();
+              o.fork?.onClick?.();
+            }}
+          >
+            ${icon(GitFork, 12)}<span>fork</span>
+          </button>`
         : nothing
     }
   `;
@@ -121,7 +130,10 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
       }
       <div class="topbar-actions session-tools">
         ${tool("crons", Clock3, cronLabel, "Crons in this context")}
-        ${tool("files", Files, "Files", "Files in this context")} ${tool("memory", Brain, "Memory", "Memory")}
+        ${tool("files", Files, "Files", "Files in this context")}
+        ${tool("apps", Rocket, "Apps", "Apps in this context")}
+        ${tool("skills", Box, "Skills", "Skills in this context")} ${tool("memory", Brain, "Memory", "Memory")}
+        ${tool("keychain", KeyRound, "Keychain", "Your keychain")}
       </div>
     </header>
   `;
@@ -159,7 +171,7 @@ export function scopedViewTopbar(current: SessionTool, redraw: () => void): Temp
     },
     onTool: (t) => {
       if (t === current) return;
-      void import("./shell").then(({ switchView }) => switchView(t));
+      void import("./shell").then(({ switchView }) => switchView(t === "apps" ? "deploys" : t));
     },
   });
 }

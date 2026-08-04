@@ -1094,29 +1094,27 @@ a.chat-row-open {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-pill {
+.session-fork-badge {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 9px;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 12px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 11.5px;
   font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
 }
-.session-pill .pill-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
+.session-fork-badge:hover:not(:disabled) {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--secondary) 85%, transparent);
 }
-.session-pill.working {
-  color: color-mix(in srgb, #3b82f6 85%, var(--foreground));
-  background: color-mix(in srgb, #3b82f6 12%, transparent);
-}
-.session-pill.needs-you {
-  color: color-mix(in srgb, #d97706 85%, var(--foreground));
-  background: color-mix(in srgb, #f59e0b 14%, transparent);
+.session-fork-badge:disabled {
+  cursor: default;
 }
 .session-tools {
   gap: 2px;

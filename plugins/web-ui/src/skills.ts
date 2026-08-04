@@ -24,6 +24,7 @@ import {
 } from "./skill-registry";
 import { listBackLink, listPageTpl } from "./list-page";
 import { scopeTitle } from "./contexts";
+import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { SkillsRefreshSequence } from "./skills-refresh";
 import { SkillsMutationSequence } from "./skills-mutation";
@@ -483,7 +484,16 @@ function drawSkills(loading = false): void {
     return;
   }
   const filters = { query: skillSearch, scope: scopeFilter, source: sourceFilter, status: statusFilter };
-  const groups = filterSkillGroups(groupSkills(skillRows), filters);
+  const scopedScope = scopedSession.active?.scopeId ?? null;
+  skillsPageHost.classList.toggle("scoped-view", Boolean(scopedScope));
+  let groups = filterSkillGroups(groupSkills(skillRows), filters);
+  if (scopedScope)
+    groups = groups
+      .map((group) => ({
+        ...group,
+        skills: group.skills.filter((skill) => skill.scopeId === scopedScope || skill.scope === "org"),
+      }))
+      .filter((group) => group.skills.length > 0);
   const filtered = groups.flatMap((group) => group.skills);
   const counts = statusCounts(skillRows);
   const rows: TemplateResult[] = groups.map((group) => skillGroup(group.name, group.skills));
@@ -495,7 +505,7 @@ function drawSkills(loading = false): void {
     drawSkills();
   };
   const emptyState = skillEmptyState(skillRows.length, filtered.length, loading);
-  let empty: string | TemplateResult = "No skills available yet.";
+  let empty: string | TemplateResult = scopedScope ? "No skills in this context." : "No skills available yet.";
   if (emptyState === "filtered") {
     empty = html`<div class="skill-empty">
       <span>No skills match these filters.</span
@@ -505,7 +515,7 @@ function drawSkills(loading = false): void {
     empty = "Loading skills…";
   }
   render(
-    html`${listPageTpl({
+    html`${scopedViewTopbar("skills", () => drawSkills())}${listPageTpl({
       title: "Skills",
       onRefresh: () => void renderSkills(),
       action: { label: "New skill", onClick: startCreate },
