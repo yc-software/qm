@@ -102,6 +102,10 @@ test("unattended cron grants require a live org-admin owner and protect later pa
   assert.equal(tamper.ok, false);
   assert.match(tamper.ok ? "" : tamper.message, /live turn/);
 
+  const privilegedNoop = await control.patchCron(created.cron.id, { enabled: true }, claims("admin-alice"));
+  assert.ok(privilegedNoop.ok, "a privileged cron no-op does not need a live grant reaffirmation");
+  assert.deepEqual(privilegedNoop.ok ? privilegedNoop.cron.unattendedGrants : undefined, grant);
+
   const unattendedRun = await control.runCron(created.cron.id, claims("admin-alice"));
   assert.equal(unattendedRun.ok, false);
   assert.match(unattendedRun.ok ? "" : unattendedRun.message, /live turn/);
@@ -572,8 +576,16 @@ test("scopeShared is explicit: shared-scope crons default to owner, while collab
   assert.equal(afterMemberEdit.length, 1, "non-owner edit via control service notifies the owner");
   assert.equal(afterMemberEdit[0]!.destination.target, "U1");
 
+  const memberNoop = await control.patchCron(ok.cron.id, { title: "expo digest v2" }, chanClaims("U2"));
+  assert.ok(memberNoop.ok, JSON.stringify(memberNoop));
+  assert.equal((await editNotices()).length, 1, "same-value member edit produces no notice");
+
+  const memberChange = await control.patchCron(ok.cron.id, { title: "expo digest v3" }, chanClaims("U2"));
+  assert.ok(memberChange.ok, JSON.stringify(memberChange));
+  assert.equal((await editNotices()).length, 2, "a later real member edit still notifies the owner");
+
   await control.patchCron(ok.cron.id, { title: "owner tweak" }, chanClaims("U1"));
-  assert.equal((await editNotices()).length, 1, "owner self-edit produces no notice");
+  assert.equal((await editNotices()).length, 2, "owner self-edit produces no notice");
 
   const byOutsider = await control.patchCron(
     ok.cron.id,
@@ -718,7 +730,13 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
 });
 
 test("cron list / get / patch / delete / run round-trip with owner authz", async () => {
-  const { control } = setup();
+  const { built, control } = setup();
+  const updateCron = built.app.updateCron.bind(built.app);
+  let updateCalls = 0;
+  built.app.updateCron = async (id, patch) => {
+    updateCalls += 1;
+    return updateCron(id, patch);
+  };
   const created = await control.createCron(
     { title: "orig", schedule: { everyMs: 3_600_000 }, action: "do x" },
     claims("U1"),
@@ -743,6 +761,20 @@ test("cron list / get / patch / delete / run round-trip with owner authz", async
   assert.equal(patched.cron.title, "renamed");
   assert.equal(patched.cron.schedule.cron, "0 9 * * 1-5");
   assert.equal(patched.cron.destination?.unfurlLinks, false);
+  assert.equal(updateCalls, 1);
+
+  const same = await control.patchCron(
+    id,
+    { title: "renamed", schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" }, unfurlLinks: false },
+    claims("U1"),
+  );
+  assert.ok(same.ok, JSON.stringify(same));
+  assert.equal(same.cron.id, id);
+  assert.equal(updateCalls, 1, "same-value patches return the cron without writing");
+
+  const sameMode = await control.patchCron(id, { runAs: "owner" }, claims("U1"));
+  assert.ok(sameMode.ok, JSON.stringify(sameMode));
+  assert.equal(updateCalls, 1, "the current effective mode is a recognized no-op");
 
   const tooFrequent = await control.patchCron(id, { schedule: { everyMs: 1 } }, claims("U1"));
   assert.equal(tooFrequent.ok, false);
@@ -754,6 +786,7 @@ test("cron list / get / patch / delete / run round-trip with owner authz", async
   const empty = await control.patchCron(id, {}, claims("U1"));
   assert.equal(empty.ok, false);
   assert.equal(empty.ok ? "" : empty.code, "bad_request");
+  assert.match(empty.ok ? "" : empty.message, /nothing to change/);
 
   const disabled = await control.setCronEnabled(id, false, claims("U1"));
   assert.ok(disabled.ok);
