@@ -11,6 +11,7 @@ import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import { parseSecurityPosture, type SecurityPosture } from "./security/security-posture.ts";
 import { slackPluginConfigFromEnv, type SlackPluginConfig } from "./slack/config.ts";
+import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "./harness/codex-auth.ts";
 import {
   MODEL_PROVIDERS,
   defaultModelForProvider,
@@ -39,6 +40,7 @@ export interface Config {
   opencodeModel?: string;
   codexModel?: string;
   codexBinPath?: string;
+  codexAuthFile?: string;
   codexProcessEnv: NodeJS.ProcessEnv;
   claudeModel?: string;
   claudeBinPath?: string;
@@ -155,6 +157,7 @@ export function providerKeysPresent(config: Config): ModelProviderAvailability {
     anthropic: Boolean(config.anthropicApiKey),
     openai: Boolean(config.openaiApiKey),
     openrouter: Boolean(config.openrouterApiKey),
+    ...(config.harness === "codex" && config.codexAuthFile ? { codexOAuth: true } : {}),
   };
 }
 
@@ -551,9 +554,24 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const missingSecrets = validateCoreSecretEnv(env);
+  const harness = harnessEnvStrict(env.HARNESS);
+  const codexAuthCandidate = harness === "codex" ? codexAuthFileForEnv(env, true) : undefined;
+  const codexOAuthConfigured = Boolean(codexAuthCandidate && readCodexOAuthAuthFile(codexAuthCandidate));
+  const secretEnv =
+    codexOAuthConfigured && codexAuthCandidate
+      ? { ...env, CODEX_AUTH_FILE: codexAuthCandidate }
+      : { ...env, CODEX_AUTH_FILE: undefined };
+  const missingSecrets = validateCoreSecretEnv(secretEnv);
   if (missingSecrets.length) {
     throw new Error(`missing or insecure required core secrets: ${missingSecrets.join(", ")}`);
+  }
+  if (harness === "codex" && !env.OPENAI_API_KEY?.trim() && !codexOAuthConfigured) {
+    throw new Error(
+      "HARNESS=codex needs OPENAI_API_KEY or a readable ChatGPT OAuth auth.json via CODEX_AUTH_FILE (or ~/.codex/auth.json)",
+    );
+  }
+  if (env.NODE_ENV === "production" && codexOAuthConfigured) {
+    throw new Error("CODEX_AUTH_FILE is supported for local Codex harnesses only");
   }
   const modelProvider = modelProviderEnvStrict(env);
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
@@ -636,6 +654,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const deployProvider: "aws" | "docker" = env.DEPLOY_PROVIDER === "aws" ? "aws" : "docker";
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
   if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
+  const codexEnv = { ...env };
+  if (codexOAuthConfigured && codexAuthCandidate) codexEnv.CODEX_AUTH_FILE = codexAuthCandidate;
+  else delete codexEnv.CODEX_AUTH_FILE;
   const codexProcessEnv = Object.fromEntries(
     [
       "PATH",
@@ -654,7 +675,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "CODEX_ACCESS_TOKEN",
       "HOME",
       "CODEX_HOME",
-    ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
+      "CODEX_AUTH_FILE",
+    ].flatMap((name) => (codexEnv[name] === undefined ? [] : [[name, codexEnv[name]]])),
   ) as NodeJS.ProcessEnv;
   const claudeProcessEnv = Object.fromEntries(
     [
@@ -689,7 +711,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
-    harness: harnessEnvStrict(env.HARNESS),
+    harness,
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
     securityScreenBackend,
     ...(securityScreenBackend === "proxy"
@@ -717,6 +739,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.OPENCODE_MODEL || env.PI_MODEL ? { opencodeModel: env.OPENCODE_MODEL || env.PI_MODEL } : {}),
     ...(env.CODEX_MODEL ? { codexModel: env.CODEX_MODEL } : {}),
     ...(env.CODEX_BIN ? { codexBinPath: env.CODEX_BIN } : {}),
+    ...(codexOAuthConfigured && codexAuthCandidate ? { codexAuthFile: codexAuthCandidate } : {}),
     codexProcessEnv,
     ...(env.CLAUDE_MODEL ? { claudeModel: env.CLAUDE_MODEL } : {}),
     ...(env.CLAUDE_BIN ? { claudeBinPath: env.CLAUDE_BIN } : {}),

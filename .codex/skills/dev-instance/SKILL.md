@@ -119,8 +119,12 @@ The dev instance should exercise the real system:
 
 - real LLM: needs a model credential for the harness you run. Core supports several
   (`HARNESS=pi|opencode|codex|claude`); the launcher picks one from the credentials it
-  finds and honours an explicit `HARNESS`. Set the key your chosen harness expects, or
-  pass `DEV_INSTANCE_ALLOW_MOCK=1` for a deliberate no-model wiring check
+  finds and honours an explicit `HARNESS`. Set the key your chosen harness expects. For
+  Codex, a ChatGPT OAuth session is also supported: `HARNESS=codex` discovers a valid
+  `$HOME/.codex/auth.json`, or you can set `CODEX_AUTH_FILE` to another auth file. The
+  launcher runs Codex in an isolated home and persists refreshed OAuth tokens. Pass
+  `DEV_INSTANCE_ALLOW_MOCK=1` for a deliberate no-model wiring check. This OAuth path is
+  for local dev instances; deployed production processes still require an API key.
 - real durability: uses `DATABASE_URL` when supplied; otherwise starts/reuses a local
   Docker Postgres container and runs core with `SESSION_STORE=postgres` and
   `RUN_STORE=postgres`

@@ -193,6 +193,11 @@ export interface ModelProviderAvailability {
   anthropic: boolean;
   openai: boolean;
   openrouter: boolean;
+  codexOAuth?: boolean;
+}
+
+function providerFlags(value: ModelProviderAvailability): ModelProviderAvailability {
+  return { anthropic: value.anthropic, openai: value.openai, openrouter: value.openrouter };
 }
 
 export function modelServiceable(id: string, providers: ModelProviderAvailability): boolean {
@@ -215,9 +220,10 @@ export function modelProviderAvailabilityFor(
   configKeys: ModelProviderAvailability,
   managedKeys: ModelProviderAvailability = configKeys,
 ): ModelProviderAvailability {
-  if (harness === "pi") return managedKeys;
-  if (harness === "opencode") return { ...configKeys, openrouter: false };
-  if (harness === "codex") return configKeys;
+  if (harness === "pi") return providerFlags(managedKeys);
+  if (harness === "opencode") return { ...providerFlags(configKeys), openrouter: false };
+  if (harness === "codex")
+    return { ...providerFlags(configKeys), openai: configKeys.openai || Boolean(configKeys.codexOAuth) };
   return ALL_PROVIDERS_AVAILABLE;
 }
 
