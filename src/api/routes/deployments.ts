@@ -322,7 +322,8 @@ function proxyReachHttp2(
         return start(true);
       }
       if (res.destroyed || res.writableEnded) return;
-      if (!res.headersSent) sendJson(res, 502, { error: "bad_gateway", message: "deployment unreachable" });
+      if (wantsWarmingPage(req, method) && !res.headersSent) sendWarmingPage(res);
+      else if (!res.headersSent) sendJson(res, 502, { error: "bad_gateway", message: "deployment unreachable" });
       else res.destroy();
     };
     up.once("close", () => {
@@ -330,14 +331,20 @@ function proxyReachHttp2(
       if (!responseStarted || !up.readableEnded || up.rstCode !== http2Constants.NGHTTP2_NO_ERROR) fail();
       else if (!failureHandled && !res.destroyed && !res.writableEnded) res.end();
     });
-    up.setTimeout(deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs, () => {
-      if (failureHandled) return;
-      failureHandled = true;
-      if (!res.headersSent) sendJson(res, 504, { error: "gateway_timeout", message: "deployment did not respond" });
-      else res.end();
-      up.close(http2Constants.NGHTTP2_CANCEL);
-      checkDeploymentHttp2Session(connection);
-    });
+    const htmlNav = wantsWarmingPage(req, method);
+    up.setTimeout(
+      warmingDialTimeoutMs(`${host}:${port}`, htmlNav, deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs),
+      () => {
+        if (failureHandled) return;
+        failureHandled = true;
+        if (htmlNav && !res.headersSent) sendWarmingPage(res);
+        else if (!res.headersSent)
+          sendJson(res, 504, { error: "gateway_timeout", message: "deployment did not respond" });
+        else res.end();
+        up.close(http2Constants.NGHTTP2_CANCEL);
+        checkDeploymentHttp2Session(connection);
+      },
+    );
     up.on("response", (responseHeaders) => {
       if (failureHandled || res.headersSent || res.destroyed || res.writableEnded) {
         up.close(http2Constants.NGHTTP2_CANCEL);
@@ -345,6 +352,7 @@ function proxyReachHttp2(
       }
       responseStarted = true;
       up.setTimeout(0);
+      markUpstreamUp(`${host}:${port}`);
       armThrottleShield(`${host}:${port}`, Number(responseHeaders[":status"] ?? 0), up);
       const status = Number(responseHeaders[":status"] ?? 502);
       const safeHeaders = gatewaySafeResponseHeaders(responseHeaders);
@@ -358,6 +366,80 @@ function proxyReachHttp2(
   };
   start(false);
 }
+
+// --- cold-start warming page -------------------------------------------------
+// AWS microVMs auto-resume on first connect, which can take many seconds. During
+// that window a browser navigation would otherwise hang for the full dial timeout
+// and then land on raw gateway JSON. For document requests we instead answer
+// quickly with a small self-refreshing "warming up" page.
+const WARM_RECENT_MS = 60_000;
+const COLD_FIRST_BYTE_TIMEOUT_MS = 4_000;
+const upstreamLastOk = new Map<string, number>();
+
+function markUpstreamUp(upstreamKey: string): void {
+  if (upstreamLastOk.size > 1000) {
+    for (const [k, at] of upstreamLastOk) if (Date.now() - at > WARM_RECENT_MS) upstreamLastOk.delete(k);
+  }
+  upstreamLastOk.set(upstreamKey, Date.now());
+}
+
+function wantsWarmingPage(req: BaseCtx["req"], method: string): boolean {
+  if (method !== "GET" && method !== "HEAD") return false;
+  const dest = String(req.headers["sec-fetch-dest"] ?? "");
+  if (dest && dest !== "document") return false;
+  return String(req.headers.accept ?? "").includes("text/html");
+}
+
+function warmingDialTimeoutMs(upstreamKey: string, htmlNav: boolean, configuredMs: number): number {
+  if (!htmlNav) return configuredMs;
+  const lastOk = upstreamLastOk.get(upstreamKey) ?? 0;
+  if (Date.now() - lastOk < WARM_RECENT_MS) return configuredMs;
+  return Math.min(configuredMs, COLD_FIRST_BYTE_TIMEOUT_MS);
+}
+
+const WARMING_PAGE_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Starting up…</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fafaf8;color:#333}
+  .card{text-align:center;padding:2rem}
+  .spinner{width:28px;height:28px;margin:0 auto 1rem;border:3px solid #eee;border-top-color:#f26522;
+    border-radius:50%;animation:spin .9s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  h1{font-size:1.1rem;font-weight:600;margin:0 0 .35rem}
+  p{margin:0;color:#777}
+</style></head>
+<body><div class="card"><div class="spinner"></div><h1>Starting up&hellip;</h1>
+<p id="msg"></p></div>
+<script>
+  var started = Date.now();
+  function retry(){
+    if (Date.now() - started > 120000) {
+      document.getElementById("msg").textContent = "Still not responding — the app may have crashed.";
+      return;
+    }
+    fetch(location.href, { method: "HEAD", cache: "no-store" }).then(function(r){
+      if (r.status !== 503 && r.status !== 502 && r.status !== 504) location.reload();
+      else setTimeout(retry, 2000);
+    }).catch(function(){ setTimeout(retry, 2000); });
+  }
+  setTimeout(retry, 1500);
+</script></body></html>`;
+
+function sendWarmingPage(res: BaseCtx["res"]): void {
+  if (res.headersSent || res.destroyed || res.writableEnded) {
+    res.end();
+    return;
+  }
+  res.writeHead(503, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "retry-after": "2",
+  });
+  res.end(WARMING_PAGE_HTML);
+}
+// -----------------------------------------------------------------------------
 
 async function proxyReach(
   ctx: BaseCtx,
@@ -411,21 +493,30 @@ async function proxyReach(
     proxyReachHttp2(ctx, reach, subPath, headers, bufferedBody);
     return;
   }
+  const htmlNav = wantsWarmingPage(req, method);
   const up = requestFn({ hostname: host, port, path: subPath + url.search, method, headers }, (upRes) => {
     up.setTimeout(0);
+    markUpstreamUp(upstreamKey);
     upRes.on("error", () => res.destroy());
     armThrottleShield(upstreamKey, upRes.statusCode ?? 0, upRes);
     const headers = gatewaySafeResponseHeaders(upRes.headers);
     res.writeHead(upRes.statusCode ?? 502, headers);
     upRes.pipe(res);
   });
-  up.setTimeout(deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs, () => {
-    if (!res.headersSent) sendJson(res, 504, { error: "gateway_timeout", message: "deployment did not respond" });
+  const dialMs = warmingDialTimeoutMs(
+    upstreamKey,
+    htmlNav,
+    deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs,
+  );
+  up.setTimeout(dialMs, () => {
+    if (htmlNav && !res.headersSent) sendWarmingPage(res);
+    else if (!res.headersSent) sendJson(res, 504, { error: "gateway_timeout", message: "deployment did not respond" });
     else res.end();
     up.destroy();
   });
   up.on("error", () => {
-    if (!res.headersSent) sendJson(res, 502, { error: "bad_gateway", message: "deployment unreachable" });
+    if (htmlNav && !res.headersSent) sendWarmingPage(res);
+    else if (!res.headersSent) sendJson(res, 502, { error: "bad_gateway", message: "deployment unreachable" });
     else res.end();
   });
   req.on("error", () => up.destroy());
