@@ -161,6 +161,7 @@ export async function startSlackPlugin(
     directory,
     ids,
     deduper,
+    config: cfg,
     ...(cfg.webUiPublicUrl ? { webUiPublicUrl: cfg.webUiPublicUrl } : {}),
     ensureHeader,
   });
