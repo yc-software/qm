@@ -171,6 +171,32 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
     assert.equal((await d.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"])).kind, "none");
     assert.equal((await d.resolveGroupByParticipants(["U-alice"])).kind, "one");
   });
+
+  it("a swap stamped older than the stored snapshot is refused, so a stale instance cannot clobber a fresh sync", async () => {
+    const d = createDirectoryStore();
+    assert.equal(await d.replaceGroups([{ groupId: "G-new", principalId: "U-alice" }], 2000), true);
+    assert.equal(await d.replaceGroups([], 1000), false);
+    assert.equal(await d.groupMember("G-new", "U-alice"), true);
+    assert.equal(await d.replaceGroups([], 3000), true);
+    assert.equal(await d.groupMember("G-new", "U-alice"), false);
+  });
+
+  it("an unstamped swap keeps today's last-write-wins behaviour", async () => {
+    const d = createDirectoryStore();
+    await d.replaceGroups([{ groupId: "G-new", principalId: "U-alice" }], 2000);
+    assert.equal(await d.replaceGroups([], undefined), true);
+    assert.equal(await d.groupMember("G-new", "U-alice"), false);
+  });
+
+  it("members and channels swaps are stale-guarded the same way", async () => {
+    const d = createDirectoryStore();
+    assert.equal(await d.replace([{ principalId: "U-new", displayName: "New", type: "internal" }], 2000), true);
+    assert.equal(await d.replace([], 1000), false);
+    assert.equal((await d.list()).length, 1);
+    assert.equal(await d.replaceChannels([{ channelId: "C-1", name: "eng" }], undefined, 2000), true);
+    assert.equal(await d.replaceChannels([], undefined, 1000), false);
+    assert.equal((await d.listChannels()).length, 1);
+  });
 });
 
 describe("private-channel membership (authorizes private-channel sends, §10)", () => {

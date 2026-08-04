@@ -52,6 +52,38 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (m, p) =>
+      (p === "/v1/projects" && (m === "GET" || m === "POST")) ||
+      (/^\/v1\/projects\/[^/]+$/.test(p) && m === "PATCH") ||
+      (/^\/v1\/projects\/[^/]+\/members$/.test(p) && m === "POST") ||
+      (/^\/v1\/projects\/[^/]+\/members\/[^/]+$/.test(p) && m === "DELETE"),
+    guidance:
+      "These act as the ASKING PERSON across every project they belong to, matching the web UI. Do not send principalId; the capability token always determines the person, and inaccessible projects return 404.",
+    routes: [
+      { method: "GET", path: "/v1/projects", summary: "list every project the asking person belongs to" },
+      {
+        method: "POST",
+        path: "/v1/projects",
+        summary: "create a project owned by the asking person — body {name}",
+      },
+      {
+        method: "PATCH",
+        path: "/v1/projects/:id",
+        summary: "rename a project the asking person owns — body {name}",
+      },
+      {
+        method: "POST",
+        path: "/v1/projects/:id/members",
+        summary: "add an internal directory member to a project the asking person belongs to — body {memberId}",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/projects/:id/members/:memberId",
+        summary: "remove a member from a project the asking person owns",
+      },
+    ],
+  },
+  {
+    match: (m, p) =>
       (p === "/v1/crons" && (m === "POST" || m === "GET")) ||
       (m === "POST" &&
         p.startsWith("/v1/crons/") &&
@@ -111,7 +143,8 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (m, p) =>
-      (m === "GET" && p === "/v1/conversations") || (m === "POST" && /^\/v1\/conversations\/[^/]+$/.test(p)),
+      (m === "GET" && (p === "/v1/conversations" || /^\/v1\/conversations\/[^/]+$/.test(p))) ||
+      (m === "POST" && /^\/v1\/conversations\/[^/]+(?:\/fork)?$/.test(p)),
     guidance:
       "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving.",
     routes: [
@@ -125,7 +158,37 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/conversations/:id",
         summary:
-          "update one of the asking person's conversations — body {archived?, pinned?, title?}; archive/unarchive, pin/unpin, rename (null title clears). Per-person and reversible; 404 for a conversation not on their list",
+          "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). Per-person and reversible; 404 for a conversation not on their list",
+      },
+      {
+        method: "GET",
+        path: "/v1/conversations/:id?tailTurns=20",
+        summary:
+          "read the bounded transcript of one of the asking person's conversations; defaults to the last 20 turns and supports older paging with tailTurns and beforeSeq; returns 404 for a conversation they cannot see",
+      },
+      {
+        method: "POST",
+        path: "/v1/conversations/:id/fork",
+        summary:
+          "fork one of the asking person's conversations into a new conversation — body optionally {upToSeq}; returns 404 for a conversation they cannot see",
+      },
+    ],
+  },
+  {
+    match: (m, p) => m === "GET" && (p === "/v1/files" || /^\/v1\/files\/[^/]+\/content$/.test(p)),
+    guidance:
+      "These show the ASKING PERSON's file library across every context they can reach. A file outside their visibility returns 404 without revealing whether it exists.",
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/files",
+        summary:
+          "list files the asking person can reach across their contexts, split into owned and shared files; use limit and cursor query parameters to page owned files",
+      },
+      {
+        method: "GET",
+        path: "/v1/files/:id/content",
+        summary: "download the bytes of a file from the asking person's file library",
       },
     ],
   },
@@ -136,7 +199,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/reach",
         summary:
-          "send a teammate a DM, post to a channel, or post to a group DM RIGHT NOW — `text` plus `recipient`, `channel`, or `participants` (the group DM's other members — the group is opened for you if it doesn't exist yet, so never ask someone to create one), optionally with `files` (workspace-relative paths, attached to the message all-or-nothing). EXTREMELY IMPORTANT: a `channel` post broadcasts to everyone there — pick the narrowest audience that can act; a question or errand for one person goes to their DM (`recipient`), NEVER a public channel, unless the person you're helping explicitly named that channel as the destination or the message genuinely concerns the whole room; or react to a message instead of posting with `react:{ts,emoji}` plus a `channel`/`participants`; or retract one of your own messages with `delete:{ts}` (no target = this conversation, or name a `channel`/`participants` to delete elsewhere) — find a message's `ts` via /v1/surface-context; pass `unfurlLinks:false` to suppress Slack previews (no schedule; for later/recurring use /v1/crons)",
+          "send a teammate a DM, post to a channel, or post to a group DM RIGHT NOW — `text` plus `recipient`, `channel`, or `participants` (the group DM's other members — the group is opened for you if it doesn't exist yet, so never ask someone to create one), optionally with `files` (workspace-relative paths, attached to the message all-or-nothing). EXTREMELY IMPORTANT: a `channel` post broadcasts to everyone there — pick the narrowest audience that can act; a question or errand for one person goes to their DM (`recipient`), NEVER a public channel, unless the person you're helping explicitly named that channel as the destination or the message genuinely concerns the whole room; pass `threadTs` (the parent message's ts) with a `channel`/`participants` post to reply inside that thread instead of top-level; or react to a message instead of posting with `react:{ts,emoji}` plus a `channel`/`participants`; or retract one of your own messages with `delete:{ts}` (no target = this conversation, or name a `channel`/`participants` to delete elsewhere) — find a message's `ts` via /v1/surface-context; pass `unfurlLinks:false` to suppress Slack previews (no schedule; for later/recurring use /v1/crons)",
       },
     ],
   },
@@ -144,10 +207,11 @@ const FAMILIES: AgentApiFamily[] = [
     match: (m, p) =>
       (m === "GET" && p === "/v1/deployments") ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+$/.test(p)) ||
+      (m === "GET" && /^\/v1\/deployments\/[^/]+\/fetch$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/git-url$/.test(p)) ||
       (m === "POST" && /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name)$/.test(p)),
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). A published app (`publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
+      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
     routes: [
       {
         method: "GET",
@@ -160,6 +224,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/deployments/:id",
         summary:
           "inspect one deployment you can reach — status, owner/home scope, effective permission, current and applied versions, version history with commit ids and timestamps, and gitUrl",
+      },
+      {
+        method: "GET",
+        path: "/v1/deployments/:id/fetch",
+        summary:
+          "read a deployment's rendered content as the asking person — query path defaults to / and maxBytes defaults to 256KB; returns upstream status, contentType, body, and truncation metadata",
       },
       {
         method: "GET",
@@ -206,6 +276,8 @@ const FAMILIES: AgentApiFamily[] = [
   {
     match: (m, p) =>
       (p === "/v1/memory/self" && (m === "GET" || m === "PUT")) ||
+      (p === "/v1/memory/history" && m === "GET") ||
+      (p === "/v1/memory/restore" && m === "POST") ||
       (m === "POST" && (p === "/v1/memory/search" || p === "/v1/memory/facts")),
     when: (v) => !!v.claims.memory,
     guidance: "Memory bodies and curation rules are documented in the memory skill.",
@@ -215,7 +287,13 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET|PUT",
         path: "/v1/memory/self",
-        summary: "read or rewrite (curate) this conversation's whole notebook",
+        summary: "read or rewrite (curate) this conversation's whole notebook; rewriting is destructive",
+      },
+      { method: "GET", path: "/v1/memory/history", summary: "list notebook versions available to undo a rewrite" },
+      {
+        method: "POST",
+        path: "/v1/memory/restore",
+        summary: "restore a prior notebook version using revision and expectedRevision; use scope: org for org memory",
       },
     ],
   },
@@ -335,7 +413,10 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (m, p) =>
-      (m === "POST" && p === "/v1/skills") || ((m === "PUT" || m === "DELETE") && p.startsWith("/v1/skills/")),
+      (m === "POST" && p === "/v1/skills") ||
+      (m === "GET" && p.startsWith("/v1/skills/")) ||
+      ((m === "PUT" || m === "DELETE") && p.startsWith("/v1/skills/")) ||
+      (m === "POST" && /^\/v1\/skills\/[^/]+\/restore$/.test(p)),
     guidance:
       "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it auto-loads (skills/<name>/SKILL.md) on every future turn. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale.",
     routes: [
@@ -346,6 +427,11 @@ const FAMILIES: AgentApiFamily[] = [
           "save a NEW skill in this conversation's scope — {name, description, body} (the SKILL.md). Auto review+published; a name already taken in this scope is a 409 (edit it instead).",
       },
       {
+        method: "GET",
+        path: "/v1/skills/:id",
+        summary: "read a skill you can see, including an archived skill's body, files, status, and version",
+      },
+      {
         method: "PUT",
         path: "/v1/skills/:id",
         summary:
@@ -354,7 +440,12 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "DELETE",
         path: "/v1/skills/:id",
-        summary: "delete a skill you manage (hard delete). 404 if missing, 403 if it isn't yours to delete",
+        summary: "archive a skill you manage. 404 if missing, 403 if it isn't yours to archive",
+      },
+      {
+        method: "POST",
+        path: "/v1/skills/:id/restore",
+        summary: "restore an archived skill you manage by re-reviewing and publishing its preserved version",
       },
     ],
   },

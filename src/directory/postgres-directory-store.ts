@@ -85,6 +85,9 @@ const SCHEMA = [
       ALTER TABLE directory_sync ADD COLUMN channel_members_synced BOOLEAN NOT NULL DEFAULT FALSE;
     END IF;
   END $$`,
+  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS members_synced_at BIGINT`,
+  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS channels_synced_at BIGINT`,
+  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS groups_synced_at BIGINT`,
   `CREATE TABLE IF NOT EXISTS directory_meta(
     org_id        TEXT PRIMARY KEY,
     workspace_url TEXT,
@@ -182,30 +185,52 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   async function swapIfChanged(
     hashCol: string,
     hash: string,
+    syncedAt: number | undefined,
     write: (client: PoolClient) => Promise<void>,
-  ): Promise<void> {
-    await withPgTransaction(await pool(), async (client) => {
+  ): Promise<boolean> {
+    const syncedAtCol = hashCol.replace(/_hash$/, "_synced_at");
+    return withPgTransaction(await pool(), async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
-      const sync = await client.query(`SELECT ${hashCol} FROM directory_sync WHERE org_id = $1`, [orgId]);
-      if (sync.rows[0]?.[hashCol] === hash) return;
+      const sync = await client.query(`SELECT ${hashCol}, ${syncedAtCol} FROM directory_sync WHERE org_id = $1`, [
+        orgId,
+      ]);
+      const row = sync.rows[0];
+      if (syncedAt !== undefined && row?.[syncedAtCol] != null && Number(row[syncedAtCol]) > syncedAt) {
+        console.warn(
+          `[directory] refused stale ${hashCol.replace(/_hash$/, "")} swap for ${orgId}: stamped ${Number(row[syncedAtCol]) - syncedAt}ms behind`,
+        );
+        return false;
+      }
+      if (row?.[hashCol] === hash) {
+        if (syncedAt !== undefined) {
+          await client.query(
+            `UPDATE directory_sync SET ${syncedAtCol} = GREATEST(COALESCE(${syncedAtCol}, 0), $2) WHERE org_id = $1`,
+            [orgId, syncedAt],
+          );
+        }
+        return true;
+      }
       await write(client);
       await client.query(
-        `INSERT INTO directory_sync (org_id, ${hashCol}, updated_at) VALUES ($1, $2, $3)
-         ON CONFLICT (org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol}, updated_at = EXCLUDED.updated_at`,
-        [orgId, hash, Date.now()],
+        `INSERT INTO directory_sync (org_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
+           ${syncedAtCol} = COALESCE(EXCLUDED.${syncedAtCol}, directory_sync.${syncedAtCol}),
+           updated_at = EXCLUDED.updated_at`,
+        [orgId, hash, syncedAt ?? null, Date.now()],
       );
+      return true;
     });
   }
 
   return {
-    async replace(members) {
+    async replace(members, syncedAt) {
       const byId = new Map<string, DirectoryMember>();
       for (const m of members) if (m.principalId && m.type === "internal") byId.set(m.principalId, m);
       const internal = [...byId.values()];
 
       const hash = hashRoster(internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}`));
 
-      await swapIfChanged("members_hash", hash, async (client) => {
+      return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
         await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
         if (internal.length) {
           await client.query(
@@ -224,7 +249,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       });
     },
 
-    async replaceChannels(channels, channelMembers) {
+    async replaceChannels(channels, channelMembers, syncedAt) {
       const byId = new Map<string, DirectoryChannel>();
       for (const c of channels) if (c.channelId && c.name) byId.set(c.channelId, c);
       const list = [...byId.values()];
@@ -237,7 +262,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           : ["members:known", ...membershipRows.map((m) => `m:${m.channelId}|${m.principalId}`)];
       const hash = hashRoster([...channelsPart, ...membersPart]);
 
-      await swapIfChanged("channels_hash", hash, async (client) => {
+      const applied = await swapIfChanged("channels_hash", hash, syncedAt, async (client) => {
         await client.query("DELETE FROM directory_channels WHERE org_id = $1", [orgId]);
         if (list.length) {
           await client.query(
@@ -263,9 +288,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           }
         }
       });
-      if (membershipRows !== undefined) {
+      if (applied && membershipRows !== undefined) {
         await q("UPDATE directory_sync SET channel_members_synced = TRUE WHERE org_id = $1", [orgId]);
       }
+      return applied;
     },
 
     async setWorkspaceUrl(url) {
@@ -311,7 +337,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length > 0 ? (rows[0]!.is_private as boolean) : undefined;
     },
 
-    async replaceGroups(groupMembers) {
+    async replaceGroups(groupMembers, syncedAt) {
       const rows = dedupPairs(
         groupMembers,
         (m) => m.groupId,
@@ -319,7 +345,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       );
       const hash = hashRoster(rows.map((m) => `${m.groupId}|${m.principalId}`));
 
-      await swapIfChanged("groups_hash", hash, async (client) => {
+      return swapIfChanged("groups_hash", hash, syncedAt, async (client) => {
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1", [orgId]);
         if (rows.length) {
           await client.query(
@@ -346,8 +372,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           orgId,
         ]);
         await client.query(
-          `INSERT INTO directory_sync (org_id, groups_hash, updated_at) VALUES ($1, $2, $3)
-           ON CONFLICT (org_id) DO UPDATE SET groups_hash = EXCLUDED.groups_hash, updated_at = EXCLUDED.updated_at`,
+          `INSERT INTO directory_sync (org_id, groups_hash, groups_synced_at, updated_at) VALUES ($1, $2, $3, $3)
+           ON CONFLICT (org_id) DO UPDATE SET groups_hash = EXCLUDED.groups_hash,
+             groups_synced_at = GREATEST(COALESCE(directory_sync.groups_synced_at, 0), EXCLUDED.groups_synced_at),
+             updated_at = EXCLUDED.updated_at`,
           [orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
         );
       });

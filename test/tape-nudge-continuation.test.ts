@@ -153,7 +153,13 @@ async function runScenario(
             entrySeq: finalEntry.seq,
           });
         }
-        return { reply, modelCalls: 1, ...(failTapeMessage ? { tapeWriteFailed: true } : {}) };
+        // A "needs nudge" turn ends with NO final reply text (like a real turn ending on
+        // tool calls) — a text-bearing ending is now delivered directly, without a nudge.
+        return {
+          reply: turn.input === "needs nudge" ? "" : reply,
+          modelCalls: 1,
+          ...(failTapeMessage ? { tapeWriteFailed: true } : {}),
+        };
       },
       async screenSecurity() {
         return { decision: "auto" as const };

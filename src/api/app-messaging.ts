@@ -6,7 +6,14 @@ import type { Destination, SurfaceContextRequest, SurfaceContextResult } from ".
 import { errMessage } from "../util/errors.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
-import { reachEnqueue, withSlackUnfurlOption, withReact, withDelete, type ReachResolution } from "../reach/reach.ts";
+import {
+  reachEnqueue,
+  withSlackUnfurlOption,
+  withReact,
+  withDelete,
+  withThread,
+  type ReachResolution,
+} from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
@@ -302,9 +309,9 @@ export function createMessagingMethods(
       return found;
     },
 
-    async upsertDirectory(members) {
+    async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
-      await deps.directory.replace(members);
+      if (!(await deps.directory.replace(members, syncedAt))) return;
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
@@ -329,11 +336,11 @@ export function createMessagingMethods(
         });
       }
     },
-    async upsertChannels(channels, channelMembers) {
-      await deps.directory.replaceChannels(channels, channelMembers);
+    async upsertChannels(channels, channelMembers, syncedAt) {
+      await deps.directory.replaceChannels(channels, channelMembers, syncedAt);
     },
-    async upsertGroups(groupMembers) {
-      await deps.directory.replaceGroups(groupMembers);
+    async upsertGroups(groupMembers, syncedAt) {
+      await deps.directory.replaceGroups(groupMembers, syncedAt);
     },
     async setDirectoryWorkspaceUrl(url) {
       await deps.directory.setWorkspaceUrl(url);
@@ -426,6 +433,17 @@ export function createMessagingMethods(
         if (r.recipient) extra.recipient = r.recipient;
         if (r.channel) extra.channel = r.channel;
         if (r.group) extra.group = r.group;
+      }
+      if (input.threadTs) {
+        if (baseDestination.type !== "slack" && baseDestination.type !== "group") {
+          return {
+            ok: false,
+            status: 400,
+            error: "bad_request",
+            message: "threadTs threads a channel or group DM post — a DM to a person has no threads",
+          };
+        }
+        baseDestination = withThread(baseDestination, input.threadTs);
       }
       const sender = await deps.directory.get(input.senderId).catch(() => null);
       const delivery = await reachEnqueue({

@@ -117,7 +117,7 @@ async function listen(server: Server): Promise<string> {
 }
 
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
-  assert.ok(projectRoutes.every((route) => route.auth === "source"));
+  assert.ok(projectRoutes.every((route) => route.auth === "either"));
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);

@@ -1012,3 +1012,88 @@ test("DELETE /v1/skills/:id via a capability token archives the token-actor's ow
     await srv.close();
   }
 });
+
+test("a capability token reads and restores its archived skill without losing identity, files, or version", async () => {
+  const srv = await startSecure();
+  try {
+    const created = await srv.skills.create({
+      scopeId: scopeId("personal", "U1"),
+      manifest: {
+        name: "recover-me",
+        description: "recoverable",
+        requiredCapabilities: [],
+        body: "# recover-me",
+        files: [{ path: "scripts/run.sh", content: "exit 0", executable: true }],
+      },
+      createdBy: "U1",
+    });
+    await srv.skills.review(created.id, "reviewer-1", []);
+    await srv.skills.publish(created.id);
+    const before = (await srv.skills.get(created.id))!;
+    const token = await srv.cap("U1");
+
+    const archived = await fetch(`${srv.base}/v1/skills/${created.id}`, {
+      method: "DELETE",
+      headers: { "x-agent-capability": token },
+    });
+    assert.equal(archived.status, 200);
+
+    const detail = await fetch(`${srv.base}/v1/skills/${created.id}`, {
+      headers: { "x-agent-capability": token },
+    });
+    assert.equal(detail.status, 200);
+    const detailBody = (await detail.json()) as {
+      skill: { id: string; body: string; status: string; version: number; files: Array<{ path: string }> };
+    };
+    assert.equal(detailBody.skill.id, before.id);
+    assert.equal(detailBody.skill.body, before.manifest.body);
+    assert.equal(detailBody.skill.status, "archived");
+    assert.equal(detailBody.skill.version, before.version);
+    assert.deepEqual(detailBody.skill.files, [{ path: "scripts/run.sh", executable: true }]);
+
+    const restored = await fetch(`${srv.base}/v1/skills/${created.id}/restore`, {
+      method: "POST",
+      headers: { "x-agent-capability": token },
+    });
+    assert.equal(restored.status, 200);
+    const after = (await srv.skills.get(created.id))!;
+    assert.equal(after.id, before.id);
+    assert.equal(after.version, before.version);
+    assert.deepEqual(after.manifest.files, before.manifest.files);
+    assert.equal(after.status, "published");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("skill detail and restore capability calls hide other principals' skills and require identity", async () => {
+  const srv = await startSecure();
+  try {
+    const skill = await srv.skills.create({
+      scopeId: scopeId("personal", "U2"),
+      manifest: { name: "private", description: "theirs", requiredCapabilities: [], body: "# private" },
+      createdBy: "U2",
+    });
+    await srv.skills.review(skill.id, "reviewer-1", []);
+    await srv.skills.publish(skill.id);
+    await srv.skills.archive(skill.id);
+
+    const headers = { "x-agent-capability": await srv.cap("U1") };
+    assert.equal((await fetch(`${srv.base}/v1/skills/${skill.id}`, { headers })).status, 404);
+    assert.equal((await fetch(`${srv.base}/v1/skills/${skill.id}/restore`, { method: "POST", headers })).status, 404);
+    assert.equal((await fetch(`${srv.base}/v1/skills/${skill.id}?principalId=U2`)).status, 401);
+    assert.equal(
+      (
+        await fetch(`${srv.base}/v1/skills/${skill.id}/restore`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ principalId: "U2" }),
+        })
+      ).status,
+      401,
+    );
+    assert.equal((await srv.skills.get(skill.id))?.status, "archived");
+  } finally {
+    await srv.close();
+  }
+});

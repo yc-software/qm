@@ -41,8 +41,12 @@ export type ChannelResolution =
   { kind: "one"; channel: DirectoryChannel } | { kind: "ambiguous"; candidates: DirectoryChannel[] } | { kind: "none" };
 
 export interface DirectoryStore {
-  replace(members: DirectoryMember[]): Promise<void>;
-  replaceChannels(channels: DirectoryChannel[], channelMembers?: ChannelMembership[]): Promise<void>;
+  replace(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
+  replaceChannels(
+    channels: DirectoryChannel[],
+    channelMembers?: ChannelMembership[],
+    syncedAt?: number,
+  ): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
   get(principalId: string): Promise<DirectoryMember | null>;
@@ -51,7 +55,7 @@ export interface DirectoryStore {
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
   channelPrivacy(channelId: string): Promise<boolean | undefined>;
-  replaceGroups(groupMembers: GroupMembership[]): Promise<void>;
+  replaceGroups(groupMembers: GroupMembership[], syncedAt?: number): Promise<boolean>;
   upsertGroup(groupId: string, principalIds: readonly string[]): Promise<void>;
   resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
   groupMember(groupId: string, principalId: string): Promise<boolean>;
@@ -92,6 +96,18 @@ export function createDirectoryStore(): DirectoryStore {
   let groupMembers: Map<string, Set<string>> | undefined;
   let groupsSynced = false;
   let workspaceUrl: string | undefined;
+  const syncedAts = new Map<string, number>();
+
+  function acceptSync(section: string, syncedAt: number | undefined): boolean {
+    if (syncedAt === undefined) return true;
+    const stored = syncedAts.get(section);
+    if (stored !== undefined && stored > syncedAt) {
+      console.warn(`[directory] refused stale ${section} swap: stamped ${stored - syncedAt}ms behind`);
+      return false;
+    }
+    syncedAts.set(section, syncedAt);
+    return true;
+  }
 
   return {
     async setWorkspaceUrl(url) {
@@ -100,10 +116,13 @@ export function createDirectoryStore(): DirectoryStore {
     async meta() {
       return { workspaceUrl: workspaceUrl ?? null };
     },
-    async replace(next) {
+    async replace(next, syncedAt) {
+      if (!acceptSync("members", syncedAt)) return false;
       members = next.filter((m) => m.principalId && m.type === "internal");
+      return true;
     },
-    async replaceChannels(nextChannels, nextChannelMembers) {
+    async replaceChannels(nextChannels, nextChannelMembers, syncedAt) {
+      if (!acceptSync("channels", syncedAt)) return false;
       channels = nextChannels.filter((c) => c.channelId && c.name);
       if (nextChannelMembers !== undefined) {
         const byChannel = new Map<string, Set<string>>();
@@ -113,6 +132,7 @@ export function createDirectoryStore(): DirectoryStore {
         }
         channelMembers = byChannel;
       }
+      return true;
     },
     async channelMember(channelId, principalId) {
       return channelMembers?.get(channelId)?.has(principalId) ?? false;
@@ -128,7 +148,8 @@ export function createDirectoryStore(): DirectoryStore {
       const channel = channels.find((candidate) => candidate.channelId === channelId);
       return channel ? channel.isPrivate === true : undefined;
     },
-    async replaceGroups(nextGroupMembers) {
+    async replaceGroups(nextGroupMembers, syncedAt) {
+      if (!acceptSync("groups", syncedAt)) return false;
       const byGroup = new Map<string, Set<string>>();
       for (const m of nextGroupMembers) {
         if (!m.groupId || !m.principalId) continue;
@@ -136,6 +157,7 @@ export function createDirectoryStore(): DirectoryStore {
       }
       groupMembers = byGroup;
       groupsSynced = true;
+      return true;
     },
     async upsertGroup(groupId, principalIds) {
       const ids = principalIds.filter(Boolean);
@@ -143,6 +165,8 @@ export function createDirectoryStore(): DirectoryStore {
       const byGroup = groupMembers ?? new Map<string, Set<string>>();
       byGroup.set(groupId, new Set(ids));
       groupMembers = byGroup;
+      const stored = syncedAts.get("groups");
+      syncedAts.set("groups", Math.max(stored ?? 0, Date.now()));
     },
     async resolveGroupByParticipants(participants) {
       const key = groupParticipantsKey(participants);

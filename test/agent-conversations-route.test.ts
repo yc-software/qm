@@ -52,7 +52,9 @@ describe("agent conversations self-API", async () => {
 
   it("requires a capability token", async () => {
     assert.equal((await get("/v1/conversations")).status, 401);
+    assert.equal((await get(`/v1/conversations/${mineId}`)).status, 401);
     assert.equal((await post(`/v1/conversations/${mineId}`, { archived: true })).status, 401);
+    assert.equal((await post(`/v1/conversations/${mineId}/fork`, {})).status, 401);
   });
 
   it("lists only the actor's own conversations", async () => {
@@ -84,7 +86,61 @@ describe("agent conversations self-API", async () => {
   });
 
   it("refuses a conversation the actor can't see (404, no existence leak)", async () => {
-    const res = await post(`/v1/conversations/${theirsId}`, { archived: true }, await capFor("U1"));
+    const token = await capFor("U1");
+    assert.equal((await get(`/v1/conversations/${theirsId}`, token)).status, 404);
+    assert.equal((await post(`/v1/conversations/${theirsId}`, { archived: true }, token)).status, 404);
+    assert.equal((await post(`/v1/conversations/${theirsId}/fork`, {}, token)).status, 404);
+  });
+
+  it("reads and tail-pages one of the actor's own conversations", async () => {
+    for (let turn = 2; turn <= 21; turn++) {
+      await built.app.turn(dm("U1", `launch question ${turn}`, "web:U1:c1"));
+    }
+    const token = await capFor("U1");
+    const bounded = await get(`/v1/conversations/${mineId}`, token);
+    assert.equal(bounded.status, 200);
+    const boundedBody = (await bounded.json()) as {
+      entries: Array<{ type: string; payload: { text?: string } }>;
+      earlierEntries?: number;
+    };
+    assert.ok(!boundedBody.entries.some((entry) => entry.payload.text === "plan the launch"));
+    assert.ok(boundedBody.entries.some((entry) => entry.payload.text === "launch question 21"));
+    assert.ok((boundedBody.earlierEntries ?? 0) > 0);
+
+    const tail = await get(`/v1/conversations/${mineId}?tailTurns=1`, token);
+    assert.equal(tail.status, 200);
+    const tailBody = (await tail.json()) as {
+      entries: Array<{ type: string; payload: { text?: string } }>;
+      earlierEntries?: number;
+    };
+    assert.ok(tailBody.entries.some((entry) => entry.payload.text === "launch question 21"));
+    assert.ok(!tailBody.entries.some((entry) => entry.payload.text === "launch question 20"));
+    assert.ok((tailBody.earlierEntries ?? 0) > 0);
+    assert.equal((await get(`/v1/conversations/${mineId}?sinceSeq=0`, token)).status, 400);
+  });
+
+  it("forks one of the actor's own conversations", async () => {
+    const res = await post(`/v1/conversations/${mineId}/fork`, {}, await capFor("U1"));
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { session: { id: string }; entries: Array<{ payload: { text?: string } }> };
+    assert.notEqual(body.session.id, mineId);
+    assert.ok(body.entries.some((entry) => entry.payload.text === "plan the launch"));
+    const mine = await built.app.listSessions("U1");
+    assert.ok(mine.some((session) => session.id === body.session.id));
+  });
+
+  it("allows forking under strict posture", async () => {
+    const scope = scopeId("personal", "U1");
+    await built.config.setSecurityPosture(scope, "strict");
+    try {
+      assert.equal((await post(`/v1/conversations/${mineId}/fork`, {}, await capFor("U1"))).status, 200);
+    } finally {
+      await built.config.setSecurityPosture(scope, "auto");
+    }
+  });
+
+  it("refuses to color a conversation the actor can't see", async () => {
+    const res = await post(`/v1/conversations/${theirsId}`, { color: "#123456" }, await capFor("U1"));
     assert.equal(res.status, 404);
   });
 
@@ -93,6 +149,18 @@ describe("agent conversations self-API", async () => {
     assert.equal((await post(`/v1/conversations/${mineId}`, {}, token)).status, 400);
     assert.equal((await post(`/v1/conversations/${mineId}`, { archived: "yes" }, token)).status, 400);
     assert.equal((await post(`/v1/conversations/${mineId}`, { title: 5 }, token)).status, 400);
+    assert.equal((await post(`/v1/conversations/${mineId}`, { color: "red" }, token)).status, 400);
+  });
+
+  it("sets and clears the sidebar color", async () => {
+    const token = await capFor("U1");
+    const set = await post(`/v1/conversations/${mineId}`, { color: "#A1B2C3" }, token);
+    assert.equal(set.status, 200);
+    assert.equal(((await set.json()) as { conversation: { color: string | null } }).conversation.color, "#a1b2c3");
+
+    const clear = await post(`/v1/conversations/${mineId}`, { color: null }, token);
+    assert.equal(clear.status, 200);
+    assert.equal(((await clear.json()) as { conversation: { color: string | null } }).conversation.color, null);
   });
 
   it("renames and pins through the same patch", async () => {

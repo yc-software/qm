@@ -14,6 +14,7 @@ type ReachBody = {
   participants?: unknown;
   text?: unknown;
   message?: unknown;
+  threadTs?: unknown;
   unfurlLinks?: unknown;
   react?: unknown;
   delete?: unknown;
@@ -63,6 +64,29 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   else if (typeof b.message === "string") text = b.message;
   const react = parseReact(b.react);
   const del = parseDelete(b.delete);
+  let threadTs: string | undefined;
+  if (b.threadTs !== undefined) {
+    if (typeof b.threadTs !== "string" || !/^\d+\.\d+$/.test(b.threadTs.trim())) {
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message:
+          'threadTs must be the parent message\'s ts string, e.g. "1723497600.123456" — find it via /v1/surface-context',
+      });
+    }
+    threadTs = b.threadTs.trim();
+    if (react || del) {
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "threadTs threads a text post — react/delete already name their target message ts",
+      });
+    }
+    if (typeof b.recipient === "string") {
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "threadTs applies to a channel or group DM post — a DM to a person has no threads",
+      });
+    }
+  }
   const hasNamedTarget =
     typeof b.recipient === "string" || typeof b.channel === "string" || Array.isArray(b.participants);
   if (react && del) {
@@ -168,6 +192,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     senderId: capability.actorId,
     senderScope: capability.scopeId,
     ...(text !== undefined ? { text } : {}),
+    ...(threadTs !== undefined ? { threadTs } : {}),
     ...(react ? { react } : {}),
     ...(del ? { delete: del } : {}),
     ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),

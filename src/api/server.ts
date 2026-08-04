@@ -98,8 +98,17 @@ function isAdminContentRead(pathname: string): boolean {
 }
 
 function strictPostAllowed(pathname: string, body: unknown): boolean {
-  if (pathname === "/v1/surface-context" || pathname === "/v1/memory/search" || pathname.startsWith("/v1/run-signals/"))
+  if (
+    pathname === "/v1/surface-context" ||
+    pathname === "/v1/projects" ||
+    pathname === "/v1/memory/search" ||
+    pathname === "/v1/memory/restore" ||
+    pathname.startsWith("/v1/run-signals/") ||
+    /^\/v1\/conversations\/[^/]+\/fork$/.test(pathname)
+  )
     return true;
+  if (/^\/v1\/projects\/[^/]+(?:\/members(?:\/[^/]+)?)?$/.test(pathname)) return true;
+  if (/^\/v1\/skills\/[^/]+\/restore$/.test(pathname)) return true;
   return (
     /^\/v1\/triggers\/[^/]+\/consent$/.test(pathname) && (body as { decision?: unknown } | null)?.decision === "decline"
   );

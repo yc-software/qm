@@ -170,6 +170,8 @@ test("the catalog IS the gate: discovery rows with real paths are admitted, unli
   assert.equal(agentApiMatches("POST", "/v1/skills"), true);
   assert.equal(agentApiMatches("PUT", "/v1/skills/abc"), true);
   assert.equal(agentApiMatches("DELETE", "/v1/skills/abc"), true);
+  assert.equal(agentApiMatches("GET", "/v1/skills/abc"), true);
+  assert.equal(agentApiMatches("POST", "/v1/skills/abc/restore"), true);
   assert.equal(agentApiMatches("GET", "/v1/crons/abc"), true);
   assert.equal(agentApiMatches("PUT", "/v1/memory/self"), true);
   assert.equal(agentApiMatches("PUT", "/v1/admin/memory"), true);

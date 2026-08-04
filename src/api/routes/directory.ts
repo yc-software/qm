@@ -4,6 +4,8 @@ import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
+const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
 async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
@@ -32,6 +34,9 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     channelMembers?: unknown;
     groupMembers?: unknown;
     workspaceUrl?: unknown;
+    membersSyncedAt?: unknown;
+    channelsSyncedAt?: unknown;
+    groupsSyncedAt?: unknown;
   };
   if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers)) {
     return sendJson(res, 400, {
@@ -58,7 +63,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
       }));
-    await app.upsertDirectory(members);
+    await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;
   }
   let channelCount: number | undefined;
@@ -73,7 +78,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
             isObj(m) && typeof m.channelId === "string" && typeof m.principalId === "string",
         )
       : undefined;
-    await app.upsertChannels(channels, channelMembers);
+    await app.upsertChannels(channels, channelMembers, numOrUndef(b.channelsSyncedAt));
     channelCount = channels.length;
   }
   let groupMemberCount: number | undefined;
@@ -82,7 +87,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
       (m): m is { groupId: string; principalId: string } =>
         isObj(m) && typeof m.groupId === "string" && typeof m.principalId === "string",
     );
-    await app.upsertGroups(groupMembers);
+    await app.upsertGroups(groupMembers, numOrUndef(b.groupsSyncedAt));
     groupMemberCount = groupMembers.length;
   }
   return sendJson(res, 200, {

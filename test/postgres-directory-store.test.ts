@@ -340,3 +340,41 @@ test("pg directory: workspace URL survives roster swaps and reads back per org",
   await store.setWorkspaceUrl("https://acme2.slack.com");
   assert.deepEqual(await store.meta(), { workspaceUrl: "https://acme2.slack.com" });
 });
+
+test("pg directory: a swap stamped older than the stored snapshot is refused", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+
+  assert.equal(await store.replaceGroups([{ groupId: "G-fresh", principalId: "U-alice" }], 2000), true);
+  assert.equal(await store.replaceGroups([], 1000), false, "a stale instance's swap must not clobber a fresh sync");
+  assert.equal(await store.groupMember("G-fresh", "U-alice"), true);
+  assert.equal(await store.replaceGroups([], 3000), true);
+  assert.equal(await store.groupMember("G-fresh", "U-alice"), false);
+
+  assert.equal(await store.replace([{ principalId: "U-fresh", displayName: "Fresh", type: "internal" }], 2000), true);
+  assert.equal(await store.replace([], 1000), false);
+  assert.notEqual(await store.get("U-fresh"), null);
+
+  assert.equal(await store.replaceChannels([{ channelId: "C-fresh", name: "fresh" }], undefined, 2000), true);
+  assert.equal(await store.replaceChannels([], undefined, 1000), false);
+  assert.equal(
+    (await store.listChannels()).some((c) => c.channelId === "C-fresh"),
+    true,
+  );
+
+  assert.equal(await store.replaceChannels([], undefined, undefined), true, "an unstamped swap keeps last-write-wins");
+  assert.equal((await store.listChannels()).length, 0);
+});
+
+test(
+  "pg directory: an identical push still advances the stamp, so ordering survives content-idempotent pushes",
+  { skip },
+  async () => {
+    const store = createPostgresDirectoryStore(URL!);
+    const roster = [{ groupId: "G-idem", principalId: "U-alice" }];
+
+    assert.equal(await store.replaceGroups(roster, 12000), true);
+    assert.equal(await store.replaceGroups(roster, 13000), true);
+    assert.equal(await store.replaceGroups([], 12500), false, "a swap older than the newest snapshot seen must lose");
+    assert.equal(await store.groupMember("G-idem", "U-alice"), true);
+  },
+);
