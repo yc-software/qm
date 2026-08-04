@@ -491,7 +491,7 @@ function drawSkills(loading = false): void {
     groups = groups
       .map((group) => ({
         ...group,
-        skills: group.skills.filter((skill) => skill.scopeId === scopedScope || skill.scope === "org"),
+        skills: group.skills.filter((skill) => skill.scopeId === scopedScope),
       }))
       .filter((group) => group.skills.length > 0);
   const filtered = groups.flatMap((group) => group.skills);

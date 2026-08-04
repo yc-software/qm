@@ -26,30 +26,55 @@ interface CronLite {
   archived?: boolean;
 }
 
-const cronCountCache = new Map<string, { count: number; at: number }>();
-const cronCountInFlight = new Set<string>();
+const toolCountCache = new Map<string, { count: number; at: number }>();
+const toolCountInFlight = new Set<string>();
 
-/** Cached count of enabled crons owned by a scope; kicks off a refresh and
- * calls onReady when a fresh count lands. */
-export function scopeCronCount(scope: string, onReady: () => void): number | null {
-  const hit = cronCountCache.get(scope);
+const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<number>>> = {
+  crons: async (scope) => {
+    const r = await api<{ crons?: CronLite[]; visible?: CronLite[] }>("/api/crons");
+    const seen = new Set<string>();
+    let count = 0;
+    for (const c of [...(r.crons ?? []), ...(r.visible ?? [])]) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      if (c.ownerScopeId === scope && c.enabled && !c.archived) count++;
+    }
+    return count;
+  },
+  files: async (scope) => {
+    const q = new URLSearchParams({ limit: "100", scope });
+    const r = await api<{ owned?: unknown[]; shared?: unknown[] }>(`/api/files?${q.toString()}`);
+    return (r.owned?.length ?? 0) + (r.shared?.length ?? 0);
+  },
+  apps: async (scope) => {
+    const r = await api<{ deployments?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
+      "/api/deployments",
+    );
+    return (r.deployments ?? []).filter(
+      (d) => d.status !== "archived" && (d.createdInScope === scope || d.ownerScopeId === scope),
+    ).length;
+  },
+  skills: async (scope) => {
+    const r = await api<{ skills?: Array<{ scopeId?: string; status?: string }> }>("/api/skills?includeShadowed=1");
+    return (r.skills ?? []).filter((sk) => sk.scopeId === scope && sk.status !== "archived").length;
+  },
+};
+
+/** Cached count of a tool's items in a scope; kicks off a refresh and calls
+ * onReady when a fresh count lands. Tools without a counter return null. */
+export function scopeToolCount(tool: SessionTool, scope: string, onReady: () => void): number | null {
+  const counter = TOOL_COUNTERS[tool];
+  if (!counter || !scope) return null;
+  const key = `${tool}:${scope}`;
+  const hit = toolCountCache.get(key);
   if (hit && Date.now() - hit.at < 60_000) return hit.count;
-  if (!cronCountInFlight.has(scope)) {
-    cronCountInFlight.add(scope);
-    void api<{ crons?: CronLite[]; visible?: CronLite[] }>("/api/crons")
-      .then((r) => {
-        const seen = new Set<string>();
-        let count = 0;
-        for (const c of [...(r.crons ?? []), ...(r.visible ?? [])]) {
-          if (seen.has(c.id)) continue;
-          seen.add(c.id);
-          if (c.ownerScopeId === scope && c.enabled && !c.archived) count++;
-        }
-        cronCountCache.set(scope, { count, at: Date.now() });
-      })
-      .catch(() => cronCountCache.set(scope, { count: hit?.count ?? 0, at: Date.now() }))
+  if (!toolCountInFlight.has(key)) {
+    toolCountInFlight.add(key);
+    void counter(scope)
+      .then((count) => toolCountCache.set(key, { count, at: Date.now() }))
+      .catch(() => toolCountCache.set(key, { count: hit?.count ?? 0, at: Date.now() }))
       .finally(() => {
-        cronCountInFlight.delete(scope);
+        toolCountInFlight.delete(key);
         onReady();
       });
   }
@@ -62,7 +87,7 @@ export interface SessionTopbarOpts {
   crumb: string | null;
   title: string;
   activeTool?: SessionTool | null;
-  cronCount?: number | null;
+  toolCount?: ((tool: SessionTool) => number | null) | null;
   fork?: { title: string; onClick?: (() => void) | null } | null;
   onTitle?: (() => void) | null;
   onCrumb?: (() => void) | null;
@@ -108,17 +133,19 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
   const headingTitle = o.crumb
     ? `This chat runs in the ${o.crumb} context — the agent works with that context's files and memory, separate from your personal context.`
     : o.title;
-  const tool = (t: SessionTool, glyph: Parameters<typeof icon>[0], label: string, hint: string) => html`
-    <button
-      class="session-tool ${o.activeTool === t ? "active" : ""}"
-      type="button"
-      title=${hint}
-      @click=${() => o.onTool(t)}
-    >
-      ${icon(glyph, 15)}<span>${label}</span>
-    </button>
-  `;
-  const cronLabel = o.cronCount ? `${o.cronCount} ${o.cronCount === 1 ? "cron" : "crons"}` : "Crons";
+  const tool = (t: SessionTool, glyph: Parameters<typeof icon>[0], hint: string) => {
+    const count = o.toolCount?.(t) ?? null;
+    return html`
+      <button
+        class="session-tool ${o.activeTool === t ? "active" : ""}"
+        type="button"
+        title=${hint}
+        @click=${() => o.onTool(t)}
+      >
+        ${icon(glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
+      </button>
+    `;
+  };
   return html`
     <header class="chat-topbar session-topbar">
       ${
@@ -129,11 +156,9 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
           : html`<div class="session-heading" title=${headingTitle}>${heading}</div>`
       }
       <div class="topbar-actions session-tools">
-        ${tool("crons", Clock3, cronLabel, "Crons in this context")}
-        ${tool("files", Files, "Files", "Files in this context")}
-        ${tool("apps", Rocket, "Apps", "Apps in this context")}
-        ${tool("skills", Box, "Skills", "Skills in this context")} ${tool("memory", Brain, "Memory", "Memory")}
-        ${tool("keychain", KeyRound, "Keychain", "Your keychain")}
+        ${tool("crons", Clock3, "Crons in this context")} ${tool("files", Files, "Files in this context")}
+        ${tool("apps", Rocket, "Apps in this context")} ${tool("skills", Box, "Skills in this context")}
+        ${tool("memory", Brain, "Memory")} ${tool("keychain", KeyRound, "Your keychain")}
       </div>
     </header>
   `;
@@ -154,7 +179,7 @@ export function scopedViewTopbar(current: SessionTool, redraw: () => void): Temp
     title: active.title,
     onCrumb: active.crumb ? () => openProjectPage(active.scopeId) : null,
     activeTool: current,
-    cronCount: scopeCronCount(active.scopeId, redraw),
+    toolCount: (t) => scopeToolCount(t, active.scopeId, redraw),
     onTitle: () => {
       setScopedSession(null);
       void Promise.all([import("./shell"), import("./sessions")]).then(
