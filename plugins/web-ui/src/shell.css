@@ -1143,6 +1143,21 @@ a.chat-row-open {
   background: color-mix(in srgb, var(--secondary) 85%, transparent);
   color: var(--foreground);
 }
+.session-tool-count {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--secondary) 90%, transparent);
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+}
+.session-tool.active .session-tool-count,
+.session-tool:hover .session-tool-count {
+  color: var(--foreground);
+}
 .session-heading.as-link {
   border: 0;
   background: transparent;
