@@ -218,8 +218,14 @@ async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): P
   step(`base model provider ${provider}: ${name} accepted`);
 }
 
+const NEXFORCE_KEY_PROBE = JSON.stringify({
+  model: "deepseek/deepseek-v4-flash",
+  max_tokens: 1,
+  messages: [{ role: "user", content: "ping" }],
+});
+
 const MODEL_PROVIDER_PROBES: Readonly<
-  Record<ModelProvider, { url: string; headers: (key: string) => Record<string, string> }>
+  Record<ModelProvider, { url: string; headers: (key: string) => Record<string, string>; body?: string }>
 > = {
   anthropic: {
     url: "https://api.anthropic.com/v1/models?limit=1",
@@ -227,13 +233,23 @@ const MODEL_PROVIDER_PROBES: Readonly<
   },
   openai: { url: "https://api.openai.com/v1/models", headers: (key) => ({ authorization: `Bearer ${key}` }) },
   openrouter: { url: "https://openrouter.ai/api/v1/key", headers: (key) => ({ authorization: `Bearer ${key}` }) },
+  nexforce: {
+    url: "https://router.nexforce.ai/v1/chat/completions",
+    headers: (key) => ({ authorization: `Bearer ${key}`, "content-type": "application/json" }),
+    body: NEXFORCE_KEY_PROBE,
+  },
 };
 
 async function modelProviderCheck(provider: ModelProvider, apiKey: string): Promise<void> {
   const probe = MODEL_PROVIDER_PROBES[provider];
   let res: Response;
   try {
-    res = await fetch(probe.url, { headers: probe.headers(apiKey), signal: AbortSignal.timeout(10_000) });
+    res = await fetch(probe.url, {
+      method: probe.body ? "POST" : "GET",
+      headers: probe.headers(apiKey),
+      ...(probe.body ? { body: probe.body } : {}),
+      signal: AbortSignal.timeout(10_000),
+    });
   } catch (e) {
     throw new CliError(
       `could not reach the ${provider} API: ${errMessage(e)} — check network access (and any proxy) and retry`,

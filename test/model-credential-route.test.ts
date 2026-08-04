@@ -38,6 +38,7 @@ function start(
       anthropic: Boolean(config.anthropicApiKey),
       openai: Boolean(config.openaiApiKey),
       openrouter: Boolean(config.openrouterApiKey),
+      nexforce: Boolean(config.nexforceApiKey),
     },
     admin: built.admin,
     auditLog: built.auditLog,
@@ -60,6 +61,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { provider: "anthropic", configured: true, source: "environment" },
         { provider: "openai", configured: false, source: "absent" },
         { provider: "openrouter", configured: false, source: "absent" },
+        { provider: "nexforce", configured: false, source: "absent" },
       ],
       models: [
         { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
@@ -130,6 +132,32 @@ test("OpenRouter validation uses an authenticated endpoint", async () => {
     assert.equal(response.status, 400);
     assert.equal(requested, "https://openrouter.ai/api/v1/key");
     assert.equal(await srv.built.modelCredentials.resolve("openrouter"), null);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("Nexforce validation probes a chat completion, not the public catalog", async () => {
+  let requested = "";
+  let method = "";
+  let body = "";
+  const srv = start({}, async (input, init) => {
+    requested = String(input);
+    method = init?.method ?? "";
+    body = typeof init?.body === "string" ? init.body : "";
+    return new Response(null, { status: 401 });
+  });
+  try {
+    const response = await fetch(`${srv.base}/v1/admin/model-providers/nexforce`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ apiKey: "not-a-real-key" }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal(requested, "https://router.nexforce.ai/v1/chat/completions");
+    assert.equal(method, "POST");
+    assert.match(body, /"model":"deepseek\/deepseek-v4-flash"/);
+    assert.equal(await srv.built.modelCredentials.resolve("nexforce"), null);
   } finally {
     await srv.close();
   }

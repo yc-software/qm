@@ -1153,6 +1153,13 @@ test("modelProvider must name a vendor the configured harness can bill", () => {
   withConfig({ modelProvider: "openai", env: { core: { HARNESS: "codex" } } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.modelProvider, "openai");
   });
+  withConfig({ modelProvider: "nexforce", env: { core: { HARNESS: "pi" } } }, ({ path }) => {
+    assert.throws(
+      () => loadConfigAt(path),
+      /model provider "nexforce" cannot serve a base model/,
+      "nexforce has no servable base model yet, so it cannot be declared as the base provider",
+    );
+  });
   withConfig({ modelProvider: "openrouter" }, ({ path }) => {
     assert.equal(
       loadConfigAt(path).config.modelProvider,

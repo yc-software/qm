@@ -104,19 +104,21 @@ export function awsWorkloadArchitecture(config: QmConfig, workload: string): "ar
   return service.architecture ?? "arm64";
 }
 
-export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
+export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter", "nexforce"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
 export const MODEL_PROVIDER_KEYS: Readonly<Record<ModelProvider, string>> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
+  nexforce: "NEXFORCE_API_KEY",
 };
 
 export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly string[]>> = {
   anthropic: ["pi", "opencode", "claude", "mock"],
   openai: ["pi", "opencode", "codex", "mock"],
   openrouter: ["pi", "mock"],
+  nexforce: [],
 };
 
 export const isModelProvider = (value: unknown): value is ModelProvider =>
@@ -731,8 +733,11 @@ function validateModelProvider(config: QmConfig, path: string): void {
   if (!provider) return;
   const harness = configuredHarness(config);
   if (!MODEL_PROVIDER_HARNESSES[provider].includes(harness)) {
+    const servable = MODEL_PROVIDER_HARNESSES[provider];
     throw new CliError(
-      `${path}: model provider "${provider}" cannot serve a base model on env.core.HARNESS "${harness}" — that harness runs no ${provider} model, so every agent turn would be refused. Use ${MODEL_PROVIDER_HARNESSES[provider].join(", ")}, or pick a provider that harness can bill.`,
+      servable.length === 0
+        ? `${path}: model provider "${provider}" cannot serve a base model on any harness — no ${provider} model is available yet, so every agent turn would be refused.`
+        : `${path}: model provider "${provider}" cannot serve a base model on env.core.HARNESS "${harness}" — that harness runs no ${provider} model, so every agent turn would be refused. Use ${servable.join(", ")}, or pick a provider that harness can bill.`,
     );
   }
 }

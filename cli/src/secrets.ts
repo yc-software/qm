@@ -54,6 +54,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       'OpenRouter API key: bills the base model when modelProvider is "openrouter", an optional deployment fallback otherwise.',
   },
   {
+    name: "NEXFORCE_API_KEY",
+    service: "core",
+    required: { when: { kind: "model-provider", provider: "nexforce" }, optionalOtherwise: true },
+    description:
+      'Nexforce Router API key: bills the base model when modelProvider is "nexforce", an optional deployment fallback otherwise.',
+  },
+  {
     name: "OPENAI_API_KEY",
     service: "core",
     required: {

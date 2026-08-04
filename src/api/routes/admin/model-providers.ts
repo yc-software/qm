@@ -4,21 +4,34 @@ import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
-const VALIDATION_REQUESTS: Record<ModelProvider, { url: string; headers: (apiKey: string) => Record<string, string> }> =
-  {
-    anthropic: {
-      url: "https://api.anthropic.com/v1/models",
-      headers: (apiKey) => ({ "x-api-key": apiKey, "anthropic-version": "2023-06-01" }),
-    },
-    openai: {
-      url: "https://api.openai.com/v1/models",
-      headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
-    },
-    openrouter: {
-      url: "https://openrouter.ai/api/v1/key",
-      headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
-    },
-  };
+const NEXFORCE_KEY_PROBE = JSON.stringify({
+  model: "deepseek/deepseek-v4-flash",
+  max_tokens: 1,
+  messages: [{ role: "user", content: "ping" }],
+});
+
+const VALIDATION_REQUESTS: Record<
+  ModelProvider,
+  { url: string; headers: (apiKey: string) => Record<string, string>; body?: string }
+> = {
+  anthropic: {
+    url: "https://api.anthropic.com/v1/models",
+    headers: (apiKey) => ({ "x-api-key": apiKey, "anthropic-version": "2023-06-01" }),
+  },
+  openai: {
+    url: "https://api.openai.com/v1/models",
+    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
+  },
+  openrouter: {
+    url: "https://openrouter.ai/api/v1/key",
+    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
+  },
+  nexforce: {
+    url: "https://router.nexforce.ai/v1/chat/completions",
+    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}`, "content-type": "application/json" }),
+    body: NEXFORCE_KEY_PROBE,
+  },
+};
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -29,7 +42,9 @@ async function validate(ctx: ApiCtx, provider: ModelProvider, apiKey: string): P
   const request = VALIDATION_REQUESTS[provider];
   try {
     const response = await (ctx.deps.modelCredentialFetch ?? fetch)(request.url, {
+      method: request.body ? "POST" : "GET",
       headers: request.headers(apiKey),
+      ...(request.body ? { body: request.body } : {}),
       signal: AbortSignal.timeout(5_000),
     });
     return response.ok;

@@ -31,7 +31,9 @@ it in place. If the repository has not been initialized, collect:
   required secret. Collect the key in the same pass as the other credentials —
   a deployment that cannot answer one message is not finished. An operator who
   genuinely wants to defer omits `modelProvider` and adds the key from the
-  Admin page later, but do not offer that as the default;
+  Admin page later, but do not offer that as the default. (The Nexforce Router
+  is registered as a provider too, but only for Admin-page key management — it
+  cannot yet serve a base model, so it is never a `modelProvider` choice.)
 - model;
 - region and provider account or organization;
 - whether the provider hostname is acceptable;
@@ -189,6 +191,13 @@ only with a model the chosen provider can bill — a mismatch is refused at
 startup rather than at the first message. The same rule covers the harness:
 `HARNESS` `codex` runs OpenAI models alone, `claude` runs Anthropic models
 alone, and `openrouter` needs the default `pi` harness.
+
+The Nexforce Router is registered as a model provider — its key can be stored
+and validated from the Admin page (`NEXFORCE_API_KEY`, minted at
+`https://marketplace.nexforce.ai/workspace/ai-gateway/ai-gateway-keys`) — but
+it cannot yet serve a base model, so it is never a `modelProvider` choice.
+Store the key from the Admin page now; do not promise a Nexforce-served
+deployment.
 
 An operator may still prefer to hold the key centrally and rotate it from the
 Admin page. That is a deliberate choice, not the default: drop `modelProvider`

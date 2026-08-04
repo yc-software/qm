@@ -197,6 +197,7 @@ test("naming a base model provider makes that provider's key a required deployme
     ["anthropic", "ANTHROPIC_API_KEY"],
     ["openai", "OPENAI_API_KEY"],
     ["openrouter", "OPENROUTER_API_KEY"],
+    ["nexforce", "NEXFORCE_API_KEY"],
   ] as const) {
     const config = makeConfig({ modelProvider: provider });
     assert.equal(secretByName(config, key).required, true, `${provider} requires ${key}`);

@@ -11,6 +11,7 @@ import {
   readConfigOrgId,
   EMAIL_TRANSPORTS,
   MODEL_PROVIDERS,
+  MODEL_PROVIDER_HARNESSES,
   type EmailTransport,
   type ModelProvider,
 } from "./config.ts";
@@ -87,6 +88,11 @@ function modelProviderFlag(flags: Flags): ModelProvider | undefined {
   const provider = strFlag(flags, "model-provider");
   if (provider !== undefined && !isModelProvider(provider)) {
     throw new CliError(`--model-provider must be ${MODEL_PROVIDERS.join(" | ")}`, { clause: "cli.invocation" });
+  }
+  if (provider !== undefined && MODEL_PROVIDER_HARNESSES[provider].length === 0) {
+    throw new CliError(`--model-provider ${provider} cannot serve a base model on any harness yet`, {
+      clause: "cli.invocation",
+    });
   }
   return provider;
 }

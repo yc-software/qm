@@ -395,12 +395,17 @@ test("MODEL_PROVIDER is refused when the harness can never run that vendor's mod
     "openai",
     "the one combination Codex can bill is accepted",
   );
+  assert.throws(
+    () => loadConfig({ MODEL_PROVIDER: "nexforce", HARNESS: "pi", NEXFORCE_API_KEY: "k" }),
+    /cannot serve a base model on HARNESS=pi/,
+    "nexforce has no servable base model yet, so a real harness refuses it",
+  );
 });
 
 test("baseModelProviders constrains the base model only when a provider is declared", () => {
   assert.deepEqual(
     baseModelProviders(loadConfig({ MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "k", ANTHROPIC_API_KEY: "k" })),
-    { anthropic: false, openai: false, openrouter: true },
+    { anthropic: false, openai: false, openrouter: true, nexforce: false },
     "the declaration outranks a stray key from another vendor",
   );
   assert.equal(
