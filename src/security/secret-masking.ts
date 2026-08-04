@@ -21,6 +21,7 @@ export function createSecretValueMasker(env: Record<string, string> | undefined)
     const uri = encodeURIComponent(value);
     if (uri !== value) variants.push({ needle: uri, label: key });
     variants.push({ needle: Buffer.from(value, "utf8").toString("base64").replace(/=+$/, ""), label: key });
+    variants.push({ needle: Buffer.from(value, "utf8").toString("base64url"), label: key });
   }
   if (!variants.length) return (text) => text;
   variants.sort((a, b) => b.needle.length - a.needle.length);

@@ -1134,6 +1134,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function onComposerKeydown(e: KeyboardEvent, agent: Agent): void {
+    // During IME composition (Japanese/Chinese/Korean), Enter confirms the
+    // conversion — it must never send. Safari reports composition Enter with
+    // keyCode 229 and may fire after compositionend, so check both.
+    if (e.isComposing || e.keyCode === 229) return;
     const slash = currentSlashMenu();
     if (slash.open) {
       if (e.key === "Escape") {

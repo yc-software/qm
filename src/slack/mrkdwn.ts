@@ -1,3 +1,4 @@
+import { safeChunks } from "./safe-cut.ts";
 export function decodeSlackEntities(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
@@ -173,9 +174,5 @@ function reformatTables(text: string, keep: (s: string) => string): string {
 }
 
 export function slackSectionBlocks(text: string): Array<Record<string, unknown>> {
-  const blocks: Array<Record<string, unknown>> = [];
-  for (let offset = 0; offset < text.length; offset += 2_900) {
-    blocks.push({ type: "section", text: { type: "mrkdwn", text: text.slice(offset, offset + 2_900) } });
-  }
-  return blocks;
+  return safeChunks(text, 2_900).map((chunk) => ({ type: "section", text: { type: "mrkdwn", text: chunk } }));
 }
