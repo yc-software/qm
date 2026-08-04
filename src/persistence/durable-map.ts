@@ -14,6 +14,39 @@ export interface DurableMap<T> {
   take(id: string): Promise<T | null>;
 }
 
+/**
+ * Serialize for a Postgres jsonb column. jsonb rejects two things a JS string
+ * happily carries: NUL (\u0000) and unpaired surrogate halves — and qm's own
+ * truncation helpers can manufacture the latter by slicing mid-emoji. The
+ * memory map accepts those values, so production diverged from every
+ * in-memory test. Sanitize at the serialization boundary: drop NULs and
+ * replace lone surrogates with U+FFFD, recursively, only when a string
+ * actually needs it.
+ */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+function jsonbSafeString(s: string): string {
+  let out = s;
+  if (out.includes("\u0000")) out = out.replaceAll("\u0000", "");
+  if (LONE_SURROGATE.test(out)) out = out.replace(LONE_SURROGATE, "\uFFFD");
+  return out;
+}
+
+function jsonbSafe(value: unknown): unknown {
+  if (typeof value === "string") return jsonbSafeString(value);
+  if (Array.isArray(value)) return value.map(jsonbSafe);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[jsonbSafeString(k)] = jsonbSafe(v);
+    return out;
+  }
+  return value;
+}
+
+export function jsonbStringify(value: unknown): string {
+  return JSON.stringify(jsonbSafe(value));
+}
+
 function applyPatch<T>(value: T, patch: Partial<T>): T {
   const next = { ...value } as Record<string, unknown>;
   for (const [k, v] of Object.entries(patch)) {
@@ -153,7 +186,7 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
-          [id, JSON.stringify(value)],
+          [id, jsonbStringify(value)],
         ),
       );
     },
@@ -163,7 +196,7 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = ${table}.json
            RETURNING json`,
-          [id, JSON.stringify(value)],
+          [id, jsonbStringify(value)],
         ),
       );
       return res.rows[0]!.json as T;
@@ -173,7 +206,7 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO NOTHING`,
-          [id, JSON.stringify(value)],
+          [id, jsonbStringify(value)],
         ),
       );
       return (inserted.rowCount ?? 0) > 0;
@@ -186,7 +219,7 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
         client.query(`UPDATE ${table} SET json = (json - $2::text[]) || $3::jsonb WHERE id = $1 RETURNING json`, [
           id,
           removeKeys,
-          JSON.stringify(set),
+          jsonbStringify(set),
         ]),
       );
       return res.rows.length ? (res.rows[0]!.json as T) : null;
@@ -196,7 +229,7 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
         if (!current.rows[0]) return null;
         const next = fn(current.rows[0].json as T);
-        await client.query(`UPDATE ${table} SET json = $2 WHERE id = $1`, [id, JSON.stringify(next)]);
+        await client.query(`UPDATE ${table} SET json = $2 WHERE id = $1`, [id, jsonbStringify(next)]);
         return next;
       });
     },

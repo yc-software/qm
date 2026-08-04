@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +38,7 @@ for (const k of kinds) {
   }
 }
 
-const fixtureDir = new URL("../test/memory-bench/conversations/", import.meta.url).pathname;
+const fixtureDir = fileURLToPath(new URL("../test/memory-bench/conversations/", import.meta.url));
 const conversations = readdirSync(fixtureDir)
   .filter((f) => f.endsWith(".json"))
   .sort()

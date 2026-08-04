@@ -276,6 +276,7 @@ test("strategy wiring: scratch-promote parses, wraps the store, and ships prompt
 test("a save landing during promotion is not reverted by the promote write", async () => {
   const { base, strategy, memory } = fresh({
     oneShot: async () => {
+      // a user edit lands while the model call is in flight
       await base.replace(SCOPE, "# Memory\n\n- (2026-06-10) the newer edit");
       return "# Memory\n\n- (2026-06-10) promoted fact";
     },

@@ -316,11 +316,22 @@ export function createTurnMethods(
               return req.async ? { status: "queued", runId: live.id, steered: true } : drive(live.id);
             if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
           }
+          // A mid-run message can carry files. They can't be materialized into
+          // the live turn's inbox, but the run must hear about them — name
+          // them in the steer (with the message ts so the agent can pull each
+          // via the surface-file API), and never report a captionless file as
+          // steered while silently dropping it.
+          const fileNames = (req.attachments ?? []).map((a) =>
+            a.sourceId
+              ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
+              : a.name,
+          );
           const wake: Wake = {
             situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
             ts: String(req.clientSentAt ?? Date.now()),
             text: injectedText,
             halt: origin.kind === "human" && isHalt(req.text),
+            ...(fileNames.length ? { fileNames } : {}),
           };
           const route = routeWake(wake, true, resolveTurnOrigin(live.request).kind === "ambient");
           if (route.kind === "steer" || route.kind === "drop") {
