@@ -978,8 +978,13 @@ a.chat-row-open {
   min-height: 0;
   min-width: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   position: relative;
+}
+/* Glance tiers render no top bar: two children (glance, dock), two rows. */
+[data-density="card"] .custom-chat-shell,
+[data-density="strip"] .custom-chat-shell {
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 .drop-overlay {
   position: absolute;
