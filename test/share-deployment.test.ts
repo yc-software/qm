@@ -105,7 +105,7 @@ function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityCla
     params: { id },
     capability,
     secret: "test-secret",
-    deps: {},
+    deps: { apiBaseUrl: "https://api.example", publicUrl: "https://web.example" },
     url: new URL(`http://localhost/v1/deployments/${id}`),
     req: { headers: { host: "localhost" } },
   } as unknown as ApiCtx;
@@ -153,6 +153,7 @@ test("deployment detail is viewer-gated and fixes the permission/gitUrl wire con
   assert.equal(visible.status, 200);
   assert.equal(visible.body.deployment.permission, "write");
   assert.equal(typeof visible.body.deployment.gitUrl, "string");
+  assert.equal(new URL(visible.body.deployment.gitUrl).origin, "https://api.example");
   assert.equal(visible.body.deployment.currentVersion, 1);
   assert.equal(typeof visible.body.deployment.versions[0].createdAt, "number");
   assert.equal(visible.body.deployment.versions[0].snapshotDir, undefined);

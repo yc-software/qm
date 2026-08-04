@@ -268,7 +268,11 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     [{ channelId: "C1", principalId: "U2" }],
   );
   const secret = "deployments-list-secret".repeat(3);
-  const server = createServer(app, { signingSecret: secret, publicUrl: "https://core.test" });
+  const server = createServer(app, {
+    signingSecret: secret,
+    apiBaseUrl: "https://core.test",
+    publicUrl: "https://web.test",
+  });
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;

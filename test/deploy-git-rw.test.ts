@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { Server } from "node:http";
+import { createServer as createHttpServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +30,7 @@ const GIT_ENV = {
   GIT_COMMITTER_EMAIL: "t@t",
 };
 
-function fixture() {
+function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   const deployStore = createDeployStore({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } });
   const acl: AclStore = createAclStore();
   const deploy = createDeployService({
@@ -52,7 +52,7 @@ function fixture() {
     sessions: createMemorySessionStore(),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
-  const server: Server = createServer(app, { signingSecret: SECRET, identity });
+  const server: Server = createServer(app, { signingSecret: SECRET, identity, ...urls });
   server.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return { app, deploy, acl, identity, base, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -234,6 +234,45 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
     assert.equal(anon.status, 401);
   } finally {
     await f.close();
+  }
+});
+
+test("git-url endpoint returns a clonable API URL when web and API origins differ", async () => {
+  let coreBase = "";
+  const ingress = createHttpServer((req, res) => {
+    const upstream = httpRequest(
+      new URL(req.url ?? "/", coreBase),
+      { method: req.method, headers: req.headers },
+      (upstreamResponse) => {
+        res.writeHead(upstreamResponse.statusCode ?? 500, upstreamResponse.headers);
+        upstreamResponse.pipe(res);
+      },
+    );
+    upstream.on("error", (error) => res.destroy(error));
+    req.pipe(upstream);
+  });
+  ingress.listen(0);
+  const apiBaseUrl = `http://127.0.0.1:${(ingress.address() as AddressInfo).port}`;
+  const f = fixture({ apiBaseUrl, publicUrl: "https://web.example" });
+  coreBase = f.base;
+  try {
+    const deployment = await f.app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [{ path: "server.js", data: "1" }],
+    });
+    const response = await fetch(`${f.base}/v1/deployments/${encodeURIComponent(deployment.id)}/git-url`, {
+      headers: { "x-agent-capability": await capFor("U1") },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { url: string };
+    assert.equal(new URL(body.url).origin, apiBaseUrl);
+    const work = mkdtempSync(join(tmpdir(), "git-url-clone-"));
+    await execFileP("git", ["clone", "--quiet", body.url, work], { env: GIT_ENV });
+  } finally {
+    await f.close();
+    await new Promise<void>((resolve) => ingress.close(() => resolve()));
   }
 });
 

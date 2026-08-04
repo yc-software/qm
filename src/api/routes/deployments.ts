@@ -1121,10 +1121,15 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
 }
 
 function gitUrlBase(ctx: ApiCtx): string {
-  if (ctx.deps.publicUrl) return ctx.deps.publicUrl;
-  const host = (ctx.req.headers["x-forwarded-host"] as string) ?? ctx.req.headers.host ?? "localhost";
-  const proto = (ctx.req.headers["x-forwarded-proto"] as string) ?? "http";
-  return `${proto}://${host}`;
+  if (ctx.deps.apiBaseUrl) {
+    return ctx.deps.apiBaseUrl;
+  } else if (ctx.deps.publicUrl) {
+    return ctx.deps.publicUrl;
+  } else {
+    const host = (ctx.req.headers["x-forwarded-host"] as string) ?? ctx.req.headers.host ?? "localhost";
+    const proto = (ctx.req.headers["x-forwarded-proto"] as string) ?? "http";
+    return `${proto}://${host}`;
+  }
 }
 
 async function deploymentGitUrl(ctx: ApiCtx): Promise<void> {

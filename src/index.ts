@@ -42,6 +42,7 @@ const server = createServer(built.app, {
   consentLinks: built.consentLinks,
   secretDrops: built.secretDrops,
   ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
+  ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
   ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
   ...(config.publicWebUrl ? { portalUrl: config.publicWebUrl } : {}),
   admin: built.admin,
