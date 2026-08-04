@@ -93,7 +93,7 @@ export class Child {
       if (this.spec.readiness.kind === "log") {
         const pattern = this.spec.readiness.pattern;
         const offset = this.logOffset;
-        const seen = bestEffortValue(() => readFileSync(this.logFile(), "utf8").slice(offset).includes(pattern));
+        const seen = bestEffortValue(() => readFileSync(this.logFile()).includes(pattern, offset));
         if (seen) return { ok: true };
       } else {
         const url = this.spec.readiness.url;
