@@ -44,6 +44,7 @@ function svc() {
 interface CtxOpts {
   files?: Array<{ path: string; data: Uint8Array }>;
   sandbox?: Sandbox;
+  provision?: () => Promise<SandboxHandle>;
   ledger?: ToolLedger;
   runId?: string;
   rw?: boolean;
@@ -69,7 +70,7 @@ function ctx(deploy: DeployService, opts: CtxOpts = {}) {
   const sandbox = opts.sandbox ?? fileSandbox(files);
   return createToolContext({
     sandbox,
-    provision: async () => ({}) as SandboxHandle,
+    provision: opts.provision ?? (async () => ({}) as SandboxHandle),
     layers: opts.rw === false ? [] : [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
@@ -122,9 +123,23 @@ test("publish falls back to per-file reads when the routed backend refuses backu
   sandbox.backupComputer = async () => {
     throw new CapabilityUnsupportedError("sprites", "backupComputer");
   };
+  const warnings: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
   const tc = ctx(s.deploy, { files, sandbox });
-  const r = await tc.publish({ dir: "dist", entrypoint: "node server.js", name: "sprite-app" });
+  const r = await (async () => {
+    try {
+      return await tc.publish({ dir: "dist", entrypoint: "node server.js", name: "sprite-app" });
+    } finally {
+      console.warn = warn;
+    }
+  })();
   assert.equal(r.url, "/d/sprite-app/");
+  assert.deepEqual(warnings, [
+    ["[publish] this computer's substrate (sprites) does not support backupComputer; falling back to per-file reads"],
+  ]);
   const d = (await s.deployStore.getByName("sprite-app"))!;
   assert.deepEqual(
     (await s.deployStore.treeOf(d.id, 1))?.map((f) => f.path).sort(),
@@ -163,6 +178,45 @@ test("publish by name updates in place: bumps the version, keeps the id and the 
   assert.equal(second.id, first.id, "same deployment");
   assert.equal(second.version, 2, "new immutable version");
   assert.equal(second.url, "/d/dash/", "stable link");
+});
+
+test("publish by name inherits the current entrypoint when redeploying without one", async () => {
+  const s = svc();
+  await ctx(s.deploy, { files: [{ path: "app/server.js", data: bytes("v1") }] }).publish({
+    dir: "app",
+    entrypoint: "node server.js",
+    name: "dash",
+  });
+  const second = await ctx(s.deploy, { files: [{ path: "app/server.js", data: bytes("v2") }] }).publish({
+    dir: "app",
+    name: "dash",
+  });
+
+  const d = (await s.deployStore.getByName("dash"))!;
+  assert.equal(second.version, 2);
+  assert.equal(d.versions[1]!.entrypoint, "node server.js");
+  assert.deepEqual(
+    (await s.deployStore.filesOf(d.id, 2))?.map((f) => ({ path: f.path, data: [...f.data] })),
+    [{ path: "server.js", data: [...bytes("v2")] }],
+  );
+});
+
+test("publish without an entrypoint and without a prior version fails before provisioning", async () => {
+  const s = svc();
+  let provisioned = false;
+  const tc = ctx(s.deploy, {
+    files: appFile("app/server.js"),
+    provision: async () => {
+      provisioned = true;
+      return {} as SandboxHandle;
+    },
+  });
+
+  await assert.rejects(() => tc.publish({ dir: "app", name: "new-app" }), {
+    message: 'publish requires an entrypoint, e.g. "node server.js"',
+  });
+  assert.equal(provisioned, false);
+  assert.equal((await s.deployStore.list()).length, 0);
 });
 
 test("publish: a different scope claiming a taken name is rejected", async () => {
