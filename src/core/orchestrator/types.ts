@@ -154,7 +154,7 @@ export interface OrchestratorDeps {
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;
-  managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion">;
+  managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
   reachExec?: boolean;
   eagerProvision?: boolean;
   environments?: EnvironmentStore;

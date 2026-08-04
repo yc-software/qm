@@ -55,7 +55,8 @@ const FAMILIES: AgentApiFamily[] = [
       (p === "/v1/projects" && (m === "GET" || m === "POST")) ||
       (/^\/v1\/projects\/[^/]+$/.test(p) && m === "PATCH") ||
       (/^\/v1\/projects\/[^/]+\/members$/.test(p) && m === "POST") ||
-      (/^\/v1\/projects\/[^/]+\/members\/[^/]+$/.test(p) && m === "DELETE"),
+      (/^\/v1\/projects\/[^/]+\/members\/[^/]+$/.test(p) && m === "DELETE") ||
+      (/^\/v1\/projects\/[^/]+\/slack-channel$/.test(p) && (m === "PUT" || m === "DELETE")),
     guidance:
       "These act as the ASKING PERSON across every project they belong to, matching the web UI. Do not send principalId; the capability token always determines the person, and inaccessible projects return 404.",
     routes: [
@@ -79,6 +80,17 @@ const FAMILIES: AgentApiFamily[] = [
         method: "DELETE",
         path: "/v1/projects/:id/members/:memberId",
         summary: "remove a member from a project the asking person owns",
+      },
+      {
+        method: "PUT",
+        path: "/v1/projects/:id/slack-channel",
+        summary:
+          "link a project to its Slack home channel — body {channel} (name or id; the asking person must be in the project and able to see the channel — public, or a private one they belong to; a channel that already has its own agent workspace is rejected with 409). Everyone in the channel joins the project, and the roster follows the channel from then on; the channel becomes the project's default delivery audience for crons and report-outs.",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/projects/:id/slack-channel",
+        summary: "unlink a project's Slack home channel — members who joined via the channel leave the project",
       },
     ],
   },

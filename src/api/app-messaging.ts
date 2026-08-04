@@ -338,6 +338,7 @@ export function createMessagingMethods(
     },
     async upsertChannels(channels, channelMembers, syncedAt) {
       await deps.directory.replaceChannels(channels, channelMembers, syncedAt);
+      await h.syncLinkedProjectRosters();
     },
     async upsertGroups(groupMembers, syncedAt) {
       await deps.directory.replaceGroups(groupMembers, syncedAt);

@@ -161,8 +161,10 @@ export interface CoreProject {
   name: string;
   ownerId: string;
   memberIds: string[];
+  channelMemberIds?: string[];
   scopeId: string;
-  members: Array<{ principalId: string; displayName: string }>;
+  members: Array<{ principalId: string; displayName: string; viaChannel?: boolean }>;
+  slackChannel?: { channelId: string; channelName: string; linkedBy?: string; linkedAt?: number };
   createdAt?: number;
   updatedAt?: number;
 }

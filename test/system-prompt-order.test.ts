@@ -27,6 +27,7 @@ import type { ConnectorStatusCache } from "../src/credentials/connector-status.t
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -74,7 +75,14 @@ const skills = {
   visibleFor: async () => [{ skill: { manifest: { name: "deploy", description: "Deploy the app" } }, shadowed: [] }],
 } as unknown as SkillStore;
 
-function buildOrchestrator(extra: { crons?: CronStore; sandbox?: Sandbox; skills?: SkillStore } = {}) {
+function buildOrchestrator(
+  extra: {
+    crons?: CronStore;
+    sandbox?: Sandbox;
+    skills?: SkillStore;
+    managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
+  } = {},
+) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -307,4 +315,43 @@ test("Slack turns get the terse-response style instruction; other surfaces do no
   assert.equal(nonSlack.status, "ok");
   assert.doesNotMatch(nonSlack.reply ?? "", /## Talking on Slack/);
   assert.doesNotMatch(nonSlack.reply ?? "", /a couple of sentences/);
+});
+test("a project session names its linked Slack home channel; unlinked projects get no block", async () => {
+  const managedGroups = {
+    recognizes: (ref: string) => ref.startsWith("web-project-"),
+    membership: async () => true,
+    members: async () => [actor.id],
+    version: async () => "1",
+    withVersion: async <T>(_ref: string, _version: string | undefined, fn: () => Promise<T>) => fn(),
+    slackChannel: async (ref: string) =>
+      ref === "web-project-linked" ? { channelId: "C-ENG", channelName: "eng" } : undefined,
+  };
+  const { orchestrator: orch } = buildOrchestrator({ managedGroups });
+
+  const group = (ref: string, thread: string): OrchestratorInput => ({
+    surface: "test",
+    actor,
+    conversation: {
+      kind: "group",
+      threadRef: thread,
+      channelRef: ref,
+      channelName: "Proj",
+      audience: [actor],
+    } as Conversation,
+    text: "!sysprompt",
+    scopeVersion: "1",
+    sessionParticipantIds: [actor.id],
+    origin: { kind: "direct" },
+  });
+
+  const linked = await orch.handleTurn(group("web-project-linked", "grp:linked:1"));
+  assert.equal(linked.status, "ok", `refused: ${(linked as { reason?: string }).reason}`);
+  const prompt = linked.reply ?? "";
+  assert.match(prompt, /## Project home channel/);
+  assert.match(prompt, /#eng/);
+  assert.match(prompt, /channel: "eng"/);
+
+  const unlinked = await orch.handleTurn(group("web-project-bare", "grp:bare:1"));
+  assert.equal(unlinked.status, "ok");
+  assert.ok(!(unlinked.reply ?? "").includes("## Project home channel"));
 });

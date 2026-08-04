@@ -65,6 +65,87 @@ test("ProjectStore rename is owner-only and cleans the name", async () => {
   assert.ok(same.status === "ok" && !same.changed);
 });
 
+test("ProjectStore slack-channel link is member-managed and not a roster change", async () => {
+  let at = 500;
+  const projects = createProjectStore(undefined, { id: () => "sl", now: () => at++ });
+  const project = await projects.create({ name: "Linked", ownerId: "owner" });
+  await projects.addMember(project.id, "owner", "member");
+  const groupRef = projectGroupRef(project.id);
+  const versionBefore = await projects.version(groupRef);
+
+  assert.equal(
+    (await projects.setSlackChannel(project.id, "outsider", { channelId: "C1", channelName: "eng" })).status,
+    "forbidden",
+  );
+  assert.equal(await projects.slackChannel(groupRef), undefined);
+
+  const linked = await projects.setSlackChannel(project.id, "member", { channelId: "C1", channelName: "eng" });
+  assert.ok(linked.status === "ok" && linked.changed);
+  const link = await projects.slackChannel(groupRef);
+  assert.equal(link?.channelId, "C1");
+  assert.equal(link?.channelName, "eng");
+  assert.equal(link?.linkedBy, "member");
+  assert.equal((await projects.get(project.id))?.slackChannel?.channelId, "C1");
+
+  const same = await projects.setSlackChannel(project.id, "owner", { channelId: "C1", channelName: "eng" });
+  assert.ok(same.status === "ok" && !same.changed);
+  assert.equal(
+    await projects.version(groupRef),
+    versionBefore,
+    "linking is not a roster change: in-flight turns and approvals stay current",
+  );
+
+  const relinked = await projects.setSlackChannel(project.id, "owner", { channelId: "C2", channelName: "ops" });
+  assert.ok(relinked.status === "ok" && relinked.changed);
+  assert.equal((await projects.slackChannel(groupRef))?.linkedBy, "owner");
+
+  assert.equal((await projects.setSlackChannel(project.id, "outsider", null)).status, "forbidden");
+  const unlinked = await projects.setSlackChannel(project.id, "member", null);
+  assert.ok(unlinked.status === "ok" && unlinked.changed);
+  assert.equal(await projects.slackChannel(groupRef), undefined);
+  const noop = await projects.setSlackChannel(project.id, "member", null);
+  assert.ok(noop.status === "ok" && !noop.changed);
+  assert.equal((await projects.setSlackChannel("missing", "owner", null)).status, "not_found");
+});
+
+test("ProjectStore derives membership from the linked channel roster", async () => {
+  let at = 900;
+  const projects = createProjectStore(undefined, { id: () => "dr", now: () => at++ });
+  const project = await projects.create({ name: "Derived", ownerId: "owner" });
+  const groupRef = projectGroupRef(project.id);
+
+  // no link yet: sync is refused
+  assert.equal((await projects.syncChannelMembers(project.id, ["chan-pal"])).status, "forbidden");
+
+  await projects.setSlackChannel(project.id, "owner", { channelId: "C1", channelName: "eng" });
+  const versionLinked = await projects.version(groupRef);
+  const synced = await projects.syncChannelMembers(project.id, ["chan-pal", "owner"]);
+  assert.ok(synced.status === "ok" && synced.changed);
+  assert.notEqual(await projects.version(groupRef), versionLinked, "derived roster change bumps the scope version");
+
+  // union semantics: manual + derived, deduped
+  assert.deepEqual(await projects.members(groupRef), ["owner", "chan-pal"]);
+  assert.equal(await projects.membership(groupRef, "chan-pal"), true);
+  assert.ok((await projects.listForMember("chan-pal")).some((candidate) => candidate.id === project.id));
+
+  // idempotent re-sync: no version churn
+  const versionAfter = await projects.version(groupRef);
+  const again = await projects.syncChannelMembers(project.id, ["owner", "chan-pal"]);
+  assert.ok(again.status === "ok" && !again.changed);
+  assert.equal(await projects.version(groupRef), versionAfter);
+
+  // channel rename flows through without a roster-version bump
+  const renamed = await projects.syncChannelMembers(project.id, ["owner", "chan-pal"], "eng-renamed");
+  assert.ok(renamed.status === "ok" && renamed.changed);
+  assert.equal((await projects.slackChannel(groupRef))?.channelName, "eng-renamed");
+  assert.equal(await projects.version(groupRef), versionAfter);
+
+  // unlink drops the derived members with the link
+  await projects.setSlackChannel(project.id, "owner", null);
+  assert.deepEqual(await projects.members(groupRef), ["owner"]);
+  assert.equal(await projects.membership(groupRef, "chan-pal"), false);
+});
+
 test("managed groups override Slack membership and historical sessions grant no access", async () => {
   const projects = createProjectStore(undefined, { id: () => "managed" });
   const project = await projects.create({ name: "Managed", ownerId: "owner" });
@@ -755,4 +836,129 @@ test("leaving a Project still cuts off everything after the member left", async 
   );
   assert.equal(await built.app.getSessionForViewer(session.id, "member"), null);
   assert.deepEqual(await built.app.listSessions("member"), []);
+});
+test("Project slack-channel routes gate on visibility and workspace use, and sync the channel roster", async (t) => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-slack-")) }));
+  const server = createInsecureTestServer(built.app, {});
+  const base = await listen(server);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+  await built.app.upsertDirectory([
+    { principalId: "owner", displayName: "Owner", type: "internal" },
+    { principalId: "member", displayName: "Member", type: "internal" },
+    { principalId: "outsider", displayName: "Outsider", type: "internal" },
+    { principalId: "chan-pal", displayName: "Channel Pal", type: "internal" },
+  ]);
+  const channels = [
+    { channelId: "C-ENG", name: "eng", isPrivate: false },
+    { channelId: "C-SECRET", name: "war-room", isPrivate: true },
+    { channelId: "C-BUSY", name: "busy", isPrivate: false },
+  ];
+  await built.app.upsertChannels(channels, [
+    { channelId: "C-SECRET", principalId: "member" },
+    { channelId: "C-ENG", principalId: "owner" },
+    { channelId: "C-ENG", principalId: "chan-pal" },
+  ]);
+
+  const put = (id: string, principalId: string, channel: string) =>
+    fetch(`${base}/v1/projects/${id}/slack-channel`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId, channel }),
+    });
+
+  const create = await fetch(`${base}/v1/projects`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "owner", name: "Linked" }),
+  });
+  assert.equal(create.status, 201);
+  const project = ((await create.json()) as { project: { id: string } }).project;
+  const groupRef = projectGroupRef(project.id);
+  const scope = projectScopeId(project.id);
+  await fetch(`${base}/v1/projects/${project.id}/members`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "owner", memberId: "member" }),
+  });
+
+  // a session predating the link, so channel-derived members should inherit it
+  await built.app.turn({
+    surface: "web",
+    actor: { externalId: "owner" },
+    conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:pre", audience: [] },
+    text: "before the link",
+  });
+
+  // a non-member of the project can't link even a channel they can see
+  assert.equal((await put(project.id, "outsider", "eng")).status, 403);
+  // a private channel the actor can't see reads as invalid
+  assert.equal((await put(project.id, "owner", "war-room")).status, 400);
+  assert.equal((await put(project.id, "owner", "no-such-channel")).status, 400);
+  assert.equal((await put("missing", "owner", "eng")).status, 404);
+
+  // a channel that already has its own workspace can't become a home channel
+  await built.sessions.getOrCreateByThread("ch:C-BUSY:1", "channel", "channel:C-BUSY", "busy", "slack");
+  const busy = await put(project.id, "owner", "busy");
+  assert.equal(busy.status, 409);
+  assert.equal(((await busy.json()) as { error: string }).error, "channel_in_use");
+
+  // linking by #name resolves through the directory and pulls in the channel roster
+  const linked = await put(project.id, "owner", "#eng");
+  assert.equal(linked.status, 200);
+  const linkedProject = (
+    (await linked.json()) as {
+      project: {
+        memberIds: string[];
+        slackChannel?: { channelId: string; channelName: string; linkedBy: string };
+        members: Array<{ principalId: string; viaChannel?: boolean }>;
+      };
+    }
+  ).project;
+  assert.equal(linkedProject.slackChannel?.channelId, "C-ENG");
+  assert.equal(linkedProject.slackChannel?.linkedBy, "owner");
+  assert.ok(linkedProject.memberIds.includes("chan-pal"), "channel roster joins the project");
+  assert.equal(linkedProject.members.find((m) => m.principalId === "chan-pal")?.viaChannel, true);
+  assert.equal(linkedProject.members.find((m) => m.principalId === "member")?.viaChannel, undefined);
+  assert.equal(await built.projects.membership(groupRef, "chan-pal"), true);
+  // ...including the conversations that predate the link
+  assert.ok((await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
+
+  // the roster keeps following the channel through directory syncs
+  await built.app.upsertChannels(channels, [
+    { channelId: "C-SECRET", principalId: "member" },
+    { channelId: "C-ENG", principalId: "owner" },
+  ]);
+  assert.equal(await built.projects.membership(groupRef, "chan-pal"), false, "leaving the channel leaves the project");
+  await built.app.upsertChannels(channels, [
+    { channelId: "C-SECRET", principalId: "member" },
+    { channelId: "C-ENG", principalId: "owner" },
+    { channelId: "C-ENG", principalId: "chan-pal" },
+  ]);
+  assert.equal(
+    await built.projects.membership(groupRef, "chan-pal"),
+    true,
+    "rejoining the channel rejoins the project",
+  );
+
+  // manual members never ride the channel roster
+  assert.equal(await built.projects.membership(groupRef, "member"), true);
+
+  // unlink: project members only; derived members leave with the link
+  const outsiderUnlink = await fetch(`${base}/v1/projects/${project.id}/slack-channel`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "outsider" }),
+  });
+  assert.equal(outsiderUnlink.status, 403);
+  const unlink = await fetch(`${base}/v1/projects/${project.id}/slack-channel`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "member" }),
+  });
+  assert.equal(unlink.status, 200);
+  assert.equal(await built.projects.slackChannel(groupRef), undefined);
+  assert.equal(await built.projects.membership(groupRef, "chan-pal"), false);
+  assert.equal(await built.projects.membership(groupRef, "member"), true);
+  assert.ok(!(await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
 });

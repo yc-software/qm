@@ -315,6 +315,16 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length > 0;
     },
 
+    async channelMemberIds(channelId) {
+      const synced = await q("SELECT channel_members_synced FROM directory_sync WHERE org_id = $1", [orgId]);
+      if (synced[0]?.channel_members_synced !== true) return undefined;
+      const rows = await q(
+        "SELECT principal_id FROM directory_channel_members WHERE org_id = $1 AND channel_id = $2 ORDER BY principal_id",
+        [orgId, channelId],
+      );
+      return rows.map((row) => row.principal_id as string);
+    },
+
     async channelMembership(channelId, principalId) {
       const rows = await q(
         `SELECT EXISTS (

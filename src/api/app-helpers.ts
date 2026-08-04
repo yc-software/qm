@@ -216,10 +216,15 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   async function projectView(project: Project): Promise<ProjectView> {
     const memberIds = (await deps.projects?.members(projectGroupRef(project.id))) ?? project.memberIds;
+    const manual = new Set([project.ownerId, ...project.memberIds]);
     const members = await Promise.all(
       memberIds.map(async (principalId) => {
         const member = await deps.directory.get(principalId).catch(() => null);
-        return { principalId, displayName: member?.displayName?.trim() || principalId };
+        return {
+          principalId,
+          displayName: member?.displayName?.trim() || principalId,
+          ...(manual.has(principalId) ? {} : { viaChannel: true }),
+        };
       }),
     );
     return { ...project, memberIds, scopeId: projectScopeId(project.id), members };
@@ -470,6 +475,53 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return (await principalCanAccessCurrentScope(principalId, d.ownerScopeId)) ? "read" : null;
   }
 
+  async function syncProjectChannelRoster(project: Project, actorId: string): Promise<void> {
+    const link = project.slackChannel;
+    if (!link || !deps.projects) return;
+    const roster = await deps.directory.channelMemberIds(link.channelId).catch(() => undefined);
+    if (roster === undefined) return;
+    const derived = roster.filter((m) => deps.identity.isInternal(deps.identity.classify(m)));
+    const channel = (await deps.directory.listChannels().catch(() => [])).find((c) => c.channelId === link.channelId);
+    const prev = project.channelMemberIds ?? [];
+    const manual = new Set([project.ownerId, ...project.memberIds]);
+    const prevSet = new Set(prev);
+    const nextSet = new Set(derived);
+    await deps.projects.syncChannelMembers(project.id, derived, channel?.name, async ({ project: p, changed }) => {
+      if (!changed) return;
+      for (const m of derived) {
+        if (prevSet.has(m) || manual.has(m)) continue;
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: actorId,
+          action: "project.member.add",
+          resource: m,
+          scopeLabel: projectScopeId(p.id),
+        });
+        await reconcileProjectMember(p, m, true);
+      }
+      for (const m of prev) {
+        if (nextSet.has(m) || manual.has(m)) continue;
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: actorId,
+          action: "project.member.remove",
+          resource: m,
+          scopeLabel: projectScopeId(p.id),
+        });
+        await reconcileProjectMember(p, m, false);
+      }
+    });
+  }
+
+  async function syncLinkedProjectRosters(): Promise<void> {
+    if (!deps.projects) return;
+    for (const project of await deps.projects.listLinked().catch(() => [])) {
+      await syncProjectChannelRoster(project, "directory-sync").catch((err) =>
+        swallow(`projects: channel roster sync for ${project.id}`, err),
+      );
+    }
+  }
+
   async function reconcileProjectMember(project: Project, memberId: string, add: boolean): Promise<void> {
     const sessions = (await deps.sessions.listAll()).filter(
       (session) => session.scopeId === projectScopeId(project.id),
@@ -552,6 +604,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     principalCanReadDeployment,
     principalGitPermission,
     reconcileProjectMember,
+    syncProjectChannelRoster,
+    syncLinkedProjectRosters,
     replayOrphanedRunSignals,
   };
 }

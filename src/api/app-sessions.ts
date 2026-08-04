@@ -37,6 +37,7 @@ export function createSessionMethods(
   | "addProjectMember"
   | "removeProjectMember"
   | "renameProject"
+  | "setProjectSlackChannel"
   | "listScopeResources"
   | "managesScope"
   | "membershipControlsScope"
@@ -65,6 +66,7 @@ export function createSessionMethods(
     projectsForViewer,
     projectView,
     reconcileProjectMember,
+    syncProjectChannelRoster,
     managedProjectMembership,
     approvalRecordIsCurrent,
     principalCanAccessCurrentScope,
@@ -311,6 +313,56 @@ export function createSessionMethods(
         return { ...result, project: await projectView(result.project) };
       }
       return result;
+    },
+
+    async setProjectSlackChannel(id, principalId, channel) {
+      if (!deps.projects) return { status: "not_found" };
+      if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
+      const existing = await deps.projects.get(id);
+      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      let link: { channelId: string; channelName: string } | null = null;
+      if (channel !== null) {
+        const wanted = channel.trim().replace(/^#/, "");
+        if (!wanted) return { status: "invalid_channel" };
+        const reachable = await deps.directory.listChannelsFor(principalId).catch(() => []);
+        const match =
+          reachable.find((c) => c.channelId === wanted) ??
+          reachable.find((c) => c.name.toLowerCase() === wanted.toLowerCase());
+        if (!match) return { status: "invalid_channel" };
+        const channelScope = scopeId("channel", match.channelId);
+        const inUse = (await deps.sessions.listAll()).some((session) => session.scopeId === channelScope);
+        if (inUse) return { status: "channel_in_use" };
+        link = { channelId: match.channelId, channelName: match.name };
+      }
+      const prevDerived = existing.channelMemberIds ?? [];
+      const manual = new Set([existing.ownerId, ...existing.memberIds]);
+      const result = await deps.projects.setSlackChannel(id, principalId, link, async ({ project, changed }) => {
+        if (changed)
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId,
+            action: link ? "project.slack_channel.link" : "project.slack_channel.unlink",
+            resource: link?.channelId ?? existing.slackChannel?.channelId ?? "",
+            scopeLabel: projectScopeId(project.id),
+          });
+        if (!link) {
+          for (const m of prevDerived) {
+            if (manual.has(m)) continue;
+            deps.auditLog.record({
+              at: Date.now(),
+              principalId,
+              action: "project.member.remove",
+              resource: m,
+              scopeLabel: projectScopeId(project.id),
+            });
+            await reconcileProjectMember(project, m, false);
+          }
+        }
+      });
+      if (result.status !== "ok") return result;
+      if (link) await syncProjectChannelRoster(result.project, principalId);
+      const fresh = (await deps.projects.get(id)) ?? result.project;
+      return { ...result, project: await projectView(fresh) };
     },
 
     async renameProject(id, principalId, name) {

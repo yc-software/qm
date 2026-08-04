@@ -892,6 +892,35 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return relay(res, r);
     }
 
+    const projectSlackChannel = path.match(/^\/api\/projects\/([^/]+)\/slack-channel$/);
+    if (method === "PUT" && projectSlackChannel) {
+      const id = decodeURIComponent(projectSlackChannel[1]!);
+      let channel = "";
+      try {
+        const p = JSON.parse((await readBody(req)) || "{}") as { channel?: unknown };
+        if (typeof p.channel === "string") channel = p.channel.trim().slice(0, 200);
+      } catch (e) {
+        if (e instanceof PayloadTooLargeError) throw e;
+        return json(res, 400, { error: "bad_request" });
+      }
+      if (!channel) return json(res, 400, { error: "bad_request", message: "channel required" });
+      const r = await coreFetch(
+        "PUT",
+        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
+        JSON.stringify({ principalId: user, channel }),
+      );
+      return relay(res, r);
+    }
+    if (method === "DELETE" && projectSlackChannel) {
+      const id = decodeURIComponent(projectSlackChannel[1]!);
+      const r = await coreFetch(
+        "DELETE",
+        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
+        JSON.stringify({ principalId: user }),
+      );
+      return relay(res, r);
+    }
+
     const removeProjectMember = path.match(/^\/api\/projects\/([^/]+)\/members\/([^/]+)$/);
     if (method === "DELETE" && removeProjectMember) {
       const id = decodeURIComponent(removeProjectMember[1]!);

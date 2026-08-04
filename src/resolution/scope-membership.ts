@@ -8,6 +8,7 @@ export interface ManagedGroupDirectory {
   members(groupId: string): Promise<string[] | undefined>;
   version(groupId: string): Promise<string | undefined>;
   withVersion<T>(groupId: string, version: string | undefined, fn: () => Promise<T>): Promise<T | undefined>;
+  slackChannel?(groupId: string): Promise<{ channelId: string; channelName: string } | undefined>;
 }
 
 export interface ScopeMembershipDeps {

@@ -95,6 +95,10 @@ export const contextsState = {
   memberBusy: false,
   memberError: "",
   memberSearchedQuery: "",
+  slackEditing: false,
+  slackValue: "",
+  slackBusy: false,
+  slackError: "",
 };
 
 let contextsLoading = false;
@@ -149,6 +153,10 @@ export function resetContextsState(): void {
   contextsState.memberBusy = false;
   contextsState.memberError = "";
   contextsState.memberSearchedQuery = "";
+  contextsState.slackEditing = false;
+  contextsState.slackValue = "";
+  contextsState.slackBusy = false;
+  contextsState.slackError = "";
   cancelMemberSearchTimer();
   contextsNotice = "";
   memberSearchSeq++;
@@ -497,8 +505,8 @@ function detailTpl(c: CoreContext): TemplateResult {
           }
         </div>
         <aside class="context-settings" aria-label=${c.project ? "Project settings" : "Context settings"}>
-          ${c.project ? projectMembersSection(c) : nothing} ${contextModelSection(c.scopeId)}
-          ${ambientPolicySection(c.scopeId)}
+          ${c.project ? projectMembersSection(c) : nothing} ${c.project ? projectSlackSection(c) : nothing}
+          ${contextModelSection(c.scopeId)} ${ambientPolicySection(c.scopeId)}
         </aside>
       </div>
     </div>
@@ -526,6 +534,182 @@ function memberLabel(context: CoreContext, principalId: string): string {
   return context.project?.members.find((member) => member.principalId === principalId)?.displayName || principalId;
 }
 
+function channelNameOptions(): string[] {
+  return [
+    ...new Set(
+      contextsState.list
+        .filter((c) => c.kind === "channel" && c.name)
+        .map((c) => c.name!.replace(/^#/, ""))
+        .sort(),
+    ),
+  ];
+}
+
+async function linkProjectSlackChannel(context: CoreContext): Promise<void> {
+  const channel = contextsState.slackValue.trim().replace(/^#/, "");
+  if (!context.project || contextsState.slackBusy || !channel) return;
+  const resetSeq = contextsResetSeq;
+  contextsState.slackBusy = true;
+  contextsState.slackError = "";
+  drawContexts();
+  try {
+    const response = await api(`/api/projects/${encodeURIComponent(context.project.id)}/slack-channel`, {
+      method: "PUT",
+      body: JSON.stringify({ channel }),
+    });
+    if (resetSeq !== contextsResetSeq) return;
+    const project = projectFromResponse(response);
+    if (!project) throw new Error("Core returned an invalid project");
+    upsertProject(project);
+    contextsState.slackEditing = false;
+    contextsState.slackValue = "";
+  } catch (error) {
+    if (resetSeq !== contextsResetSeq) return;
+    contextsState.slackError = errMessage(error, "Couldn't link that channel — you must be a member of it.");
+  } finally {
+    if (resetSeq === contextsResetSeq) {
+      contextsState.slackBusy = false;
+      drawContexts();
+    }
+  }
+}
+
+async function unlinkProjectSlackChannel(context: CoreContext): Promise<void> {
+  const linked = context.project?.slackChannel;
+  if (!context.project || !linked || contextsState.slackBusy) return;
+  if (!window.confirm(`Unlink #${linked.channelName} from ${context.name || "this project"}?`)) return;
+  const resetSeq = contextsResetSeq;
+  contextsState.slackBusy = true;
+  contextsState.slackError = "";
+  drawContexts();
+  try {
+    const response = await api(`/api/projects/${encodeURIComponent(context.project.id)}/slack-channel`, {
+      method: "DELETE",
+    });
+    if (resetSeq !== contextsResetSeq) return;
+    const project = projectFromResponse(response);
+    if (!project) throw new Error("Core returned an invalid project");
+    upsertProject(project);
+  } catch (error) {
+    if (resetSeq !== contextsResetSeq) return;
+    contextsState.slackError = errMessage(error, "Couldn't unlink the channel.");
+  } finally {
+    if (resetSeq === contextsResetSeq) {
+      contextsState.slackBusy = false;
+      drawContexts();
+    }
+  }
+}
+
+function projectSlackLinked(context: CoreContext): TemplateResult {
+  const linked = context.project!.slackChannel!;
+  return html`
+    <div class="project-member-row">
+      <span class="context-glyph" aria-hidden="true">${icon(Hash, 15)}</span>
+      <span class="project-member-name">${linked.channelName}</span>
+      <button
+        class="project-icon-button danger"
+        type="button"
+        aria-label=${`Unlink #${linked.channelName}`}
+        title=${`Unlink #${linked.channelName}`}
+        ?disabled=${contextsState.slackBusy}
+        @click=${() => void unlinkProjectSlackChannel(context)}
+      >
+        ${icon(X, 15)}
+      </button>
+    </div>
+    <p class="context-hint">
+      The agent posts this project's updates to #${linked.channelName}, and everyone in the channel is in the project.
+    </p>
+  `;
+}
+
+function projectSlackEditor(context: CoreContext): TemplateResult {
+  const options = channelNameOptions();
+  return html`
+    <form
+      class="project-slack-form"
+      @submit=${(e: Event) => {
+        e.preventDefault();
+        void linkProjectSlackChannel(context);
+      }}
+    >
+      <div class="project-member-search-row">
+        ${icon(Hash, 16)}
+        <input
+          type="text"
+          data-focus-key="project-slack-channel"
+          autocomplete="off"
+          maxlength="200"
+          placeholder="channel name"
+          list="project-slack-channels"
+          aria-label="Slack channel to link"
+          .value=${contextsState.slackValue}
+          ?disabled=${contextsState.slackBusy}
+          @input=${(e: Event) => {
+            contextsState.slackValue = (e.target as HTMLInputElement).value;
+          }}
+        />
+      </div>
+      <datalist id="project-slack-channels">${options.map((name) => html`<option value=${name}></option>`)}</datalist>
+      <div class="project-slack-actions">
+        <button class="btn primary" type="submit" ?disabled=${contextsState.slackBusy}>Link</button>
+        <button
+          class="btn"
+          type="button"
+          ?disabled=${contextsState.slackBusy}
+          @click=${() => {
+            contextsState.slackEditing = false;
+            contextsState.slackValue = "";
+            contextsState.slackError = "";
+            drawContexts();
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  `;
+}
+
+function projectSlackIdle(): TemplateResult {
+  return html`
+    <button
+      class="btn project-slack-link"
+      type="button"
+      ?disabled=${contextsState.slackBusy}
+      @click=${() => {
+        contextsState.slackEditing = true;
+        contextsState.slackError = "";
+        drawContexts();
+      }}
+    >
+      ${icon(Hash, 15)}<span>Link a channel</span>
+    </button>
+    <p class="context-hint">
+      Give this project a home channel on Slack — the agent will post updates there, and everyone in the channel joins
+      the project.
+    </p>
+  `;
+}
+
+function projectSlackSection(context: CoreContext): TemplateResult {
+  const project = context.project!;
+  let body: TemplateResult;
+  if (project.slackChannel) body = projectSlackLinked(context);
+  else if (contextsState.slackEditing) body = projectSlackEditor(context);
+  else body = projectSlackIdle();
+  return html`
+    <section class="context-panel project-slack" aria-labelledby="project-slack-title">
+      <div class="context-panel-heading">
+        <h2 class="context-panel-title" id="project-slack-title">Slack channel</h2>
+      </div>
+      ${body}
+      ${contextsState.slackError ? html`<div class="project-member-status error" aria-live="polite">${contextsState.slackError}</div>` : nothing}
+    </section>
+  `;
+}
+
 function projectMembersSection(context: CoreContext): TemplateResult {
   const project = context.project!;
   const pickerOpen = contextsState.memberProjectId === project.id;
@@ -538,13 +722,21 @@ function projectMembersSection(context: CoreContext): TemplateResult {
       <div class="project-member-list">
         ${projectPeople(context).map((principalId) => {
           const label = memberLabel(context, principalId);
+          const viaChannel = Boolean(project.members.find((member) => member.principalId === principalId)?.viaChannel);
           return html`
             <div class="project-member-row">
               <span class="project-member-avatar" aria-hidden="true">${initials(label)}</span>
               <span class="project-member-name">${label}</span>
               ${principalId === project.ownerId ? html`<span class="badge">Owner</span>` : nothing}
               ${
-                isProjectOwner(context) && principalId !== project.ownerId
+                viaChannel && project.slackChannel
+                  ? html`<span class="badge" title="Joined via the linked Slack channel"
+                      >#${project.slackChannel.channelName}</span
+                    >`
+                  : nothing
+              }
+              ${
+                isProjectOwner(context) && principalId !== project.ownerId && !viaChannel
                   ? html`<button
                       class="project-icon-button danger"
                       type="button"
@@ -1015,6 +1207,10 @@ function toggleMemberPicker(context: CoreContext): void {
   contextsState.memberSearching = false;
   contextsState.memberError = "";
   contextsState.memberSearchedQuery = "";
+  contextsState.slackEditing = false;
+  contextsState.slackValue = "";
+  contextsState.slackBusy = false;
+  contextsState.slackError = "";
   drawContexts();
   if (contextsState.memberProjectId)
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#project-member-search")?.focus());
@@ -1029,6 +1225,10 @@ function closeMemberPicker(): void {
   contextsState.memberSearching = false;
   contextsState.memberError = "";
   contextsState.memberSearchedQuery = "";
+  contextsState.slackEditing = false;
+  contextsState.slackValue = "";
+  contextsState.slackBusy = false;
+  contextsState.slackError = "";
   drawContexts();
 }
 
@@ -1040,6 +1240,10 @@ function scheduleMemberSearch(context: CoreContext): void {
   contextsState.memberSearching = false;
   contextsState.memberError = "";
   contextsState.memberSearchedQuery = "";
+  contextsState.slackEditing = false;
+  contextsState.slackValue = "";
+  contextsState.slackBusy = false;
+  contextsState.slackError = "";
   const query = contextsState.memberQuery.trim();
   if (query.length < 2) {
     if (hadVisibleState || contextsState.memberMatches.length) {
@@ -1214,6 +1418,10 @@ function selectContext(scopeId: string | null): void {
   contextsState.memberSearching = false;
   contextsState.memberError = "";
   contextsState.memberSearchedQuery = "";
+  contextsState.slackEditing = false;
+  contextsState.slackValue = "";
+  contextsState.slackBusy = false;
+  contextsState.slackError = "";
   contextsState.selected = scopeId;
   contextsState.resources = null;
   contextsState.resourcesScope = null;

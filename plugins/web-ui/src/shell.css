@@ -6222,6 +6222,24 @@ a.chat-row-open {
   flex-direction: column;
   gap: 10px;
 }
+.project-slack-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.project-slack-actions {
+  display: flex;
+  gap: 8px;
+}
+.project-slack .project-slack-link {
+  align-self: flex-start;
+}
+.context-hint {
+  margin: 8px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
 .context-model-select {
   align-self: flex-start;
   min-width: min(260px, 100%);

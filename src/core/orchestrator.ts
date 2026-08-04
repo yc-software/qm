@@ -150,6 +150,7 @@ import {
   currentTimeBlock,
   deliveryMenu,
   renderConversationRoster,
+  renderProjectHomeChannel,
   renderReachRoster,
   renderStandingObligations,
 } from "./orchestrator/prompt-blocks.ts";
@@ -861,6 +862,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (visibleSkills.length) systemPrompt += `\n\n${skillsIndex(visibleSkills)}`;
       const gatewayBlock = renderGatewayContext(input.surface, input.gatewayContext);
       if (gatewayBlock) systemPrompt += `\n\n${gatewayBlock}`;
+      const homeChannel =
+        conversation.kind === "group" && conversation.channelRef
+          ? await deps.managedGroups
+              ?.slackChannel?.(conversation.channelRef)
+              .catch(swallowAs("orchestrator: project home channel read", undefined))
+          : undefined;
+      if (homeChannel) systemPrompt += `\n\n${renderProjectHomeChannel(homeChannel.channelName)}`;
       systemPrompt += cronBlock;
       const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles);
       if (sharedFilesBlock) systemPrompt += `\n\n${sharedFilesBlock}`;

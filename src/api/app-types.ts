@@ -175,12 +175,12 @@ export type VisibleCron = Cron & { scopeName?: string };
 
 export type ProjectView = Project & {
   scopeId: ScopeId;
-  members: Array<{ principalId: string; displayName: string }>;
+  members: Array<{ principalId: string; displayName: string; viaChannel?: boolean }>;
 };
 
 type ProjectViewMutation =
   | { status: "ok"; project: ProjectView; changed: boolean }
-  | { status: "not_found" | "forbidden" | "invalid_member" | "invalid_name" };
+  | { status: "not_found" | "forbidden" | "invalid_member" | "invalid_name" | "invalid_channel" | "channel_in_use" };
 
 interface DeploymentGitUrl {
   url: string;
@@ -273,6 +273,7 @@ export interface App {
   createProject(principalId: string, name: string): Promise<ProjectView | null>;
   addProjectMember(id: string, principalId: string, memberId: string): Promise<ProjectViewMutation>;
   removeProjectMember(id: string, principalId: string, memberId: string): Promise<ProjectViewMutation>;
+  setProjectSlackChannel(id: string, principalId: string, channel: string | null): Promise<ProjectViewMutation>;
   renameProject(id: string, principalId: string, name: string): Promise<ProjectViewMutation>;
   updateSession(
     sessionId: string,
