@@ -923,6 +923,27 @@ test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, ledger
   }
 });
 
+test("pg run store: waitFor survives a transient poll failure without an unhandled rejection", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!);
+  let unhandled: unknown;
+  const onUnhandledRejection = (err: unknown): void => {
+    unhandled = err;
+  };
+  process.once("unhandledRejection", onUnhandledRejection);
+  try {
+    const r = (await runs.enqueue({ sessionId: "sWaitFor", request: turn("x") })).run;
+    const pending = runs.waitFor(r.id, 800);
+    // Kill the pool mid-poll: the next getRun() tick will reject, exercising the
+    // catch path instead of leaking an unhandled rejection out of setInterval.
+    await new Promise((res) => setTimeout(res, 50));
+    await close();
+    await assert.rejects(pending, /did not finish within 800ms/, "still settles via its own timeout, not a crash");
+  } finally {
+    process.removeListener("unhandledRejection", onUnhandledRejection);
+  }
+  assert.equal(unhandled, undefined, "a transient poll failure must not escape as an unhandled rejection");
+});
+
 test(
   "pg run store: releaseLease (deploy drain) hands the run back as a retry without spending budget; stale token is a no-op",
   { skip },

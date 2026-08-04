@@ -104,6 +104,39 @@ test("writeEnvValue rejects invalid keys and multi-line values", (t) => {
   assert.throws(() => writeEnvValue(file, "GOOD_KEY", "a\nb"));
 });
 
+test("readEnvFile matches Node --env-file for export prefixes and quoted values", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, ".env");
+  writeFileSync(
+    file,
+    [
+      'DQ="wrapped#value"',
+      "SQ='single'",
+      "BT=`tick`",
+      "export EXPORTED=yes",
+      'ESCAPED="line1\\nline2"',
+      'TRAILING="abc" rest is ignored',
+      'UNCLOSED="keeps raw',
+      "SPACED=  padded  ",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    [...readEnvFile(file)],
+    [
+      ["DQ", "wrapped#value"],
+      ["SQ", "single"],
+      ["BT", "tick"],
+      ["EXPORTED", "yes"],
+      ["ESCAPED", "line1\nline2"],
+      ["TRAILING", "abc"],
+      ["UNCLOSED", '"keeps raw'],
+      ["SPACED", "padded"],
+    ],
+  );
+});
+
 async function withFakeStdin<T>(fn: (emit: (bytes: Buffer) => void) => Promise<T>): Promise<T> {
   const { EventEmitter } = await import("node:events");
   const fake = Object.assign(new EventEmitter(), {

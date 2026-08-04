@@ -87,10 +87,10 @@ test("pool token parsing accepts quoted dotenv values", () => {
     handle: "bot1",
     canaryChannel: "C0TEST",
     extra: {
-      SLACK_BOT_TOKEN: '"xoxb-quoted"',
-      SLACK_APP_TOKEN: "'xapp-quoted'",
-      HANDLE: '"bot1"',
-      CANARY_CHANNEL: "'C0TEST'",
+      SLACK_BOT_TOKEN: "xoxb-quoted",
+      SLACK_APP_TOKEN: "xapp-quoted",
+      HANDLE: "bot1",
+      CANARY_CHANNEL: "C0TEST",
     },
   });
   assert.equal(slotValid("pool1", store), true);

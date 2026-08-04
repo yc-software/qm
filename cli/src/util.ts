@@ -213,16 +213,37 @@ export function isInvalidSecret(name: string, value: string | undefined): boolea
   );
 }
 
+// One line of a dotenv file, following Node's --env-file semantics for the
+// `export ` prefix and quoted values ('', "", ``: the quotes are stripped and
+// \n expands to a newline inside double quotes). Two deliberate divergences
+// from Node, both pinned by tests: a `#` inside an unquoted value is part of
+// the value (tokens and URL fragments), and a quoted value ends on its own
+// line (writeEnvValue never emits multi-line values).
+function parseEnvLine(raw: string): [key: string, value: string] | undefined {
+  let line = raw.trim();
+  if (!line || line.startsWith("#")) return undefined;
+  if (line.startsWith("export ")) line = line.slice("export ".length).trimStart();
+  const eq = line.indexOf("=");
+  if (eq <= 0) return undefined;
+  const key = line.slice(0, eq).trim();
+  let value = line.slice(eq + 1).trim();
+  const quote = value[0];
+  if (quote === '"' || quote === "'" || quote === "`") {
+    const end = value.indexOf(quote, 1);
+    if (end > 0) {
+      value = value.slice(1, end);
+      if (quote === '"') value = value.replaceAll("\\n", "\n");
+    }
+  }
+  return [key, value];
+}
+
 export function readEnvFile(path: string): Map<string, string> {
   const out = new Map<string, string>();
   if (!existsSync(path)) return out;
   for (const raw of readFileSync(path, "utf8").split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq <= 0) continue;
-    const key = line.slice(0, eq).trim();
-    if (isEnvVarName(key)) out.set(key, line.slice(eq + 1));
+    const entry = parseEnvLine(raw);
+    if (entry && isEnvVarName(entry[0])) out.set(entry[0], entry[1]);
   }
   return out;
 }

@@ -6,6 +6,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
 import { isTerminal } from "./run-store.ts";
+import { errMessage } from "../util/errors.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface PostgresRuntime {
@@ -75,8 +76,35 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         PRIMARY KEY(run_id, attempt, call_index)
       )`,
     `ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1`,
-    `ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey`,
-    `ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index)`,
+    // One-time migration to the (run_id, attempt, call_index) key. The whole
+    // DO block is a single transaction, so a crash mid-migration can't leave
+    // the table without a primary key the way the old unconditional
+    // DROP CONSTRAINT + ADD PRIMARY KEY pair could (each ALTER autocommitted
+    // separately). It runs only while the PK is still the legacy shape, keeps
+    // the newest duplicate row if a keyless window let any in, and is a no-op
+    // on every later boot.
+    `DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM pg_constraint c
+          WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'
+            AND (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                 FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+                 JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+                ) <> ARRAY['run_id','attempt','call_index']
+        ) OR NOT EXISTS (
+          SELECT 1 FROM pg_constraint c
+          WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'
+        ) THEN
+          DELETE FROM tool_calls t USING (
+            SELECT ctid, row_number() OVER (
+              PARTITION BY run_id, attempt, call_index ORDER BY created_at DESC, ctid DESC
+            ) AS rn FROM tool_calls
+          ) dup WHERE t.ctid = dup.ctid AND dup.rn > 1;
+          ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey;
+          ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index);
+        END IF;
+      END $$`,
   ]);
 
   async function getRun(id: string): Promise<Run | null> {
@@ -305,6 +333,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           if (done) return;
           done = true;
           clearInterval(poll);
+          clearTimeout(timer);
           events.off(runId, onSettle);
           resolve(r);
         };
@@ -313,9 +342,13 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         }
         events.once(runId, onSettle);
         const poll = setInterval(() => {
-          void getRun(runId).then((r) => {
-            if (r && isTerminal(r.status)) finish(r);
-          });
+          void getRun(runId)
+            .then((r) => {
+              if (r && isTerminal(r.status)) finish(r);
+            })
+            .catch((err: unknown) => {
+              console.error(`[postgres-run-store] waitFor poll for run ${runId} failed transiently:`, errMessage(err));
+            });
         }, 250);
         poll.unref?.();
         const timer = setTimeout(() => {
