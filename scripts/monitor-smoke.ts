@@ -8,7 +8,7 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
-import { createMonitorBroker } from "../src/monitors/monitor-broker.ts";
+import { createMonitorBroker, readBackgroundOutputTail } from "../src/monitors/monitor-broker.ts";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
@@ -64,9 +64,22 @@ const registry = createMemoryProcessRegistry();
 const monitors = createMonitorStore();
 const deliveries = createDeliveryStore();
 const broker = createBackgroundBroker({ sandbox: sb, registry, scopeId: scope, pollMs: 4000, ttlMaxMs: 60 * 60_000 });
+let h: Awaited<ReturnType<typeof sb.provision>> | undefined;
 const monitorBroker = createMonitorBroker({
   store: monitors,
   registry,
+  readOutputTail: async (processId, maxBytes) => {
+    if (!h) return { outputTail: "" };
+    const handle = h;
+    return readBackgroundOutputTail(maxBytes, async (cursor, readMaxBytes) => {
+      const read = await broker.poll(handle, processId, { sinceCursor: cursor, maxBytes: readMaxBytes, waitMs: 0 });
+      return {
+        chunks: read.chunks,
+        cursor: read.cursor,
+        ...(read.status.state === "exited" ? { exitCode: read.status.code } : {}),
+      };
+    });
+  },
   scopeId: scope,
   owner,
   ownerScopeId: scope,
@@ -97,7 +110,6 @@ const poller = createMonitorPoller({
   },
 });
 
-let h: Awaited<ReturnType<typeof sb.provision>> | undefined;
 try {
   console.log(`[${ts()}] provisioning sprite for`, scope, "…");
   h = await sb.provision([{ scopeId: scope, mountPath: "", mode: "rw" }]);
@@ -117,6 +129,7 @@ try {
     instructions: "Briefly tell the user how the diffusion-model download/generation is going.",
     sinceCursor: s.cursor,
   });
+  if ("completed" in w) throw new Error(`job already ${w.registryStatus} before watch could be armed`);
   ok(!w.reattached, `watch armed (monitor ${w.monitorId}, expires ${new Date(w.expiresAt).toISOString()})`);
 
   console.log(`[${ts()}] polling every 10s until the exit wake (cap 35min) …`);

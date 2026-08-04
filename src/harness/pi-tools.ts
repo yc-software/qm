@@ -1209,6 +1209,20 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
                 ...(params.pattern !== undefined ? { pattern: params.pattern } : {}),
                 ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
               });
+              if ("completed" in r) {
+                const status = `${r.registryStatus}${r.exitCode !== undefined ? ` (code ${r.exitCode})` : ""}`;
+                const result = r.outputTail
+                  ? `job already ${status} — no watch armed; here is the tail of its output:\n${r.outputTail}`
+                  : `job already ${status} — no watch armed; it produced no output.`;
+                return recordResult(
+                  callId,
+                  { tool: "background", ...r },
+                  {
+                    content: [{ type: "text" as const, text: result }],
+                    details: r,
+                  },
+                );
+              }
               const trigger = params.pattern ? `new output matching /${params.pattern}/` : "new output";
               return recordResult(
                 callId,

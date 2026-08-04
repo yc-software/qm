@@ -25,7 +25,7 @@ import type { GapPhase, LeaseAttempt, SessionStore } from "../sessions/session-s
 import { isOverheardEntry } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
-import { createMonitorBroker } from "../monitors/monitor-broker.ts";
+import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
 import { envKey } from "../credentials/connector-token.ts";
 import { renderKeychainManifest, type MaterializedEnvCred } from "../credentials/keychain.ts";
@@ -1569,11 +1569,30 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               })
             : undefined;
 
+        const readOutputTail = backgroundBroker
+          ? async (processId: string, maxBytes: number) => {
+              const handle = await provision();
+              return readBackgroundOutputTail(maxBytes, async (cursor, readMaxBytes) => {
+                const read = await backgroundBroker.poll(handle, processId, {
+                  sinceCursor: cursor,
+                  maxBytes: readMaxBytes,
+                  waitMs: 0,
+                });
+                return {
+                  chunks: read.chunks,
+                  cursor: read.cursor,
+                  ...(read.status.state === "exited" ? { exitCode: read.status.code } : {}),
+                };
+              });
+            }
+          : undefined;
+
         const monitorBroker =
           deps.monitors && deps.processes && supportsProcessSessions(deps.sandbox)
             ? createMonitorBroker({
                 store: deps.monitors,
                 registry: deps.processes,
+                readOutputTail: readOutputTail ?? (async () => ({ outputTail: "" })),
                 scopeId: memoryScopeId,
                 owner: actor.id,
                 ownerScopeId: scopeId,

@@ -1302,6 +1302,39 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   assert.equal(bg.length, 10);
 });
 
+test("background watch reports an already exited job as a successful tail result", async () => {
+  const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async backgroundWatch(processId) {
+        return {
+          processId,
+          completed: true,
+          registryStatus: "exited",
+          exitCode: 0,
+          outputTail: "final line\n",
+          cursor: 42,
+        };
+      },
+    },
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const background = createPiTools(ref).find((t) => t.name === "background");
+
+  const watched = textOf(await call(background, { action: "watch", process_id: "bg-1" }));
+
+  assert.match(watched, /job already exited \(code 0\) — no watch armed; here is the tail of its output:/);
+  assert.match(watched, /final line/);
+  const result = emitted.find((e) => e.type === "tool_result")!.payload;
+  assert.equal(result.completed, true);
+  assert.equal(result.error, undefined);
+});
+
 test("background per-action validation returns a crisp [error] instead of throwing", async () => {
   const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
   const background = createPiTools({ current: fakeToolContext() }).find((t) => t.name === "background");
