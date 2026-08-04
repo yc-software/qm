@@ -446,3 +446,27 @@ test("parseCommandPolicy rejects regexes with catastrophic repetition", () => {
     assert.ok("error" in parsed, pattern);
   }
 });
+test("a heredoc fed to a non-interpreter command (cat, gh) is data, not gated", () => {
+  const policy = defaultOrgPolicy();
+  const prBody = [
+    `gh pr create --title x --body "$(cat <<'EOF'`,
+    "Extract SQL payloads safely; previously DROP TABLE users in payloads broke parsing.",
+    "EOF",
+    ')"',
+  ].join("\n");
+  assert.equal(evaluateCommand(prBody, policy).decision, "allow");
+  const piped = ["cat <<'EOF' | gh pr create --body-file -", "fixes DROP TABLE handling", "EOF"].join("\n");
+  assert.equal(evaluateCommand(piped, policy).decision, "allow");
+});
+
+test("a heredoc fed to a SQL client or interpreter stays gated", () => {
+  const policy = defaultOrgPolicy();
+  const sql = ["psql mydb <<EOF", "drop table users;", "EOF"].join("\n");
+  assert.equal(evaluateCommand(sql, policy).decision, "require_approval");
+});
+
+test("an unquoted heredoc's command substitutions still execute and stay gated", () => {
+  const policy = defaultOrgPolicy();
+  const sneaky = ["cat <<EOF | gh pr create --body-file -", "hello $(rm -rf /tmp/x)", "EOF"].join("\n");
+  assert.equal(evaluateCommand(sneaky, policy).decision, "require_approval");
+});
