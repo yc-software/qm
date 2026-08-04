@@ -34,7 +34,7 @@ import type {
 } from "../connectors/background-exec-broker.ts";
 import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } from "../monitors/monitor-broker.ts";
 import type { DeployService, DeployFile } from "../deploy/deploy-service.ts";
-import { publicUrlOf } from "../deploy/deploy-store.ts";
+import { publicUrlOf, type Deployment } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -98,6 +98,11 @@ interface PublishResult {
   url: string;
   audience?: PublishAudienceDescriptor;
   dataDir?: string;
+}
+
+function deploymentEntrypoint(d: Deployment | null): string | undefined {
+  if (!d) return undefined;
+  return d.versions.find((v) => v.version === d.currentVersion)?.entrypoint || undefined;
 }
 
 export class NeedsApproval extends Error {
@@ -673,17 +678,28 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!writableScopeId) throw new Error("publish needs a writable scope to own the app");
       const owner: ScopeId = scopeId("personal", deps.createdBy);
       const createdInScope: ScopeId = writableScopeId;
-      if (input.entrypoint && input.dir && hasParentPathSegment(input.dir)) {
+      let effectiveEntrypoint = input.entrypoint;
+      if (effectiveEntrypoint === undefined && input.rollbackTo === undefined) {
+        const shouldInheritForRename = input.renameFrom !== undefined && input.dir !== undefined;
+        const priorName =
+          input.renameFrom === undefined || shouldInheritForRename ? (input.renameFrom ?? input.name) : undefined;
+        const prior = priorName ? await deps.deploy.getDeployment(priorName) : null;
+        effectiveEntrypoint = deploymentEntrypoint(prior);
+        if (!effectiveEntrypoint && input.renameFrom === undefined) {
+          throw new Error('publish requires an entrypoint, e.g. "node server.js"');
+        }
+      }
+      if (effectiveEntrypoint && input.dir && hasParentPathSegment(input.dir)) {
         throw new Error("publish directory must stay inside the workspace — no .. path segments");
       }
       const handle = await deps.provision();
-      const files: DeployFile[] = input.entrypoint
+      const files: DeployFile[] = effectiveEntrypoint
         ? filesUnder(await collectTree(deps.sandbox, handle, input.dir), input.dir)
         : [];
-      if (input.entrypoint && files.length === 0) {
+      if (effectiveEntrypoint && files.length === 0) {
         throw new Error(`publish: no files found under ${input.dir ?? "."} - nothing to deploy`);
       }
-      const { authEnv } = input.entrypoint
+      const { authEnv } = effectiveEntrypoint
         ? await captureResidentAuth(deps.sandbox, handle, {
             split: true,
             ...(deps.actingSlackUserId ? { actingSlackUserId: deps.actingSlackUserId } : {}),
@@ -706,7 +722,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           : { kind: "owner", grantees: [] };
       const optOut = Array.isArray(input.share) && input.share.length === 0;
       const desiredDefault = optOut ? [] : aud.grantees;
-      const doReconcile = input.entrypoint !== undefined && (optOut || !aud.incomplete);
+      const doReconcile = effectiveEntrypoint !== undefined && (optOut || !aud.incomplete);
       const snapshotAt = Date.now();
       const resolvedShare = input.share?.map((s) => {
         const scope = s.scope === "org" ? orgScopeId : s.scope;
@@ -746,12 +762,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           d.createdInScope,
         );
         const audience: PublishAudienceDescriptor =
-          aud.incomplete && input.entrypoint !== undefined && input.share === undefined && aud.reason
+          aud.incomplete && effectiveEntrypoint !== undefined && input.share === undefined && aud.reason
             ? { ...base, note: aud.reason }
             : base;
         const urlBase = deps.publicWebUrl?.replace(/\/$/, "") ?? "";
         const url = publicUrlOf(d.endpoint) ?? `${urlBase}/d/${ref}/`;
-        const dataDir = input.entrypoint ? deps.deploy.providerProfile?.dataDir : undefined;
+        const dataDir = effectiveEntrypoint ? deps.deploy.providerProfile?.dataDir : undefined;
         return {
           id: d.id,
           ...(d.name ? { name: d.name } : {}),
@@ -1046,7 +1062,10 @@ async function captureResidentAuth(
     });
     return { homeFiles: entries.map((e) => ({ path: e.path, data: e.data })), authEnv: {} };
   } catch (e) {
-    if (e instanceof CapabilityUnsupportedError) return { homeFiles: [], authEnv: {} };
+    if (e instanceof CapabilityUnsupportedError) {
+      console.warn(`[publish] ${e.message}; skipping resident auth backup`);
+      return { homeFiles: [], authEnv: {} };
+    }
     throw e;
   }
 }
@@ -1068,6 +1087,7 @@ async function collectTree(
       return entries.filter((e) => !carriesGitMetadata(e.path)).map((e) => ({ path: e.path, data: e.data }));
     } catch (e) {
       if (!(e instanceof CapabilityUnsupportedError)) throw e;
+      console.warn(`[publish] ${e.message}; falling back to per-file reads`);
     }
   }
   const out: Array<{ path: string; data: Uint8Array }> = [];
