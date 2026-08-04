@@ -59,11 +59,14 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   Slack Mac app, and don't ask permission first — do it on your own; don't wait to be
   asked. Skip it for trivial refactors, docs, config, or pure-logic changes already
   covered by tests.
-- **Screenshot every front-end change in the PR.** Anything an operator or user sees
-  rendered — admin/web/portal UI, Slack surfaces, emails — ships with a screenshot of the
-  after state (before/after when it's a change to something that already existed) in the PR
-  description, so a reviewer sees the result without booting it. Can't reach the surface
-  live? Render it against realistic data and say so.
+- **Demo every front-end change in the PR.** Anything an operator or user sees
+  rendered — admin/web/portal UI, Slack surfaces, emails — ships with a way for a
+  reviewer to see the result without booting it. Prefer a link to a live demo app
+  (e.g. the built UI served against a small mock API, published internally) so the
+  reviewer can click around the real thing; note in the PR what's mocked. Fall back
+  to screenshots only when a live demo isn't practical (e.g. Slack surfaces, emails),
+  and then show the after state (before/after for changes to something that existed),
+  rendered against realistic data.
 
 ## Private forks
 

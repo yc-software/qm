@@ -4,6 +4,7 @@ import { api, ApiError } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
 import { appState, replacePanePreservingFocus } from "./shell";
+import { scopedSession, scopedViewTopbar } from "./session-scope";
 
 interface RevisionRow {
   revision: string;
@@ -64,9 +65,10 @@ function drawMemory(loading = false): void {
     (fact) => !search || fact.text.toLowerCase().includes(search.toLowerCase()),
   );
   const host = document.createElement("div");
-  host.className = "pane";
+  host.className = scopedSession.active ? "pane scoped-view" : "pane";
   render(
     html`
+      ${scopedViewTopbar("memory", () => drawMemory())}
       <div class="pane-head">
         <div>
           <h1 class="pane-title">Memory</h1>

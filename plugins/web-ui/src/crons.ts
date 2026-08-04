@@ -4,7 +4,8 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
 import { listBackLink, listPageTpl } from "./list-page";
-import { ensureContexts, scopeChip } from "./contexts";
+import { contextsState, ensureContexts, scopeChip } from "./contexts";
+import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { mainConversation } from "./conversations";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
@@ -185,6 +186,11 @@ function cronStatusText(c: CronView): string {
 
 export async function renderCronsPage(): Promise<void> {
   if (appState.currentView !== "crons") return;
+  if (scopedSession.active) cronsScope = scopedSession.active.scopeId;
+  else if (contextsState.selected) {
+    cronsScope = contextsState.selected;
+    contextsState.selected = null;
+  }
   await ensureContexts();
   drawCronsPage();
   const loaded = await refreshCrons({ showLoading: cronList.length === 0 && visibleCronList.length === 0 });
@@ -252,14 +258,19 @@ function drawCronsPage(): void {
   if (cronsNotice) empty = cronsNotice;
   else if (cronsLoading && cronList.length === 0 && visibleCronList.length === 0) empty = "Loading crons…";
   else if (cronsScope) empty = "No crons in this context.";
+  const scoped = Boolean(scopedSession.active);
+  cronsPageHost.classList.toggle("scoped-view", scoped);
   render(
-    listPageTpl({
+    html`${scopedViewTopbar("crons", drawCronsPage)}
+    ${listPageTpl({
       title: "Crons",
       scope: cronsScope,
-      onScope: (s) => {
-        cronsScope = s;
-        drawCronsPage();
-      },
+      onScope: scoped
+        ? undefined
+        : (s) => {
+            cronsScope = s;
+            drawCronsPage();
+          },
       onRefresh: () => {
         cronRuns.clear();
         void renderCronsPage();
@@ -275,7 +286,7 @@ function drawCronsPage(): void {
       },
       rows,
       empty,
-    }),
+    })}`,
     cronsPageHost,
   );
 }

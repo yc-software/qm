@@ -6,6 +6,7 @@ import { browserRenderableImage, fieldSelect, formatBytes, icon, relTime } from 
 import { contextsState, ensureContexts, personalScopeId, scopeChip, scopeFilterControl } from "./contexts";
 import { appState } from "./shell";
 import { fileListNeedsAllPages } from "./file-list";
+import { scopedSession, scopedViewTopbar } from "./session-scope";
 
 interface FileItem {
   id: string;
@@ -93,20 +94,27 @@ function drawFiles(loading = false): void {
   else if (filesUploading) dropLabel = "Uploading…";
   const status = filesNotice || (loading && !fileRows.length ? "Loading files…" : "");
   const uploadTarget = filesScope ?? personalScopeId();
+  const scoped = Boolean(scopedSession.active);
+  filesHost.classList.toggle("scoped-view", scoped);
   render(
     html`
+      ${scopedViewTopbar("files", drawFiles)}
       <div class="list-page-head">
         <div>
           <h1 class="pane-title">Files</h1>
           <div class="pane-subtitle">Files created, uploaded, or shared with you</div>
         </div>
         <div class="list-page-actions">
-          ${scopeFilterControl(filesScope, (s) => {
-            filesScope = s;
-            fileRows = [];
-            filesNextCursor = null;
-            void loadFiles(appState.viewRenderSeq);
-          })}<button class="btn primary" type="button" ?disabled=${filesUploading} @click=${pickFiles}>
+          ${
+            scoped
+              ? nothing
+              : scopeFilterControl(filesScope, (s) => {
+                  filesScope = s;
+                  fileRows = [];
+                  filesNextCursor = null;
+                  void loadFiles(appState.viewRenderSeq);
+                })
+          }<button class="btn primary" type="button" ?disabled=${filesUploading} @click=${pickFiles}>
             ${icon(Upload, 15)}<span>Upload</span>
           </button>
         </div>
@@ -386,7 +394,14 @@ async function loadFiles(seq: number): Promise<void> {
 
 export async function renderFiles(): Promise<void> {
   if (appState.currentView !== "files") return;
-  if (contextsState.selected) {
+  if (scopedSession.active) {
+    if (filesScope !== scopedSession.active.scopeId) {
+      filesScope = scopedSession.active.scopeId;
+      fileRows = [];
+      filesNextCursor = null;
+    }
+    contextsState.selected = null;
+  } else if (contextsState.selected) {
     filesScope = contextsState.selected;
     fileRows = [];
     filesNextCursor = null;

@@ -17,7 +17,6 @@ import {
   FileText,
   Files,
   GitFork,
-  Hash,
   Maximize2,
   Paperclip,
   Pencil,
@@ -27,7 +26,6 @@ import {
   Rocket,
   ScrollText,
   Terminal,
-  Users,
   Wrench,
   type IconNode,
 } from "lucide";
@@ -52,7 +50,6 @@ import {
   makeOpenerStreamFn,
   makeRunResumeStreamFn,
   runApprovalTurn,
-  sharedContextLabel,
   TAIL_TURNS,
   type ApprovalDecision,
   type AssistantWork,
@@ -84,7 +81,9 @@ import {
   harnessSupportsFastMode,
 } from "./model-options";
 import { browserRenderableImage, formatBytes, icon, relTime } from "./ui";
-import { adminSessionLogUrl, appState, can, renderSidebarTop, syncUrlFromState } from "./shell";
+import { adminSessionLogUrl, appState, can, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
+import { contextsState, scopeTitle } from "./contexts";
+import { openProjectPage, scopeCronCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
   addPendingSession,
   dropPendingSession,
@@ -1024,7 +1023,7 @@ export function createChatSurface(
                 </div>`
               : nothing
           }
-          ${contextBanner()}
+          ${glanceTier ? nothing : sessionTopbar(agent)}
           ${
             glanceTier
               ? paneGlance(agent, messages, glanceTier)
@@ -1086,16 +1085,40 @@ export function createChatSurface(
     return null;
   }
 
-  function contextBanner(): TemplateResult | typeof nothing {
-    const label = sharedContextLabel(chatState.scopeId, chatState.contextName);
-    if (!label) return nothing;
-    const glyph = chatState.scopeId?.startsWith("group:") ? Users : Hash;
-    return html`<div
-      class="context-banner"
-      title="This chat runs in the ${label} context — the agent works with that context's files and memory, separate from your personal context."
-    >
-      ${icon(glyph, 13)}<span><strong>${label}</strong> context</span>
-    </div>`;
+  function pillState(needsYou: boolean, working: boolean): "needs-you" | "working" | null {
+    if (needsYou) return "needs-you";
+    return working ? "working" : null;
+  }
+
+  function sessionTopbar(agent: Agent): TemplateResult {
+    const scope = chatState.scopeId;
+    const session = sessionsState.list.find((s) =>
+      chatState.sessionId
+        ? s.id === chatState.sessionId
+        : Boolean(chatState.threadRef) && s.threadRef === chatState.threadRef,
+    );
+    const title = session?.title?.trim() || "New chat";
+    const crumb = scope && !scope.startsWith("personal:") ? scopeTitle(scope, chatState.contextName) : null;
+    const needsYou = activePendingApprovals().length > 0;
+    const working = !needsYou && (agent.state.isStreaming || chatState.resolvingApprovals.size > 0);
+    return sessionTopbarTpl({
+      crumb,
+      title,
+      onCrumb: crumb && scope ? () => openProjectPage(scope) : null,
+      pill: pillState(needsYou, working),
+      cronCount: scope ? scopeCronCount(scope, () => drawActiveChat()) : null,
+      onTool: (tool) => {
+        setScopedSession({
+          scopeId: scope ?? "",
+          sessionId: chatState.sessionId,
+          threadRef: chatState.threadRef,
+          title,
+          crumb,
+        });
+        if (scope && tool !== "memory") contextsState.selected = scope;
+        switchView(tool);
+      },
+    });
   }
 
   function chatHeader(title: string | TemplateResult, detail: string, readOnly: boolean): TemplateResult {

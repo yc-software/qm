@@ -58,6 +58,7 @@ import {
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderFiles } from "./files";
+import { setScopedSession } from "./session-scope";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
@@ -564,6 +565,7 @@ function onNavClick(e: Event): void {
   if (!isView(view)) return;
   if (e instanceof MouseEvent && !isPlainLeftClick(e)) return;
   e.preventDefault();
+  setScopedSession(null);
   switchView(view);
   closeSidebarOnNarrowView();
 }
