@@ -50,15 +50,13 @@ export interface SlotTokens {
   extra: Record<string, string>;
 }
 
-const unquote = (value: string): string => value.replace(/^(['"])(.*)\1$/, "$2");
-
 export function slotTokens(slot: string, store = poolStore()): SlotTokens {
   const env = readEnvFile(join(store, `${slot}.env`));
   return {
-    botToken: unquote(env.SLACK_BOT_TOKEN ?? ""),
-    appToken: unquote(env.SLACK_APP_TOKEN ?? ""),
-    handle: unquote(env.HANDLE ?? ""),
-    canaryChannel: unquote(env.CANARY_CHANNEL ?? ""),
+    botToken: env.SLACK_BOT_TOKEN ?? "",
+    appToken: env.SLACK_APP_TOKEN ?? "",
+    handle: env.HANDLE ?? "",
+    canaryChannel: env.CANARY_CHANNEL ?? "",
     extra: env,
   };
 }

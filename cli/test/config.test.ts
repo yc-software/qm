@@ -62,6 +62,12 @@ test("required fields: orgId, target, services (must include core), valid servic
     const { config } = loadConfigAt(path);
     assert.deepEqual(config.services, ["core", "web-ui", "admin", "portal"]);
   });
+  withConfig({ unknownField: "bad" }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /unknown top-level field "unknownField"/),
+  );
+  withConfig({ org_id: "acme" }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /unknown top-level field "org_id"/),
+  );
 });
 
 test("apiUrl must be an http(s) origin URL; the trailing slash is stripped", () => {
@@ -80,6 +86,25 @@ test("apiUrl must be an http(s) origin URL; the trailing slash is stripped", () 
   ]) {
     withConfig({ apiUrl }, ({ path }) =>
       assert.throws(() => loadConfigAt(path), /"apiUrl" must be a non-empty http\(s\) origin URL/),
+    );
+  }
+});
+
+test("publicUrl must be an http(s) origin URL on every target", () => {
+  withConfig({ publicUrl: "https://acme.example/" }, ({ path }) =>
+    assert.equal(loadConfigAt(path).config.publicUrl, "https://acme.example"),
+  );
+  for (const publicUrl of [
+    "",
+    "not a url",
+    "ftp://acme.example",
+    "https://acme.example/subpath",
+    "https://acme.example?x=1",
+    "https://user:pw@acme.example",
+    "https://acme.example.",
+  ]) {
+    withConfig({ publicUrl }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /"publicUrl" must be a non-empty http\(s\) origin URL/),
     );
   }
 });

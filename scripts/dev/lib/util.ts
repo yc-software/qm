@@ -29,6 +29,26 @@ export function fileMtimeEpoch(path: string): number {
   }
 }
 
+// Mirrors parseEnvLine in cli/src/util.ts — keep the two in agreement.
+function parseEnvLine(raw: string): [key: string, value: string] | undefined {
+  let line = raw.trim();
+  if (!line || line.startsWith("#")) return undefined;
+  if (line.startsWith("export ")) line = line.slice("export ".length).trimStart();
+  const eq = line.indexOf("=");
+  if (eq <= 0) return undefined;
+  const key = line.slice(0, eq).trim();
+  let value = line.slice(eq + 1).trim();
+  const quote = value[0];
+  if (quote === '"' || quote === "'" || quote === "`") {
+    const end = value.indexOf(quote, 1);
+    if (end > 0) {
+      value = value.slice(1, end);
+      if (quote === '"') value = value.replaceAll("\\n", "\n");
+    }
+  }
+  return [key, value];
+}
+
 export function readEnvFile(path: string): Record<string, string> {
   let raw: string;
   try {
@@ -38,10 +58,8 @@ export function readEnvFile(path: string): Record<string, string> {
   }
   const out: Record<string, string> = {};
   for (const line of raw.split("\n")) {
-    const eq = line.indexOf("=");
-    if (eq <= 0) continue;
-    const key = line.slice(0, eq);
-    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) out[key] = line.slice(eq + 1);
+    const entry = parseEnvLine(line);
+    if (entry && /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry[0])) out[entry[0]] = entry[1];
   }
   return out;
 }

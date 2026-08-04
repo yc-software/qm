@@ -478,9 +478,41 @@ export function readConfigOrgId(path: string): string | undefined {
   }
 }
 
+const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
+  "contract",
+  "orgId",
+  "publicUrl",
+  "apiUrl",
+  "target",
+  "model",
+  "modelProvider",
+  "basePort",
+  "services",
+  "plugins",
+  "skills",
+  "env",
+  "secretEnv",
+  "securityScreen",
+  "vms",
+  "imageOverrides",
+  "sandbox",
+  "appPrefix",
+  "region",
+  "flyOrg",
+  "imageFrom",
+  "deployAppPrefix",
+  "aws",
+]);
+
 function validate(raw: unknown, path: string): QmConfig {
   if (!isPlainObject(raw)) throw new CliError(`${path}: expected a JSON object`);
   const o = raw;
+
+  for (const key of Object.keys(o)) {
+    if (!VALID_TOP_LEVEL_KEYS.has(key)) {
+      throw new CliError(`${path}: unknown top-level field ${JSON.stringify(key)}`);
+    }
+  }
 
   const contract = o["contract"];
   if (contract !== CONTRACT_VERSION) {
@@ -499,13 +531,18 @@ function validate(raw: unknown, path: string): QmConfig {
 
   const publicUrl = o["publicUrl"];
   if (typeof publicUrl !== "string" || !publicUrl.trim()) {
-    throw new CliError(`${path}: "publicUrl" must be a non-empty http(s) URL`);
+    throw new CliError(`${path}: "publicUrl" must be a non-empty http(s) origin URL`);
   }
   try {
     const parsed = new URL(publicUrl);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("protocol");
+    if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password)
+      throw new Error("origin");
+    if (parsed.hostname.endsWith(".")) throw new Error("trailing dot");
   } catch {
-    throw new CliError(`${path}: "publicUrl" must be a non-empty http(s) URL`);
+    throw new CliError(
+      `${path}: "publicUrl" must be a non-empty http(s) origin URL without credentials, a path, query, fragment, or trailing hostname dot`,
+    );
   }
 
   const apiUrl = o["apiUrl"];
@@ -796,13 +833,22 @@ function validateBrokerTrust(config: QmConfig, path: string, secrets?: ReadonlyM
   }
 }
 
+function isSlackIssuer(issuer: string): boolean {
+  try {
+    const host = new URL(issuer).hostname;
+    return host === "slack.com" || host.endsWith(".slack.com");
+  } catch {
+    return false;
+  }
+}
+
 export function validatePortalTrust(config: QmConfig, path = "config", secrets?: ReadonlyMap<string, string>): void {
   if (!config.services.includes("portal")) return;
   if (config.services.includes("auth")) return validateBrokerTrust(config, path, secrets);
   const env = config.env.portal ?? {};
   const issuer = env.OIDC_ISSUER?.trim() || "https://slack.com";
   const jwksUri = env.OIDC_JWKS_URI?.trim();
-  if (issuer !== "https://slack.com" && isMissingOrPlaceholder(jwksUri)) {
+  if (!isSlackIssuer(issuer) && isMissingOrPlaceholder(jwksUri)) {
     throw new CliError(`${path}: portal requires env.portal.OIDC_JWKS_URI when using a non-Slack OIDC issuer`);
   }
   if (jwksUri !== undefined) {
