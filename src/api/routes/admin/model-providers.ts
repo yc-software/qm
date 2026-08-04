@@ -1,24 +1,34 @@
-import { isModelProvider, type ModelProvider } from "../../../model/pi-models.ts";
+import { isModelProvider, providerBaseUrl, type ModelProvider } from "../../../model/pi-models.ts";
 import { selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
-const VALIDATION_REQUESTS: Record<ModelProvider, { url: string; headers: (apiKey: string) => Record<string, string> }> =
-  {
-    anthropic: {
-      url: "https://api.anthropic.com/v1/models",
-      headers: (apiKey) => ({ "x-api-key": apiKey, "anthropic-version": "2023-06-01" }),
-    },
-    openai: {
-      url: "https://api.openai.com/v1/models",
-      headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
-    },
-    openrouter: {
-      url: "https://openrouter.ai/api/v1/key",
-      headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
-    },
-  };
+const VALIDATION_REQUESTS: Record<
+  ModelProvider,
+  { baseUrl: string; path: string; headers: (apiKey: string) => Record<string, string> }
+> = {
+  anthropic: {
+    baseUrl: "https://api.anthropic.com",
+    path: "/v1/models",
+    headers: (apiKey) => ({ "x-api-key": apiKey, "anthropic-version": "2023-06-01" }),
+  },
+  openai: {
+    baseUrl: "https://api.openai.com/v1",
+    path: "/models",
+    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
+  },
+  openrouter: {
+    baseUrl: "https://openrouter.ai/api/v1",
+    path: "/key",
+    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
+  },
+};
+
+function validationUrl(provider: ModelProvider): string {
+  const request = VALIDATION_REQUESTS[provider];
+  return `${providerBaseUrl(provider) ?? request.baseUrl}${request.path}`;
+}
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -26,10 +36,9 @@ async function actor(ctx: ApiCtx) {
 }
 
 async function validate(ctx: ApiCtx, provider: ModelProvider, apiKey: string): Promise<boolean> {
-  const request = VALIDATION_REQUESTS[provider];
   try {
-    const response = await (ctx.deps.modelCredentialFetch ?? fetch)(request.url, {
-      headers: request.headers(apiKey),
+    const response = await (ctx.deps.modelCredentialFetch ?? fetch)(validationUrl(provider), {
+      headers: VALIDATION_REQUESTS[provider].headers(apiKey),
       signal: AbortSignal.timeout(5_000),
     });
     return response.ok;
