@@ -90,6 +90,7 @@ test("safeAttachmentName strips directories (no traversal) and keeps unicode", (
 test("mimeFromName maps known extensions, defaults to octet-stream", () => {
   assert.equal(mimeFromName("a.csv"), "text/csv");
   assert.equal(mimeFromName("a.PNG"), "image/png");
+  assert.equal(mimeFromName("a.webp"), "image/webp");
   assert.equal(mimeFromName("noext"), "application/octet-stream");
 });
 

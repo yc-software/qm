@@ -15,6 +15,7 @@ import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
+import { downscaleVisionImage } from "./image-downscale.ts";
 
 export const INBOX_DIR = "inbox";
 export const OUTBOX_DIR = "outbox";
@@ -94,6 +95,7 @@ const MIME_BY_EXT: Record<string, string> = {
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
   gif: "image/gif",
+  webp: "image/webp",
   svg: "image/svg+xml",
   zip: "application/zip",
 };
@@ -323,10 +325,11 @@ export async function materializeInbound(
       ...(registered ? { artifactId: registered.id } : {}),
     });
     if (VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 && bytes.length <= MAX_VISION_IMAGE_BYTES) {
+      const imageBytes = await downscaleVisionImage(bytes, mimetype);
       images.push({
         name,
         mimeType: mimetype,
-        dataBase64: Buffer.from(bytes).toString("base64"),
+        dataBase64: Buffer.from(imageBytes).toString("base64"),
         ...(registered ? { artifactId: registered.id } : {}),
       });
     }
