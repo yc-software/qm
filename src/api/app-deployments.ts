@@ -26,6 +26,7 @@ export function createDeploymentMethods(
   | "renameDeployment"
   | "setDeploymentDisplayName"
   | "reachDeployment"
+  | "deploymentLogsFor"
   | "deploymentGitRepoPath"
   | "runDeploymentGitPush"
   | "deploymentGitUrlFor"
@@ -97,6 +98,16 @@ export function createDeploymentMethods(
       if (!deployment) return { status: "not_found" };
       if (!(await principalCanReadDeployment(deployment, principalId))) return { status: "denied" };
       return deps.deploy.reachDeployment(id, principalId, { bypassAcl: true });
+    },
+    async deploymentLogsFor(
+      id,
+      principalId,
+      opts,
+    ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }> {
+      const deployment = await deps.deploy.getDeployment(id);
+      if (!deployment) return { status: "not_found" };
+      if (!(await principalCanReadDeployment(deployment, principalId))) return { status: "denied" };
+      return { status: "ok", logs: await deps.deploy.deploymentLogs(id, opts) };
     },
     deploymentGitRepoPath(id) {
       return deps.deploy.gitRepoPath(id);

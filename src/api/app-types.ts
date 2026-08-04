@@ -440,6 +440,11 @@ export interface App {
   renameDeployment(id: string, name: string): Promise<Deployment>;
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
+  deploymentLogsFor(
+    id: string,
+    principalId: string,
+    opts: { tailLines: number },
+  ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }>;
   shareDeployment(
     idOrName: string,
     grantee: ScopeId,

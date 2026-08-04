@@ -78,6 +78,13 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       return { host: "127.0.0.1", port: hostPort };
     },
 
+    async logs(d: Deployment, opts: { tailLines: number }): Promise<string | null> {
+      const lines = Math.max(1, Math.min(2000, Math.floor(opts.tailLines)));
+      const r = await dexec(["logs", "--tail", String(lines), name(d)]);
+      if (r.code !== 0) return null;
+      return `${r.stdout}${r.stderr}`;
+    },
+
     async destroy(d: Deployment): Promise<void> {
       await dexec(["rm", "-f", name(d)]);
       freePort(name(d));

@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
+import { artifactPath, createMemoryFileArtifactStore, fileArtifactId } from "../src/files/file-artifact-store.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal, type WorkspaceLayer } from "../src/types.ts";
@@ -297,4 +299,91 @@ test("write without data or share is rejected; sharing a missing file / from a r
       }).write("x.png", undefined, [{ scope: "org" }]),
     /writable scope/,
   );
+});
+
+test("a viewer-uploaded artifact (artifacts/<id>/<name>) is readable through its shared handle (public #94)", async () => {
+  const workspace = ws();
+  const acl = createAclStore();
+  const owner = scopeId("personal", "U1");
+  const grantee = scopeId("personal", "U2");
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const id = fileArtifactId("upload:U1:test:1:x", "in", 0);
+  const path = artifactPath(id, "notes.txt");
+  await files.put({
+    id,
+    ownerScopeId: owner,
+    createdBy: "U1",
+    name: "notes.txt",
+    path,
+    mimetype: "text/plain",
+    data: Buffer.from("hello from the upload"),
+    direction: "in",
+    createdInScope: grantee,
+  });
+  await acl.grant({ ownerScopeId: owner, ref: path, granteeScopeId: grantee, permission: "read", grantedBy: "U1" });
+
+  const handles = await acl.handlesForAudience([person("U2")], grantee, "org:o", principalEntitledToScope);
+  assert.equal(handles.length, 1, "the grant materializes as a handle");
+
+  const ctx = createToolContext({
+    sandbox: memSandbox().sandbox,
+    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
+    layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
+    commandPolicy: () => ({}) as never,
+    authorizeCommand: () => false,
+    grantedHandles: handles,
+    workspace,
+    files,
+    deploy: {} as never,
+    acl,
+    createdBy: "U2",
+  });
+  const got = await ctx.read(handles[0]!.handlePath);
+  assert.equal(got.content, "hello from the upload");
+  assert.equal(got.sourceScopeId, owner);
+});
+
+test("a workspace-backed share is never served from a stale artifact snapshot", async () => {
+  const workspace = ws();
+  const acl = createAclStore();
+  const owner = scopeId("personal", "U1");
+  const grantee = scopeId("personal", "U2");
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  // artifact snapshot holds version 1 under the real workspace path
+  await files.put({
+    id: fileArtifactId("share:U1:doc.txt", "out", 0),
+    ownerScopeId: owner,
+    createdBy: "U1",
+    name: "doc.txt",
+    path: "doc.txt",
+    mimetype: "text/plain",
+    data: Buffer.from("version 1"),
+    direction: "out",
+    createdInScope: owner,
+  });
+  // workspace holds version 2
+  await workspace.write(owner, "doc.txt", "version 2");
+  await acl.grant({
+    ownerScopeId: owner,
+    ref: "doc.txt",
+    granteeScopeId: grantee,
+    permission: "read",
+    grantedBy: "U1",
+  });
+  const handles = await acl.handlesForAudience([person("U2")], grantee, "org:o", principalEntitledToScope);
+  const ctx = createToolContext({
+    sandbox: memSandbox().sandbox,
+    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
+    layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
+    commandPolicy: () => ({}) as never,
+    authorizeCommand: () => false,
+    grantedHandles: handles,
+    workspace,
+    files,
+    deploy: {} as never,
+    acl,
+    createdBy: "U2",
+  });
+  const got = await ctx.read(handles[0]!.handlePath);
+  assert.equal(got.content, "version 2", "the live workspace copy wins for workspace-namespace paths");
 });

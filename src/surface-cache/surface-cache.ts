@@ -465,7 +465,7 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
         for (const msg of m.values()) {
           if (!msg.sub || msg.deleted) continue;
           if (o.container && msg.container !== o.container) continue;
-          const tk = `${msg.container} ${msg.sub}`;
+          const tk = `${msg.container}\0${msg.sub}`;
           const cur = byThread.get(tk);
           if (!cur) {
             byThread.set(tk, {

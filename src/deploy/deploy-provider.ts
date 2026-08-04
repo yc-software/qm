@@ -21,4 +21,6 @@ export interface DeployProvider {
   reconcile?(d: Deployment, version: DeploymentVersion, input: DeployReconcileInput): Promise<DeployEndpoint>;
   destroy(d: Deployment): Promise<void>;
   resolveEndpoint?(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint | null>;
+  /** Recent output from the running app (entrypoint stdout+stderr), newest last. */
+  logs?(d: Deployment, opts: { tailLines: number }): Promise<string | null>;
 }

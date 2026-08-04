@@ -651,6 +651,21 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       return resolve;
     },
 
+    async logs(d, opts): Promise<string | null> {
+      ensureConfigured();
+      const stored = await store.get(d.id);
+      if (!stored) return null;
+      await ensureRunning(stored.microvmId, stored.endpoint);
+      const lines = Math.max(1, Math.min(2000, Math.floor(opts.tailLines)));
+      const r = await execRaw(
+        stored.microvmId,
+        stored.endpoint,
+        `tail -n ${lines} ${shq(LOG_PATH)} 2>/dev/null || true`,
+        30,
+      );
+      return r.stdout;
+    },
+
     async destroy(d): Promise<void> {
       bumpResolveGen(d.id);
       const stored = await store.get(d.id);

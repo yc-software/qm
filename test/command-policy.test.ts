@@ -470,3 +470,37 @@ test("an unquoted heredoc's command substitutions still execute and stay gated",
   const sneaky = ["cat <<EOF | gh pr create --body-file -", "hello $(rm -rf /tmp/x)", "EOF"].join("\n");
   assert.equal(evaluateCommand(sneaky, policy).decision, "require_approval");
 });
+
+test("destructive SQL handed to a SQL client fires the floor rule (public #49)", () => {
+  const p = defaultOrgPolicy();
+  for (const cmd of [
+    'psql -c "DROP TABLE users"',
+    "psql --command='drop table users'",
+    'psql -d app -c "TRUNCATE TABLE events"',
+    'mysql -u root -e "DROP TABLE users"',
+    "mariadb --execute='truncate table logs'",
+    'sqlite3 app.db "DROP TABLE users"',
+    'duckdb data.db -c "drop table t"',
+    '/usr/bin/psql -c "DROP TABLE users"',
+    'echo "DROP TABLE users" | psql app',
+    'printf "TRUNCATE TABLE x" | mysql app',
+  ]) {
+    const r = evaluateCommand(cmd, p);
+    assert.equal(r.decision, "require_approval", `expected gate on: ${cmd}`);
+    assert.equal(r.reason, "destructive SQL", `wrong reason on: ${cmd}`);
+  }
+});
+
+test("SQL-looking text that is only data still passes (no false positives)", () => {
+  const p = defaultOrgPolicy();
+  for (const cmd of [
+    'git commit -m "drop table users"',
+    'echo "DROP TABLE users"',
+    'grep -r "TRUNCATE TABLE" src/',
+    'psql -c "SELECT * FROM users"',
+    "sqlite3 app.db '.tables'",
+    'rg "drop table" --type sql',
+  ]) {
+    assert.equal(evaluateCommand(cmd, p).decision, "allow", `false positive on: ${cmd}`);
+  }
+});

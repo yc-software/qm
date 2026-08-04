@@ -777,10 +777,88 @@ function executedShellPayloads(input: string): string[] {
   return [
     ...scan.nested,
     ...scan.commands.flatMap(segmentShellPayloads),
+    ...scan.commands.flatMap(sqlClientPayloads),
     ...pipedShellPayloads(input),
+    ...pipedSqlPayloads(input),
     ...hereStringShellPayloads(input),
     ...simpleVariablePayloads(input),
   ];
+}
+
+/**
+ * SQL clients whose command-line payloads are executable SQL. scannableCommand
+ * empties quoted strings before rules run, so `psql -c "DROP TABLE users"`
+ * scanned as `psql -c ""` and the destructive-SQL floor rule could never fire
+ * on any spelling people actually type. Extract those payloads as their own
+ * scan lines, the same way executed shell payloads are.
+ */
+const SQL_CLIENT_SPECS: Record<string, { options: string[]; sqlPositionalsAfter?: number }> = {
+  psql: { options: ["-c", "--command"] },
+  pgcli: { options: ["-c", "--command"] },
+  mysql: { options: ["-e", "--execute"] },
+  mariadb: { options: ["-e", "--execute"] },
+  mycli: { options: ["-e", "--execute"] },
+  sqlite3: { options: ["-cmd"], sqlPositionalsAfter: 1 },
+  duckdb: { options: ["-c", "-s", "--command"], sqlPositionalsAfter: 1 },
+  "clickhouse-client": { options: ["-q", "--query"] },
+};
+
+function sqlClientSpec(
+  words: string[],
+): { spec: { options: string[]; sqlPositionalsAfter?: number }; args: string[] } | undefined {
+  const start = commandStart(words);
+  if (start >= words.length) return undefined;
+  const executableWord = words[start]!;
+  const executable = (executableWord.split("/").pop() ?? executableWord).toLowerCase();
+  const spec = SQL_CLIENT_SPECS[executable];
+  return spec ? { spec, args: words.slice(start + 1) } : undefined;
+}
+
+function sqlClientPayloads(words: string[]): string[] {
+  const found = sqlClientSpec(words);
+  if (!found) return [];
+  const { spec, args } = found;
+  const payloads: string[] = [];
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    let matched = false;
+    for (const opt of spec.options) {
+      if (arg === opt) {
+        if (args[i + 1] !== undefined) payloads.push(args[++i]!);
+        matched = true;
+        break;
+      }
+      if (arg.startsWith(`${opt}=`)) {
+        payloads.push(arg.slice(opt.length + 1));
+        matched = true;
+        break;
+      }
+      if (opt.length === 2 && !arg.startsWith("--") && arg.startsWith(opt) && arg.length > 2) {
+        payloads.push(arg.slice(2));
+        matched = true;
+        break;
+      }
+    }
+    if (!matched && !arg.startsWith("-")) positionals.push(arg);
+  }
+  if (spec.sqlPositionalsAfter !== undefined) payloads.push(...positionals.slice(spec.sqlPositionalsAfter));
+  return payloads;
+}
+
+function pipedSqlPayloads(input: string): string[] {
+  const payloads: string[] = [];
+  for (const pipeline of shellPipelines(input)) {
+    for (let i = 1; i < pipeline.length; i++) {
+      const consumer = scanShell(pipeline[i]!).commands[0];
+      if (!consumer || !sqlClientSpec(consumer)) continue;
+      const producer = scanShell(pipeline[i - 1]!).commands.at(-1);
+      if (!producer) continue;
+      const payload = literalProducerPayload(producer);
+      if (payload) payloads.push(payload);
+    }
+  }
+  return payloads;
 }
 
 function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEvaluation | null {

@@ -1,3 +1,4 @@
+import { resolvePgCaTrust } from "../persistence/pg-pool.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
@@ -237,6 +238,8 @@ type PostdeployConfig = Pick<
   Config,
   | "adminGrants"
   | "databaseUrl"
+  | "databaseCaCert"
+  | "databaseCaCertFile"
   | "flyAppName"
   | "orgId"
   | "port"
@@ -254,7 +257,13 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
   if (!portalIdentitySecret) throw new Error("postdeploy smoke requires PORTAL_IDENTITY_SECRET");
 
   const pg = (await import("pg")).default;
-  const client = new pg.Client({ connectionString: databaseUrl });
+  const client = new pg.Client({
+    connectionString: databaseUrl,
+    ...resolvePgCaTrust({
+      ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
+      ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
+    }),
+  });
   await client.connect();
   try {
     const unsafe = await client.query(PARALLEL_EXCEPTION_QUERY);

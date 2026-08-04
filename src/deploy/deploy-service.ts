@@ -73,6 +73,8 @@ export interface DeployService {
   renameDeployment(id: string, name: string): Promise<Deployment>;
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
+  /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
+  deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
   reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
@@ -497,6 +499,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const endpoint = await liveEndpoint(d);
       await deps.deployStore.touch(d.id, Date.now());
       return { status: "ok", endpoint };
+    },
+
+    async deploymentLogs(idOrName, opts): Promise<string | null> {
+      if (!deps.provider.logs) return null;
+      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      if (!d || d.status !== "running") return null;
+      return deps.provider.logs(d, opts);
     },
 
     async gitRepoPath(idOrName) {

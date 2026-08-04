@@ -40,7 +40,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { mimeFromName } from "../core/attachments.ts";
 import { swallow } from "../util/errors.ts";
-import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
+import { fileArtifactId, isArtifactPath, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
 import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
@@ -475,6 +475,41 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     return cache ? once(call, cache) : call();
   }
 
+  const MAX_SHARED_ARTIFACT_BYTES = 10 * 1024 * 1024;
+
+  async function readGrantedArtifactBytes(ownerScopeId: ScopeId, ownerPath: string): Promise<Buffer | null> {
+    if (!deps.files) return null;
+    const rows = await deps.files.resolveByOwnerPaths([{ ownerScopeId, path: ownerPath }]);
+    // Re-assert the tuple: the (owner_scope_id, path) index isn't unique and
+    // neither implementation orders results.
+    const row = rows.find((r) => r.ownerScopeId === ownerScopeId && r.path === ownerPath);
+    if (!row) return null;
+    const opened = await deps.files.open(row.id);
+    if (!opened) return null;
+    // The advertised size can be absent on some backends (fails open at 0), so
+    // the collector enforces the cap on actual bytes read.
+    if (opened.sizeBytes > MAX_SHARED_ARTIFACT_BYTES) {
+      opened.stream.destroy();
+      throw new Error(
+        `shared file ${ownerPath.split("/").pop()} is ${opened.sizeBytes} bytes — larger than the ${MAX_SHARED_ARTIFACT_BYTES}-byte shared-read limit`,
+      );
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of opened.stream) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+      total += buf.length;
+      if (total > MAX_SHARED_ARTIFACT_BYTES) {
+        opened.stream.destroy();
+        throw new Error(
+          `shared file ${ownerPath.split("/").pop()} exceeds the ${MAX_SHARED_ARTIFACT_BYTES}-byte shared-read limit`,
+        );
+      }
+      chunks.push(buf);
+    }
+    return Buffer.concat(chunks);
+  }
+
   return {
     ...(deps.credentialExecServices ? { credentialExecServices: deps.credentialExecServices } : {}),
     ...(deps.credentialExec ? { credentialExec: deps.credentialExec } : {}),
@@ -595,7 +630,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           };
         }
         const granted = matches[0]!;
-        const bytes = await deps.workspace.readBytes(granted.ownerScopeId, granted.ownerPath);
+        // Two producers create grants: the write tool (workspace-backed, real
+        // workspace path) and viewer uploads / inbound attachments (artifact
+        // store only, artifacts/<id>/<name>). The namespace decides which
+        // store serves the read — never a precedence rule, because a
+        // workspace-backed path can also have a stale artifact snapshot.
+        const bytes = isArtifactPath(granted.ownerPath)
+          ? await readGrantedArtifactBytes(granted.ownerScopeId, granted.ownerPath)
+          : await deps.workspace.readBytes(granted.ownerScopeId, granted.ownerPath);
         if (bytes === null) return { content: null, sourceScopeId: granted.ownerScopeId };
         const asText = tryDecodeUtf8(bytes);
         if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId };

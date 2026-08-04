@@ -1201,6 +1201,27 @@ function textContentType(contentType: string): boolean {
   );
 }
 
+const LOGS_DEFAULT_TAIL_LINES = 200;
+const LOGS_MAX_TAIL_LINES = 2000;
+
+async function deploymentLogs(ctx: ApiCtx): Promise<void> {
+  const { res, app, params, capability, actor, url } = ctx;
+  const viewer = capability?.actorId ?? actor?.p;
+  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
+  const rawTail = url.searchParams.get("tailLines");
+  const tailLines = rawTail === null ? LOGS_DEFAULT_TAIL_LINES : Number(rawTail);
+  if (!Number.isInteger(tailLines) || tailLines < 1 || tailLines > LOGS_MAX_TAIL_LINES) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: `tailLines must be an integer from 1 to ${LOGS_MAX_TAIL_LINES}`,
+    });
+  }
+  const result = await app.deploymentLogsFor(params.id!, viewer, { tailLines });
+  if (result.status !== "ok") return sendJson(res, 404, { error: "not_found" });
+  if (result.logs === null) return sendJson(res, 200, { logs: null, message: "no logs available for this deployment" });
+  return sendJson(res, 200, { logs: result.logs });
+}
+
 async function fetchDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, capability, actor, url } = ctx;
   const viewer = capability?.actorId ?? actor?.p;
@@ -1444,6 +1465,7 @@ export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/deployments", auth: "either", handle: listDeployments },
   { method: "GET", path: "/v1/deployments/:id", auth: "either", handle: getDeployment },
   { method: "GET", path: "/v1/deployments/:id/fetch", auth: "either", handle: fetchDeployment },
+  { method: "GET", path: "/v1/deployments/:id/logs", auth: "either", handle: deploymentLogs },
   { method: "GET", path: "/v1/deployments/:id/git-url", auth: "either", handle: deploymentGitUrl },
   { method: "GET", path: "/v1/deployments/:id/owner-url", auth: "source", handle: deploymentOwnerUrl },
   { method: "POST", path: "/v1/deployments/:id/share", auth: "either", handle: shareDeployment },

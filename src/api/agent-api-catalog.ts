@@ -244,6 +244,7 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "GET" && p === "/v1/deployments") ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/fetch$/.test(p)) ||
+      (m === "GET" && /^\/v1\/deployments\/[^/]+\/logs$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/git-url$/.test(p)) ||
       (m === "POST" && /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name)$/.test(p)),
     guidance:
@@ -266,6 +267,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/deployments/:id/fetch",
         summary:
           "read a deployment's rendered content as the asking person — query path defaults to / and maxBytes defaults to 256KB; returns upstream status, contentType, body, and truncation metadata",
+      },
+      {
+        method: "GET",
+        path: "/v1/deployments/:id/logs",
+        summary:
+          "recent runtime output (entrypoint stdout+stderr) of a running deployment you can reach — query tailLines (default 200, max 2000); returns {logs} (null when the provider keeps none)",
       },
       {
         method: "GET",

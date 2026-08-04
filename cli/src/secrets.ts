@@ -147,6 +147,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     managedBy: "terraform",
   },
   {
+    name: "DATABASE_CA_CERT",
+    service: "core",
+    required: false,
+    description:
+      "Extra root CA (PEM content) trusted for the Postgres connection, for providers that pin a private root (e.g. Supabase's pooler). Verification stays on.",
+  },
+  {
     name: "AWS_DEPLOY_GATE_SECRET",
     service: "core",
     required: { when: { kind: "env-present", service: "core", name: "AWS_DEPLOY_APPS_DOMAIN" } },

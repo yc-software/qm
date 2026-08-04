@@ -29,6 +29,8 @@ export interface Config {
   orgId: string;
   sessionStore: "memory" | "postgres";
   databaseUrl?: string;
+  databaseCaCert?: string;
+  databaseCaCertFile?: string;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
   sandboxBackend: "aws" | "local" | "sprites" | "smolmachines";
@@ -729,6 +731,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
+    ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
+    ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
     harness: harnessEnvStrict(env.HARNESS),
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
     securityScreenBackend,
