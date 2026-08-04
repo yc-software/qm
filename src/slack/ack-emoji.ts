@@ -1,7 +1,7 @@
 import { swallowAs } from "../util/errors.ts";
 import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS } from "./lib.ts";
 import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
-import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import type { CoreClient } from "../api/core-client.ts";
 
 export interface AckEmojiPicker {
   refreshAckEmoji(client: any): void;
@@ -30,7 +30,7 @@ function sample<T>(items: readonly T[], n: number): T[] {
   return pool.slice(0, n);
 }
 
-export function createAckEmojiPicker(core: SlackCoreClient): AckEmojiPicker {
+export function createAckEmojiPicker(core: CoreClient): AckEmojiPicker {
   let ackEmojiCache: { custom: string[]; urls: Record<string, string>; at: number } | null = null;
   let ackEmojiInFlight: Promise<void> | null = null;
   function refreshAckEmoji(client: any): void {

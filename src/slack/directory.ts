@@ -17,7 +17,7 @@ import {
   sleep,
 } from "./lib.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
-import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import type { CoreClient } from "../api/core-client.ts";
 
 export interface BotIdentity {
   ownTeamId: string;
@@ -86,7 +86,7 @@ export interface Directory {
 }
 
 export function createDirectory(deps: {
-  core: SlackCoreClient;
+  core: CoreClient;
   ids: BotIdentity;
   userSnapshotTtlMs?: number;
   channelMembersTtlMs?: number;
