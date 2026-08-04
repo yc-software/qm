@@ -1104,6 +1104,134 @@ test("tool entries carry the call id + faithful model-facing result (WAL replay 
   assert.match(result("call-exec").result, /\[exit 0\]/);
 });
 
+test("memory remember accepts facts as a single string and records coercion", async () => {
+  const emitted: Emitted[] = [];
+  const remembered: string[][] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async memoryRemember(facts) {
+        remembered.push(facts);
+        return facts.length;
+      },
+    },
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const memory = createPiTools(ref).find((tool) => tool.name === "memory");
+
+  await call(memory, { action: "remember", facts: "Owns billing." });
+
+  assert.deepEqual(remembered, [["Owns billing."]]);
+  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
+  assert.equal(result.coercedFrom, "facts");
+  assert.equal(result.added, 1);
+});
+
+test("memory remember falls back to content lines with bullets", async () => {
+  const emitted: Emitted[] = [];
+  const remembered: string[][] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async memoryRemember(facts) {
+        remembered.push(facts);
+        return facts.length;
+      },
+    },
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const memory = createPiTools(ref).find((tool) => tool.name === "memory");
+
+  await call(memory, { action: "remember", facts: [], content: "\n- Owns billing.\n- Likes short updates.\n\n" });
+
+  assert.deepEqual(remembered, [["Owns billing.", "Likes short updates."]]);
+  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
+  assert.equal(result.coercedFrom, "content");
+  assert.equal(result.added, 2);
+});
+
+test("memory remember falls back to query when facts and content are empty", async () => {
+  const emitted: Emitted[] = [];
+  const remembered: string[][] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async memoryRemember(facts) {
+        remembered.push(facts);
+        return facts.length;
+      },
+    },
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const memory = createPiTools(ref).find((tool) => tool.name === "memory");
+
+  await call(memory, { action: "remember", facts: [], content: "  ", query: "Prefers email summaries." });
+
+  assert.deepEqual(remembered, [["Prefers email summaries."]]);
+  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
+  assert.equal(result.coercedFrom, "query");
+  assert.equal(result.added, 1);
+});
+
+test("memory remember keeps normal facts arrays unchanged", async () => {
+  const emitted: Emitted[] = [];
+  const remembered: string[][] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async memoryRemember(facts) {
+        remembered.push(facts);
+        return facts.length;
+      },
+    },
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const memory = createPiTools(ref).find((tool) => tool.name === "memory");
+
+  await call(memory, { action: "remember", facts: ["Owns billing.", "Likes short updates."] });
+
+  assert.deepEqual(remembered, [["Owns billing.", "Likes short updates."]]);
+  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
+  assert.equal(result.coercedFrom, undefined);
+  assert.equal(result.added, 2);
+});
+
+test("memory remember all-empty error names the supplied fields", async () => {
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const memory = createPiTools(ref).find((tool) => tool.name === "memory");
+
+  const ret = (await call(memory, { action: "remember", facts: [], content: "", query: "" })) as {
+    content: Array<{ text: string }>;
+  };
+
+  assert.equal(
+    ret.content[0]!.text,
+    "[error] memory remember requires `facts` (a non-empty list). Received: facts, content, query (use facts instead).",
+  );
+  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
+  assert.equal(result.isError, true);
+  assert.equal(result.error, "facts required");
+});
+
 test("not-found read and denied command record isError + the faithful error text", async () => {
   const emitted: Emitted[] = [];
   const denyTC: ToolContext = {

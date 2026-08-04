@@ -121,6 +121,44 @@ function capText(t: string): string {
   return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
 }
 
+function contentFactLines(content: string): string[] {
+  return content
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^[-*]\s+/, "")
+        .trim(),
+    )
+    .filter(Boolean);
+}
+
+function passedRememberFields(params: { facts?: unknown; content?: unknown; query?: unknown }): string {
+  const fields = ["facts", "content", "query"].filter((field) => params[field as keyof typeof params] !== undefined);
+  return fields.length ? fields.join(", ") : "none";
+}
+
+function rememberFacts(params: { facts?: unknown; content?: unknown; query?: unknown }): {
+  facts: string[];
+  coercedFrom?: "facts" | "content" | "query";
+} {
+  if (typeof params.facts === "string") {
+    const fact = params.facts.trim();
+    if (fact) return { facts: [fact], coercedFrom: "facts" };
+  }
+  const facts = Array.isArray(params.facts) ? params.facts.map((fact) => String(fact).trim()).filter(Boolean) : [];
+  if (facts.length) return { facts };
+  if (typeof params.content === "string") {
+    const contentFacts = contentFactLines(params.content);
+    if (contentFacts.length) return { facts: contentFacts, coercedFrom: "content" };
+  }
+  if (typeof params.query === "string") {
+    const fact = params.query.trim();
+    if (fact) return { facts: [fact], coercedFrom: "query" };
+  }
+  return { facts: [] };
+}
+
 function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }): string {
   return s.state === "exited" ? `exited ${s.code}` : "running";
 }
@@ -892,7 +930,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
         ...(params.query !== undefined ? { query: params.query } : {}),
         ...(params.limit !== undefined ? { limit: params.limit } : {}),
         ...(params.facts !== undefined ? { facts: params.facts } : {}),
-        ...(params.content !== undefined ? { chars: params.content.length } : {}),
+        ...(typeof params.content === "string" ? { chars: params.content.length } : {}),
       });
       const unavailable = () =>
         recordResult(
@@ -937,19 +975,24 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
           );
         }
         case "remember": {
-          const facts = (params.facts ?? []).map((f) => f.trim()).filter(Boolean);
+          const resolved = rememberFacts(params);
+          const { facts } = resolved;
           if (!facts.length)
             return recordResult(
               callId,
               { tool: "memory", action, error: "facts required" },
-              text("[error] memory remember requires `facts` (a non-empty list)."),
+              text(
+                `[error] memory remember requires \`facts\` (a non-empty list). Received: ${passedRememberFields(
+                  params,
+                )} (use facts instead).`,
+              ),
               true,
             );
           const added = await tc.memoryRemember(facts);
           if (added === null) return unavailable();
           return recordResult(
             callId,
-            { tool: "memory", action, added },
+            { tool: "memory", action, added, ...(resolved.coercedFrom ? { coercedFrom: resolved.coercedFrom } : {}) },
             text(
               added
                 ? `Remembered ${added} fact${added === 1 ? "" : "s"}.`
