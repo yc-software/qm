@@ -50,6 +50,7 @@ test("native harnesses reject cross-provider pins and choose their own defaults"
 
 test("the default base model follows the providers a deployment can actually bill", () => {
   for (const provider of MODEL_PROVIDERS) {
+    if (provider === "nexforce") continue;
     const only = onlyProvider(provider);
     const chosen = defaultModelForHarness("pi", undefined, only);
     assert.equal(
@@ -60,6 +61,11 @@ test("the default base model follows the providers a deployment can actually bil
   }
   assert.equal(defaultModelForHarness("pi", undefined, onlyProvider("openrouter")), "openrouter/auto");
   assert.equal(defaultModelForHarness("pi", undefined, onlyProvider("openai")), "gpt-5.6-sol");
+  assert.equal(
+    defaultModelForHarness("pi", undefined, onlyProvider("nexforce")),
+    "claude-opus-5",
+    "a nexforce-only deployment has no servable base model yet, so the shipped default stands",
+  );
 });
 
 test("provider-blind callers and explicit pins keep the shipped default", () => {
@@ -71,7 +77,7 @@ test("provider-blind callers and explicit pins keep the shipped default", () => 
     "an explicit pin is never silently swapped — the mismatch is rejected at config load instead",
   );
   assert.equal(
-    defaultModelForHarness("pi", undefined, { anthropic: false, openai: false, openrouter: false }),
+    defaultModelForHarness("pi", undefined, { anthropic: false, openai: false, openrouter: false, nexforce: false }),
     "claude-opus-5",
     "with no provider at all the shipped default stands rather than an arbitrary pick",
   );
@@ -141,10 +147,10 @@ test("auxiliary selection falls back to the base model when its provider has no 
 
 test("an auxiliary is never less serviceable than the base model it was derived from", () => {
   const providerSets = [
-    { anthropic: true, openai: false, openrouter: false },
-    { anthropic: false, openai: true, openrouter: false },
-    { anthropic: false, openai: false, openrouter: true },
-    { anthropic: false, openai: false, openrouter: false },
+    { anthropic: true, openai: false, openrouter: false, nexforce: false },
+    { anthropic: false, openai: true, openrouter: false, nexforce: false },
+    { anthropic: false, openai: false, openrouter: true, nexforce: false },
+    { anthropic: false, openai: false, openrouter: false, nexforce: false },
   ];
   for (const m of SELECTABLE_BASE_MODELS) {
     const auxiliary = auxiliaryModelFor(m.id);

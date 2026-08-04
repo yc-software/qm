@@ -3,7 +3,7 @@ import { modelSupportedByHarness, resolveModel, SELECTABLE_BASE_MODELS } from ".
 export interface ModelCatalogEntry {
   id: string;
   name: string;
-  provider: "anthropic" | "openai" | "openrouter";
+  provider: "anthropic" | "openai" | "openrouter" | "nexforce";
 }
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?supported_parameters=tools&sort=most-popular";
@@ -24,7 +24,7 @@ const cache = new WeakMap<typeof fetch, CacheEntry>();
 export function builtInModelCatalog(): ModelCatalogEntry[] {
   return SELECTABLE_BASE_MODELS.flatMap((model) => {
     const provider = resolveModel(model.id)?.provider;
-    return provider === "anthropic" || provider === "openai" || provider === "openrouter"
+    return provider === "anthropic" || provider === "openai" || provider === "openrouter" || provider === "nexforce"
       ? [{ ...model, provider }]
       : [];
   });
