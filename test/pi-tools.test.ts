@@ -281,6 +281,12 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async staySilent() {
       return { ok: true as const, message: "[staying silent]" };
     },
+    mcpToolDefs() {
+      return [];
+    },
+    async callMcpTool() {
+      return "";
+    },
   };
 }
 

@@ -87,6 +87,8 @@ import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import { createMemoryService, type MemoryService } from "./memory/memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
+import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
+import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -324,6 +326,8 @@ export interface BuiltApp {
   modelCredentials: ModelCredentialStore;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
+  mcpServers: McpServerStore;
+  mcpToolService: McpToolService;
   acl: AclStore;
   skills: SkillStore;
   skillBundles: SkillBundleStore;
@@ -561,6 +565,9 @@ export function buildApp(
   const baseMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
+  const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
+  const mcpToolService = createMcpToolService({ servers: mcpServers, audit: auditLog });
+  const mcpTools = () => mcpToolService.toolDefs();
   const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
     errors.record({
@@ -740,6 +747,7 @@ export function buildApp(
         resolveBaseModelId: orgBaseModelId,
         resolveProviderKeys: resolveModelProviderKeys,
         signals: runSignals,
+        mcpTools,
       }),
     ],
     [
@@ -748,6 +756,7 @@ export function buildApp(
         ...openCodeHarnessConfigOptions(config),
         signals: runSignals,
         tasks,
+        mcpTools,
         resolveCustomProviders: async () => {
           const enabled = await customProviders.enabled();
           return Promise.all(
@@ -767,8 +776,8 @@ export function buildApp(
         },
       }),
     ],
-    ["codex", createCodexHarness({ ...codexHarnessConfigOptions(config), signals: runSignals, tasks })],
-    ["claude", createClaudeHarness({ ...claudeHarnessConfigOptions(config), signals: runSignals, tasks })],
+    ["codex", createCodexHarness({ ...codexHarnessConfigOptions(config), signals: runSignals, tasks, mcpTools })],
+    ["claude", createClaudeHarness({ ...claudeHarnessConfigOptions(config), signals: runSignals, tasks, mcpTools })],
     ["mock", createMockHarness()],
   ]);
   const fallbackHarness = config.harness as HarnessId;
@@ -961,6 +970,7 @@ export function buildApp(
     deploy: deployService,
     acl,
     admin,
+    mcp: mcpToolService,
     ...(config.maxContextEntries !== undefined ? { maxContextEntries: config.maxContextEntries } : {}),
     ...(config.maxContextTokens !== undefined ? { maxContextTokens: config.maxContextTokens } : {}),
     execTimeoutMs: config.execTimeoutDefaultMs,
@@ -1111,6 +1121,8 @@ export function buildApp(
     modelCredentials,
     customProviders,
     refreshCustomProviders,
+    mcpServers,
+    mcpToolService,
     ...(overrides.modelCredentialFetch ? { modelCredentialFetch: overrides.modelCredentialFetch } : {}),
     acl,
     admin,
@@ -1449,6 +1461,8 @@ export function buildApp(
     modelCredentials,
     customProviders,
     refreshCustomProviders,
+    mcpServers,
+    mcpToolService,
     acl,
     skills,
     skillBundles,

@@ -1874,6 +1874,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memory: deps.memory,
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
+          ...(deps.mcp ? { mcp: deps.mcp } : {}),
           sessionHistory: {
             search: async (q: string, limit?: number) =>
               searchSessionEntries(

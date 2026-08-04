@@ -33,6 +33,8 @@ const server = createServer(built.app, {
   modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
   providerKeys: providerKeysPresent(config),
   modelCredentials: built.modelCredentials,
+  mcpServers: built.mcpServers,
+  mcpToolService: built.mcpToolService,
   ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
   harnessId: config.harness,
   connectorTokens: built.connectorTokens,

@@ -43,6 +43,7 @@ import { swallow } from "../util/errors.ts";
 import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
+import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
   ControlService,
@@ -173,6 +174,8 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryRemember(facts: string[]): Promise<number | null>;
   memoryRewrite(content: string): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
+  mcpToolDefs(): McpToolDescriptor[];
+  callMcpTool(name: string, args: Record<string, unknown>): Promise<string>;
   backgroundStart(command: string, opts?: { ttlSeconds?: number }): Promise<BackgroundStartResult>;
   backgroundPoll(
     processId: string,
@@ -396,6 +399,7 @@ export interface ToolContextDeps {
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
   memoryAccess?: { write?: ScopeId; read: ScopeId[] };
+  mcp?: McpToolService;
   sessionHistory?: { search(q: string, limit?: number): Promise<string[]> };
   actingSlackUserId?: string;
   layerAuth?: {
@@ -827,6 +831,15 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async history(q: string, limit?: number): Promise<string[]> {
       if (!deps.sessionHistory) return [];
       return deps.sessionHistory.search(q, limit);
+    },
+
+    mcpToolDefs(): McpToolDescriptor[] {
+      return deps.mcp?.toolDefs() ?? [];
+    },
+
+    async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
+      if (!deps.mcp) throw new Error("no MCP connectors are configured");
+      return deps.mcp.call(name, args, deps.createdBy);
     },
 
     async backgroundStart(command: string, opts?: { ttlSeconds?: number }): Promise<BackgroundStartResult> {

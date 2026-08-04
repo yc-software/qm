@@ -16,6 +16,7 @@ import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../se
 import { CodexAppServer, CodexRpcError } from "./codex-app-server.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
 import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
+import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
 
 export interface CodexHarnessOptions {
@@ -27,6 +28,7 @@ export interface CodexHarnessOptions {
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;
+  mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
   turnWallClockMs?: number;
   execTimeoutMs?: number;
@@ -226,6 +228,7 @@ function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiTool
     scratchExec: opts.scratchExec,
     ownerAuthExec: opts.ownerAuthExec,
     reachExec: opts.reachExec,
+    ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
     controlTools: opts.controlTools,
     execTimeoutMs: opts.execTimeoutMs,
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,

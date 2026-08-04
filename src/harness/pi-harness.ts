@@ -61,6 +61,7 @@ import {
   type GapWork,
 } from "./harness.ts";
 import { coreToolOptions, createPiTools, pauseStampAfterToolCall, type ToolContextRef } from "./pi-tools.ts";
+import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   planColdStartSeed,
@@ -95,6 +96,7 @@ export interface PiHarnessOptions {
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;
+  mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
   turnWallClockMs?: number;
   execTimeoutMs?: number;
@@ -1261,6 +1263,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const scratchExec = opts?.scratchExec ?? false;
   const ownerAuthExec = opts?.ownerAuthExec ?? false;
   const reachExec = opts?.reachExec ?? false;
+  const mcpTools = opts?.mcpTools;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
@@ -1333,6 +1336,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           scratchExec,
           ownerAuthExec,
           reachExec,
+          ...(mcpTools ? { mcpTools } : {}),
           controlTools,
           ...(credentialExecServices?.length ? { credentialExecServices } : {}),
           ...(surfaceTools ? { surfaceTools: true } : {}),

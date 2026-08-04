@@ -34,6 +34,7 @@ import {
 import { deleteSlackInstallation, getSlackInstallation, putSlackInstallation } from "./admin/slack-installation.ts";
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
+import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 
 const timed =
   (handle: (ctx: ApiCtx) => void | Promise<void>) =>
@@ -58,6 +59,9 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "DELETE", path: "/v1/admin/slack-installation", auth: "either", handle: deleteSlackInstallation },
   { method: "GET", path: "/v1/admin/model-providers", auth: "either", handle: getModelProviders },
   { method: "PUT", path: "/v1/admin/model-providers/:provider", auth: "either", handle: putModelProvider },
+  { method: "GET", path: "/v1/admin/mcp-servers", auth: "either", handle: getMcpServers },
+  { method: "PUT", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: putMcpServer },
+  { method: "DELETE", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: deleteMcpServer },
   { method: "DELETE", path: "/v1/admin/model-providers/:provider", auth: "either", handle: deleteModelProvider },
   { method: "GET", path: "/v1/admin/custom-providers", auth: "either", handle: getCustomProviders },
   { method: "PUT", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: putCustomProvider },
