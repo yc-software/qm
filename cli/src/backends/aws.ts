@@ -1568,7 +1568,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   assertAwsPublicFrontDoor(config);
   if (!opts.dryRun) await assertAwsPublicNetwork(config);
   assertAwsPublicApiUrl(config);
-  assertAwsDeployImage(config);
+  if (!usesFlySandboxes(config)) assertAwsDeployImage(config);
   header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.orgId} (aws)`);
   const allServices = Object.keys(aws.services);
   assertOwnedServices(config, describedServices(config, allServices), allServices);
@@ -1641,7 +1641,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   let sandboxPinImage: string | undefined;
   let dbSnapshot: string | undefined;
   try {
-    assertAwsDeployImage(config);
+    if (!usesFlySandboxes(config)) assertAwsDeployImage(config);
     before = serviceSnapshot(config, allServices);
     current = currentDeploymentManifest(aws);
     if (usesFlySandboxes(config)) {
@@ -2784,7 +2784,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         });
       }
     });
-  check("Lambda MicroVM deploy image", () => assertAwsDeployImage(config));
+  if (!usesFlySandboxes(config)) check("Lambda MicroVM deploy image", () => assertAwsDeployImage(config));
   check("deploy role", () => {
     const expectedSubject = githubTrustSubject(configDir, aws.deployBranch, aws.deployEnvironment);
     const role = awsJson<{ Role?: { Arn?: string; AssumeRolePolicyDocument?: { Statement?: unknown } } }>(aws, [
@@ -2981,7 +2981,7 @@ async function checkLive(
   assertAwsCallerAccount(aws);
   const failures: string[] = [];
   try {
-    assertAwsDeployImage(config);
+    if (!usesFlySandboxes(config)) assertAwsDeployImage(config);
   } catch (error) {
     failures.push(`deploy image drift: ${errMessage(error)}`);
   }
