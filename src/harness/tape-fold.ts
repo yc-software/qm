@@ -177,6 +177,11 @@ function contextEvent(row: TapeRecord): TapeEvent | null {
 
 type Foldable = { out: unknown[]; boundaries: Array<{ pos: number; entrySeq: number }> };
 
+function assistantDroppedAtReplay(m: unknown): boolean {
+  const msg = m as { role?: string; stopReason?: string };
+  return msg?.role === "assistant" && (msg.stopReason === "aborted" || msg.stopReason === "error");
+}
+
 function healDanglingCalls(out: unknown[], at: number): void {
   const answered = new Set<string>();
   for (const m of out) {
@@ -186,7 +191,7 @@ function healDanglingCalls(out: unknown[], at: number): void {
   const missing: Array<{ id: string; name: string }> = [];
   for (const m of out) {
     const msg = m as { role?: string; content?: unknown };
-    if (msg?.role !== "assistant" || !Array.isArray(msg.content)) continue;
+    if (msg?.role !== "assistant" || !Array.isArray(msg.content) || assistantDroppedAtReplay(m)) continue;
     for (const block of msg.content) {
       const b = block as { type?: string; id?: string; name?: string };
       if (b?.type === "toolCall" && typeof b.id === "string" && !answered.has(b.id)) {
@@ -309,7 +314,7 @@ export function lintFold(messages: readonly unknown[]): FoldLint {
         if (b?.type === "toolCall" && typeof b.id === "string") {
           if (seenCallIds.has(b.id)) problems.push(`#${i}: duplicate tool call id ${b.id}`);
           seenCallIds.add(b.id);
-          openCalls.add(b.id);
+          if (!assistantDroppedAtReplay(m)) openCalls.add(b.id);
         }
       }
     } else if (msg.role === "toolResult") {
