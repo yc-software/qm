@@ -68,6 +68,9 @@ test("required fields: orgId, target, services (must include core), valid servic
   withConfig({ org_id: "acme" }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /unknown top-level field "org_id"/),
   );
+  withConfig({ "//": "comment-key convention for plain-JSON configs" }, ({ path }) => {
+    assert.ok(loadConfigAt(path).config);
+  });
 });
 
 test("apiUrl must be an http(s) origin URL; the trailing slash is stripped", () => {
