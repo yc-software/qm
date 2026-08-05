@@ -193,6 +193,16 @@ export function registerSlackEvents(
     }
   });
 
+  for (const evt of ["channel_created", "channel_rename", "channel_unarchive"] as const) {
+    app.event(evt, async ({ event, body, client }: any) => {
+      const e = event as { channel?: { id?: string } | string; event_ts?: string };
+      const channel = typeof e.channel === "string" ? e.channel : e.channel?.id;
+      if (deduper.seen(dedupeKey({ event_id: (body as { event_id?: string })?.event_id, channel, ts: e.event_ts })))
+        return;
+      await forceDirectorySync(client);
+    });
+  }
+
   app.event("member_left_channel", async ({ event, body, client }: any) => {
     const e = event as { channel?: string; event_ts?: string };
     if (

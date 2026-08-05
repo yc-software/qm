@@ -53,6 +53,9 @@
         "message.mpim",
         "member_joined_channel",
         "member_left_channel",
+        "channel_created",
+        "channel_rename",
+        "channel_unarchive",
         "reaction_added",
         "reaction_removed"
       ]

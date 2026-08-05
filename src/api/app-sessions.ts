@@ -324,10 +324,20 @@ export function createSessionMethods(
       if (channel !== null) {
         const wanted = channel.trim().replace(/^#/, "");
         if (!wanted) return { status: "invalid_channel" };
-        const reachable = await deps.directory.listChannelsFor(principalId).catch(() => []);
-        const match =
-          reachable.find((c) => c.channelId === wanted) ??
-          reachable.find((c) => c.name.toLowerCase() === wanted.toLowerCase());
+        const findChannel = async () => {
+          const reachable = await deps.directory.listChannelsFor(principalId).catch(() => []);
+          return (
+            reachable.find((c) => c.channelId === wanted) ??
+            reachable.find((c) => c.name.toLowerCase() === wanted.toLowerCase())
+          );
+        };
+        let match = await findChannel();
+        if (!match) {
+          // The synced directory may not have caught up with a just-created channel;
+          // ask the surface for a fresh sync and look once more before giving up.
+          await h.refreshSurfaceDirectory().catch(() => undefined);
+          match = await findChannel();
+        }
         if (!match) return { status: "invalid_channel" };
         const channelScope = scopeId("channel", match.channelId);
         const inUse = (await deps.sessions.listAll()).some((session) => session.scopeId === channelScope);

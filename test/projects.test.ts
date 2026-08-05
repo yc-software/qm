@@ -837,6 +837,40 @@ test("leaving a Project still cuts off everything after the member left", async 
   assert.equal(await built.app.getSessionForViewer(session.id, "member"), null);
   assert.deepEqual(await built.app.listSessions("member"), []);
 });
+test("linking a just-created channel refreshes the surface directory and retries", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-fresh-chan-")) }));
+  await built.app.upsertDirectory([{ principalId: "owner", displayName: "Owner", type: "internal" }]);
+  await built.app.upsertChannels(
+    [{ channelId: "C-OLD", name: "old", isPrivate: false }],
+    [{ channelId: "C-OLD", principalId: "owner" }],
+  );
+  const project = await built.app.createProject("owner", "Fresh");
+  assert.ok(project);
+  // Fulfil the on-demand sync the way the Slack surface would: push the new channel.
+  const unlisten = built.app.onContextRequestCreated((r) => {
+    if (!r.query.syncDirectory) return;
+    void built.app
+      .upsertChannels(
+        [
+          { channelId: "C-OLD", name: "old", isPrivate: false },
+          { channelId: "C-NEW", name: "brand-new", isPrivate: false },
+        ],
+        [
+          { channelId: "C-OLD", principalId: "owner" },
+          { channelId: "C-NEW", principalId: "owner" },
+        ],
+      )
+      .then(() => built.app.fulfillContextRequest(r.id, { result: { messages: [] } }));
+  });
+  try {
+    const linked = await built.app.setProjectSlackChannel(project!.id, "owner", "#brand-new");
+    assert.equal(linked.status, "ok");
+    assert.equal(linked.status === "ok" && linked.project.slackChannel?.channelId, "C-NEW");
+  } finally {
+    unlisten();
+  }
+});
+
 test("Project slack-channel routes gate on visibility and workspace use, and sync the channel roster", async (t) => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-slack-")) }));
   const server = createInsecureTestServer(built.app, {});

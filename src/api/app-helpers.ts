@@ -54,6 +54,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     adminBase ? `${adminBase}/admin/history?session=${encodeURIComponent(sessionId)}` : undefined;
 
   const surfaceContext = createSurfaceContextPuller(app);
+  const directoryRefresher = createSurfaceContextPuller(app, { waitMs: 4_000 });
+
+  async function refreshSurfaceDirectory(): Promise<void> {
+    await directoryRefresher.pull("slack", { syncDirectory: true, count: 1 });
+  }
   const reachDir: ReachDirectory = {
     resolveRecipient: (q) => deps.directory.resolve(q),
     resolveChannel: (q) => deps.directory.resolveChannel(q),
@@ -603,6 +608,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     effectiveDeploymentPermission,
     principalCanReadDeployment,
     principalGitPermission,
+    refreshSurfaceDirectory,
     reconcileProjectMember,
     syncProjectChannelRoster,
     syncLinkedProjectRosters,

@@ -190,6 +190,10 @@ export function createSurfaceContextFulfiller(deps: {
     };
     try {
       const q = r.query ?? {};
+      if (q.syncDirectory) {
+        await directory.forceDirectorySync(client).catch(swallowAs("slack: on-demand directory sync", undefined));
+        return await post({ messages: [] });
+      }
       if (q.openGroup) return await post(await openGroupDm(client, q.openGroup.participants ?? []));
       if (typeof q.searchAll === "string" && q.searchAll) {
         return fulfillLiveSearch(

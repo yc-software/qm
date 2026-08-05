@@ -267,6 +267,7 @@ export interface SurfaceContextQuery {
   viewerToken?: string;
   file?: { ts: string; threadTs?: string; name?: string };
   openGroup?: { participants: string[] };
+  syncDirectory?: boolean;
 }
 
 export interface SurfaceContextResult {
