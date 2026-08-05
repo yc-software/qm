@@ -14,6 +14,7 @@ import {
   Plus,
   RefreshCw,
   Rocket,
+  ShieldCheck,
   type IconNode,
 } from "lucide";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
@@ -64,7 +65,7 @@ import { renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderSkills } from "./skills";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
-import { appState, isView, type AuthMode, type Me, type View } from "./shell-state";
+import { appState, can, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 export { appState, can, type Me, type View } from "./shell-state";
 
@@ -148,9 +149,9 @@ const NAV_WORKSPACE_KEY = "web-ui:nav-workspace";
 
 function loadNavOpen(key: string): boolean {
   try {
-    return localStorage.getItem(key) !== "0";
+    return localStorage.getItem(key) === "1";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -531,12 +532,18 @@ export function renderSidebarTop(): void {
             ${navRow("files", ICON.files, "Files")} ${navRow("crons", ICON.crons, "Crons")}
             ${navRow("keychain", ICON.keychain, "Keychain")} ${navRow("deploys", ICON.deploys, "Apps")}
             ${navRow("memory", ICON.memory, "Memory")} ${navRow("skills", ICON.skills, "Skills")}
+            ${
+              can("admin")
+                ? html`<a class="navrow" href=${ADMIN_HOME_URL} title="Admin">
+                    ${icon(ShieldCheck, 17)}<span>Admin</span>
+                  </a>`
+                : nothing
+            }
           `,
         )}
       </nav>
       ${
-        appState.currentView === "chats"
-          ? html`
+        html`
               <div class="section-label recents-label">
                 <span>Sessions</span>
                 <button
@@ -551,7 +558,6 @@ export function renderSidebarTop(): void {
                 </button>
               </div>
             `
-          : ""
       }
     `,
     appState.topEl,
@@ -586,7 +592,6 @@ export function switchView(v: View): void {
   }
   renderSidebarTop();
   syncUrlFromState();
-  if (v !== "chats" && appState.listEl) render(nothing, appState.listEl);
   switch (v) {
     case "chats":
       if (splitState.active) drawCanvas();
