@@ -256,7 +256,7 @@ function visibleSessions(): CoreSession[] {
 }
 
 export function renderList(): void {
-  if (!appState.listEl || appState.currentView !== "chats") return;
+  if (!appState.listEl) return;
   const visible = visibleSessions();
   const active = visible.filter((s) => !s.archived);
   const archived = visible.filter((s) => s.archived);
