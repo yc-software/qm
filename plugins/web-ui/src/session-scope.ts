@@ -139,10 +139,11 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
       <button
         class="session-tool ${o.activeTool === t ? "active" : ""}"
         type="button"
-        title=${hint}
+        aria-label=${hint}
         @click=${() => o.onTool(t)}
       >
         ${icon(glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
+        <span class="session-tool-hint" role="tooltip">${hint}</span>
       </button>
     `;
   };
@@ -156,8 +157,8 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
           : html`<div class="session-heading" title=${headingTitle}>${heading}</div>`
       }
       <div class="topbar-actions session-tools">
-        ${tool("crons", Clock3, "Crons in this context")} ${tool("files", Files, "Files in this context")}
-        ${tool("apps", Rocket, "Apps in this context")} ${tool("skills", Box, "Skills in this context")}
+        ${tool("crons", Clock3, "Crons")} ${tool("files", Files, "Files")}
+        ${tool("apps", Rocket, "Apps")} ${tool("skills", Box, "Skills")}
         ${tool("memory", Brain, "Memory")} ${tool("keychain", KeyRound, "Your keychain")}
       </div>
     </header>
