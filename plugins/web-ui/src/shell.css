@@ -4383,8 +4383,59 @@ a.chat-row-open {
   background: var(--secondary);
   font-size: 13px;
 }
-.project-grid {
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+.project-list {
+  width: min(960px, 100%);
+  margin: 0 auto;
+}
+.project-group {
+  margin-top: 22px;
+}
+.project-group-head {
+  padding: 0 6px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.project-group-count {
+  font-weight: 500;
+  letter-spacing: normal;
+}
+.context-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.context-row:hover {
+  background: color-mix(in srgb, var(--background) 88%, var(--secondary));
+}
+.context-row-title {
+  overflow: hidden;
+  min-width: 0;
+  flex-shrink: 1;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.context-row-meta {
+  overflow: hidden;
+  margin-left: auto;
+  flex: none;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
 }
 .project-empty {
   max-width: 960px;
@@ -4395,26 +4446,6 @@ a.chat-row-open {
 .project-other-label {
   max-width: 960px;
   margin: 28px auto 0;
-}
-.context-card {
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    background 0.12s ease,
-    border-color 0.12s ease;
-}
-.context-card:hover {
-  background: color-mix(in srgb, var(--background) 88%, var(--secondary));
-  border-color: color-mix(in srgb, var(--foreground) 18%, var(--border));
-}
-.context-card .card-head {
-  align-items: center;
-  justify-content: flex-start;
-}
-.context-card .card-head .badge {
-  margin-left: auto;
-  flex-shrink: 0;
 }
 
 .pane-subtitle {

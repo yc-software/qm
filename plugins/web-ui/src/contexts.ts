@@ -329,14 +329,32 @@ function gridTpl(): TemplateResult {
         Boolean(context.sessionCount))
     );
   };
-  const rank = (context: CoreContext) => {
-    if (context.kind === "personal") return 0;
-    return context.project ? 1 : 2;
+  const projects = contextsState.list.filter(matches);
+  const groupOf = (context: CoreContext) => {
+    if (context.kind === "personal") return "personal";
+    return context.project ? "web" : "slack";
   };
-  const projects = contextsState.list.filter(matches).sort((a, b) => rank(a) - rank(b));
+  const groups = [
+    { key: "personal", label: "Personal" },
+    { key: "web", label: "Web" },
+    { key: "slack", label: "Slack" },
+  ]
+    .map((g) => ({ ...g, items: projects.filter((context) => groupOf(context) === g.key) }))
+    .filter((g) => g.items.length > 0);
   const projectsFiltered = Boolean(q);
   let projectList: TemplateResult | typeof nothing = nothing;
-  if (projects.length) projectList = html`<div class="grid project-grid">${projects.map(contextCard)}</div>`;
+  if (projects.length)
+    projectList = html`<div class="project-list">
+      ${groups.map(
+        (g) =>
+          html`<section class="project-group">
+            <div class="project-group-head">
+              ${g.label} <span class="project-group-count">· ${g.items.length}</span>
+            </div>
+            ${g.items.map(contextRow)}
+          </section>`,
+      )}
+    </div>`;
   else if (!contextsLoading) {
     projectList = html`<div class="empty compact project-empty">
       ${projectsFiltered ? "No projects match your search." : "No projects yet."}
@@ -399,22 +417,18 @@ function gridTpl(): TemplateResult {
   `;
 }
 
-function contextCard(c: CoreContext): TemplateResult {
+function contextRow(c: CoreContext): TemplateResult {
   const { title, sub, glyph } = contextMeta(c);
   const count = c.sessionCount === 1 ? "1 conversation" : `${c.sessionCount} conversations`;
-  let access = "shared";
-  if (c.project && isProjectOwner(c)) access = "owned";
-  else if (c.kind === "personal") access = "private";
+  const meta = [c.project ? sub : "", count, c.lastActivityAt ? `active ${relTime(c.lastActivityAt)}` : ""]
+    .filter(Boolean)
+    .join(" · ");
   return html`
-    <button class="card context-card" type="button" @click=${() => selectContext(c.scopeId)}>
-      <div class="card-head">
-        <span class="context-glyph">${icon(glyph, 17)}</span>
-        <h2 class="card-title">${title}</h2>
-        ${c.isPrivate ? html`<span class="context-lock" title="Private channel">${icon(Lock, 13)}</span>` : nothing}
-        <span class="badge">${access}</span>
-      </div>
-      <div class="card-meta context-card-sub">${sub}</div>
-      <div class="card-meta">${count}${c.lastActivityAt ? ` · active ${relTime(c.lastActivityAt)}` : ""}</div>
+    <button class="context-row" type="button" title=${sub} @click=${() => selectContext(c.scopeId)}>
+      <span class="context-glyph">${icon(glyph, 15)}</span>
+      <span class="context-row-title">${title}</span>
+      ${c.isPrivate ? html`<span class="context-lock" title="Private channel">${icon(Lock, 12)}</span>` : nothing}
+      <span class="context-row-meta">${meta}</span>
     </button>
   `;
 }
