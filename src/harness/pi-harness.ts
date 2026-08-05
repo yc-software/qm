@@ -77,7 +77,8 @@ import { compactTranscript, deterministicCompactSummary, estimateHistoryTokens }
 import { countTokens } from "../util/tokens.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
-import { createGrindMeter, enforceGrindBudget, meterGrindCall } from "./grind.ts";
+import { createGrindMeter, meterGrindCall } from "./grind.ts";
+import { enforceGoal, goalSteeringNote, meterGoalCall, type GoalRecord } from "./goal.ts";
 
 export interface PiHarnessOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
@@ -1552,7 +1553,29 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             },
             scopeLabel: turn.scopeLabel,
           });
-          const modelPrompt = [turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
+          const grindMeter = createGrindMeter();
+          // Rehydrate a persisted goal (goals survive turns until closed).
+          if (!entry.ref.goal) {
+            for (let i = turn.history.length - 1; i >= 0; i--) {
+              const h = turn.history[i]!;
+              if (h.type !== "system") continue;
+              const payload = h.payload as { kind?: string; goal?: GoalRecord } | null;
+              if (payload?.kind === "goal" && payload.goal) {
+                entry.ref.goal = payload.goal;
+                break;
+              }
+            }
+          }
+          entry.ref.goalMeter = grindMeter;
+          entry.ref.goalRound = 0;
+          const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
+          const modelPrompt = [
+            activeGoalAtStart ? goalSteeringNote(activeGoalAtStart) : "",
+            turn.input,
+            turn.environment,
+          ]
+            .filter((s) => s && s.trim())
+            .join("\n\n");
           entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
           entry.ref.modelDispatch = [];
@@ -1565,7 +1588,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           });
 
           const callStats: Array<PerCallStat> = [];
-          const grindMeter = createGrindMeter();
           let curStart: number | undefined;
           let curFirst: number | undefined;
           let prevStepEnd: number | undefined;
@@ -1631,6 +1653,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 piUsageToCallUsage(u),
                 (entry.agentSession.model as { id?: string } | undefined)?.id ?? effectiveModel,
               );
+              if (entry.ref.goal?.status === "active") meterGoalCall(entry.ref.goal, piUsageToCallUsage(u));
               callStats.push({
                 ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
                 durationMs: curStart !== undefined ? end - curStart : null,
@@ -1814,13 +1837,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 abort: () => entry.agentSession.abort(),
               },
             );
-            if (wallClock === "ok" && turn.grind && !userAborted && !turn.cancel?.aborted) {
-              const grindResult = await enforceGrindBudget({
-                grind: turn.grind,
+            if (wallClock === "ok" && entry.ref.goal?.status === "active" && !userAborted && !turn.cancel?.aborted) {
+              const goalResult = await enforceGoal({
+                goal: entry.ref.goal,
                 meter: grindMeter,
                 outcome: wallClock,
                 ok: "ok" as const,
-                closingText: () => entry.agentSession.getLastAssistantText() ?? "",
                 toolCalls: () =>
                   entry.agentSession.messages
                     .slice(messagesBefore)
@@ -1832,7 +1854,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   !!entry.ref.pausedOnApproval ||
                   !!entry.ref.pendingApprovals?.length,
                 beforePrompt: async (note) => {
-                  console.error(`${note} session=${turn.session.id}`);
+                  console.error(
+                    `[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`,
+                  );
+                  void note;
+                  entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
                   entry.ref.silentRequested = false;
                   await thinkTail;
                 },
@@ -1844,8 +1870,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   });
                 },
               });
-              wallClock = grindResult.outcome;
-              grindWaiverNote = grindResult.waiverNote;
+              wallClock = goalResult.outcome;
+              grindWaiverNote = goalResult.waiverNote;
             }
             if (wallClock === "ok" && !userAborted && !turn.cancel?.aborted) {
               const refusal = providerRefusalError(entry.agentSession, messagesBefore);
@@ -1942,6 +1968,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           if (userAborted) {
             const partial = entry.agentSession.getLastAssistantText() ?? "";
             const reply = partial.trim() ? partial : "(stopped)";
+            if (entry.ref.goal) {
+              const g = entry.ref.goal;
+              await turn.emit({
+                type: "system",
+                payload: { kind: "goal", goal: { ...g } },
+                scopeLabel: turn.scopeLabel,
+              });
+              if (g.status !== "active") entry.ref.goal = null;
+            }
             const finalEntry = await turn.emit({
               type: "assistant",
               payload: { text: reply },
