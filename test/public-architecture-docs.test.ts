@@ -39,6 +39,11 @@ test("README describes the shipped Slack topology", () => {
   assert.doesNotMatch(readme, /nothing in the core knows about Slack/);
 });
 
+test("production server receives custom provider dependencies", () => {
+  assert.match(index, /customProviders: built\.customProviders/);
+  assert.match(index, /refreshCustomProviders: built\.refreshCustomProviders/);
+});
+
 test("README names the frameworks the shipped surfaces use", () => {
   assert.ok(rootPackage.dependencies.fastify);
   assert.ok(rootPackage.dependencies["@slack/bolt"]);
