@@ -12,7 +12,6 @@ export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
-import type { GrindBudget } from "./grind.ts";
 
 interface HarnessImage {
   mimeType: string;
@@ -68,7 +67,6 @@ export interface HarnessTurnInput {
   surfaceName?: string;
   pollFire?: boolean;
   turnWallClockMs?: number;
-  grind?: GrindBudget;
   systemPrompt: string;
   systemCacheBoundary?: number;
   history: SessionEntry[];

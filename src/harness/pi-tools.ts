@@ -11,6 +11,7 @@ import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage } from "../util/errors.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
+import { GOAL_BLOCKED_MIN_ROUNDS, createGoalRecord, type GoalRecord } from "./goal.ts";
 import { unscreenedNotice, UNSCREENED_PREFIX, type SecurityScreenVerdict } from "../security/security-posture.ts";
 import { CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
 
@@ -63,6 +64,14 @@ export interface ToolContextRef {
   abortSignal?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
+  /** The session's registered goal, if any (rehydrated across turns). */
+  goal?: GoalRecord | null;
+  /** Continuation round counter — a blocked claim counts once per round. */
+  goalRound?: number;
+  /** Round in which the last rejected blocked claim was made. */
+  goalLastBlockedRound?: number;
+  /** Live usage meter for the current turn (floor checks). */
+  goalMeter?: import("./grind.ts").GrindMeter;
   screenToolResult?: (tool: string, result: string, unscreenable: boolean) => Promise<boolean | "unscreened">;
   screenExternalContent?: (input: {
     content: string;
@@ -2649,6 +2658,175 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       }),
     );
 
+  const createGoal = defineTool({
+    name: "create_goal",
+    label: "create_goal",
+    description:
+      "Register a goal for this session — ONLY when the user explicitly asks for sustained, self-directed work " +
+      '("grind on X for 30 minutes", "keep going until the tests are green", "work through this list"); never infer ' +
+      "one from an ordinary request. Once registered the harness enforces it: you cannot end a reply while the goal " +
+      'is active — you either verifiably complete it (update_goal "complete") or, after repeated genuine impasses, ' +
+      "mark it blocked. Fails if an unfinished goal exists.",
+    parameters: Type.Object({
+      objective: Type.String({
+        description:
+          "The concrete end state to pursue, in the user's terms. Verifiable phrasing ('all tests in X pass') beats vague ('improve X').",
+      }),
+      floor: Type.Optional(
+        Type.Object(
+          {
+            minTurns: Type.Optional(Type.Number({ description: "Keep working for at least this many model turns." })),
+            minMs: Type.Optional(Type.Number({ description: "Keep working at least this many milliseconds." })),
+            minTokens: Type.Optional(Type.Number({ description: "Keep working through at least this many tokens." })),
+            minUsd: Type.Optional(Type.Number({ description: "Keep working through at least this much spend (USD)." })),
+          },
+          {
+            description:
+              "Work floor — set when the user names a duration/amount ('for 30 minutes'). The goal cannot complete before the floor is met.",
+          },
+        ),
+      ),
+      token_cap: Type.Optional(
+        Type.Number({ description: "Wind-down token budget. Set only when the user explicitly caps spend/size." }),
+      ),
+    }),
+    async execute(callId, params) {
+      const p = params as { objective: string; floor?: Record<string, number>; token_cap?: number };
+      await recordCall(callId, { tool: "create_goal", objective: p.objective });
+      if (ref.goal && ref.goal.status === "active") {
+        return recordResult(
+          callId,
+          { tool: "create_goal", error: "goal_exists" },
+          text("A goal is already active. Complete or block it with update_goal first — get_goal shows it."),
+          true,
+        );
+      }
+      let record: GoalRecord;
+      try {
+        const floor = p.floor && Object.values(p.floor).some((v) => Number.isFinite(v) && v > 0) ? p.floor : undefined;
+        record = createGoalRecord({
+          objective: p.objective,
+          ...(floor ? { floor } : {}),
+          ...(p.token_cap ? { capTokens: p.token_cap } : {}),
+          source: "tool",
+        });
+      } catch (e) {
+        return recordResult(callId, { tool: "create_goal", error: "invalid" }, text(errMessage(e)), true);
+      }
+      ref.goal = record;
+      return recordResult(
+        callId,
+        { tool: "create_goal", goal: record },
+        text(
+          "Goal registered and now enforced: you can no longer end a reply while it is active. " +
+            "Complete it with update_goal only when the objective is verifiably met.",
+        ),
+      );
+    },
+  });
+
+  const getGoal = defineTool({
+    name: "get_goal",
+    label: "get_goal",
+    description: "Read this session's goal: objective, status, work floor, token cap and usage.",
+    parameters: Type.Object({}),
+    async execute(callId) {
+      await recordCall(callId, { tool: "get_goal" });
+      const goal = ref.goal ?? null;
+      return recordResult(
+        callId,
+        { tool: "get_goal", goal },
+        text(goal ? JSON.stringify(goal, null, 1) : "No goal registered in this session."),
+      );
+    },
+  });
+
+  const updateGoal = defineTool({
+    name: "update_goal",
+    label: "update_goal",
+    description:
+      'Close the active goal. status "complete" ONLY when the objective is achieved and verified against current ' +
+      'evidence (and any work floor is met). status "blocked" ONLY at a genuine impasse that has recurred across ' +
+      `${GOAL_BLOCKED_MIN_ROUNDS} separate continuation rounds — never because the work is hard, slow, or unclear.`,
+    parameters: Type.Object({
+      status: Type.Union([Type.Literal("complete"), Type.Literal("blocked")]),
+      note: Type.Optional(
+        Type.String({ description: "complete: what evidence proves it. blocked: the exact impasse (required)." }),
+      ),
+    }),
+    async execute(callId, params) {
+      const p = params as { status: "complete" | "blocked"; note?: string };
+      await recordCall(callId, { tool: "update_goal", status: p.status, ...(p.note ? { note: p.note } : {}) });
+      const goal = ref.goal;
+      if (!goal || goal.status !== "active") {
+        return recordResult(
+          callId,
+          { tool: "update_goal", error: "no_active_goal" },
+          text("No active goal to update."),
+          true,
+        );
+      }
+      if (p.status === "blocked") {
+        const reason = p.note?.trim();
+        if (!reason) {
+          return recordResult(
+            callId,
+            { tool: "update_goal", error: "blocked_needs_reason" },
+            text("Blocking requires a note naming the exact impasse."),
+            true,
+          );
+        }
+        const round = ref.goalRound ?? 0;
+        if (ref.goalLastBlockedRound !== round) {
+          ref.goalLastBlockedRound = round;
+          goal.blockedStreak += 1;
+          goal.blockedReason = reason;
+          goal.updatedAt = Date.now();
+        }
+        if (goal.blockedStreak < GOAL_BLOCKED_MIN_ROUNDS) {
+          return recordResult(
+            callId,
+            { tool: "update_goal", error: "blocked_audit", streak: goal.blockedStreak },
+            text(
+              `Blocked claim ${goal.blockedStreak}/${GOAL_BLOCKED_MIN_ROUNDS} recorded — not accepted yet. ` +
+                "Attack the impasse differently this round; if the SAME impasse recurs, claim blocked again next round.",
+            ),
+            true,
+          );
+        }
+        goal.status = "blocked";
+        goal.updatedAt = Date.now();
+        return recordResult(
+          callId,
+          { tool: "update_goal", goal },
+          text("Goal marked blocked. Tell the user the exact impasse and what would unblock it."),
+        );
+      }
+      if (goal.floor) {
+        const meter = ref.goalMeter;
+        if (meter) {
+          const { grindState } = await import("./grind.ts");
+          const state = grindState(goal.floor, meter);
+          if (!state.met) {
+            return recordResult(
+              callId,
+              { tool: "update_goal", error: "floor_unmet", state: state.text },
+              text(`The work floor is not met yet (${state.text}). Keep working; completion is not available early.`),
+              true,
+            );
+          }
+        }
+      }
+      goal.status = "complete";
+      goal.updatedAt = Date.now();
+      if (p.note) goal.completionNote = p.note;
+      return recordResult(
+        callId,
+        { tool: "update_goal", goal },
+        text("Goal marked complete. Report the outcome (and evidence) to the user."),
+      );
+    },
+  });
   const tools = [
     execute,
     ...(credentialExecServices.length ? [credentialExec] : []),
@@ -2662,6 +2840,9 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     ...(controlTools || surfaceTools ? [guidance] : []),
     ...(surfaceTools ? [surface, staySilent] : [finishSilently]),
     ...mcpTools,
+    createGoal,
+    getGoal,
+    updateGoal,
   ];
   const mcpNames = new Set(mcpTools.map((t) => t.name));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
