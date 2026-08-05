@@ -509,7 +509,7 @@ function validate(raw: unknown, path: string): QmConfig {
   const o = raw;
 
   for (const key of Object.keys(o)) {
-    if (!VALID_TOP_LEVEL_KEYS.has(key)) {
+    if (key !== "//" && !VALID_TOP_LEVEL_KEYS.has(key)) {
       throw new CliError(`${path}: unknown top-level field ${JSON.stringify(key)}`);
     }
   }
