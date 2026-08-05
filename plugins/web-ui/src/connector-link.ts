@@ -9,6 +9,7 @@ export const CONNECTOR_NAMES: Record<string, string> = {
   github: "GitHub",
   dropbox: "Dropbox",
   x: "X",
+  bluenexus: "BlueNexus",
 };
 
 export interface ConnectorLink {

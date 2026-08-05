@@ -111,6 +111,7 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
   GOOGLE_OAUTH_CLIENT_SECRET: ["From your Google Cloud OAuth client (APIs & Services -> Credentials)."],
   DROPBOX_OAUTH_CLIENT_SECRET: ["From your Dropbox app console (https://www.dropbox.com/developers/apps)."],
   LINEAR_OAUTH_CLIENT_SECRET: ["From your Linear OAuth application settings."],
+  BLUENEXUS_OAUTH_CLIENT_SECRET: ["From your BlueNexus OAuth client (Developer -> My Apps)."],
 };
 
 const FORMAT_HINTS: Readonly<Record<string, { prefix: string; label: string }>> = {
