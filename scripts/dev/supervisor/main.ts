@@ -320,6 +320,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   else if (assembled.harness === "codex") {
     harnessDetail = `live codex turns (openai key from ${assembled.openaiKeySource || "the environment"})`;
   } else if (assembled.harness === "claude") harnessDetail = "live claude turns (native CLI authentication)";
+  else if (assembled.harness === "cma") harnessDetail = "live cma turns (Claude Managed Agents sessions)";
   phase("env", "ok", harnessDetail);
 
   phase("deps", "start");

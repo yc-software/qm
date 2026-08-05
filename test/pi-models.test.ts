@@ -45,7 +45,10 @@ test("native harnesses reject cross-provider pins and choose their own defaults"
   assert.equal(modelSupportedByHarness("claude-opus-4-8", "codex"), false);
   assert.equal(modelSupportedByHarness("claude-future-9", "claude"), true);
   assert.equal(modelSupportedByHarness("gpt-future-9", "codex"), true);
+  assert.equal(modelSupportedByHarness("claude-opus-4-8", "cma"), true);
+  assert.equal(modelSupportedByHarness("gpt-5.6-sol", "cma"), false);
   assert.equal(defaultModelForHarness("codex", "claude-opus-4-8"), "gpt-5.6-sol");
+  assert.equal(defaultModelForHarness("cma", "gpt-5.6-sol"), "claude-opus-5");
 });
 
 test("the default base model follows the providers a deployment can actually bill", () => {
@@ -84,6 +87,9 @@ test("a provider that cannot serve a harness has no default model for it", () =>
   assert.equal(defaultModelForProvider("codex", "anthropic"), undefined, "the Codex CLI runs no Anthropic model");
   assert.equal(defaultModelForProvider("claude", "openrouter"), undefined, "the Claude CLI runs no OpenRouter model");
   assert.equal(defaultModelForProvider("opencode", "openrouter"), undefined, "opencode has no OpenRouter route");
+  assert.equal(defaultModelForProvider("cma", "anthropic"), "claude-opus-5");
+  assert.equal(defaultModelForProvider("cma", "openai"), undefined, "CMA runs no OpenAI model");
+  assert.equal(defaultModelForProvider("cma", "openrouter"), undefined, "CMA runs no OpenRouter model");
 });
 
 test("the curated catalog contains only current model families", () => {

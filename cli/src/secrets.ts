@@ -42,9 +42,28 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "ANTHROPIC_API_KEY",
     service: "core",
-    required: { when: { kind: "model-provider", provider: "anthropic" }, optionalOtherwise: true },
+    required: {
+      when: {
+        kind: "any",
+        conditions: [
+          { kind: "env-equals", service: "core", name: "HARNESS", value: "cma" },
+          { kind: "model-provider", provider: "anthropic" },
+        ],
+      },
+      optionalOtherwise: true,
+    },
     description:
-      'Anthropic API key: bills the base model when modelProvider is "anthropic", an optional deployment fallback otherwise.',
+      'Anthropic API key: bills the base model when modelProvider is "anthropic" and authenticates the CMA harness, an optional deployment fallback otherwise.',
+  },
+  {
+    name: "CMA_ENVIRONMENT_KEY",
+    service: "core",
+    required: {
+      when: { kind: "env-equals", service: "core", name: "HARNESS", value: "cma" },
+      optionalOtherwise: true,
+    },
+    description:
+      "Environment key for the self-hosted CMA environment, generated on the environment's page in the Claude console; the CMA harness uses it to service the environment's work queue and run the model's bash tool on each scope's own computer.",
   },
   {
     name: "OPENROUTER_API_KEY",
@@ -71,7 +90,9 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "PUBLIC_API_URL",
     service: "core",
-    required: { when: { kind: "env-in", service: "core", name: "HARNESS", values: ["pi", "opencode", "codex"] } },
+    required: {
+      when: { kind: "env-in", service: "core", name: "HARNESS", values: ["pi", "opencode", "codex", "cma"] },
+    },
     description: "Public core self-API URL reachable from agent sandboxes.",
   },
   {

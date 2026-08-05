@@ -1,7 +1,19 @@
-export const sleep = (ms: number, opts?: { unref?: boolean }): Promise<void> =>
+export const sleep = (ms: number, opts?: { unref?: boolean; signal?: AbortSignal }): Promise<void> =>
   new Promise((r) => {
-    const t = setTimeout(r, ms);
+    if (opts?.signal?.aborted) {
+      r();
+      return;
+    }
+    const t = setTimeout(() => {
+      opts?.signal?.removeEventListener("abort", onAbort);
+      r();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      r();
+    };
     if (opts?.unref) t.unref?.();
+    opts?.signal?.addEventListener("abort", onAbort, { once: true });
   });
 
 export function createKeyedQueue<K = string>(): <T>(key: K, fn: () => Promise<T>) => Promise<T> {

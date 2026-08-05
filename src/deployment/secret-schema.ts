@@ -3,6 +3,7 @@ import { isStrongSigningSecret } from "../auth/source-auth.ts";
 type SecretGate =
   | "production"
   | "codex"
+  | "cma"
   | "postgres"
   | "sprites"
   | "fly-sandbox"
@@ -27,7 +28,8 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "PORTAL_IDENTITY_SECRET", requiredWhen: "production" },
   { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
   { name: "OPENAI_API_KEY", requiredWhen: ["codex", "model-openai"] },
-  { name: "ANTHROPIC_API_KEY", requiredWhen: "model-anthropic" },
+  { name: "ANTHROPIC_API_KEY", requiredWhen: ["cma", "model-anthropic"] },
+  { name: "CMA_ENVIRONMENT_KEY", requiredWhen: "cma" },
   { name: "OPENROUTER_API_KEY", requiredWhen: "model-openrouter" },
   { name: "DATABASE_URL", requiredWhen: "postgres" },
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
@@ -42,6 +44,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
   codex: (env) => env.HARNESS?.trim() === "codex",
+  cma: (env) => env.HARNESS?.trim() === "cma",
   postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
   sprites: (env) => env.SANDBOX_BACKEND === "sprites" || env.SANDBOX_SECONDARY_BACKEND === "sprites",
   "fly-sandbox": (env) => env.SANDBOX_BACKEND === "fly",

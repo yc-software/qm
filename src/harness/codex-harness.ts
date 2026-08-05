@@ -15,7 +15,14 @@ import { countTokens } from "../util/tokens.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { CodexAppServer, CodexRpcError } from "./codex-app-server.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
-import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
+import {
+  bridgedTools,
+  bridgedToolText,
+  coreToolOptions,
+  turnToolContext,
+  turnToolOptions,
+  type BridgedTool,
+} from "./pi-tools.ts";
 import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
 
 export interface CodexHarnessOptions {
@@ -50,31 +57,6 @@ export function codexHarnessConfigOptions(config: Config): CodexHarnessOptions {
     turnWallClockMs: config.turnWallClockMs,
   };
 }
-
-export function codexToolContext(turn: HarnessTurnInput): ToolContextRef {
-  return {
-    current: turn.tools,
-    pendingApprovals: [],
-    pausedOnApproval: false,
-    silentRequested: false,
-    pollFire: Boolean(turn.pollFire),
-    emit: turn.emit,
-    scopeLabel: turn.scopeLabel,
-    orgScopeId: turn.orgScopeId,
-    screenExternalContent: turn.screenExternalContent,
-    toolApprovalGate: turn.toolApprovalGate,
-  };
-}
-
-type BridgedTool = {
-  name: string;
-  description: string;
-  parameters: unknown;
-  execute(
-    callId: string,
-    args: unknown,
-  ): Promise<{ content?: Array<{ type?: string; text?: string }>; terminate?: boolean }>;
-};
 
 type CodexItem = Record<string, unknown> & { type: string };
 type CodexTurn = { id: string; status: string; error?: { message?: string } | null; items?: CodexItem[] };
@@ -221,26 +203,6 @@ async function transitionTask(
   if (!updated) throw new Error(`task ${id} was not ${expected} while transitioning to ${next}`);
 }
 
-function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
-  return {
-    scratchExec: opts.scratchExec,
-    ownerAuthExec: opts.ownerAuthExec,
-    reachExec: opts.reachExec,
-    controlTools: opts.controlTools,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    ...(turn
-      ? { readOnly: turn.readOnly, surfaceTools: turn.surfaceTools, surfaceName: turn.surfaceName }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
-}
-
-function asTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {
-  return createPiTools(ref, options) as unknown as BridgedTool[];
-}
-
 function userInput(text: string): Record<string, unknown> {
   return { type: "text", text, text_elements: [] };
 }
@@ -313,13 +275,6 @@ function reasoningFromTurn(turn: CodexTurn): string[] {
       ? item.summary.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
       : [],
   );
-}
-
-function toolText(result: Awaited<ReturnType<BridgedTool["execute"]>>): string {
-  return (result.content ?? [])
-    .filter((item): item is { type?: string; text: string } => typeof item.text === "string")
-    .map((item) => item.text)
-    .join("\n");
 }
 
 export function codexTaskTitle(prompt: unknown): string {
@@ -501,7 +456,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           });
           try {
             const result = await tool.execute(callId, p.arguments ?? {});
-            const output = toolText(result);
+            const output = bridgedToolText(result);
             state.responseItems.push({ type: "function_call_output", call_id: callId, output });
             if (result.terminate || state.turn.cancel?.aborted)
               setImmediate(() => {
@@ -587,10 +542,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       if (error === setupCancelled) return { reply: "", stopped: true };
       throw error;
     }
-    const ref = codexToolContext(turn);
+    const ref = turnToolContext(turn);
     const toolAbort = new AbortController();
     ref.abortSignal = toolAbort.signal;
-    const tools = toolsEnabled ? asTools(ref, toolOptions(opts, turn)) : [];
+    const tools = toolsEnabled ? bridgedTools(ref, turnToolOptions(opts, turn)) : [];
     const dynamicTools = tools.map((tool) => ({
       type: "function",
       name: tool.name,

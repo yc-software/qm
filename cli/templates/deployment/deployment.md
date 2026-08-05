@@ -187,8 +187,13 @@ deploy time: Anthropic serves `claude-opus-5`, OpenAI `gpt-5.6-sol`, OpenRouter
 `openrouter/auto`. Set `model` in `qm.config.jsonc` only to override that, and
 only with a model the chosen provider can bill — a mismatch is refused at
 startup rather than at the first message. The same rule covers the harness:
-`HARNESS` `codex` runs OpenAI models alone, `claude` runs Anthropic models
-alone, and `openrouter` needs the default `pi` harness.
+`HARNESS` `codex` runs OpenAI models alone, `claude` and `cma` run Anthropic
+models alone, and `openrouter` needs the default `pi` harness. `cma` needs one
+extra piece of one-time setup: in the Claude console (platform.claude.com),
+create an environment with the self-hosted type and generate its environment
+key on the environment's page, then put `CMA_ENVIRONMENT_ID` in the core `env`
+of `qm.config.jsonc` and set `CMA_ENVIRONMENT_KEY` as a core secret. `qm check`
+verifies both against the live environment before deploy.
 
 An operator may still prefer to hold the key centrally and rotate it from the
 Admin page. That is a deliberate choice, not the default: drop `modelProvider`

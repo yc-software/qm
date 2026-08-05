@@ -327,6 +327,40 @@ test("HARNESS=claude uses native Claude authentication and does not require an A
   assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_MODEL: "claude-opus-4-8" }).claudeModel, "claude-opus-4-8");
 });
 
+test("HARNESS=cma requires the self-hosted environment plumbing and an API key", () => {
+  const cmaEnv = {
+    HARNESS: "cma",
+    ANTHROPIC_API_KEY: "sk-ant",
+    CMA_ENVIRONMENT_ID: "env_1",
+    CMA_ENVIRONMENT_KEY: "sk-ant-oat01-x",
+    CMA_AGENT_ID: "agent_1",
+  };
+  const loaded = loadConfig({ ...cmaEnv, CMA_MODEL: "claude-sonnet-5" });
+  assert.equal(loaded.cmaModel, "claude-sonnet-5");
+  assert.equal(loaded.cmaEnvironmentId, "env_1");
+  assert.equal(loaded.cmaEnvironmentKey, "sk-ant-oat01-x");
+  assert.equal(loaded.cmaAgentId, "agent_1");
+  assert.equal(loaded.cmaDelivery, "stream");
+  assert.equal(loadConfig({ ...cmaEnv, CMA_DELIVERY: "poll" }).cmaDelivery, "poll");
+  assert.throws(() => loadConfig({ ...cmaEnv, CMA_DELIVERY: "webhook" }), /use stream or poll/);
+  assert.throws(
+    () => loadConfig({ HARNESS: "cma", ANTHROPIC_API_KEY: "sk-ant", CMA_ENVIRONMENT_KEY: "sk-ant-oat01-x" }),
+    /requires CMA_ENVIRONMENT_ID/,
+  );
+  assert.throws(
+    () => loadConfig({ HARNESS: "cma", ANTHROPIC_API_KEY: "sk-ant", CMA_ENVIRONMENT_ID: "env_1" }),
+    /missing or insecure required core secrets: CMA_ENVIRONMENT_KEY/,
+  );
+  assert.doesNotThrow(
+    () => loadConfig({ ...cmaEnv, CMA_AGENT_ID: undefined }),
+    "the agent id is optional: agents are provisioned per model and effort at runtime",
+  );
+  assert.throws(
+    () => loadConfig({ HARNESS: "cma", CMA_ENVIRONMENT_ID: "env_1", CMA_ENVIRONMENT_KEY: "sk-ant-oat01-x" }),
+    /missing or insecure required core secrets: ANTHROPIC_API_KEY/,
+  );
+});
+
 test("SANDBOX_BACKEND: unset defaults to local (dev only); the secondary must be recognized and differ", () => {
   assert.equal(loadConfig({}).sandboxBackend, "local");
   assert.throws(

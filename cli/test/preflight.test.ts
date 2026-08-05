@@ -4,6 +4,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import type { QmConfig } from "../src/config.ts";
 import { CliError } from "../src/log.ts";
 import {
+  cmaEnvironmentPreflight,
   emailTransportPreflight,
   flySandboxTokenPreflight,
   nodeEngineProblem,
@@ -38,6 +39,109 @@ async function quietAsync(fn: () => Promise<void>): Promise<string[]> {
     console.warn = warnFn;
   }
 }
+
+const CMA_CONFIG: QmConfig = {
+  ...CONFIG,
+  env: { core: { HARNESS: "cma", CMA_ENVIRONMENT_ID: "env_check" } },
+};
+const CMA_SECRETS = new Map([
+  ["ANTHROPIC_API_KEY", "sk-ant-check"],
+  ["CMA_ENVIRONMENT_KEY", "sk-ant-oat01-check"],
+]);
+
+function cmaFetch(environment: () => Response, heartbeat?: () => Response): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/work/") && init?.method === "POST")
+      return heartbeat ? heartbeat() : new Response("{}", { status: 200 });
+    return environment();
+  }) as typeof fetch;
+}
+
+test("cma preflight probes only cma deployments that carry an environment id", async () => {
+  const silent = (async () => {
+    throw new Error("must not be called");
+  }) as typeof fetch;
+  assert.deepEqual(await quietAsync(() => cmaEnvironmentPreflight(CONFIG, CMA_SECRETS, silent)), []);
+  assert.deepEqual(
+    await quietAsync(() =>
+      cmaEnvironmentPreflight({ ...CMA_CONFIG, env: { core: { HARNESS: "cma" } } }, CMA_SECRETS, silent),
+    ),
+    [],
+    "a missing environment id is runChecks' problem, not the network preflight's",
+  );
+});
+
+test("cma preflight fails with the console fix when the environment cannot be read", async () => {
+  await assert.rejects(
+    () =>
+      cmaEnvironmentPreflight(
+        CMA_CONFIG,
+        CMA_SECRETS,
+        cmaFetch(() => new Response("nope", { status: 404 })),
+      ),
+    (e: unknown) => {
+      assert.ok(e instanceof CliError);
+      assert.ok(e.message.includes("env_check"));
+      assert.ok(e.message.includes("platform.claude.com"));
+      return true;
+    },
+  );
+  await assert.rejects(
+    () =>
+      cmaEnvironmentPreflight(
+        CMA_CONFIG,
+        CMA_SECRETS,
+        cmaFetch(() => new Response("denied", { status: 401 })),
+      ),
+    (e: unknown) => {
+      assert.ok(e instanceof CliError);
+      assert.ok(e.message.includes("ANTHROPIC_API_KEY"));
+      return true;
+    },
+  );
+});
+
+test("cma preflight rejects a cloud environment and a rejected environment key", async () => {
+  const cloud = () => new Response(JSON.stringify({ config: { type: "cloud" } }), { status: 200 });
+  await assert.rejects(
+    () => cmaEnvironmentPreflight(CMA_CONFIG, CMA_SECRETS, cmaFetch(cloud)),
+    (e: unknown) => {
+      assert.ok(e instanceof CliError);
+      assert.ok(e.message.includes('type "cloud"'));
+      assert.ok(e.message.includes("self-hosted"));
+      return true;
+    },
+  );
+  const selfHosted = () => new Response(JSON.stringify({ config: { type: "self_hosted" } }), { status: 200 });
+  await assert.rejects(
+    () =>
+      cmaEnvironmentPreflight(
+        CMA_CONFIG,
+        CMA_SECRETS,
+        cmaFetch(selfHosted, () => new Response("bad", { status: 401 })),
+      ),
+    (e: unknown) => {
+      assert.ok(e instanceof CliError);
+      assert.ok(e.message.includes("CMA_ENVIRONMENT_KEY"));
+      assert.ok(e.message.includes("environment's page"));
+      return true;
+    },
+  );
+});
+
+test("cma preflight passes a healthy self-hosted environment and warns on network failure", async () => {
+  const selfHosted = () => new Response(JSON.stringify({ config: { type: "self_hosted" } }), { status: 200 });
+  const lines = await quietAsync(() => cmaEnvironmentPreflight(CMA_CONFIG, CMA_SECRETS, cmaFetch(selfHosted)));
+  assert.ok(lines.some((line) => line.includes("ANTHROPIC_API_KEY ok (self_hosted)")));
+  assert.ok(lines.some((line) => line.includes("CMA_ENVIRONMENT_KEY ok")));
+  const flaky = await quietAsync(() =>
+    cmaEnvironmentPreflight(CMA_CONFIG, CMA_SECRETS, (async () => {
+      throw new Error("connect ECONNREFUSED");
+    }) as typeof fetch),
+  );
+  assert.ok(flaky.some((line) => line.includes("continuing")));
+});
 
 test("nodeEngineProblem accepts a satisfying version and rejects an older one", () => {
   assert.equal(nodeEngineProblem(">=24.15.0", "package.json", "v24.15.0"), undefined);
