@@ -157,6 +157,38 @@ test("aborted assistant's dangling tool call is not healed — pi drops the mess
   assert.ok(lintFold(out).ok);
 });
 
+test("a poisoned tape — errored assistants, consecutive users, pre-existing interrupt — serves clean", () => {
+  seq = 0;
+  const erroredAssistant = () =>
+    row({
+      kind: "message",
+      payload: { role: "assistant", content: [], timestamp: 4, stopReason: "error" },
+    });
+  const rows = [
+    user("q"),
+    assistant([{ type: "toolCall", id: "c1", name: "exec", arguments: {} }]),
+    toolResult("c1", "ok"),
+    row({
+      kind: "message",
+      payload: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c9", name: "exec", arguments: {} }],
+        timestamp: 2,
+        stopReason: "aborted",
+      },
+    }),
+    row({ kind: "context_event", payload: { event: "interrupt" } }),
+    user("next turn"),
+    erroredAssistant(),
+    user("retry note"),
+    erroredAssistant(),
+  ];
+  const out = foldTape(rows) as Array<{ role: string; toolCallId?: string }>;
+  assert.ok(!out.some((m) => m.role === "toolResult" && m.toolCallId === "c9"));
+  assert.ok(lintFold(out).ok);
+  assert.ok(!tapeNeedsInterruptHeal(rows));
+});
+
 test("lintFold rejects a toolResult answering an aborted assistant's call", () => {
   seq = 0;
   const rows = [
