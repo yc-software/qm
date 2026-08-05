@@ -27,6 +27,8 @@ const env = {
   GITHUB_OAUTH_CLIENT_SECRET: "ghsecret",
   X_OAUTH_CLIENT_ID: "xid",
   X_OAUTH_CLIENT_SECRET: "xsecret",
+  BLUENEXUS_OAUTH_CLIENT_ID: "bnid",
+  BLUENEXUS_OAUTH_CLIENT_SECRET: "bnsecret",
 } as NodeJS.ProcessEnv;
 
 const resolve = createSecretClientResolver(createEnvSecretSource(env));
@@ -383,9 +385,10 @@ test("authorizeUrl adds code_challenge + S256 only when a challenge is supplied"
   assert.equal(without.searchParams.get("code_challenge_method"), null);
 });
 
-test("only X opts into PKCE; the other providers leave the seam inert (regression guard)", () => {
+test("only X and BlueNexus opt into PKCE; the other providers leave the seam inert (regression guard)", () => {
+  const pkceProviders = new Set(["x", "bluenexus"]);
   for (const [name, p] of Object.entries(PROVIDERS)) {
-    if (name === "x") assert.equal(p.pkce, true, "X requires PKCE");
+    if (pkceProviders.has(name)) assert.equal(p.pkce, true, `${name} requires PKCE`);
     else assert.notEqual(p.pkce, true, `${name} must not enable PKCE`);
   }
 });
@@ -415,6 +418,25 @@ test("OAuth state round-trips the PKCE verifier", async () => {
   );
   const opened = await openOAuthState(sealed, { secret: "state-secret" });
   assert.equal(opened.codeVerifier, "ver-abc");
+});
+
+const bluenexusClient = (): Promise<ResolvedClient> => resolve("bluenexus", {});
+
+test("BlueNexus authorizes on the app host but exchanges on the api host, with PKCE and the read-write MCP scope", async () => {
+  const u = new URL(
+    authorizeUrl("bluenexus", {
+      redirectUri: "https://app/cb",
+      state: "s",
+      client: await bluenexusClient(),
+      codeChallenge: "CH",
+    }),
+  );
+  assert.equal(u.origin + u.pathname, "https://app.bluenexus.ai/oauth/authorize");
+  assert.equal(PROVIDERS.bluenexus!.tokenUrl, "https://api.bluenexus.ai/api/v1/auth/token");
+  assert.equal(u.searchParams.get("client_id"), "bnid");
+  assert.equal(u.searchParams.get("code_challenge"), "CH");
+  assert.equal(u.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(u.searchParams.get("scope"), "universal-mcp-read-write");
 });
 
 const xClient = (): Promise<ResolvedClient> => resolve("x", {});

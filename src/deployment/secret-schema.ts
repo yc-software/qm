@@ -11,6 +11,7 @@ type SecretGate =
   | "google-oauth"
   | "dropbox-oauth"
   | "linear-oauth"
+  | "bluenexus-oauth"
   | "model-anthropic"
   | "model-openai"
   | "model-openrouter";
@@ -37,6 +38,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "GOOGLE_OAUTH_CLIENT_SECRET", requiredWhen: "google-oauth" },
   { name: "DROPBOX_OAUTH_CLIENT_SECRET", requiredWhen: "dropbox-oauth" },
   { name: "LINEAR_OAUTH_CLIENT_SECRET", requiredWhen: "linear-oauth" },
+  { name: "BLUENEXUS_OAUTH_CLIENT_SECRET", requiredWhen: "bluenexus-oauth" },
 ];
 
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
@@ -50,6 +52,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "google-oauth": (env) => Boolean(env.GOOGLE_OAUTH_CLIENT_ID),
   "dropbox-oauth": (env) => Boolean(env.DROPBOX_OAUTH_CLIENT_ID),
   "linear-oauth": (env) => Boolean(env.LINEAR_OAUTH_CLIENT_ID),
+  "bluenexus-oauth": (env) => Boolean(env.BLUENEXUS_OAUTH_CLIENT_ID),
   "model-anthropic": (env) => env.MODEL_PROVIDER?.trim() === "anthropic",
   "model-openai": (env) => env.MODEL_PROVIDER?.trim() === "openai",
   "model-openrouter": (env) => env.MODEL_PROVIDER?.trim() === "openrouter",

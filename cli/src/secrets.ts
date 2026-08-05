@@ -164,6 +164,12 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Linear OAuth client secret.",
   },
   {
+    name: "BLUENEXUS_OAUTH_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "BLUENEXUS_OAUTH_CLIENT_ID" } },
+    description: "BlueNexus OAuth client secret.",
+  },
+  {
     name: "SLACK_BOT_TOKEN",
     service: "slack",
     required: false,
