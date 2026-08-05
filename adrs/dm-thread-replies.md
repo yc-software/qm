@@ -1,22 +1,13 @@
-# Let assistant replies thread inside a 1:1 DM
+Small thing: could assistant replies thread inside a 1:1 DM?
 
-Slack DMs have threads. QM won't use them.
+Slack DMs do have threads, but right now a reply to a person's DM always posts at the top level, and
+passing a thread id back gets rejected with "a DM to a person has no threads". Slack itself is happy
+to thread on an IM channel, and it looks like the layer that actually talks to Slack already forwards
+the thread id, so I think it's just the check above it.
 
-`reachNow` in `src/api/app-messaging.ts` rejects `threadTs` unless the destination is a channel or a
-group DM. A DM to a person returns `bad_request` with "a DM to a person has no threads". That isn't
-true of Slack. `chat.postMessage` accepts `thread_ts` on an IM channel and the client renders the
-reply thread normally. `src/slack/delivery.ts` already passes `thread_ts` through, so the plumbing
-below the API is fine. The check above it is the only thing in the way.
+The reason it bugs me: I keep a few topics going with the assistant in one DM. Every reply goes to
+one flat column and the topics interleave. Best I can do now is one message per question, which is a
+poor imitation of threads and makes the DM noisier.
 
-Why I care. I have several topics open with the assistant in one DM. Every answer lands top-level,
-so the DM is one flat column with the topics interleaved. The workaround today is one message per
-question, which approximates threads badly and makes the DM noisier rather than less.
-
-What I'd like: allow `threadTs` when the destination is a person-DM, and let the `post` action reply
-in the thread of the message it's answering in a DM the same way it does in a channel. Keeping the
-error for cases Slack can't thread is fine.
-
-One thing to decide that I don't have an opinion on: whether a threaded DM reply should also
-broadcast to the DM top level. In a channel `threadOnly` controls that. For a DM I'd guess default
-to no broadcast, but you'd know better whether that hides replies from people who don't expand
-threads.
+No strong opinion on whether a threaded DM reply should also show at the top level of the DM. You'd
+know better whether that hides things from people who don't open threads.
