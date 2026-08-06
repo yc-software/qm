@@ -30,10 +30,13 @@ export function getBaseModel(id: string, fallback?: { name: string; provider: st
     const template = builtinModel(clone.template);
     if (template) return cloneModel(template, id, clone.name);
   }
-  if (fallback?.provider === "openrouter") {
-    const template = getModel("openrouter", "openrouter/auto" as Parameters<typeof getModel>[1]) as PiModel | undefined;
+  if (fallback) {
+    const providerKey = (KNOWN_PROVIDERS.includes(fallback.provider as any) ? fallback.provider : "openai") as any;
+    const template = (getModel(providerKey, "gpt-4o" as any) ?? getModel("openai", "gpt-4o" as any)) as PiModel | undefined;
     if (template) return cloneModel(template, id, fallback.name);
   }
+  const defaultTemplate = getModel("openai", "gpt-4o" as any) as PiModel | undefined;
+  if (defaultTemplate) return cloneModel(defaultTemplate, id, id);
   throw new Error(`Unsupported model: ${id}`);
 }
 

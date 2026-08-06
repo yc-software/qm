@@ -82,9 +82,8 @@ function buildOption(
 ): ModelOption | null {
   try {
     const dynamic = catalog[id];
-    const meta = MODEL_CATALOG[id] ?? (dynamic ? { label: dynamic.name, buttonLabel: dynamic.name } : null);
-    if (!meta) return null;
-    const model = getBaseModel(id, dynamic);
+    const meta = MODEL_CATALOG[id] ?? (dynamic ? { label: dynamic.name, buttonLabel: dynamic.name } : { label: id, buttonLabel: id });
+    const model = getBaseModel(id, dynamic ?? { name: id, provider: "custom" });
     return {
       value: qualified ? `${harnessId}:${id}` : id,
       harnessId,
@@ -157,10 +156,11 @@ export function runtimeModelOptions(
   catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
 ): ModelOption[] {
   const options = approvedHarnesses.flatMap((harnessId) => {
-    const configured = buildOptions(modelsByHarness[harnessId] ?? [], harnessId, true, catalog);
-    return configured.length
-      ? configured
-      : buildOptions(defaultModelIdsForHarness(harnessId), harnessId, true, catalog);
+    const serverModels = modelsByHarness[harnessId];
+    if (serverModels) {
+      return buildOptions(serverModels, harnessId, true, catalog);
+    }
+    return buildOptions(defaultModelIdsForHarness(harnessId), harnessId, true, catalog);
   });
   return options.length ? options : buildOptions(DEFAULT_PICKER_MODEL_IDS);
 }
