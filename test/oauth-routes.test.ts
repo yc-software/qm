@@ -51,8 +51,8 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
   const fetchImpl: FetchLike = async (url, init) => {
     exchanged = true;
     assert.equal(url, PROVIDERS.google!.tokenUrl);
-    assert.match(init.body, /grant_type=authorization_code/);
-    assert.match(init.body, /code=code-123/);
+    assert.match(init.body ?? "", /grant_type=authorization_code/);
+    assert.match(init.body ?? "", /code=code-123/);
     return {
       ok: true,
       status: 200,

@@ -21,6 +21,16 @@ const CONNECTOR_LABELS: Record<string, { name: string; hosts: string; desc?: str
     hosts: "Gmail, Calendar, Drive, Sheets",
     desc: "Lets the agent read and act in your Gmail, Calendar, and Sheets on your behalf, and read your Drive (it can save new files there, but not edit your existing ones).",
   },
+  atlassian: {
+    name: "Atlassian",
+    hosts: "Jira & Confluence",
+    desc: "Lets the agent read Jira issues and search Confluence pages from the Atlassian site you select. This connection is read-only.",
+  },
+  "read-ai": {
+    name: "Read AI",
+    hosts: "Meetings, transcripts & summaries",
+    desc: "Lets the agent read your Read AI meeting reports, summaries, action items, and transcripts. This connection is read-only.",
+  },
   slack: {
     name: "Slack",
     hosts: "Channels & messages",
@@ -53,9 +63,22 @@ const CONNECTOR_LABELS: Record<string, { name: string; hosts: string; desc?: str
   },
 };
 
-const CONNECTOR_LOGOS: Record<string, string> = {
+interface ConnectorLogo {
+  path: string;
+  viewBox?: string;
+  fillRule?: "nonzero" | "evenodd";
+}
+
+const CONNECTOR_LOGOS: Record<string, string | ConnectorLogo> = {
   google:
     "M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z",
+  atlassian:
+    "M7.12 11.084a.683.683 0 0 0-1.16.126L.075 22.974a.703.703 0 0 0 .63 1.018h8.19a.678.678 0 0 0 .63-.39c1.767-3.65.696-9.203-2.406-12.52ZM11.434.386a15.515 15.515 0 0 0-.906 15.317l3.95 7.9a.703.703 0 0 0 .628.388h8.19a.703.703 0 0 0 .63-1.017L12.63.38a.664.664 0 0 0-1.196.006Z",
+  "read-ai": {
+    path: "M66.12 44.9646C66.12 56.7455 56.5697 66.2958 44.7888 66.2958C33.0079 66.2958 23.4576 56.7455 23.4576 44.9646C23.4576 33.1837 33.0079 23.6334 44.7888 23.6334C56.5697 23.6334 66.12 33.1837 66.12 44.9646ZM44.7888 61.227C53.7703 61.227 61.0512 53.9461 61.0512 44.9646C61.0512 35.9831 53.7703 28.7022 44.7888 28.7022C35.8073 28.7022 28.5264 35.9831 28.5264 44.9646C28.5264 53.9461 35.8073 61.227 44.7888 61.227ZM38.0894 47.2675C39.0847 50.0084 41.7121 51.96 44.7888 51.96C47.8655 51.96 50.4929 50.0084 51.4882 47.2675L56.2526 48.9976C54.5527 53.6787 50.0652 57.0288 44.7888 57.0288C39.5124 57.0288 35.0249 53.6787 33.325 48.9976L38.0894 47.2675ZM68.232 66.7182V58.2702H73.3008V66.7182C73.3008 70.4507 70.2749 73.4766 66.5424 73.4766H58.0944V68.4078H66.5424C67.4755 68.4078 68.232 67.6513 68.232 66.7182ZM21.768 23.6334V32.0814H16.6992V23.6334C16.6992 19.9008 19.7251 16.875 23.4576 16.875H31.9056V21.9438H23.4576C22.5245 21.9438 21.768 22.7003 21.768 23.6334Z",
+    viewBox: "0 0 90 90",
+    fillRule: "evenodd",
+  },
   slack:
     "M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z",
   notion:
@@ -70,11 +93,14 @@ const CONNECTOR_LOGOS: Record<string, string> = {
 };
 
 function connectorLogo(id: string): TemplateResult {
-  const path = CONNECTOR_LOGOS[id];
-  if (!path) return html`<span class="connector-logo">${icon(Plug, 18)}</span>`;
+  const logo = CONNECTOR_LOGOS[id];
+  if (!logo) return html`<span class="connector-logo">${icon(Plug, 18)}</span>`;
+  const path = typeof logo === "string" ? logo : logo.path;
+  const viewBox = typeof logo === "string" ? "0 0 24 24" : (logo.viewBox ?? "0 0 24 24");
+  const fillRule = typeof logo === "string" ? "nonzero" : (logo.fillRule ?? "nonzero");
   return html`<span class="connector-logo"
-    ><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
-      <path d=${path}></path></svg
+    ><svg width="18" height="18" viewBox=${viewBox} fill="currentColor" aria-hidden="true" focusable="false">
+      <path d=${path} fill-rule=${fillRule}></path></svg
   ></span>`;
 }
 

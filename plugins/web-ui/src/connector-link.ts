@@ -3,6 +3,8 @@ const CONNECTOR_REDEEM_RE =
 
 export const CONNECTOR_NAMES: Record<string, string> = {
   google: "Google Workspace",
+  atlassian: "Atlassian",
+  "read-ai": "Read AI",
   slack: "Slack",
   notion: "Notion",
   linear: "Linear",

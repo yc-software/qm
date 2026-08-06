@@ -57,7 +57,7 @@ export interface OAuthProviderConfig {
 
 export type FetchLike = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: { method: string; headers: Record<string, string>; body?: string },
 ) => Promise<{
   ok: boolean;
   status: number;
@@ -211,6 +211,132 @@ const notionExchange: OAuthExchangeAdapter = async ({ provider, client, code, re
   if (!access) throw new Error("notion token exchange returned no access_token");
   return { hosts: provider.hosts, token: { accessToken: access } };
 };
+const ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources";
+
+async function assertSingleAtlassianSite(fetchImpl: FetchLike, accessToken: string): Promise<void> {
+  const res = await fetchImpl(ATLASSIAN_ACCESSIBLE_RESOURCES_URL, {
+    method: "GET",
+    headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`atlassian accessible-resources check failed (${res.status})`);
+  const raw = await res.json();
+  if (!Array.isArray(raw)) throw new Error("atlassian accessible-resources returned an invalid response");
+  const sites = new Set<string>();
+  for (const value of raw) {
+    const resource = value as Record<string, unknown>;
+    if (typeof resource.id !== "string" || !resource.id || typeof resource.url !== "string" || !resource.url) {
+      throw new Error("atlassian accessible-resources returned an invalid site");
+    }
+    let origin: string;
+    try {
+      origin = new URL(resource.url).origin.toLowerCase();
+    } catch {
+      throw new Error("atlassian accessible-resources returned an invalid site");
+    }
+    sites.add(`${resource.id}\n${origin}`);
+  }
+  if (sites.size !== 1) {
+    throw new Error(
+      `atlassian connection must grant exactly one site; the token currently grants ${sites.size}. Reconnect and select only the intended site`,
+    );
+  }
+}
+
+async function atlassianTokenRequest(
+  args: OAuthAdapterArgs,
+  body: Record<string, string>,
+  fallbackRefresh?: string,
+  grantedScopes?: string[],
+): Promise<OAuthToken> {
+  const res = await args.fetchImpl(args.provider.tokenUrl, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const raw = (await res.json()) as Record<string, unknown>;
+  if (!res.ok || raw.error) {
+    throw new Error(
+      `atlassian token request failed (${res.status}): ${String(raw.error_description ?? raw.error ?? "unknown")}`,
+    );
+  }
+  const token = toToken(raw, fallbackRefresh, args.now, grantedScopes);
+  if (!token.accessToken) throw new Error("atlassian token request returned no access_token");
+  return token;
+}
+
+const atlassianExchange: OAuthExchangeAdapter = async (args) => {
+  const token = await atlassianTokenRequest(args, {
+    grant_type: "authorization_code",
+    client_id: args.client.id,
+    client_secret: args.client.secret,
+    code: args.code,
+    redirect_uri: args.redirectUri,
+  });
+  await assertSingleAtlassianSite(args.fetchImpl, token.accessToken);
+  return { hosts: args.provider.hosts, token };
+};
+
+const atlassianRefresh: OAuthRefreshAdapter = async (args) =>
+  atlassianTokenRequest(
+    args,
+    {
+      grant_type: "refresh_token",
+      client_id: args.client.id,
+      client_secret: args.client.secret,
+      refresh_token: args.token.refreshToken ?? "",
+    },
+    args.token.refreshToken,
+    args.token.grantedScopes,
+  );
+
+async function readAiTokenRequest(
+  args: OAuthAdapterArgs,
+  body: Record<string, string>,
+  fallbackRefresh?: string,
+  grantedScopes?: string[],
+): Promise<OAuthToken> {
+  const basic = Buffer.from(`${args.client.id}:${args.client.secret}`).toString("base64");
+  const res = await args.fetchImpl(args.provider.tokenUrl, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/x-www-form-urlencoded",
+      authorization: `Basic ${basic}`,
+    },
+    body: new URLSearchParams(body).toString(),
+  });
+  const raw = (await res.json()) as Record<string, unknown>;
+  if (!res.ok || raw.error) {
+    throw new Error(
+      `read ai token request failed (${res.status}): ${String(raw.error_description ?? raw.error ?? "unknown")}`,
+    );
+  }
+  const token = toToken(raw, fallbackRefresh, args.now, grantedScopes);
+  if (!token.accessToken) throw new Error("read ai token request returned no access_token");
+  return token;
+}
+
+const readAiExchange: OAuthExchangeAdapter = async (args) => {
+  if (!args.codeVerifier) throw new Error("read ai token exchange requires a PKCE verifier");
+  const token = await readAiTokenRequest(args, {
+    grant_type: "authorization_code",
+    code: args.code,
+    redirect_uri: args.redirectUri,
+    code_verifier: args.codeVerifier,
+  });
+  return { hosts: args.provider.hosts, token };
+};
+
+const readAiRefresh: OAuthRefreshAdapter = async (args) =>
+  readAiTokenRequest(
+    args,
+    {
+      grant_type: "refresh_token",
+      refresh_token: args.token.refreshToken ?? "",
+    },
+    args.token.refreshToken,
+    args.token.grantedScopes,
+  );
 
 export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   google: {
@@ -259,6 +385,62 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
       ],
       scopesRationale:
         "gmail.modify/calendar/drive/spreadsheets/tasks back the Google Workspace skills; openid+email identify the account.",
+    },
+  },
+
+  atlassian: {
+    hosts: ["api.atlassian.com"],
+    authUrl: "https://auth.atlassian.com/authorize",
+    tokenUrl: "https://auth.atlassian.com/oauth/token",
+    scopes: ["read:jira-work", "search:confluence", "read:confluence-content.all", "offline_access"],
+    clientIdEnv: "ATLASSIAN_OAUTH_CLIENT_ID",
+    clientSecretEnv: "ATLASSIAN_OAUTH_CLIENT_SECRET",
+    redirectPath: "atlassian/callback",
+    consentMode: "standard",
+    egressRule: ["api.atlassian.com", "auth.atlassian.com"],
+    authParams: { audience: "api.atlassian.com", prompt: "consent" },
+    exchange: atlassianExchange,
+    refresh: atlassianRefresh,
+    setupGuide: {
+      console: "Atlassian Developer Console → My apps",
+      url: "https://developer.atlassian.com/console/myapps/",
+      steps: [
+        "Create an OAuth 2.0 (3LO) integration and use a resource-level grant.",
+        "Add the Jira and Confluence APIs, then grant only the requested read scopes and offline_access.",
+        "Add the redirect URI shown below as the app's callback URL.",
+        "During consent, select exactly one Jira/Confluence site; connections granting zero or multiple sites are rejected.",
+        "Paste the Client ID + Client secret below.",
+      ],
+      scopesRationale:
+        "Jira and Confluence read/search scopes back read-only issue and page retrieval; offline_access enables rotating refresh tokens. No write scopes are requested.",
+    },
+  },
+
+  "read-ai": {
+    hosts: ["api.read.ai"],
+    authUrl: "https://authn.read.ai/oauth2/auth",
+    tokenUrl: "https://authn.read.ai/oauth2/token",
+    scopes: ["openid", "email", "offline_access", "profile", "meeting:read"],
+    clientIdEnv: "READ_AI_OAUTH_CLIENT_ID",
+    clientSecretEnv: "READ_AI_OAUTH_CLIENT_SECRET",
+    redirectPath: "read-ai/callback",
+    consentMode: "standard",
+    egressRule: ["api.read.ai", "authn.read.ai"],
+    exchange: readAiExchange,
+    refresh: readAiRefresh,
+    pkce: true,
+    setupGuide: {
+      console: "Read AI API → Dynamic OAuth client registration",
+      url: "https://support.read.ai/hc/en-us/articles/49380809380371-API-Keys-Authentication",
+      steps: [
+        "Ensure Downloads is enabled under Read AI Workspace Settings → Reports & Sharing.",
+        "POST a dynamic OAuth client registration to https://api.read.ai/oauth/register using the redirect URI shown below.",
+        "Request only openid, email, offline_access, profile, and meeting:read with Authorization Code + refresh_token grants and client_secret_basic authentication.",
+        "Save the returned Client ID and Client secret immediately; Read AI does not show the secret again.",
+        "Paste the Client ID + Client secret below.",
+      ],
+      scopesRationale:
+        "meeting:read provides read-only access to meeting reports, summaries, action items, and transcripts; identity scopes bind the account; offline_access enables rotating refresh tokens.",
     },
   },
 

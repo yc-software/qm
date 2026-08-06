@@ -109,6 +109,12 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
     "Scope it to the configured organization <fly-org>; do not reuse a personal token.",
   ],
   GOOGLE_OAUTH_CLIENT_SECRET: ["From your Google Cloud OAuth client (APIs & Services -> Credentials)."],
+  ATLASSIAN_OAUTH_CLIENT_SECRET: [
+    "From your Atlassian OAuth 2.0 (3LO) integration (https://developer.atlassian.com/console/myapps/).",
+  ],
+  READ_AI_OAUTH_CLIENT_SECRET: [
+    "From the one-time response returned by Read AI dynamic OAuth client registration (https://api.read.ai/oauth/register).",
+  ],
   DROPBOX_OAUTH_CLIENT_SECRET: ["From your Dropbox app console (https://www.dropbox.com/developers/apps)."],
   LINEAR_OAUTH_CLIENT_SECRET: ["From your Linear OAuth application settings."],
 };

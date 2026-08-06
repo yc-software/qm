@@ -41,6 +41,33 @@ test("AWS deployment app domains reject a missing or placeholder gate secret", (
   );
 });
 
+test("an Atlassian env client id requires its matching client secret", () => {
+  assert.deepEqual(validateCoreSecretEnv({ ATLASSIAN_OAUTH_CLIENT_ID: "client-id" } as NodeJS.ProcessEnv), [
+    "ATLASSIAN_OAUTH_CLIENT_SECRET",
+  ]);
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      ATLASSIAN_OAUTH_CLIENT_ID: "client-id",
+      ATLASSIAN_OAUTH_CLIENT_SECRET: "client-secret",
+    } as NodeJS.ProcessEnv),
+    [],
+  );
+  assert.deepEqual(validateCoreSecretEnv({} as NodeJS.ProcessEnv), []);
+});
+
+test("a Read AI env client id requires its dynamic client secret", () => {
+  assert.deepEqual(validateCoreSecretEnv({ READ_AI_OAUTH_CLIENT_ID: "client-id" } as NodeJS.ProcessEnv), [
+    "READ_AI_OAUTH_CLIENT_SECRET",
+  ]);
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      READ_AI_OAUTH_CLIENT_ID: "client-id",
+      READ_AI_OAUTH_CLIENT_SECRET: "client-secret",
+    } as NodeJS.ProcessEnv),
+    [],
+  );
+});
+
 test("a declared base model provider is enforced at boot, not just at deploy time", () => {
   for (const [provider, key] of [
     ["anthropic", "ANTHROPIC_API_KEY"],
