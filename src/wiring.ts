@@ -85,6 +85,7 @@ import {
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import { createMemoryService, type MemoryService } from "./memory/memory-service.ts";
+import { createGbrainClient, createGbrainMemory } from "./memory/gbrain-memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import {
   createLocalBlobTransferStore,
@@ -556,10 +557,25 @@ export function buildApp(
   const files: FileArtifactStore = config.databaseUrl
     ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes)
     : createMemoryFileArtifactStore(fileBytes);
-  const baseMemory: MemoryService = config.databaseUrl
+  const persistedMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
   const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
+  const baseMemory: MemoryService = createGbrainMemory(
+    persistedMemory,
+    config.gbrain
+      ? createGbrainClient({
+          ...config.gbrain,
+          onError: (e) =>
+            errors.record({
+              category: "memory",
+              code: "gbrain_unavailable",
+              message: errMessage(e),
+              scopeLabel: "unknown" as ScopeId,
+            }),
+        })
+      : undefined,
+  );
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
     errors.record({
       category: e.category,

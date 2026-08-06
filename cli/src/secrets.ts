@@ -164,6 +164,12 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Linear OAuth client secret.",
   },
   {
+    name: "GBRAIN_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "GBRAIN_CLIENT_ID" } },
+    description: "gbrain OAuth client secret for the shared-brain memory backend.",
+  },
+  {
     name: "SLACK_BOT_TOKEN",
     service: "slack",
     required: false,

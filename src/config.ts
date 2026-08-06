@@ -35,6 +35,7 @@ export interface Config {
   sandboxSecondaryBackend?: "aws" | "local" | "sprites";
   deployProvider: "docker" | "aws";
   egressServiceHosts?: string[];
+  gbrain?: { mcpUrl: string; issuerUrl: string; clientId: string; clientSecret: string };
   brandingDefault?: { accent?: string; mark?: string; selfLabel?: string };
   modelId?: string;
   opencodeModel?: string;
@@ -463,6 +464,34 @@ function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
   return Object.keys(branding).length ? branding : undefined;
 }
 
+function gbrainFromEnv(env: NodeJS.ProcessEnv): Config["gbrain"] {
+  const mcpUrl = (env.GBRAIN_MCP_URL ?? "").trim();
+  const issuerUrl = (env.GBRAIN_ISSUER_URL ?? "").trim();
+  const clientId = (env.GBRAIN_CLIENT_ID ?? "").trim();
+  const clientSecret = (env.GBRAIN_CLIENT_SECRET ?? "").trim();
+  if (!mcpUrl && !issuerUrl && !clientId && !clientSecret) return undefined;
+  if (!mcpUrl || !issuerUrl || !clientId || !clientSecret) {
+    throw new Error(
+      "gbrain memory needs GBRAIN_MCP_URL, GBRAIN_ISSUER_URL, GBRAIN_CLIENT_ID and GBRAIN_CLIENT_SECRET together; unset all four to disable it",
+    );
+  }
+  for (const [name, value] of [
+    ["GBRAIN_MCP_URL", mcpUrl],
+    ["GBRAIN_ISSUER_URL", issuerUrl],
+  ] as const) {
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new Error(`${name} must be an absolute URL`);
+    }
+    if (parsed.protocol !== "https:" && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
+      throw new Error(`${name} must use https outside localhost`);
+    }
+  }
+  return { mcpUrl, issuerUrl, clientId, clientSecret };
+}
+
 function harnessEnvStrict(value: string | undefined): Config["harness"] {
   if (value === undefined || value.trim() === "") return "mock";
   const harness = value.trim();
@@ -716,6 +745,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     ...(orgBrandingFromEnv(env) ? { brandingDefault: orgBrandingFromEnv(env) } : {}),
+    ...(gbrainFromEnv(env) ? { gbrain: gbrainFromEnv(env) } : {}),
     ...(env.PI_MODEL ? { modelId: env.PI_MODEL } : {}),
     ...(env.OPENCODE_MODEL || env.PI_MODEL ? { opencodeModel: env.OPENCODE_MODEL || env.PI_MODEL } : {}),
     ...(env.CODEX_MODEL ? { codexModel: env.CODEX_MODEL } : {}),
