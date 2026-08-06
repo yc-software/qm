@@ -359,7 +359,10 @@ test("AWS module provisions durable encrypted object storage and configurable sa
   assert.match(mainTf, /expiration\s*\{\s*expired_object_delete_marker\s*= true\s*\}/);
   assert.match(mainTf, /"s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"/);
   assert.match(mainTf, /"s3:ListBucketMultipartUploads"/);
-  assert.match(mainTf, /abort_incomplete_multipart_upload\s*\{\s*days_after_initiation\s*= 1\s*\}/);
+  assert.match(
+    mainTf,
+    /id\s*= "qm-transfer-expiry"[\s\S]*?abort_incomplete_multipart_upload\s*\{\s*days_after_initiation\s*= 1\s*\}/,
+  );
   assert.match(mainTf, /backup_retention_period\s*= var\.db_backup_retention_days/);
   assert.match(mainTf, /multi_az\s*= var\.db_multi_az/);
   assert.match(mainTf, /skip_final_snapshot\s*= var\.db_skip_final_snapshot/);

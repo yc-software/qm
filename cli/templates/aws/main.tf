@@ -569,12 +569,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "objects" {
       expired_object_delete_marker = true
     }
 
-    # The core writes this same rule id via ensureExpiry, with the same 1 day and this same clause,
-    # so whichever applies last leaves an identical config instead of the two stripping each other.
-    # Parts from an upload that died mid-stream are invisible to ListObjects; only this reaps them.
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 1
-    }
   }
 
   rule {
@@ -587,6 +581,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "objects" {
 
     expiration {
       days = 1
+    }
+
+    # Keep this identical to the rule written by the core's ensureExpiry.
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
     }
   }
 }

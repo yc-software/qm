@@ -14,7 +14,7 @@ RUN dnf install -y \
 
 RUN curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo \
        -o /etc/yum.repos.d/gh-cli.repo \
-  && dnf install -y gh-2.96.0-1 \
+  && dnf install -y gh-2.97.0-1 \
   && dnf clean all \
   && gh --version
 
