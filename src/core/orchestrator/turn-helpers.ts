@@ -100,6 +100,7 @@ export function visibleSkillScopes(resolution: Resolution, scopeId: ScopeId): Sc
 }
 
 const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
+  atlassian: "atlassian",
   dropbox: "dropbox",
   "email-draft-in-voice": "google",
   "email-voice-profile": "google",

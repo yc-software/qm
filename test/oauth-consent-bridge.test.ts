@@ -86,7 +86,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
   const fetchImpl: FetchLike = async (url, init) => {
     exchanged++;
     assert.equal(url, PROVIDERS.google!.tokenUrl);
-    assert.match(init.body, /grant_type=authorization_code/);
+    assert.match(init.body ?? "", /grant_type=authorization_code/);
     return {
       ok: true,
       status: 200,

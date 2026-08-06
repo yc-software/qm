@@ -21,6 +21,11 @@ const CONNECTOR_LABELS: Record<string, { name: string; hosts: string; desc?: str
     hosts: "Gmail, Calendar, Drive, Sheets",
     desc: "Lets the agent read and act in your Gmail, Calendar, and Sheets on your behalf, and read your Drive (it can save new files there, but not edit your existing ones).",
   },
+  atlassian: {
+    name: "Atlassian",
+    hosts: "Jira & Confluence",
+    desc: "Lets the agent read Jira issues and Confluence pages from the single site you select. No write permissions are requested.",
+  },
   slack: {
     name: "Slack",
     hosts: "Channels & messages",

@@ -169,11 +169,13 @@ test("the catalog endpoint exposes per-provider setup guidance (no secrets)", as
       catalog: Array<{ provider: string; setupGuide: { url: string; steps: string[] }; consentMode: string }>;
     };
     const names = catalog.map((c) => c.provider).sort();
-    assert.deepEqual(names, ["dropbox", "github", "google", "linear", "notion", "slack", "x"]);
+    assert.deepEqual(names, ["atlassian", "dropbox", "github", "google", "linear", "notion", "slack", "x"]);
     const google = catalog.find((c) => c.provider === "google")!;
     assert.ok(google.setupGuide.steps.length >= 3);
     assert.match(google.setupGuide.url, /^https:\/\//);
     assert.equal(catalog.find((c) => c.provider === "github")!.consentMode, "github_app");
+    const atlassian = catalog.find((c) => c.provider === "atlassian")!;
+    assert.match(atlassian.setupGuide.steps.join(" "), /exactly one.*site/i);
   } finally {
     await srv.close();
   }

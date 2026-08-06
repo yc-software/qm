@@ -19,6 +19,8 @@ import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
   GOOGLE_OAUTH_CLIENT_SECRET: "gsecret",
+  ATLASSIAN_OAUTH_CLIENT_ID: "aid",
+  ATLASSIAN_OAUTH_CLIENT_SECRET: "asecret",
   SLACK_OAUTH_CLIENT_ID: "sid",
   SLACK_OAUTH_CLIENT_SECRET: "ssecret",
   NOTION_OAUTH_CLIENT_ID: "nid",
@@ -75,7 +77,7 @@ test("the env resolver pins the Google hosted-domain for the company account-typ
 test("exchangeCode returns a token for the provider's hosts (default authorization_code adapter)", async () => {
   const fetchImpl: FetchLike = async (url, init) => {
     assert.equal(url, PROVIDERS.google!.tokenUrl);
-    assert.match(init.body, /grant_type=authorization_code/);
+    assert.match(init.body ?? "", /grant_type=authorization_code/);
     return {
       ok: true,
       status: 200,
@@ -94,9 +96,127 @@ test("exchangeCode returns a token for the provider's hosts (default authorizati
   assert.deepEqual(token.grantedScopes, ["a", "b"]);
 });
 
+test("Atlassian authorization requests one read-only resource-level grant with offline refresh", async () => {
+  const u = new URL(
+    authorizeUrl("atlassian", {
+      redirectUri: "https://app/v1/connectors/oauth/atlassian/callback",
+      state: "s",
+      client: await resolve("atlassian", {}),
+    }),
+  );
+  assert.equal(u.origin + u.pathname, "https://auth.atlassian.com/authorize");
+  assert.equal(u.searchParams.get("audience"), "api.atlassian.com");
+  assert.equal(u.searchParams.get("prompt"), "consent");
+  const scopes = (u.searchParams.get("scope") ?? "").split(" ");
+  assert.deepEqual(scopes, ["read:jira-work", "search:confluence", "read:confluence-content.all", "offline_access"]);
+  assert.equal(
+    scopes.some((scope) => /write|delete|manage|admin/i.test(scope)),
+    false,
+  );
+});
+
+test("Atlassian exchange uses JSON and accepts only a token bound to exactly one site", async () => {
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (url, init) => {
+    calls.push(url);
+    if (url === PROVIDERS.atlassian!.tokenUrl) {
+      assert.equal(init.headers["content-type"], "application/json");
+      assert.deepEqual(JSON.parse(init.body ?? ""), {
+        grant_type: "authorization_code",
+        client_id: "aid",
+        client_secret: "asecret",
+        code: "code-atl",
+        redirect_uri: "https://app/v1/connectors/oauth/atlassian/callback",
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "atl-at", refresh_token: "atl-rt", expires_in: 3600 }),
+      };
+    }
+    assert.equal(url, "https://api.atlassian.com/oauth/token/accessible-resources");
+    assert.equal(init.method, "GET");
+    assert.equal(init.body, undefined);
+    assert.equal(init.headers.authorization, "Bearer atl-at");
+    return {
+      ok: true,
+      status: 200,
+      json: async () => [{ id: "cloud-1", url: "https://example.atlassian.net" }],
+    };
+  };
+  const { hosts, token } = await exchangeCode(
+    "atlassian",
+    "code-atl",
+    "https://app/v1/connectors/oauth/atlassian/callback",
+    { client: await resolve("atlassian", {}), fetchImpl, now: 1_000 },
+  );
+  assert.deepEqual(calls, [
+    "https://auth.atlassian.com/oauth/token",
+    "https://api.atlassian.com/oauth/token/accessible-resources",
+  ]);
+  assert.deepEqual(hosts, ["api.atlassian.com"]);
+  assert.equal(token.accessToken, "atl-at");
+  assert.equal(token.refreshToken, "atl-rt");
+  assert.equal(token.expiresAt, 3_601_000);
+});
+
+test("Atlassian exchange rejects grants spanning zero or multiple sites", async () => {
+  const client = await resolve("atlassian", {});
+  for (const resources of [
+    [],
+    [
+      { id: "one", url: "https://one.atlassian.net" },
+      { id: "two", url: "https://two.atlassian.net" },
+    ],
+  ]) {
+    let call = 0;
+    const fetchImpl: FetchLike = async () => {
+      call += 1;
+      return call === 1
+        ? { ok: true, status: 200, json: async () => ({ access_token: "atl-at", refresh_token: "atl-rt" }) }
+        : { ok: true, status: 200, json: async () => resources };
+    };
+    await assert.rejects(
+      () =>
+        exchangeCode("atlassian", "code", "https://app/callback", {
+          client,
+          fetchImpl,
+        }),
+      new RegExp(`must grant exactly one site; the token currently grants ${resources.length}`),
+    );
+  }
+});
+
+test("Atlassian refresh uses JSON and persists its rotated refresh token", async () => {
+  const fetchImpl: FetchLike = async (url, init) => {
+    assert.equal(url, "https://auth.atlassian.com/oauth/token");
+    assert.deepEqual(JSON.parse(init.body ?? ""), {
+      grant_type: "refresh_token",
+      client_id: "aid",
+      client_secret: "asecret",
+      refresh_token: "old-rt",
+    });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "atl-at-2", refresh_token: "new-rt", expires_in: 3600 }),
+    };
+  };
+  const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl, now: () => 2_000 })("api.atlassian.com", {
+    accessToken: "old",
+    refreshToken: "old-rt",
+    expiresAt: 0,
+    grantedScopes: ["read:jira-work"],
+  });
+  assert.equal(fresh.accessToken, "atl-at-2");
+  assert.equal(fresh.refreshToken, "new-rt");
+  assert.equal(fresh.expiresAt, 3_602_000);
+  assert.deepEqual(fresh.grantedScopes, ["read:jira-work"]);
+});
+
 test("makeRefresh exchanges a refresh token, keeping it if the provider omits a new one", async () => {
   const fetchImpl: FetchLike = async (_url, init) => {
-    assert.match(init.body, /grant_type=refresh_token/);
+    assert.match(init.body ?? "", /grant_type=refresh_token/);
     return { ok: true, status: 200, json: async () => ({ access_token: "at2", expires_in: 3600 }) };
   };
   const refresh = makeRefresh({ resolveClient: resolve, fetchImpl, now: () => 2_000 });
@@ -175,7 +295,7 @@ test("github refresh asks for JSON and surfaces GitHub's 200-with-error bodies",
   const good: FetchLike = async (url, init) => {
     assert.equal(url, PROVIDERS.github!.tokenUrl);
     assert.equal(init.headers.accept, "application/json");
-    assert.match(init.body, /grant_type=refresh_token/);
+    assert.match(init.body ?? "", /grant_type=refresh_token/);
     return {
       ok: true,
       status: 200,
@@ -210,7 +330,7 @@ test("github exchange asks for JSON and surfaces GitHub's 200-with-error bodies"
   const errBody: FetchLike = async (url, init) => {
     assert.equal(url, PROVIDERS.github!.tokenUrl);
     assert.equal(init.headers.accept, "application/json");
-    assert.match(init.body, /grant_type=authorization_code/);
+    assert.match(init.body ?? "", /grant_type=authorization_code/);
     return {
       ok: true,
       status: 200,
@@ -308,7 +428,7 @@ test("Notion exchanges via HTTP Basic + JSON body and does not refresh", async (
   const fetchImpl: FetchLike = async (u, init) => {
     assert.equal(u, PROVIDERS.notion!.tokenUrl);
     assert.match(init.headers.authorization ?? "", /^Basic /);
-    assert.match(init.body, /"grant_type":"authorization_code"/);
+    assert.match(init.body ?? "", /"grant_type":"authorization_code"/);
     return { ok: true, status: 200, json: async () => ({ access_token: "notion-tok" }) };
   };
   const { token } = await exchangeCode("notion", "c", "https://app/cb", {
@@ -394,7 +514,7 @@ test("exchangeCode sends code_verifier in the token body when provided, omits it
   const client = await googleClient();
   const bodies: string[] = [];
   const capture: FetchLike = async (_url, init) => {
-    bodies.push(init.body);
+    bodies.push(init.body ?? "");
     return { ok: true, status: 200, json: async () => ({ access_token: "at" }) };
   };
   await exchangeCode("google", "code-1", "https://app/cb", {
@@ -434,7 +554,7 @@ test("X authorize URL targets x.com with the tweet scopes and offline.access", a
 test("X exchange uses HTTP Basic client auth, sends the PKCE verifier, keeps secret out of the body", async () => {
   let seen: { url: string; auth?: string; body: string } | null = null;
   const fetchImpl: FetchLike = async (url, init) => {
-    seen = { url, auth: init.headers.authorization, body: init.body };
+    seen = { url, auth: init.headers.authorization, body: init.body ?? "" };
     return {
       ok: true,
       status: 200,
@@ -464,9 +584,9 @@ test("X exchange uses HTTP Basic client auth, sends the PKCE verifier, keeps sec
 
 test("X refresh captures the ROTATED refresh token (single-use) — the connection survives past 2h", async () => {
   const fetchImpl: FetchLike = async (_url, init) => {
-    assert.match(init.body, /grant_type=refresh_token/);
-    assert.match(init.body, /refresh_token=old-rt/);
-    assert.doesNotMatch(init.body, /client_secret/);
+    assert.match(init.body ?? "", /grant_type=refresh_token/);
+    assert.match(init.body ?? "", /refresh_token=old-rt/);
+    assert.doesNotMatch(init.body ?? "", /client_secret/);
     return {
       ok: true,
       status: 200,

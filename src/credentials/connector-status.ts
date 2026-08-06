@@ -95,6 +95,7 @@ export async function refreshConnectorStatus(
 
 const PROVIDER_LABELS: Record<string, string> = {
   google: "Google",
+  atlassian: "Atlassian",
   slack: "Slack",
   notion: "Notion",
   linear: "Linear",

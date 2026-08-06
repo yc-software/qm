@@ -24,13 +24,20 @@ function skill(name: string): SkillResolution {
 }
 
 test("provider skills are visible only for connectors configured by the admin", () => {
-  const all = [skill("memory"), skill("google-workspace"), skill("dropbox"), skill("linear"), skill("x")];
+  const all = [
+    skill("memory"),
+    skill("atlassian"),
+    skill("google-workspace"),
+    skill("dropbox"),
+    skill("linear"),
+    skill("x"),
+  ];
   assert.deepEqual(
     filterConnectorSkills(all, []).map((entry) => entry.skill?.manifest.name),
     ["memory"],
   );
   assert.deepEqual(
-    filterConnectorSkills(all, ["google", "linear"]).map((entry) => entry.skill?.manifest.name),
-    ["memory", "google-workspace", "linear"],
+    filterConnectorSkills(all, ["atlassian", "google", "linear"]).map((entry) => entry.skill?.manifest.name),
+    ["memory", "atlassian", "google-workspace", "linear"],
   );
 });

@@ -9,6 +9,7 @@ type SecretGate =
   | "fly-deploy"
   | "aws-deploy-gate"
   | "google-oauth"
+  | "atlassian-oauth"
   | "dropbox-oauth"
   | "linear-oauth"
   | "model-anthropic"
@@ -35,6 +36,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "FLY_DEPLOY_API_TOKEN", requiredWhen: "fly-deploy" },
   { name: "AWS_DEPLOY_GATE_SECRET", requiredWhen: "aws-deploy-gate" },
   { name: "GOOGLE_OAUTH_CLIENT_SECRET", requiredWhen: "google-oauth" },
+  { name: "ATLASSIAN_OAUTH_CLIENT_SECRET", requiredWhen: "atlassian-oauth" },
   { name: "DROPBOX_OAUTH_CLIENT_SECRET", requiredWhen: "dropbox-oauth" },
   { name: "LINEAR_OAUTH_CLIENT_SECRET", requiredWhen: "linear-oauth" },
 ];
@@ -48,6 +50,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
   "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN),
   "google-oauth": (env) => Boolean(env.GOOGLE_OAUTH_CLIENT_ID),
+  "atlassian-oauth": (env) => Boolean(env.ATLASSIAN_OAUTH_CLIENT_ID),
   "dropbox-oauth": (env) => Boolean(env.DROPBOX_OAUTH_CLIENT_ID),
   "linear-oauth": (env) => Boolean(env.LINEAR_OAUTH_CLIENT_ID),
   "model-anthropic": (env) => env.MODEL_PROVIDER?.trim() === "anthropic",

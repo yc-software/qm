@@ -152,6 +152,12 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Google OAuth client secret.",
   },
   {
+    name: "ATLASSIAN_OAUTH_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "ATLASSIAN_OAUTH_CLIENT_ID" } },
+    description: "Atlassian OAuth 2.0 (3LO) integration client secret.",
+  },
+  {
     name: "DROPBOX_OAUTH_CLIENT_SECRET",
     service: "core",
     required: { when: { kind: "env-present", service: "core", name: "DROPBOX_OAUTH_CLIENT_ID" } },
