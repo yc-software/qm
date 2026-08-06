@@ -17,6 +17,15 @@ export interface SandboxBuildOpts {
   tag?: string;
   dryRun?: boolean;
   app?: string;
+  /**
+   * When true, build the layer with `docker buildx --load` and skip the
+   * Fly registry auth path. The image is tagged under the same
+   * `registry.fly.io/<app>` reference the deployment contract expects, but
+   * it lives only in the local Docker daemon — no registry push occurs.
+   * The `sandbox.image` digest is recorded locally so the deployment
+   * contract is still satisfied. Only valid with `--target docker`.
+   */
+  localOnly?: boolean;
 }
 
 export interface SandboxPublishOpts extends SandboxBuildOpts {
@@ -447,7 +456,7 @@ export function runSandboxPublish(opts: SandboxPublishOpts): { image: string } |
   let prepared = prepare(opts);
   assertPublishPlatform(prepared.dockerfileBody);
   const repository = publishedRepository(opts);
-  if (!opts.dryRun) authenticateFlyRegistry(opts, [repository, prepared.base]);
+  if (!opts.dryRun && !opts.localOnly) authenticateFlyRegistry(opts, [repository, prepared.base]);
   if (!opts.dryRun && prepared.base !== "scratch" && !prepared.base.includes("@sha256:")) {
     const base = pinnedByPull(prepared.base);
     if (prepared.hasCustom) {
@@ -461,39 +470,82 @@ export function runSandboxPublish(opts: SandboxPublishOpts): { image: string } |
   }
   const tag = opts.tag ?? "latest";
   const tagged = `${repository}:${tag}`;
-  const metadataPath = join(mkdtempSync(join(tmpdir(), "qm-sandbox-meta-")), "metadata.json");
-  const args = [
-    "buildx",
-    "build",
-    "--platform",
-    SANDBOX_RUNTIME_PLATFORM,
-    "--provenance=false",
-    "--push",
-    "-t",
-    tagged,
-    "--metadata-file",
-    metadataPath,
-    "--file",
-    prepared.dockerfilePath,
-    prepared.sandboxDir,
-  ];
-  header(`qm sandbox publish → ${tagged}`);
+  // Buildx metadata-file only exists when the engine produces a registry
+  // push manifest; the `--load` path does not emit one, so the digest is
+  // resolved from the local daemon instead.
+  const metadataPath = opts.localOnly
+    ? undefined
+    : join(mkdtempSync(join(tmpdir(), "qm-sandbox-meta-")), "metadata.json");
+  const args: string[] = opts.localOnly
+    ? [
+        "buildx",
+        "build",
+        "--platform",
+        SANDBOX_RUNTIME_PLATFORM,
+        "--provenance=false",
+        "--load",
+        "-t",
+        tagged,
+        "--file",
+        prepared.dockerfilePath,
+        prepared.sandboxDir,
+      ]
+    : [
+        "buildx",
+        "build",
+        "--platform",
+        SANDBOX_RUNTIME_PLATFORM,
+        "--provenance=false",
+        "--push",
+        "-t",
+        tagged,
+        "--metadata-file",
+        metadataPath!,
+        "--file",
+        prepared.dockerfilePath,
+        prepared.sandboxDir,
+      ];
+  header(`qm sandbox publish → ${tagged}${opts.localOnly ? " (local-only)" : ""}`);
   printBuild(prepared);
   if (opts.dryRun) {
-    note(bold("\nDRY RUN — nothing built, pushed, or recorded."));
+    note(bold(`\nDRY RUN — nothing built, ${opts.localOnly ? "loaded" : "pushed"}, or recorded.`));
     note(`\nDockerfile:\n${prepared.dockerfileBody}`);
     note(`docker ${args.join(" ")}`);
     return undefined;
   }
   runDocker(args, "sandbox publish failed — verify registry authentication and the layer build.");
-  const digest = readDigest(metadataPath);
+  const digest = metadataPath ? readDigest(metadataPath) : digestFromLocalImage(tagged);
   const image = `${repository}@${digest}`;
   if (opts.config.target === "aws") {
     recordSandboxPin(opts.configPath, undefined, prepared.base);
     ok(`published ${image}`);
   } else {
     recordSandboxPin(opts.configPath, image, prepared.base);
-    ok(`published and recorded ${image}`);
+    ok(opts.localOnly ? `loaded and recorded ${image}` : `published and recorded ${image}`);
   }
   return { image };
+}
+
+/**
+ * Resolve the immutable digest of an image already present in the local
+ * Docker daemon (e.g. just produced by `docker buildx --load`). Used by the
+ * `--local-only` publish path so we can record `sandbox.image` with a real
+ * `sha256:` pin without contacting a registry.
+ */
+function digestFromLocalImage(ref: string): string {
+  let output: string;
+  try {
+    output = execFileSync("docker", ["image", "inspect", "--format", "{{json .RepoDigests}}", ref], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    throw new CliError(`could not read the locally-loaded image ${ref}: ${errMessage(error)}`);
+  }
+  const repository = imageRepository(ref);
+  const digest = (JSON.parse(output) as string[]).find((entry) => entry.split("@")[0] === repository)?.split("@")[1];
+  if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest)) {
+    throw new CliError(`docker did not record an immutable digest for ${ref}`);
+  }
+  return digest;
 }
