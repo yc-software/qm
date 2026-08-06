@@ -202,7 +202,14 @@ export function createDirectoryStore(): DirectoryStore {
       return channels;
     },
     async get(principalId) {
-      return members.find((m) => samePerson(m.principalId, principalId)) ?? null;
+      const found = members.find((m) => samePerson(m.principalId, principalId));
+      if (found) return found;
+      if (principalId.includes("@")) {
+        const email = principalId.toLowerCase();
+        const name = email.split("@")[0] || email;
+        return { principalId: email, displayName: name, type: "internal" };
+      }
+      return null;
     },
     async resolve(query) {
       const bySlackId = members.find((x) => x.slackId && x.slackId === query.trim());

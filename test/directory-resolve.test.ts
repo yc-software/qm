@@ -94,6 +94,14 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     assert.deepEqual((await res.json()) as { matches: unknown[] }, { matches: [] });
   });
 
+  it("synthesizes an internal match when resolving an email address not in the directory", async () => {
+    const res = await get("/v1/directory/resolve?q=newmember%40example.com");
+    assert.equal(res.status, 200);
+    assert.deepEqual((await res.json()) as { matches: unknown[] }, {
+      matches: [{ principalId: "newmember@example.com", displayName: "newmember", type: "internal" }],
+    });
+  });
+
   it("rejects a missing query with 400", async () => {
     const res = await get("/v1/directory/resolve");
     assert.equal(res.status, 400);

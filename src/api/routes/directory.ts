@@ -112,6 +112,11 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   let found: DirectoryMember[] = [];
   if (r.kind === "one") found = [r.member];
   else if (r.kind === "ambiguous") found = r.candidates;
+  if (found.length === 0 && q.includes("@")) {
+    const email = q.toLowerCase();
+    const name = email.split("@")[0] || email;
+    found = [{ principalId: email, displayName: name, type: "internal" }];
+  }
   const matches = found.map((m) => {
     const slackId = m.slackId ?? (SLACK_ID_RE.test(m.principalId) ? m.principalId : undefined);
     return slackId ? { ...m, slackId } : m;

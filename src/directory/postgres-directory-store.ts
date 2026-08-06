@@ -455,7 +455,13 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          ORDER BY (principal_id = $2) DESC LIMIT 1`,
         [orgId, principalId, key.includes("@"), key],
       );
-      return rows.length ? memberRow(rows[0]!) : null;
+      if (rows.length) return memberRow(rows[0]!);
+      if (key.includes("@")) {
+        const email = key.toLowerCase();
+        const name = email.split("@")[0] || email;
+        return { principalId: email, displayName: name, type: "internal" };
+      }
+      return null;
     },
 
     async resolve(query) {
