@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +33,28 @@ function spec(lock: string, port: number, extraArgs: string[] = []): ChildSpec {
     stopGraceMs: 2000,
   };
 }
+
+test("child finds log readiness after existing multibyte UTF-8 content", async () => {
+  const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
+  const port = await freeTcpPort();
+  const child = new Child(
+    spec(lock, port),
+    lock,
+    () => {},
+    () => {},
+  );
+  const prefix = "以前の起動\n";
+  writeFileSync(child.logFile(), prefix);
+  assert.equal(statSync(child.logFile()).size, Buffer.byteLength(prefix));
+
+  try {
+    const res = await child.start();
+    assert.equal(res.ok, true, res.detail);
+  } finally {
+    await child.stop();
+    rmSync(lock, { recursive: true, force: true });
+  }
+});
 
 test("child starts, reports ready via log pattern, and stops with the port released", async () => {
   const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
