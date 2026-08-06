@@ -45,7 +45,8 @@
     "lint": "eslint .",
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
-    "lint:knip": "knip"
+    "lint:knip": "knip",
+    "lint:docs": "node scripts/check-doc-npm-scripts.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.211",
