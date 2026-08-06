@@ -1,6 +1,6 @@
 import { swallow } from "../util/errors.ts";
 import { decodeSlackEntities, mentionsBot, resolveMentionsInText } from "./lib.ts";
-import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import type { CoreClient } from "../api/core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import { MAX_NAME_LOOKUPS } from "./conversation-view.ts";
@@ -22,7 +22,7 @@ export interface Mirror {
 }
 
 export function createMirror(deps: {
-  core: SlackCoreClient;
+  core: CoreClient;
   ids: BotIdentity;
   directory: Directory;
   externalParticipantsEnabled(): Promise<boolean>;

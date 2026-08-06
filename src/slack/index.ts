@@ -17,16 +17,16 @@ import { createSurfaceContextFulfiller } from "./surface-context.ts";
 import { createDeliveryPoller } from "./deliveries.ts";
 import { createDeferredAckReceiver } from "./deferred-ack.ts";
 import { createHttpEventsReceiver } from "./http-events.ts";
-import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
+import type { CoreClient, SurfaceContextRequest } from "../api/core-client.ts";
 const { App, LogLevel } = bolt;
 
-export type { SlackCoreClient };
+export type { CoreClient };
 export type { SlackPluginConfig };
 export { normalizeSlackApiUrl, slackPluginConfigFromEnv };
 
 export async function startSlackPlugin(
   cfg: SlackPluginConfig,
-  core: SlackCoreClient,
+  core: CoreClient,
 ): Promise<{ stop(): Promise<void> }> {
   const EVENTS_MODE = cfg.eventsMode ?? "socket";
   if (!cfg.botToken) {

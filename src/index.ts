@@ -5,6 +5,7 @@ import { errMessage } from "./util/errors.ts";
 import { defaultModelForHarness, modelProviderAvailabilityFor } from "./model/pi-models.ts";
 import { effectiveEgressEnforcement } from "./sandbox/sandbox.ts";
 import { slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
+import { telegramPluginConfigFromEnv, startTelegramPlugin } from "./telegram/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 
 const config = loadConfig();
@@ -131,12 +132,26 @@ const slackRuntime = createSlackRuntimeReconciler({
 });
 slackRuntime.start();
 
+const telegramConfig = telegramPluginConfigFromEnv(process.env);
+let telegramPlugin: { stop(): Promise<void> } | null = null;
+if (telegramConfig) {
+  try {
+    telegramPlugin = await startTelegramPlugin(telegramConfig, built.telegramCore);
+    console.log("[qm] telegram plugin started");
+  } catch (error) {
+    console.error(`[qm] telegram plugin failed to start: ${errMessage(error)}`);
+  }
+}
+
 let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[qm] ${signal} received, shutting down`);
   void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
+  if (telegramPlugin) {
+    void telegramPlugin.stop().catch((e: unknown) => console.error("[qm] telegram plugin stop failed:", errMessage(e)));
+  }
   built.scheduler.stop();
   built.deploymentLayerRefresh.stop();
   server.close();

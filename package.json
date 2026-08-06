@@ -68,6 +68,7 @@
     "croner": "^10.0.1",
     "emoji-datasource": "^16.0.0",
     "fastify": "^5.10.0",
+    "grammy": "^1.45.1",
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
     "opencode-ai": "1.17.18",

@@ -211,7 +211,7 @@ import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus
 import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
-import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
+import { createCoreClient, type CoreClient } from "./api/core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
 import { createEngagedRegistry } from "./wake/engaged-registry.ts";
 import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
@@ -363,7 +363,8 @@ export interface BuiltApp {
   ackEmojiPicks?: AckEmojiPickStore;
   channelPolicy: ChannelPolicyStore;
   skillSyncEngine: SkillSyncEngine;
-  slackCore: SlackCoreClient;
+  slackCore: CoreClient;
+  telegramCore: CoreClient;
 }
 
 export function buildApp(
@@ -1148,7 +1149,7 @@ export function buildApp(
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeys),
     runWaitMs: config.runWaitMs,
   });
-  const slackCore = createSlackCoreClient({
+  const slackCore = createCoreClient({
     app,
     config: configStore,
     runtimeFallback: fallback,
@@ -1163,6 +1164,24 @@ export function buildApp(
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
   });
+  const telegramCore = createCoreClient(
+    {
+      app,
+      config: configStore,
+      runtimeFallback: fallback,
+      blobTransfer,
+      deliveries,
+      metrics,
+      runs,
+      turnStream,
+      tasks,
+      ackPicks: ackEmojiPicks,
+      ackModelId: () => auxiliaryModelForProvider("anthropic"),
+      ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
+      ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
+    },
+    "telegram",
+  );
   runs.onTerminal((run) => {
     void runs
       .activeForThread(run.sessionId)
@@ -1486,5 +1505,6 @@ export function buildApp(
     channelPolicy,
     skillSyncEngine,
     slackCore,
+    telegramCore,
   };
 }

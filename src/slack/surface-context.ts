@@ -11,7 +11,7 @@ import {
   oversizeMsg,
   parseDeliveryTarget,
 } from "./lib.ts";
-import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
+import type { CoreClient, SurfaceContextRequest } from "../api/core-client.ts";
 import type { CoreBridge } from "./core-bridge.ts";
 import type { Directory } from "./directory.ts";
 import {
@@ -22,7 +22,7 @@ import {
 } from "./conversation-view.ts";
 
 export function createSurfaceContextFulfiller(deps: {
-  core: SlackCoreClient;
+  core: CoreClient;
   bridge: CoreBridge;
   directory: Directory;
   serializer: ConversationSerializer;
