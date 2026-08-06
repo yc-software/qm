@@ -17,7 +17,7 @@ test("sandbox build --dry-run generates the COPY-tools Dockerfile + the fly push
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /DRY RUN — nothing built/);
     assert.match(r.out, /FROM registry\.invalid\/qm\/qm-sandbox-base@sha256:a{64}/);
-    assert.match(r.out, /COPY tools\/example-tool\/example-tool \/usr\/local\/bin\/example-tool/);
+    assert.match(r.out, /COPY --chmod=0755 tools\/example-tool\/example-tool \/usr\/local\/bin\/example-tool/);
     assert.match(r.out, /command -v "\$b"/);
     assert.match(r.out, /docker buildx build --platform linux\/amd64 --load -t acme-sandbox:local/);
   } finally {
