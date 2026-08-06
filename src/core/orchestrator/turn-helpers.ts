@@ -107,6 +107,7 @@ const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
   "google-drive-sheets": "google",
   "google-workspace": "google",
   linear: "linear",
+  "read-ai": "read-ai",
   "morning-digest": "x",
   x: "x",
 };

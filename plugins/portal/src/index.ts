@@ -514,6 +514,7 @@ function connectPage(o: { title: string; body: string; action?: string }): strin
 
 function providerLabel(provider: string): string {
   if (provider === "google") return "Google";
+  if (provider === "read-ai") return "Read AI";
   return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "this app";
 }
 

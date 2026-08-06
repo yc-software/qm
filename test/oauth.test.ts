@@ -21,6 +21,8 @@ const env = {
   GOOGLE_OAUTH_CLIENT_SECRET: "gsecret",
   ATLASSIAN_OAUTH_CLIENT_ID: "aid",
   ATLASSIAN_OAUTH_CLIENT_SECRET: "asecret",
+  READ_AI_OAUTH_CLIENT_ID: "rid",
+  READ_AI_OAUTH_CLIENT_SECRET: "rsecret",
   SLACK_OAUTH_CLIENT_ID: "sid",
   SLACK_OAUTH_CLIENT_SECRET: "ssecret",
   NOTION_OAUTH_CLIENT_ID: "nid",
@@ -219,6 +221,81 @@ test("Atlassian refresh uses JSON and persists its rotated refresh token", async
   assert.equal(fresh.refreshToken, "new-rt");
   assert.equal(fresh.expiresAt, 3_602_000);
   assert.deepEqual(fresh.grantedScopes, ["read:jira-work"]);
+});
+
+test("Read AI uses read-only OAuth 2.1 PKCE and persists each rotated refresh token", async () => {
+  const client = await resolve("read-ai", {});
+  const authorize = new URL(
+    authorizeUrl("read-ai", {
+      redirectUri: "https://app/v1/connectors/oauth/read-ai/callback",
+      state: "state",
+      client,
+      codeChallenge: "challenge",
+    }),
+  );
+  assert.equal(authorize.origin + authorize.pathname, "https://authn.read.ai/oauth2/auth");
+  assert.equal(authorize.searchParams.get("code_challenge"), "challenge");
+  assert.equal(authorize.searchParams.get("code_challenge_method"), "S256");
+  assert.deepEqual((authorize.searchParams.get("scope") ?? "").split(" "), [
+    "openid",
+    "email",
+    "offline_access",
+    "profile",
+    "meeting:read",
+  ]);
+
+  let call = 0;
+  const fetchImpl: FetchLike = async (url, init) => {
+    call += 1;
+    assert.equal(url, "https://authn.read.ai/oauth2/token");
+    assert.equal(init.headers.authorization, `Basic ${Buffer.from("rid:rsecret").toString("base64")}`);
+    assert.equal(init.headers["content-type"], "application/x-www-form-urlencoded");
+    const body = Object.fromEntries(new URLSearchParams(init.body ?? ""));
+    assert.equal(body.client_id, undefined);
+    assert.equal(body.client_secret, undefined);
+    if (call === 1) {
+      assert.deepEqual(body, {
+        grant_type: "authorization_code",
+        code: "read-code",
+        redirect_uri: "https://app/v1/connectors/oauth/read-ai/callback",
+        code_verifier: "verifier",
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          access_token: "read-at",
+          refresh_token: "read-rt-1",
+          expires_in: 599,
+          scope: "openid email offline_access profile meeting:read",
+        }),
+      };
+    }
+    assert.deepEqual(body, { grant_type: "refresh_token", refresh_token: "read-rt-1" });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "read-at-2", refresh_token: "read-rt-2", expires_in: 599 }),
+    };
+  };
+
+  const { hosts, token } = await exchangeCode(
+    "read-ai",
+    "read-code",
+    "https://app/v1/connectors/oauth/read-ai/callback",
+    { client, fetchImpl, now: 1_000, codeVerifier: "verifier" },
+  );
+  assert.deepEqual(hosts, ["api.read.ai"]);
+  assert.equal(token.accessToken, "read-at");
+  assert.equal(token.refreshToken, "read-rt-1");
+  assert.equal(token.expiresAt, 600_000);
+  assert.deepEqual(token.grantedScopes, ["openid", "email", "offline_access", "profile", "meeting:read"]);
+
+  const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl, now: () => 2_000 })("api.read.ai", token);
+  assert.equal(fresh.accessToken, "read-at-2");
+  assert.equal(fresh.refreshToken, "read-rt-2");
+  assert.equal(fresh.expiresAt, 601_000);
+  assert.deepEqual(fresh.grantedScopes, token.grantedScopes);
 });
 
 test("makeRefresh exchanges a refresh token, keeping it if the provider omits a new one", async () => {
@@ -510,9 +587,9 @@ test("authorizeUrl adds code_challenge + S256 only when a challenge is supplied"
   assert.equal(without.searchParams.get("code_challenge_method"), null);
 });
 
-test("only X opts into PKCE; the other providers leave the seam inert (regression guard)", () => {
+test("X and Read AI opt into PKCE; the other providers leave the seam inert", () => {
   for (const [name, p] of Object.entries(PROVIDERS)) {
-    if (name === "x") assert.equal(p.pkce, true, "X requires PKCE");
+    if (name === "x" || name === "read-ai") assert.equal(p.pkce, true, `${name} requires PKCE`);
     else assert.notEqual(p.pkce, true, `${name} must not enable PKCE`);
   }
 });

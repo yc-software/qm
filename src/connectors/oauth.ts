@@ -289,6 +289,55 @@ const atlassianRefresh: OAuthRefreshAdapter = async (args) =>
     args.token.grantedScopes,
   );
 
+async function readAiTokenRequest(
+  args: OAuthAdapterArgs,
+  body: Record<string, string>,
+  fallbackRefresh?: string,
+  grantedScopes?: string[],
+): Promise<OAuthToken> {
+  const basic = Buffer.from(`${args.client.id}:${args.client.secret}`).toString("base64");
+  const res = await args.fetchImpl(args.provider.tokenUrl, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/x-www-form-urlencoded",
+      authorization: `Basic ${basic}`,
+    },
+    body: new URLSearchParams(body).toString(),
+  });
+  const raw = (await res.json()) as Record<string, unknown>;
+  if (!res.ok || raw.error) {
+    throw new Error(
+      `read ai token request failed (${res.status}): ${String(raw.error_description ?? raw.error ?? "unknown")}`,
+    );
+  }
+  const token = toToken(raw, fallbackRefresh, args.now, grantedScopes);
+  if (!token.accessToken) throw new Error("read ai token request returned no access_token");
+  return token;
+}
+
+const readAiExchange: OAuthExchangeAdapter = async (args) => {
+  if (!args.codeVerifier) throw new Error("read ai token exchange requires a PKCE verifier");
+  const token = await readAiTokenRequest(args, {
+    grant_type: "authorization_code",
+    code: args.code,
+    redirect_uri: args.redirectUri,
+    code_verifier: args.codeVerifier,
+  });
+  return { hosts: args.provider.hosts, token };
+};
+
+const readAiRefresh: OAuthRefreshAdapter = async (args) =>
+  readAiTokenRequest(
+    args,
+    {
+      grant_type: "refresh_token",
+      refresh_token: args.token.refreshToken ?? "",
+    },
+    args.token.refreshToken,
+    args.token.grantedScopes,
+  );
+
 export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   google: {
     hosts: [
@@ -364,6 +413,34 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
       ],
       scopesRationale:
         "Jira and Confluence read/search scopes back read-only issue and page retrieval; offline_access enables rotating refresh tokens. No write scopes are requested.",
+    },
+  },
+
+  "read-ai": {
+    hosts: ["api.read.ai"],
+    authUrl: "https://authn.read.ai/oauth2/auth",
+    tokenUrl: "https://authn.read.ai/oauth2/token",
+    scopes: ["openid", "email", "offline_access", "profile", "meeting:read"],
+    clientIdEnv: "READ_AI_OAUTH_CLIENT_ID",
+    clientSecretEnv: "READ_AI_OAUTH_CLIENT_SECRET",
+    redirectPath: "read-ai/callback",
+    consentMode: "standard",
+    egressRule: ["api.read.ai", "authn.read.ai"],
+    exchange: readAiExchange,
+    refresh: readAiRefresh,
+    pkce: true,
+    setupGuide: {
+      console: "Read AI API → Dynamic OAuth client registration",
+      url: "https://support.read.ai/hc/en-us/articles/49380809380371-API-Keys-Authentication",
+      steps: [
+        "Ensure Downloads is enabled under Read AI Workspace Settings → Reports & Sharing.",
+        "POST a dynamic OAuth client registration to https://api.read.ai/oauth/register using the redirect URI shown below.",
+        "Request only openid, email, offline_access, profile, and meeting:read with Authorization Code + refresh_token grants and client_secret_basic authentication.",
+        "Save the returned Client ID and Client secret immediately; Read AI does not show the secret again.",
+        "Paste the Client ID + Client secret below.",
+      ],
+      scopesRationale:
+        "meeting:read provides read-only access to meeting reports, summaries, action items, and transcripts; identity scopes bind the account; offline_access enables rotating refresh tokens.",
     },
   },
 

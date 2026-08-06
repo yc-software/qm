@@ -158,6 +158,12 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Atlassian OAuth 2.0 (3LO) integration client secret.",
   },
   {
+    name: "READ_AI_OAUTH_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "READ_AI_OAUTH_CLIENT_ID" } },
+    description: "Read AI dynamic OAuth client secret.",
+  },
+  {
     name: "DROPBOX_OAUTH_CLIENT_SECRET",
     service: "core",
     required: { when: { kind: "env-present", service: "core", name: "DROPBOX_OAUTH_CLIENT_ID" } },
