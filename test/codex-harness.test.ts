@@ -304,6 +304,13 @@ test("Codex materializes API-key auth into its isolated home, and never an ambie
   assert.equal(existsSync(join(prepareCodexHome({ HOME: homedir() }, bare), "auth.json")), false);
 });
 
+test("Codex materializes an OpenAI-compatible endpoint into its isolated home", (t) => {
+  const jail = mkdtempSync(join(tmpdir(), "qm-codex-endpoint-test-"));
+  t.after(() => rmSync(jail, { recursive: true, force: true }));
+  const home = prepareCodexHome({ OPENAI_BASE_URL: "https://proxy.example.com/v1" }, jail);
+  assert.equal(readFileSync(join(home, "config.toml"), "utf8"), 'openai_base_url = "https://proxy.example.com/v1"\n');
+});
+
 test("Codex children cannot use parent surface, control, or terminal tools", () => {
   assert.equal(codexChildToolAllowed("history"), true);
   assert.equal(codexChildToolAllowed("execute"), true);

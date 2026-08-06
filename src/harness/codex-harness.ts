@@ -199,6 +199,11 @@ export function codexChildEnv(source: NodeJS.ProcessEnv, jail: string): NodeJS.P
 export function prepareCodexHome(source: NodeJS.ProcessEnv, jail: string): string {
   const target = join(jail, "codex-home");
   mkdirSync(target, { recursive: true });
+  if (source.OPENAI_BASE_URL) {
+    writeFileSync(join(target, "config.toml"), `openai_base_url = ${JSON.stringify(source.OPENAI_BASE_URL)}\n`, {
+      mode: 0o600,
+    });
+  }
   if (source.OPENAI_API_KEY) {
     writeFileSync(
       join(target, "auth.json"),
