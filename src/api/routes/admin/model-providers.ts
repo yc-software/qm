@@ -61,6 +61,9 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, {
     providers: await ctx.deps.modelCredentials.statuses(),
     models: await selectableModelCatalog(ctx.deps.modelCredentialFetch),
+    ...(ctx.deps.harnessCarriedModelAuth
+      ? { harnessAuth: { harnessId: ctx.deps.harnessId ?? "pi", provider: ctx.deps.harnessCarriedModelAuth } }
+      : {}),
   });
 }
 
