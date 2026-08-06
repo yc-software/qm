@@ -213,7 +213,7 @@ const notionExchange: OAuthExchangeAdapter = async ({ provider, client, code, re
 };
 const ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources";
 
-async function assertSingleAtlassianResource(fetchImpl: FetchLike, accessToken: string): Promise<void> {
+async function assertSingleAtlassianSite(fetchImpl: FetchLike, accessToken: string): Promise<void> {
   const res = await fetchImpl(ATLASSIAN_ACCESSIBLE_RESOURCES_URL, {
     method: "GET",
     headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
@@ -221,14 +221,24 @@ async function assertSingleAtlassianResource(fetchImpl: FetchLike, accessToken: 
   if (!res.ok) throw new Error(`atlassian accessible-resources check failed (${res.status})`);
   const raw = await res.json();
   if (!Array.isArray(raw)) throw new Error("atlassian accessible-resources returned an invalid response");
-  if (raw.length !== 1) {
-    throw new Error(
-      `atlassian connection must grant exactly one site; the token currently grants ${raw.length}. Reconnect and select only the intended site`,
-    );
+  const sites = new Set<string>();
+  for (const value of raw) {
+    const resource = value as Record<string, unknown>;
+    if (typeof resource.id !== "string" || !resource.id || typeof resource.url !== "string" || !resource.url) {
+      throw new Error("atlassian accessible-resources returned an invalid site");
+    }
+    let origin: string;
+    try {
+      origin = new URL(resource.url).origin.toLowerCase();
+    } catch {
+      throw new Error("atlassian accessible-resources returned an invalid site");
+    }
+    sites.add(`${resource.id}\n${origin}`);
   }
-  const resource = raw[0] as Record<string, unknown>;
-  if (typeof resource.id !== "string" || !resource.id || typeof resource.url !== "string" || !resource.url) {
-    throw new Error("atlassian accessible-resources returned an invalid site");
+  if (sites.size !== 1) {
+    throw new Error(
+      `atlassian connection must grant exactly one site; the token currently grants ${sites.size}. Reconnect and select only the intended site`,
+    );
   }
 }
 
@@ -262,7 +272,7 @@ const atlassianExchange: OAuthExchangeAdapter = async (args) => {
     code: args.code,
     redirect_uri: args.redirectUri,
   });
-  await assertSingleAtlassianResource(args.fetchImpl, token.accessToken);
+  await assertSingleAtlassianSite(args.fetchImpl, token.accessToken);
   return { hosts: args.provider.hosts, token };
 };
 

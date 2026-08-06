@@ -115,7 +115,7 @@ test("Atlassian authorization requests one read-only resource-level grant with o
   );
 });
 
-test("Atlassian exchange uses JSON and accepts only a token bound to exactly one site", async () => {
+test("Atlassian exchange uses JSON and accepts one site represented by both product APIs", async () => {
   const calls: string[] = [];
   const fetchImpl: FetchLike = async (url, init) => {
     calls.push(url);
@@ -141,7 +141,14 @@ test("Atlassian exchange uses JSON and accepts only a token bound to exactly one
     return {
       ok: true,
       status: 200,
-      json: async () => [{ id: "cloud-1", url: "https://example.atlassian.net" }],
+      json: async () => [
+        { id: "cloud-1", url: "https://example.atlassian.net", scopes: ["read:jira-work"] },
+        {
+          id: "cloud-1",
+          url: "https://example.atlassian.net/",
+          scopes: ["read:confluence-content.all", "search:confluence"],
+        },
+      ],
     };
   };
   const { hosts, token } = await exchangeCode(

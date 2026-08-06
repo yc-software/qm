@@ -29,9 +29,12 @@ curl -sS 'https://api.atlassian.com/oauth/token/accessible-resources' \
   -H 'Accept: application/json'
 ```
 
-The response must contain exactly one resource. Its `id` is `CLOUD_ID`; its `url` is the
-site URL used for citations. If the response contains zero or multiple resources, stop.
-Tell the user to reconnect Atlassian and select only the intended site. Never choose a
+Atlassian returns one resource entry per product, so a Jira-and-Confluence grant normally
+returns two entries with the same `id` and `url` but different `scopes`. Validate every
+entry, group them by the pair (`id`, normalized `url`), and require exactly one unique
+site. Use that site's `id` as `CLOUD_ID`, its `url` for citations, and combine the entries'
+scope lists. If there are zero entries or multiple unique (`id`, `url`) pairs, stop and
+tell the user to reconnect Atlassian and select only the intended site. Never choose a
 site heuristically and never call a resource not returned by this endpoint.
 
 If the token is empty, or an API returns 401/403, tell the user which principal needs to
