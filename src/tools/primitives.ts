@@ -215,6 +215,49 @@ export interface ToolContext extends SurfaceToolDeps {
     content: string,
   ): Promise<ControlOk<{ version: number }> | ControlErr<"soul_update_denied"> | ControlUnavailable>;
   shareArtifact(req: ShareArtifactRequest): Promise<ShareArtifactResult | ControlUnavailable>;
+  webProvider?: string;
+  webSearch(query: string, opts?: WebSearchOptions): Promise<WebSearchResult>;
+  webScrape(url: string, opts?: WebScrapeOptions): Promise<WebScrapeResult>;
+}
+
+export interface WebSearchOptions {
+  limit?: number;
+  recency?: "day" | "week" | "month" | "year";
+  site?: string;
+  kind?: "web" | "news";
+  full?: boolean;
+}
+
+export interface WebSearchHit {
+  url: string;
+  title?: string;
+  snippet?: string;
+  published?: string;
+  content?: string;
+}
+
+export interface WebSearchResult {
+  ok: boolean;
+  hits?: WebSearchHit[];
+  message?: string;
+}
+
+export interface WebScrapeOptions {
+  fresh?: boolean;
+}
+
+export interface WebScrapeResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  content?: string;
+  message?: string;
+}
+
+export interface WebToolDeps {
+  readonly name: string;
+  search(query: string, opts?: WebSearchOptions): Promise<WebSearchResult>;
+  scrape(url: string, opts?: WebScrapeOptions): Promise<WebScrapeResult>;
 }
 
 interface SurfaceSearchToolOpts {
@@ -387,6 +430,7 @@ export interface ToolContextDeps {
   control?: ControlService;
   controlClaims?: CapabilityClaims;
   surface?: SurfaceToolDeps;
+  web?: WebToolDeps;
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
@@ -394,6 +438,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   const fallbackMounts = deps.layers.filter((l) => l.mode === "ro" && l.mountPath);
   const persistExclude = deps.persistWritesToStore?.excludeDirs;
   const orgScopeId = deps.layers.find((l) => l.mountPath === "global")?.scopeId ?? null;
+  const webProvider = deps.web?.name.trim();
 
   const ledger = deps.ledger ?? createNullLedger();
   const runId = deps.runId;
@@ -440,6 +485,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     if (!deps.surface) return Promise.resolve({ ok: false, message: SURFACE_UNAVAILABLE_MESSAGE });
     const call = () => run(deps.surface!);
     return cache ? once(call, cache) : call();
+  }
+
+  function webOp<R extends { ok: boolean }>(
+    run: (web: WebToolDeps) => Promise<R>,
+  ): Promise<R | { ok: false; message: string }> {
+    if (!deps.web) return Promise.resolve({ ok: false, message: WEB_UNAVAILABLE_MESSAGE });
+    return once(
+      () => run(deps.web!),
+      (r) => r.ok,
+    );
   }
 
   return {
@@ -948,11 +1003,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       deps.surface
         ? deps.surface.staySilent(reason)
         : Promise.resolve({ ok: true as const, message: "[staying silent]" }),
+
+    ...(webProvider ? { webProvider } : {}),
+    webSearch: (query, opts) => webOp((w) => w.search(query, opts)),
+    webScrape: (url, opts) => webOp((w) => w.scrape(url, opts)),
   };
 }
 
 const SURFACE_UNAVAILABLE_MESSAGE =
   "the chat surface isn't reachable from this turn — there's no conversation to post to or read here";
+
+const WEB_UNAVAILABLE_MESSAGE = "the web tool isn't available on this instance";
 
 const BACKGROUND_UNAVAILABLE_MESSAGE =
   "Background execution isn't available on this computer — run the command with `execute` (up to 300s) instead.";

@@ -19,7 +19,14 @@ import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
-import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
+import {
+  coreToolOptions,
+  createPiTools,
+  harnessToolOptions,
+  type CoreToolOptions,
+  type PiToolsOptions,
+  type ToolContextRef,
+} from "./pi-tools.ts";
 import { reconstructMessagesFromHistory } from "./replay.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -28,20 +35,12 @@ const OPENCODE_VERSION = "1.17.18";
 const OPENCODE_IDLE_WAIT_MS = 30 * 60_000;
 export const OPENCODE_STARTUP_TIMEOUT_MS = 90_000;
 
-export interface OpenCodeHarnessOptions {
+export interface OpenCodeHarnessOptions extends CoreToolOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
   defaultModelId?: string;
   apiKey?: string;
   openaiApiKey?: string;
-  scratchExec?: boolean;
-  ownerAuthExec?: boolean;
-  reachExec?: boolean;
-  controlTools?: boolean;
   turnWallClockMs?: number;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
   binaryPath?: string;
   startupTimeoutMs?: number;
@@ -99,19 +98,12 @@ type Runtime = {
 };
 
 function toolOptions(opts: OpenCodeHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
-  return {
-    scratchExec: opts.scratchExec,
-    ownerAuthExec: opts.ownerAuthExec,
-    reachExec: opts.reachExec,
-    controlTools: opts.controlTools,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    ...(turn
+  return harnessToolOptions(
+    opts,
+    turn
       ? { readOnly: turn.readOnly, surfaceTools: turn.surfaceTools, surfaceName: turn.surfaceName }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
+      : { surfaceTools: true, surfaceName: "slack" },
+  );
 }
 
 function asTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {

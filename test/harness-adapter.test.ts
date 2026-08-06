@@ -1,10 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
-import { createOpenCodeHarness } from "../src/harness/opencode-harness.ts";
-import { createCodexHarness } from "../src/harness/codex-harness.ts";
-import { createClaudeHarness } from "../src/harness/claude-harness.ts";
-import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "../src/harness/opencode-harness.ts";
+import { createCodexHarness, codexHarnessConfigOptions } from "../src/harness/codex-harness.ts";
+import { createClaudeHarness, claudeHarnessConfigOptions } from "../src/harness/claude-harness.ts";
+import { createPiHarness, piHarnessConfigOptions } from "../src/harness/pi-harness.ts";
+import {
+  createPiTools,
+  harnessToolOptions,
+  type CoreToolOptions,
+  type ToolContextRef,
+} from "../src/harness/pi-tools.ts";
+import type { Config } from "../src/config.ts";
+import { testConfig } from "./support/test-config.ts";
 
 test("harness adapters declare their native control and tool transports", async (t) => {
   const mock = createMockHarness();
@@ -50,6 +58,27 @@ test("tool presentation belongs to the adapter", () => {
   assert.equal(opencode.tools.name("read"), "workspace_read");
   assert.equal(opencode.tools.name("execute"), "workspace_execute");
   assert.equal(opencode.tools.name("write"), "workspace_write");
+});
+
+test("every harness forwards configured tool flags into the tools it hands the model", () => {
+  const ref: ToolContextRef = { current: null };
+  const builders = [
+    ["pi", piHarnessConfigOptions],
+    ["claude", claudeHarnessConfigOptions],
+    ["codex", codexHarnessConfigOptions],
+    ["opencode", openCodeHarnessConfigOptions],
+  ] as const;
+  const toolNames = (build: (config: Config) => CoreToolOptions, config: Config): string[] =>
+    createPiTools(ref, harnessToolOptions(build(config), {})).map((tool) => tool.name);
+
+  for (const [harness, build] of builders) {
+    assert.ok(toolNames(build, testConfig()).includes("web"), `${harness} offers web with no key configured`);
+    assert.ok(
+      toolNames(build, testConfig({ signingSecret: "sek", apiBaseUrl: "https://core.test" })).includes("cron"),
+      `${harness} forwards control tools the same way`,
+    );
+    assert.ok(!toolNames(build, testConfig()).includes("cron"), `${harness} withholds control tools by default`);
+  }
 });
 
 test("model utilities are independent from turn control", async () => {

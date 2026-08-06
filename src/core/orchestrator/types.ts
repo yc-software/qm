@@ -58,6 +58,7 @@ import type { DeployService } from "../../deploy/deploy-service.ts";
 import type { AclStore } from "../../acl/acl-store.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
+import type { WebToolDeps } from "../../tools/primitives.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -161,6 +162,7 @@ export interface OrchestratorDeps {
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
   brokeredTools?: readonly BrokeredLayerTool[];
   deploymentLayer?: DeploymentLayerRuntime;
+  web?: WebToolDeps;
   surfaceContext?: SurfaceContextPuller;
   surfaceSearch?: SurfaceSearchStore;
   surfaceCache?: SurfaceCache;

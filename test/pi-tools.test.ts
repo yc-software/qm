@@ -281,6 +281,19 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async staySilent() {
       return { ok: true as const, message: "[staying silent]" };
     },
+    async webSearch(query) {
+      return query.includes("firecrawl")
+        ? {
+            ok: true,
+            hits: [{ url: "https://firecrawl.dev", title: "Firecrawl", snippet: "Turn websites into LLM-ready data." }],
+          }
+        : { ok: true, hits: [] };
+    },
+    async webScrape(url) {
+      return url === "https://firecrawl.dev"
+        ? { ok: true, url, title: "Firecrawl", content: "# Firecrawl\n\nTurn websites into LLM-ready data." }
+        : { ok: false, url, message: "the page returned no readable text (HTTP 404)" };
+    },
   };
 }
 

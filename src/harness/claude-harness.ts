@@ -38,24 +38,23 @@ import {
   parseDetectVerdict,
   renderDetectPrompt,
 } from "./pi-harness.ts";
-import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
+import {
+  coreToolOptions,
+  createPiTools,
+  harnessToolOptions,
+  type CoreToolOptions,
+  type PiToolsOptions,
+  type ToolContextRef,
+} from "./pi-tools.ts";
 import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
 
-export interface ClaudeHarnessOptions {
+export interface ClaudeHarnessOptions extends CoreToolOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
   defaultModelId?: string;
   judgeModelId?: string;
   binaryPath?: string;
   env?: NodeJS.ProcessEnv;
-  scratchExec?: boolean;
-  ownerAuthExec?: boolean;
-  reachExec?: boolean;
-  controlTools?: boolean;
   turnWallClockMs?: number;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
   tasks?: TaskStore;
 }
@@ -189,19 +188,12 @@ class MessageQueue implements AsyncIterable<SDKUserMessage> {
 }
 
 function toolOptions(opts: ClaudeHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
-  return {
-    scratchExec: opts.scratchExec,
-    ownerAuthExec: opts.ownerAuthExec,
-    reachExec: opts.reachExec,
-    controlTools: opts.controlTools,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    ...(turn
+  return harnessToolOptions(
+    opts,
+    turn
       ? { readOnly: turn.readOnly, surfaceTools: turn.surfaceTools, surfaceName: turn.surfaceName }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
+      : { surfaceTools: true, surfaceName: "slack" },
+  );
 }
 
 function asTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {
