@@ -19,8 +19,29 @@ export interface SlackPluginConfig {
   maxPrivateChannels?: number;
   recentMessages?: number;
   userCacheTtlMs?: number;
+  allow_dms: boolean;
+  user_allowlist: string[];
+  channel_allowlist: string[];
   botIdentity?: { username?: string; icon_emoji?: string };
   devIntrospection?: { port: number };
+}
+
+function parseBool(raw: string | undefined): boolean | undefined {
+  if (raw === undefined) return undefined;
+  const value = raw.trim().toLowerCase();
+  if (value === "1" || value === "true" || value === "yes" || value === "on") return true;
+  if (value === "0" || value === "false" || value === "no" || value === "off") return false;
+  return undefined;
+}
+
+function parseCsv(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const values: string[] = [];
+  for (const part of raw.split(",")) {
+    const value = part.replace(/^\s+|\s+$/g, "");
+    if (value) values.push(value);
+  }
+  return values;
 }
 
 export function slackPluginConfigFromEnv(env: Record<string, string | undefined>): SlackPluginConfig | null {
@@ -53,6 +74,9 @@ export function slackPluginConfigFromEnv(env: Record<string, string | undefined>
     ...opt("maxPrivateChannels", num(env.SLACK_MAX_PRIVATE_CHANNELS)),
     ...opt("recentMessages", num(env.SLACK_RECENT_MESSAGES)),
     ...opt("userCacheTtlMs", num(env.SLACK_USER_CACHE_TTL_MS)),
+    allow_dms: parseBool(env.SLACK_ALLOW_DMS) ?? true,
+    user_allowlist: parseCsv(env.SLACK_USER_ALLOWLIST),
+    channel_allowlist: parseCsv(env.SLACK_CHANNEL_ALLOWLIST),
     ...(() => {
       const identity = botIdentityFromEnv(env);
       return Object.keys(identity).length ? { botIdentity: identity } : {};

@@ -12,8 +12,14 @@ test("HTTP events mode trims the configured enum like the deployment secret gate
     SLACK_EVENTS_MODE: "  http  ",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: SECRET,
+    SLACK_ALLOW_DMS: "false",
+    SLACK_USER_ALLOWLIST: "U1, U2 ",
+    SLACK_CHANNEL_ALLOWLIST: "C1,C2",
   });
   assert.equal(config?.eventsMode, "http");
+  assert.equal(config?.allow_dms, false);
+  assert.deepEqual(config?.user_allowlist, ["U1", "U2"]);
+  assert.deepEqual(config?.channel_allowlist, ["C1", "C2"]);
 });
 
 function sign(body: string, ts = Math.floor(Date.now() / 1000)): { signature: string; timestamp: string } {
