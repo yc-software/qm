@@ -332,6 +332,152 @@ test("a reattached background wake that ended silent is a clean stop, never 'The
   assert.equal(work?.status, "complete");
 });
 
+test("a silent terminal run surfaces its latest delivered post as the reply", async () => {
+  globalThis.fetch = (async () => {
+    throw new Error("terminal initial snapshot should not poll");
+  }) as typeof fetch;
+
+  const streamFn = makeRunResumeStreamFn(
+    "run-posted",
+    {
+      status: "done",
+      result: { status: "silent" },
+      partial: "",
+      activity: [
+        {
+          seq: 1,
+          type: "tool_call",
+          payload: { tool: "web", action: "post", text: "Still working", callId: "post-1" },
+          createdAt: 100,
+        },
+        {
+          seq: 2,
+          type: "tool_result",
+          payload: { tool: "web", action: "post", ok: true, callId: "post-1", result: "[sent]" },
+          createdAt: 110,
+        },
+        {
+          seq: 3,
+          type: "tool_call",
+          payload: { tool: "web", action: "post", text: "Visible answer", callId: "post-2" },
+          createdAt: 120,
+        },
+        {
+          seq: 4,
+          type: "tool_result",
+          payload: { tool: "web", action: "post", ok: true, callId: "post-2", result: "[sent]" },
+          createdAt: 130,
+        },
+        {
+          seq: 5,
+          type: "tool_call",
+          payload: { tool: "stay_silent", callId: "silent-1" },
+          createdAt: 140,
+        },
+        {
+          seq: 6,
+          type: "tool_result",
+          payload: { tool: "stay_silent", ok: true, callId: "silent-1" },
+          createdAt: 150,
+        },
+      ],
+      startedAt: 100,
+      finishedAt: 200,
+    },
+    undefined,
+    undefined,
+    "Previously restored response that is longer",
+  );
+  const stream = await streamFn(MODEL, { systemPrompt: "", messages: [], tools: [] } as never);
+  const final = await drain(stream);
+  const block = final.content[0];
+
+  assert.equal(final.stopReason, "stop");
+  assert.equal(block?.type === "text" ? block.text : "", "Visible answer");
+});
+
+test("a failed terminal run preserves its error after delivering a post", async () => {
+  globalThis.fetch = (async () => {
+    throw new Error("terminal initial snapshot should not poll");
+  }) as typeof fetch;
+
+  const streamFn = makeRunResumeStreamFn(
+    "run-failed-after-post",
+    {
+      status: "failed",
+      result: { status: "error", reason: "The final step failed." },
+      partial: "",
+      activity: [
+        {
+          seq: 1,
+          type: "tool_call",
+          payload: { tool: "web", action: "post", text: "Delivered before failure", callId: "post-1" },
+          createdAt: 100,
+        },
+        {
+          seq: 2,
+          type: "tool_result",
+          payload: { tool: "web", action: "post", ok: true, callId: "post-1", result: "[sent]" },
+          createdAt: 110,
+        },
+      ],
+      startedAt: 100,
+      finishedAt: 200,
+    },
+    undefined,
+    undefined,
+    "Previously restored response that is longer",
+  );
+  const stream = await streamFn(MODEL, { systemPrompt: "", messages: [], tools: [] } as never);
+  const final = await drain(stream);
+  const block = final.content[0];
+
+  assert.equal(final.stopReason, "error");
+  assert.equal(final.errorMessage, "The final step failed.");
+  assert.equal(block?.type === "text" ? block.text : "", "Delivered before failure");
+});
+
+test("a stopped terminal run preserves its delivered post before aborting", async () => {
+  globalThis.fetch = (async () => {
+    throw new Error("terminal initial snapshot should not poll");
+  }) as typeof fetch;
+
+  const streamFn = makeRunResumeStreamFn(
+    "run-stopped-after-post",
+    {
+      status: "done",
+      result: { status: "error", stopped: true },
+      partial: "",
+      activity: [
+        {
+          seq: 1,
+          type: "tool_call",
+          payload: { tool: "web", action: "post", text: "Delivered before stop", callId: "post-1" },
+          createdAt: 100,
+        },
+        {
+          seq: 2,
+          type: "tool_result",
+          payload: { tool: "web", action: "post", ok: true, callId: "post-1", result: "[sent]" },
+          createdAt: 110,
+        },
+      ],
+      startedAt: 100,
+      finishedAt: 200,
+    },
+    undefined,
+    undefined,
+    "Previously restored response that is longer",
+  );
+  const stream = await streamFn(MODEL, { systemPrompt: "", messages: [], tools: [] } as never);
+  const final = await drain(stream);
+  const block = final.content[0];
+
+  assert.equal(final.stopReason, "aborted");
+  assert.equal(final.errorMessage, "aborted");
+  assert.equal(block?.type === "text" ? block.text : "", "Delivered before stop");
+});
+
 test("approval denial is rendered as a normal status, not a stream error", async () => {
   globalThis.fetch = (async () => {
     throw new Error("approval denial terminal snapshot should not poll");

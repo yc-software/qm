@@ -854,8 +854,10 @@ function applyRun(
     if (paused) work.pendingApprovals = approvals;
     notify?.();
   }
+  const deliveredPost = latestDeliveredPostText(work?.activity ?? []);
   if (res?.stopped) {
     if (res.reply && res.reply.length > st.acc.length) pushDelta(stream, partial, st, res.reply);
+    else if (deliveredPost) replaceText(stream, partial, st, deliveredPost);
     abortStream(stream, partial);
     return "terminal";
   }
@@ -869,7 +871,13 @@ function applyRun(
     return "terminal";
   }
   if (!paused && !quiet && (run.status === "failed" || (res && res.status !== "ok"))) {
+    if (deliveredPost) replaceText(stream, partial, st, deliveredPost);
     fail(stream, partial, res?.reason ?? "The agent run failed.");
+    return "terminal";
+  }
+  if (deliveredPost) {
+    replaceText(stream, partial, st, deliveredPost);
+    finish(stream, partial, st, deliveredPost);
     return "terminal";
   }
   finish(stream, partial, st, st.acc);
@@ -1081,6 +1089,16 @@ function pushDelta(stream: AssistantMessageEventStream, partial: AssistantMessag
   stream.push({ type: "text_delta", contentIndex: 0, delta, partial });
 }
 
+function replaceText(stream: AssistantMessageEventStream, partial: AssistantMessage, st: Acc, next: string): void {
+  if (next.startsWith(st.acc)) {
+    pushDelta(stream, partial, st, next);
+    return;
+  }
+  const block = partial.content[0];
+  if (block?.type === "text") block.text = next;
+  st.acc = next;
+}
+
 function finish(stream: AssistantMessageEventStream, partial: AssistantMessage, st: Acc, reply: string): void {
   const finalText = reply.length >= st.acc.length ? reply : st.acc;
   if (finalText.length > st.acc.length) pushDelta(stream, partial, st, finalText);
@@ -1151,6 +1169,26 @@ function postCallText(payload: unknown): string | null {
 function postResultOk(payload: unknown): boolean {
   const p = (payload ?? {}) as { ok?: unknown; isError?: unknown };
   return p.isError !== true && p.ok !== false;
+}
+
+function latestDeliveredPostText(activity: ToolActivity[]): string | null {
+  const pending = new Map<string, string>();
+  let delivered: string | null = null;
+  for (const item of activity) {
+    const payload = (item.payload ?? {}) as { callId?: unknown };
+    if (typeof payload.callId !== "string") continue;
+    if (item.type === "tool_call") {
+      const text = postCallText(item.payload);
+      if (text) pending.set(payload.callId, text);
+      continue;
+    }
+    if (item.type !== "tool_result") continue;
+    const text = pending.get(payload.callId);
+    if (!text) continue;
+    pending.delete(payload.callId);
+    if (postResultOk(item.payload)) delivered = text;
+  }
+  return delivered;
 }
 
 function userEntryText(payload: unknown): string | null {
