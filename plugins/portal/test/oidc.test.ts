@@ -232,3 +232,11 @@ test("resolvePrincipal allowedEmails permits only the seeded verified addresses"
     /permitted email list/,
   );
 });
+
+test("resolvePrincipal allowedEmails overrides allowedEmailDomain for whitelisted addresses", () => {
+  const rule = { claim: "email" as const, allowedEmails: ["Admin@Example.com"], allowedEmailDomain: "otherdomain.com" };
+  assert.equal(
+    resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "admin@example.com", email_verified: true } }),
+    "admin@example.com",
+  );
+});
