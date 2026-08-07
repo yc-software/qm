@@ -4,6 +4,7 @@ import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import {
   defaultModelForHarness,
+  harnessSuppliesOwnModelAuth,
   isHarnessId,
   modelProviderAvailabilityFor,
   modelSupportedByHarness,
@@ -1038,7 +1039,11 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     webuiModels: configuredPicker.length ? configuredPicker : allowed,
     baseModel: resolvedBase,
     harnessId,
-    ...(managedKeys ? { modelProviderConfigured: Object.values(managedKeys).some(Boolean) } : {}),
+    ...(managedKeys
+      ? {
+          modelProviderConfigured: Object.values(managedKeys).some(Boolean) || harnessSuppliesOwnModelAuth(harnessId),
+        }
+      : {}),
     externalSlackParticipants,
     ...(Object.keys(resolvedBranding).length ? { branding: resolvedBranding } : {}),
   });
