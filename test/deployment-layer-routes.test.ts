@@ -13,7 +13,10 @@ import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
+import {
+  DeploymentLayerPersistedError,
+  type DeploymentLayerBundle,
+} from "../src/deployment/deployment-layer-store.ts";
 
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";
@@ -49,6 +52,7 @@ const bundle = JSON.stringify({
   contract: 1,
   tools: [{ path: "tools/acme/tool.json", content: JSON.stringify({ id: "acme", advertise: "acme CLI" }) }],
   skills: [{ path: "skills/acme/SKILL.md", content: "---\nname: acme\ndescription: Use acme.\n---\nRun acme.\n" }],
+  data: [{ path: "data/catalogs/materials.json", content: '{"version":1}\n' }],
 });
 
 test("an empty layer GETs the version-0 shape with a source discriminator under source auth", async () => {
@@ -133,12 +137,16 @@ test("a correctly signed PUT replaces the layer and a signed GET reads it back",
       status: string;
       runtimeContentHash: string | null;
       source: string;
+      bundle: DeploymentLayerBundle;
     };
     assert.equal(getBody.version, 1);
     assert.equal(getBody.status, "applied");
     assert.equal(getBody.runtimeContentHash, getBody.contentHash);
     assert.equal(getBody.source, "durable");
     assert.ok(getBody.contentHash);
+    assert.deepEqual(getBody.bundle.data, [
+      { path: "data/catalogs/materials.json", content: '{"version":1}\n' },
+    ]);
   } finally {
     await srv.close();
   }

@@ -7,12 +7,15 @@ import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigInDir, type QmConfig } from "../src/config.ts";
 import { currentDeploymentLayerState, deploymentLayerBundle, syncDeploymentLayer } from "../src/deployment-layer.ts";
 import { expectedDescriptors, runConformance } from "../src/commands/conformance.ts";
+import { validateSandboxLayer } from "../src/sandbox-layer.ts";
 
 const SECRET = "conformance-test-secret";
 
 const PINNED_SANDBOX_IMAGE = `registry.fly.io/acme-sandboxes@sha256:${"b".repeat(64)}`;
 
 function writeLayer(dir: string): void {
+  mkdirSync(join(dir, "sandbox", "data", "catalogs"), { recursive: true });
+  writeFileSync(join(dir, "sandbox", "data", "catalogs", "materials.json"), '{"version":1}\n');
   mkdirSync(join(dir, "sandbox", "skills", "a"), { recursive: true });
   mkdirSync(join(dir, "sandbox", "skills", "a-b"), { recursive: true });
   writeFileSync(join(dir, "sandbox", "skills", "a", "SKILL.md"), "---\nname: a\ndescription: skill a\n---\nbody a\n");
@@ -37,8 +40,14 @@ function coreNormalizedHash(dir: string): string {
   const tools = [
     { path: "tools/t/tool.json", content: readFileSync(join(dir, "sandbox", "tools", "t", "tool.json"), "utf8") },
   ];
+  const data = [
+    {
+      path: "data/catalogs/materials.json",
+      content: readFileSync(join(dir, "sandbox", "data", "catalogs", "materials.json"), "utf8"),
+    },
+  ];
   const order = (a: { path: string }, b: { path: string }): number => a.path.localeCompare(b.path);
-  const bundle = { contract: 1, tools: tools.sort(order), skills: skillFiles.sort(order) };
+  const bundle = { contract: 1, tools: tools.sort(order), skills: skillFiles.sort(order), data: data.sort(order) };
   return createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
 }
 
@@ -52,6 +61,7 @@ test("the CLI bundle hashes byte-identically to the core's full-path normalizati
       ["skills/a-b/SKILL.md", "skills/a/SKILL.md"],
       "full-path order, not per-directory walk order",
     );
+    assert.deepEqual(bundle.data?.map((file) => file.path), ["data/catalogs/materials.json"]);
     const cliHash = createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
     assert.equal(cliHash, coreNormalizedHash(dir));
   } finally {
@@ -116,6 +126,26 @@ test("a missing sandbox directory skips sync instead of replacing the deployed l
       sandboxDir: join(dir, "sandbox"),
     });
     assert.ok(lines.some((line) => /skipped \(no sandbox directory/.test(line)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a dangling sandbox link fails sync instead of being treated as missing", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-dangling-sync-"));
+  const sandboxDir = join(dir, "sandbox");
+  try {
+    symlinkSync(join(dir, "missing"), sandboxDir);
+    await assert.rejects(
+      () =>
+        syncDeploymentLayer({
+          config: makeConfig("http://example.invalid"),
+          target: "docker",
+          configDir: dir,
+          sandboxDir,
+        }),
+      /directory must be a regular directory/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -694,6 +724,97 @@ test("junk files (.DS_Store, Thumbs.db, AppleDouble) are excluded from the bundl
     writeFileSync(join(dir, "sandbox", "skills", "a", "Thumbs.db"), Buffer.from([0xd0, 0xcf, 0x11, 0xe0]));
     writeFileSync(join(dir, "sandbox", "skills", "a", "._SKILL.md"), Buffer.from([0x00, 0x05, 0x16, 0x07]));
     assert.deepEqual(deploymentLayerBundle(join(dir, "sandbox")), clean);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("organization data files must be regular UTF-8 text", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-data-shape-"));
+  try {
+    mkdirSync(join(dir, "sandbox", "data"), { recursive: true });
+    writeFileSync(join(dir, "catalog.json"), "{}\n");
+    symlinkSync(join(dir, "catalog.json"), join(dir, "sandbox", "data", "catalog.json"));
+    assert.throws(
+      () => deploymentLayerBundle(join(dir, "sandbox")),
+      /deployment layer file must be a regular file/,
+    );
+    rmSync(join(dir, "sandbox", "data", "catalog.json"));
+    writeFileSync(join(dir, "sandbox", "data", "catalog.bin"), Buffer.from([0xff]));
+    assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /only accepts UTF-8 text assets/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deployment layer directories must not be symbolic links", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-linked-directory-"));
+  try {
+    mkdirSync(join(dir, "external", "data"), { recursive: true });
+    writeFileSync(join(dir, "external", "data", "catalog.json"), "{}\n");
+    mkdirSync(join(dir, "external", "tools", "external"), { recursive: true });
+    writeFileSync(join(dir, "external", "tools", "external", "tool.json"), JSON.stringify({ id: "external" }));
+    symlinkSync(join(dir, "external"), join(dir, "sandbox"));
+    assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /directory must be a regular directory/);
+    const validation = validateSandboxLayer(join(dir, "sandbox"));
+    assert.match(validation.errors[0] ?? "", /directory must be a regular directory/);
+    assert.deepEqual(validation.tools, []);
+
+    rmSync(join(dir, "sandbox"));
+    mkdirSync(join(dir, "sandbox"), { recursive: true });
+    symlinkSync(join(dir, "external", "data"), join(dir, "sandbox", "data"));
+    assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /directory must be a regular directory/);
+
+    rmSync(join(dir, "sandbox", "data"));
+    mkdirSync(join(dir, "external", "tools"), { recursive: true });
+    symlinkSync(join(dir, "external", "tools"), join(dir, "sandbox", "tools"));
+    assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /directory must be a regular directory/);
+
+    rmSync(join(dir, "sandbox", "tools"));
+    mkdirSync(join(dir, "external", "skills"), { recursive: true });
+    symlinkSync(join(dir, "external", "skills"), join(dir, "sandbox", "skills"));
+    assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /directory must be a regular directory/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dangling deployment layer directories fail instead of acting absent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-dangling-directory-"));
+  try {
+    symlinkSync(join(dir, "missing-sandbox"), join(dir, "sandbox"));
+    assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /directory must be a regular directory/);
+    assert.match(validateSandboxLayer(join(dir, "sandbox")).errors[0] ?? "", /directory must be a regular directory/);
+
+    rmSync(join(dir, "sandbox"));
+    mkdirSync(join(dir, "sandbox"));
+    for (const name of ["data", "tools", "skills"]) {
+      symlinkSync(join(dir, `missing-${name}`), join(dir, "sandbox", name));
+      assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /directory must be a regular directory/);
+      rmSync(join(dir, "sandbox", name));
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("sandbox validation rejects linked descriptors and Dockerfiles before reading them", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-validation-links-"));
+  try {
+    mkdirSync(join(dir, "sandbox", "tools", "linked"), { recursive: true });
+    writeFileSync(join(dir, "private-descriptor.json"), "private-content");
+    symlinkSync(join(dir, "private-descriptor.json"), join(dir, "sandbox", "tools", "linked", "tool.json"));
+    const descriptor = validateSandboxLayer(join(dir, "sandbox"));
+    assert.match(descriptor.errors[0] ?? "", /must be a regular file/);
+    assert.doesNotMatch(descriptor.errors.join("\n"), /private-content/);
+    assert.deepEqual(descriptor.tools, []);
+
+    rmSync(join(dir, "sandbox", "tools"), { recursive: true });
+    writeFileSync(join(dir, "private-Dockerfile"), "FROM private.example/image\n");
+    symlinkSync(join(dir, "private-Dockerfile"), join(dir, "sandbox", "Dockerfile"));
+    const dockerfile = validateSandboxLayer(join(dir, "sandbox"));
+    assert.deepEqual(dockerfile.errors, ["sandbox/Dockerfile must be a regular file"]);
+    assert.equal(dockerfile.hasDockerfile, false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

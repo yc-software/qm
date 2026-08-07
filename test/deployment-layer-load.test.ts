@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emptyDeploymentLayer, loadDeploymentLayer, replaceDeploymentLayer } from "../src/deployment/load-layer.ts";
@@ -58,6 +58,67 @@ test("loadDeploymentLayer derives the runtime shapes from tool descriptors", () 
   assert.deepEqual(layer.splitEnvTemplates, [
     { ACMECLI_ACTING_SLACK_USER_ID: "{actingSlackUserId}", ACMECLI_PLATFORM: "slack" },
   ]);
+});
+
+test("loadDeploymentLayer includes nested organization data as UTF-8 text", () => {
+  const dir = layerDir({});
+  mkdirSync(join(dir, "data", "catalogs"), { recursive: true });
+  writeFileSync(join(dir, "data", "catalogs", "materials.json"), '{"version":1}\n');
+  const layer = loadDeploymentLayer(dir);
+  assert.deepEqual(layer.dataFiles, [
+    { path: "data/catalogs/materials.json", content: '{"version":1}\n' },
+  ]);
+});
+
+test("loadDeploymentLayer rejects binary and linked organization data", () => {
+  const binary = layerDir({});
+  mkdirSync(join(binary, "data"), { recursive: true });
+  writeFileSync(join(binary, "data", "catalog.bin"), Buffer.from([0xff]));
+  assert.throws(() => loadDeploymentLayer(binary), /must be UTF-8 text/);
+
+  const linked = layerDir({});
+  mkdirSync(join(linked, "data"), { recursive: true });
+  writeFileSync(join(linked, "catalog.json"), "{}\n");
+  symlinkSync(join(linked, "catalog.json"), join(linked, "data", "catalog.json"));
+  assert.throws(() => loadDeploymentLayer(linked), /must be a regular file/);
+
+  const linkedRoot = layerDir({});
+  mkdirSync(join(linkedRoot, "external-data"));
+  writeFileSync(join(linkedRoot, "external-data", "catalog.json"), "{}\n");
+  symlinkSync(join(linkedRoot, "external-data"), join(linkedRoot, "data"));
+  assert.throws(() => loadDeploymentLayer(linkedRoot), /must be a regular directory/);
+});
+
+test("loadDeploymentLayer rejects a linked tools directory", () => {
+  const dir = layerDir({});
+  const toolsDir = join(dir, "tools");
+  const external = join(dir, "external-tools");
+  mkdirSync(external);
+  rmSync(toolsDir, { recursive: true, force: true });
+  symlinkSync(external, toolsDir);
+  assert.throws(() => loadDeploymentLayer(dir), /must be a regular directory/);
+});
+
+test("loadDeploymentLayer rejects a linked layer root", () => {
+  const external = layerDir({});
+  const parent = mkdtempSync(join(tmpdir(), "linked-layer-root-"));
+  const linked = join(parent, "layer");
+  symlinkSync(external, linked);
+  assert.throws(() => loadDeploymentLayer(linked), /must be a regular directory/);
+});
+
+test("loadDeploymentLayer rejects dangling layer directories", () => {
+  const parent = mkdtempSync(join(tmpdir(), "dangling-layer-root-"));
+  const linked = join(parent, "layer");
+  symlinkSync(join(parent, "missing-layer"), linked);
+  assert.throws(() => loadDeploymentLayer(linked), /must be a regular directory/);
+
+  const dir = layerDir({});
+  for (const name of ["data", "tools"]) {
+    symlinkSync(join(dir, `missing-${name}`), join(dir, name));
+    assert.throws(() => loadDeploymentLayer(dir), /must be a regular directory/);
+    rmSync(join(dir, name));
+  }
 });
 
 test("brokered tools resolve to service, binary, and quarantine roots", () => {

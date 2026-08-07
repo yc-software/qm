@@ -4,20 +4,21 @@ Contract v1 makes a QM deployment a committed, portable directory. The `qm` CLI 
 
 ## Layout
 
-`package.json` pins the `@yc-software/qm` deployment engine at the exact version that scaffolded the directory, so the directory records which CLI interprets it rather than drifting with whatever version an operator has installed; `contract: 1` remains only the compatibility floor. `package-lock.json` records the installed artifact. `qm.config.jsonc` is the deployment config. `deployment.md` and `.codex/skills/deploy-qm/` are materialized package assets an operator can hand to an agent. `sandbox/` adds tools and skills to agent computers; `plugins/` adds services; `.env.example` documents the computed secret names; `.env` supplies local values and is never committed. `qm init` writes `slack-app-manifest.yml` for the optional Socket Mode bot. It also writes `slack-sso-manifest.yml` only when the portal is configured to use Slack OpenID. `qm slack render` refreshes the applicable manifests after `publicUrl` changes, and `qm outputs` returns their creation links and the web coordinates. `qm init --target aws` also vendors the reference `infra/` Terraform module and its derived `terraform.tfvars`; the copy belongs to the deployment after generation. Init never overwrites an existing deployment config.
+`package.json` pins the `@yc-software/qm` deployment engine at the exact version that scaffolded the directory, so the directory records which CLI interprets it rather than drifting with whatever version an operator has installed; `contract: 1` remains only the compatibility floor. `package-lock.json` records the installed artifact. `qm.config.jsonc` is the deployment config. `deployment.md` and `.codex/skills/deploy-qm/` are materialized package assets an operator can hand to an agent. `sandbox/` adds organization data, tools, and skills; `plugins/` adds services; `.env.example` documents the computed secret names; `.env` supplies local values and is never committed. `qm init` writes `slack-app-manifest.yml` for the optional Socket Mode bot. It also writes `slack-sso-manifest.yml` only when the portal is configured to use Slack OpenID. `qm slack render` refreshes the applicable manifests after `publicUrl` changes, and `qm outputs` returns their creation links and the web coordinates. `qm init --target aws` also vendors the reference `infra/` Terraform module and its derived `terraform.tfvars`; the copy belongs to the deployment after generation. Init never overwrites an existing deployment config.
 
 The sandbox layout is:
 
 ```text
 sandbox/
   Dockerfile
+  data/<path>
   tools/<id>/tool.json
   tools/<id>/<binary>
   skills/<id>/SKILL.md
   skills/<id>/<text assets>
 ```
 
-The Dockerfile is optional when every declared binary is present in its tool directory. Skill assets delivered through the deployment-layer API are text in v1; binaries belong in the sandbox image.
+The Dockerfile is optional when every declared binary is present in its tool directory. Files under `data/` and skill assets delivered through the deployment-layer API are UTF-8 text in v1; binaries belong in the sandbox image. Data files are organization-owned inputs for features that explicitly consume their paths. Merely adding a data file does not expose it to an agent or change runtime behavior.
 
 ## Configuration
 
@@ -96,7 +97,7 @@ Deployment-specific safety belongs here too. For example, an ambiently authentic
 
 ## Delivery and pins
 
-When `sandbox/` exists, every `up` sends its descriptors and complete text skill trees to source-authenticated `PUT /v1/deployment-layer`. Without `sandbox/`, `up` skips layer sync and leaves the deployed layer unchanged. Core validates submitted bundles again, stores them in Postgres table `deployment_layer`, versions them by a canonical SHA-256 content hash, records an audit event, hydrates them before serving, and returns the restorable bundle with its metadata and resolved runtime state from source-authenticated `GET /v1/deployment-layer`. Removed layer-owned skills are archived. Filesystem `DEPLOYMENT_LAYER` remains a bootstrap input for local and recovery use.
+When `sandbox/` exists, every `up` sends its descriptors, data files, and complete text skill trees to source-authenticated `PUT /v1/deployment-layer`. Without `sandbox/`, `up` skips layer sync and leaves the deployed layer unchanged. Core validates submitted bundles again, stores them in Postgres table `deployment_layer`, versions them by a canonical SHA-256 content hash, records an audit event, hydrates them before serving, and returns the restorable bundle with its metadata and resolved runtime state from source-authenticated `GET /v1/deployment-layer`. Removed layer-owned skills are archived. Filesystem `DEPLOYMENT_LAYER` remains a bootstrap input for local and recovery use.
 
 The sandbox handoff is a substrate image pin plus a layer content hash. Docker and Fly use `sandbox publish` to push an OCI image, resolve its immutable digest, and record it in the config. AWS with `sandbox.backend: "aws"` (or no sandbox block) uses `infra build-image` to package the guest agent as a Lambda MicroVM image and records its immutable image version and execution role; with `sandbox.backend: "sprites"`, `sandbox publish` pushes the layer image and records its digest pin in the durable deployment manifest, which `up`, `check --live`, and `rollback` resolve. Service task definitions and sandbox root filesystems use immutable pins, not mutable tags.
 

@@ -16,6 +16,7 @@ export interface DeploymentLayerBundle {
   contract: 1;
   tools: DeploymentLayerFile[];
   skills: DeploymentLayerFile[];
+  data?: DeploymentLayerFile[];
 }
 
 export interface DeploymentLayerState {
@@ -40,7 +41,7 @@ function textFile(root: string, path: string, prefix: string): DeploymentLayerFi
     throw new CliError(`deployment layer file must be a regular file: ${path}`);
   const bytes = readFileSync(path);
   if (bytes.includes(0) || !Buffer.from(bytes.toString("utf8"), "utf8").equals(bytes)) {
-    throw new CliError(`deployment layer API only accepts text skill assets: ${path}`);
+    throw new CliError(`deployment layer API only accepts UTF-8 text assets: ${path}`);
   }
   const rel = relative(root, path).split(sep).join("/");
   return {
@@ -58,8 +59,16 @@ const pathOrder = (a: DeploymentLayerFile, b: DeploymentLayerFile): number => {
 
 export const JUNK_FILE = /^(?:\.DS_Store|Thumbs\.db|\._.*)$/;
 
+function regularDirectoryExists(path: string): boolean {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat) return false;
+  if (stat.isSymbolicLink() || !stat.isDirectory())
+    throw new CliError(`deployment layer directory must be a regular directory: ${path}`);
+  return true;
+}
+
 function walkText(root: string, prefix: string): DeploymentLayerFile[] {
-  if (!existsSync(root)) return [];
+  if (!regularDirectoryExists(root)) return [];
   const out: DeploymentLayerFile[] = [];
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -74,32 +83,47 @@ function walkText(root: string, prefix: string): DeploymentLayerFile[] {
 }
 
 export function deploymentLayerBundle(sandboxDir: string): DeploymentLayerBundle {
+  if (!regularDirectoryExists(sandboxDir)) return { contract: 1, tools: [], skills: [] };
   const toolsDir = join(sandboxDir, "tools");
-  const tools = existsSync(toolsDir)
-    ? readdirSync(toolsDir, { withFileTypes: true })
+  const tools: DeploymentLayerFile[] = [];
+  if (regularDirectoryExists(toolsDir)) {
+    tools.push(
+      ...readdirSync(toolsDir, { withFileTypes: true })
         .filter((entry) => !JUNK_FILE.test(entry.name))
         .map((entry) => {
           const path = join(toolsDir, entry.name);
           if (!entry.isDirectory())
             throw new CliError(`deployment layer tools entry must be a directory containing tool.json: ${path}`);
           const descriptor = join(path, "tool.json");
-          if (!existsSync(descriptor))
+          if (!lstatSync(descriptor, { throwIfNoEntry: false }))
             throw new CliError(`deployment layer tool directory is missing tool.json: ${path}`);
           return textFile(toolsDir, descriptor, "tools");
         })
-        .sort(pathOrder)
-    : [];
-  return { contract: 1, tools, skills: walkText(join(sandboxDir, "skills"), "skills") };
+        .sort(pathOrder),
+    );
+  }
+  const data = walkText(join(sandboxDir, "data"), "data");
+  return {
+    contract: 1,
+    tools,
+    skills: walkText(join(sandboxDir, "skills"), "skills"),
+    ...(data.length ? { data } : {}),
+  };
 }
 
 function normalizedLayerBody(value: unknown): string {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new CliError("deployment layer bundle must be an object");
   const bundle = value as Record<string, unknown>;
-  if (bundle.contract !== 1 || !Array.isArray(bundle.tools) || !Array.isArray(bundle.skills)) {
+  if (
+    bundle.contract !== 1 ||
+    !Array.isArray(bundle.tools) ||
+    !Array.isArray(bundle.skills) ||
+    (bundle.data !== undefined && !Array.isArray(bundle.data))
+  ) {
     throw new CliError("deployment layer bundle requires contract: 1, tools[], and skills[]");
   }
-  const files = (kind: "tools" | "skills", entries: unknown[]): DeploymentLayerFile[] =>
+  const files = (kind: "tools" | "skills" | "data", entries: unknown[]): DeploymentLayerFile[] =>
     entries
       .map((entry) => {
         if (!entry || typeof entry !== "object" || Array.isArray(entry))
@@ -111,13 +135,17 @@ function normalizedLayerBody(value: unknown): string {
         return { path: file.path, content: file.content, ...(file.executable === true ? { executable: true } : {}) };
       })
       .sort(pathOrder);
-  return JSON.stringify({ contract: 1, tools: files("tools", bundle.tools), skills: files("skills", bundle.skills) });
+  const data = files("data", (bundle.data as unknown[] | undefined) ?? []);
+  return JSON.stringify({
+    contract: 1,
+    tools: files("tools", bundle.tools),
+    skills: files("skills", bundle.skills),
+    ...(data.length ? { data } : {}),
+  });
 }
 
 export function deploymentLayerBody(sandboxDir: string): string {
-  const bundle = existsSync(sandboxDir)
-    ? deploymentLayerBundle(sandboxDir)
-    : { contract: 1 as const, tools: [], skills: [] };
+  const bundle = deploymentLayerBundle(sandboxDir);
   const body = normalizedLayerBody(bundle);
   if (Buffer.byteLength(body) > 1_000_000)
     throw new CliError("deployment layer exceeds the core API's 1 MB request limit");
@@ -251,7 +279,7 @@ export async function syncDeploymentLayer(opts: {
   envFile?: string;
   allowUnavailable?: boolean;
 }): Promise<void> {
-  if (!existsSync(opts.sandboxDir)) {
+  if (!regularDirectoryExists(opts.sandboxDir)) {
     step(`deployment layer: skipped (no sandbox directory at ${opts.sandboxDir})`);
     return;
   }

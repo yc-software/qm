@@ -38,7 +38,7 @@ const skill: DeploymentLayerBundle["skills"] = [
 ];
 
 const publicRuntime = (runtime: ReturnType<typeof resolvedDeploymentLayer>) => {
-  const { dir: _dir, ...resolved } = runtime;
+  const { dir: _dir, dataFiles: _dataFiles, ...resolved } = runtime;
   return resolved;
 };
 
@@ -55,20 +55,40 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
     now: () => now++,
   });
 
-  const first = await store.put({ contract: 1, tools: [tool("acme CLI")], skills: skill }, "test");
+  const first = await store.put(
+    {
+      contract: 1,
+      tools: [tool("acme CLI")],
+      skills: skill,
+      data: [{ path: "data/catalogs/materials.json", content: '{"version":1}\n' }],
+    },
+    "test",
+  );
   assert.equal(first.version, 1);
+  assert.deepEqual(runtime.dataFiles, [
+    { path: "data/catalogs/materials.json", content: '{"version":1}\n' },
+  ]);
   assert.equal(runtime.advertisedTools[0], "acme CLI");
   assert.deepEqual(runtime.hints, ["Use acme for company data."]);
   assert.deepEqual(runtime.credentialPaths, [{ path: ".config/acme", kind: "directory" }]);
   assert.equal(runtime.commandRules[0]?.decision, "deny");
   assert.equal((await skills.resolve("acme", [scopeId("org", "default-org")])).skill?.status, "published");
 
-  const unchanged = await store.put({ contract: 1, tools: [tool("acme CLI")], skills: skill }, "other");
+  const unchanged = await store.put(
+    {
+      contract: 1,
+      tools: [tool("acme CLI")],
+      skills: skill,
+      data: [{ path: "data/catalogs/materials.json", content: '{"version":1}\n' }],
+    },
+    "other",
+  );
   assert.equal(unchanged.version, 1);
   assert.equal(unchanged.updatedBy, "test");
 
   const second = await store.put({ contract: 1, tools: [tool("acme v2")], skills: [] }, "test-2");
   assert.equal(second.version, 2);
+  assert.deepEqual(runtime.dataFiles, []);
   assert.equal(runtime.advertisedTools[0], "acme v2");
   assert.equal((await skills.resolve("acme", [scopeId("org", "default-org")])).skill, null);
 
@@ -642,7 +662,12 @@ test("hydrate reparses bundle descriptors instead of trusting stored resolved fi
 
 test("hydrate derives runtime fields from the stored bundle, not the resolved cache", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
-  const bundle = { contract: 1 as const, tools: [tool("bundle truth")], skills: [] };
+  const bundle = {
+    contract: 1 as const,
+    tools: [tool("bundle truth")],
+    skills: [],
+    data: [{ path: "data/catalogs/materials.json", content: '{"version":1}\n' }],
+  };
   const writer = createDeploymentLayerStore({
     backing,
     runtime: emptyDeploymentLayer(),
@@ -663,6 +688,9 @@ test("hydrate derives runtime fields from the stored bundle, not the resolved ca
   });
   await reader.hydrate();
   assert.deepEqual(runtime.advertisedTools, ["bundle truth"]);
+  assert.deepEqual(runtime.dataFiles, [
+    { path: "data/catalogs/materials.json", content: '{"version":1}\n' },
+  ]);
 });
 
 test("a concurrent delete during put surfaces a conflict error, not a TypeError", async () => {
@@ -826,6 +854,33 @@ test("applied status detects and repairs deployment-skill drift", async () => {
   await store.get();
   assert.equal(await store.isApplied(record.contentHash), true);
   assert.equal((await skills.resolve("acme", [org])).skill?.manifest.body, "Run the acme tool.\n");
+});
+
+test("applied status detects and repairs deployment-data drift", async () => {
+  const backing = createMemoryMap<StoredDeploymentLayer>();
+  const runtime = resolvedDeploymentLayer("/fallback", []);
+  const store = createDeploymentLayerStore({
+    backing,
+    runtime,
+    skills: createSkillStore(),
+    scopeId: scopeId("org", "default-org"),
+  });
+  const record = await store.put(
+    {
+      contract: 1,
+      tools: [],
+      skills: [],
+      data: [{ path: "data/catalogs/materials.json", content: '{"version":1}\n' }],
+    },
+    "test",
+  );
+  runtime.dataFiles[0]!.content = '{"version":0}\n';
+  assert.equal(await store.isApplied(record.contentHash), false);
+  await store.get();
+  assert.equal(await store.isApplied(record.contentHash), true);
+  assert.deepEqual(runtime.dataFiles, [
+    { path: "data/catalogs/materials.json", content: '{"version":1}\n' },
+  ]);
 });
 
 test("a later hydrate reconciles a persisted layer audit exactly once", async () => {

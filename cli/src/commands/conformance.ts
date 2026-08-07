@@ -60,9 +60,7 @@ export async function runConformance(
   const bundle = deploymentLayerBundle(sandboxDir);
   const expectedHash = createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
   if (live.contentHash !== expectedHash) {
-    throw new CliError(
-      "runtime.layer-resolved: live content hash differs from the directory's complete tools and skills layer",
-    );
+    throw new CliError("runtime.layer-resolved: live content hash differs from the directory's complete layer");
   }
   if (
     live.status === "degraded" ||

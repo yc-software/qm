@@ -254,7 +254,7 @@ function prepare(opts: SandboxBuildOpts): PreparedBuild {
     throw new CliError(`sandbox check failed:\n${layer.errors.map((error) => `  - ${error}`).join("\n")}`);
   }
   const customDockerfile = join(sandboxDir, "Dockerfile");
-  const hasCustom = existsSync(customDockerfile);
+  const hasCustom = layer.hasDockerfile;
   if (!hasCustom && layer.tools.length === 0) {
     die(`nothing to build in ${sandboxDir}: add a tool executable under tools/, or a sandbox/Dockerfile.`);
   }

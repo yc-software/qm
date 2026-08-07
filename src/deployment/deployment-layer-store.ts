@@ -23,7 +23,7 @@ import { errMessage } from "../util/errors.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
 import { replaceDeploymentLayer, resolvedDeploymentLayer, type DeploymentLayerRuntime } from "./load-layer.ts";
 
-interface DeploymentLayerFile {
+export interface DeploymentLayerFile {
   path: string;
   content: string;
   executable?: boolean;
@@ -33,6 +33,7 @@ export interface DeploymentLayerBundle {
   contract: 1;
   tools: DeploymentLayerFile[];
   skills: DeploymentLayerFile[];
+  data?: DeploymentLayerFile[];
 }
 
 export interface StoredDeploymentLayer {
@@ -41,7 +42,7 @@ export interface StoredDeploymentLayer {
   updatedAt: number;
   updatedBy: string;
   bundle: DeploymentLayerBundle;
-  resolved: Omit<DeploymentLayerRuntime, "dir">;
+  resolved: Omit<DeploymentLayerRuntime, "dir" | "dataFiles">;
   pendingAudits?: DeploymentLayerAuditRevision[];
 }
 
@@ -61,7 +62,7 @@ export interface DeploymentLayerStore {
   live(): {
     source: "durable" | "filesystem" | "none";
     contentHash: string | null;
-    resolved: Omit<DeploymentLayerRuntime, "dir"> | null;
+    resolved: Omit<DeploymentLayerRuntime, "dir" | "dataFiles"> | null;
   };
 }
 
@@ -100,10 +101,15 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
-  if (input.contract !== 1 || !Array.isArray(input.tools) || !Array.isArray(input.skills)) {
+  if (
+    input.contract !== 1 ||
+    !Array.isArray(input.tools) ||
+    !Array.isArray(input.skills) ||
+    (input.data !== undefined && !Array.isArray(input.data))
+  ) {
     throw new Error("deployment layer requires contract: 1, tools[], and skills[]");
   }
-  const normalize = (kind: "tools" | "skills", files: DeploymentLayerFile[]): DeploymentLayerFile[] => {
+  const normalize = (kind: "tools" | "skills" | "data", files: DeploymentLayerFile[]): DeploymentLayerFile[] => {
     const seen = new Set<string>();
     return files
       .map((file) => {
@@ -129,7 +135,13 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
       })
       .sort(pathOrder);
   };
-  return { contract: 1, tools: normalize("tools", input.tools), skills: normalize("skills", input.skills) };
+  const data = normalize("data", input.data ?? []);
+  return {
+    contract: 1,
+    tools: normalize("tools", input.tools),
+    skills: normalize("skills", input.skills),
+    ...(data.length ? { data } : {}),
+  };
 }
 
 function toolDescriptors(files: DeploymentLayerFile[]): ToolDescriptor[] {
@@ -197,8 +209,8 @@ function contentHash(bundle: DeploymentLayerBundle): string {
   return createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
 }
 
-function publicResolved(runtime: DeploymentLayerRuntime): Omit<DeploymentLayerRuntime, "dir"> {
-  const { dir: _dir, ...resolved } = runtime;
+function publicResolved(runtime: DeploymentLayerRuntime): Omit<DeploymentLayerRuntime, "dir" | "dataFiles"> {
+  const { dir: _dir, dataFiles: _dataFiles, ...resolved } = runtime;
   return resolved;
 }
 
@@ -226,7 +238,15 @@ function validateBundle(
   const bundle = normalizedBundle(input);
   const tools = toolDescriptors(bundle.tools);
   const manifests = skillManifests(bundle.skills);
-  return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools) };
+  return {
+    bundle,
+    manifests,
+    runtime: resolvedDeploymentLayer(
+      dir,
+      tools,
+      (bundle.data ?? []).map((file) => ({ path: file.path, content: file.content })),
+    ),
+  };
 }
 
 export function createDeploymentLayerStore(opts: {
@@ -312,6 +332,7 @@ export function createDeploymentLayerStore(opts: {
     if (opts.runtime.dir !== `durable:${record.contentHash}`) return false;
     const next = validated ?? validateBundle(record.bundle, `durable:${record.contentHash}`);
     if (JSON.stringify(publicResolved(opts.runtime)) !== JSON.stringify(publicResolved(next.runtime))) return false;
+    if (JSON.stringify(opts.runtime.dataFiles) !== JSON.stringify(next.runtime.dataFiles)) return false;
     const current = layerSkills(await opts.skills.list());
     const wanted = new Set(next.manifests.map((manifest) => manifest.name));
     if (current.some((skill) => skill.status !== "archived" && !wanted.has(skill.manifest.name))) return false;

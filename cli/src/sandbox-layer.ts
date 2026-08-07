@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { JUNK_FILE, deploymentLayerBundle } from "./deployment-layer.ts";
 import { errMessage } from "./log.ts";
@@ -770,7 +770,8 @@ export interface SandboxValidation {
 
 const isFile = (p: string): boolean => {
   try {
-    return statSync(p).isFile();
+    const stat = lstatSync(p);
+    return !stat.isSymbolicLink() && stat.isFile();
   } catch {
     return false;
   }
@@ -788,14 +789,34 @@ const isCidr = (host: string): boolean =>
   /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(host) || /^[0-9A-Fa-f:]+\/\d{1,3}$/.test(host);
 
 export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
+  const root = lstatSync(sandboxDir, { throwIfNoEntry: false });
   const out: SandboxValidation = {
-    exists: existsSync(sandboxDir),
-    hasDockerfile: existsSync(join(sandboxDir, "Dockerfile")),
+    exists: root !== undefined,
+    hasDockerfile: false,
     tools: [],
     skills: [],
     errors: [],
     warnings: [],
   };
+  let bundleBody: string | undefined;
+  try {
+    bundleBody = JSON.stringify(deploymentLayerBundle(sandboxDir));
+    if (out.exists) {
+      const dockerfilePath = join(sandboxDir, "Dockerfile");
+      const dockerfile = lstatSync(dockerfilePath, { throwIfNoEntry: false });
+      if (dockerfile) {
+        if (dockerfile.isSymbolicLink() || !dockerfile.isFile()) {
+          out.errors.push(`sandbox/Dockerfile must be a regular file`);
+          return out;
+        }
+        out.hasDockerfile = true;
+      }
+    }
+  } catch (e) {
+    out.errors.push(errMessage(e));
+    return out;
+  }
+  if (!out.exists) return out;
 
   const toolsDir = join(sandboxDir, "tools");
   const idCounts = new Map<string, number>();
@@ -888,15 +909,8 @@ export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
     }
   }
 
-  if (out.exists && out.errors.length === 0) {
-    try {
-      const body = JSON.stringify(deploymentLayerBundle(sandboxDir));
-      if (Buffer.byteLength(body) > 1_000_000) {
-        out.errors.push("deployment layer (skills/ + tool descriptors) exceeds the core API's 1 MB request limit");
-      }
-    } catch (e) {
-      out.errors.push(errMessage(e));
-    }
+  if (out.errors.length === 0 && bundleBody !== undefined && Buffer.byteLength(bundleBody) > 1_000_000) {
+    out.errors.push("deployment layer exceeds the core API's 1 MB request limit");
   }
 
   return out;

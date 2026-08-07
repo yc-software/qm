@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   compileApproval,
@@ -13,6 +13,7 @@ import type { CommandRule } from "../types.ts";
 
 export interface DeploymentLayerRuntime {
   dir: string;
+  dataFiles: DeploymentLayerDataFile[];
   tools: ToolDescriptor[];
   connectors: ResidentAuthConnector[];
   advertisedTools: string[];
@@ -21,6 +22,11 @@ export interface DeploymentLayerRuntime {
   splitEnvTemplates: Record<string, string>[];
   commandRules: CommandRule[];
   brokeredTools: BrokeredLayerTool[];
+}
+
+export interface DeploymentLayerDataFile {
+  path: string;
+  content: string;
 }
 
 export interface BrokeredLayerTool {
@@ -33,6 +39,7 @@ export interface BrokeredLayerTool {
 export function emptyDeploymentLayer(): DeploymentLayerRuntime {
   return {
     dir: "",
+    dataFiles: [],
     tools: [],
     connectors: [],
     advertisedTools: [],
@@ -73,7 +80,11 @@ function toolService(tool: ToolDescriptor, why: string): string {
   );
 }
 
-export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): DeploymentLayerRuntime {
+export function resolvedDeploymentLayer(
+  dir: string,
+  tools: ToolDescriptor[],
+  dataFiles: DeploymentLayerDataFile[] = [],
+): DeploymentLayerRuntime {
   assertDisjointCredentialLinks(tools);
   const withAuth = tools.filter((t) => t.auth);
   const brokered = withAuth.filter((t) => t.auth!.broker);
@@ -84,6 +95,7 @@ export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): D
   }
   return {
     dir,
+    dataFiles: dataFiles.map((file) => ({ ...file })),
     tools,
     connectors: withAuth.map((t) => ({
       id: t.id,
@@ -120,6 +132,7 @@ export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): D
 export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: DeploymentLayerRuntime): void {
   target.dir = source.dir;
   for (const key of [
+    "dataFiles",
     "tools",
     "connectors",
     "advertisedTools",
@@ -135,15 +148,46 @@ export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: D
 
 const JUNK_FILE = /^(?:\.DS_Store|Thumbs\.db|\._.*)$/;
 
+function regularDirectoryExists(path: string): boolean {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat) return false;
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${path} must be a regular directory`);
+  return true;
+}
+
+function loadTextFiles(root: string, dir: string): DeploymentLayerDataFile[] {
+  if (!regularDirectoryExists(dir)) return [];
+  const files: DeploymentLayerDataFile[] = [];
+  const walk = (current: string, prefix: string): void => {
+    const entries = readdirSync(current, { withFileTypes: true }).filter((entry) => !JUNK_FILE.test(entry.name));
+    for (const entry of entries) {
+      const path = join(current, entry.name);
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(path, relativePath);
+        continue;
+      }
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${path} must be a regular file`);
+      const bytes = readFileSync(path);
+      if (bytes.includes(0) || !Buffer.from(bytes.toString("utf8"), "utf8").equals(bytes))
+        throw new Error(`deployment layer data must be UTF-8 text: ${path}`);
+      files.push({ path: `${root}/${relativePath}`, content: bytes.toString("utf8") });
+    }
+  };
+  walk(dir, "");
+  return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
 export function loadDeploymentLayer(dir: string): DeploymentLayerRuntime {
-  if (!existsSync(dir)) {
+  if (!regularDirectoryExists(dir)) {
     throw new Error(
       `DEPLOYMENT_LAYER points at ${dir}, which does not exist — a configured layer must be present at boot`,
     );
   }
   const toolsDir = join(dir, "tools");
   const tools: ToolDescriptor[] = [];
-  if (existsSync(toolsDir)) {
+  if (regularDirectoryExists(toolsDir)) {
     const entries = readdirSync(toolsDir, { withFileTypes: true })
       .filter((entry) => !JUNK_FILE.test(entry.name))
       .sort((a, b) => {
@@ -158,13 +202,13 @@ export function loadDeploymentLayer(dir: string): DeploymentLayerRuntime {
         );
       }
       const path = join(toolsDir, entry.name, "tool.json");
-      if (!existsSync(path)) throw new Error(`${join(toolsDir, entry.name)} has no tool.json`);
-      const stat = lstatSync(path);
+      const stat = lstatSync(path, { throwIfNoEntry: false });
+      if (!stat) throw new Error(`${join(toolsDir, entry.name)} has no tool.json`);
       if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${path} must be a regular file`);
       const desc = parseToolDescriptor(readFileSync(path, "utf8"), path);
       if (tools.some((t) => t.id === desc.id)) throw new Error(`${path}: duplicate tool id "${desc.id}"`);
       tools.push(desc);
     }
   }
-  return resolvedDeploymentLayer(dir, tools);
+  return resolvedDeploymentLayer(dir, tools, loadTextFiles("data", join(dir, "data")));
 }
