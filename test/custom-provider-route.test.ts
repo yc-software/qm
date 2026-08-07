@@ -59,6 +59,10 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
     return new Response(null, { status: 200 });
   });
   try {
+    const before = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(before.status, 200);
+    assert.equal(((await before.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, false);
+
     // Register (validates against the endpoint's /models).
     const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
       method: "PUT",
@@ -73,6 +77,9 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
 
     // The runtime registry serves the model immediately.
     assert.equal(String(resolveModel("acme-large")?.provider), "acme-gateway");
+    const ready = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(ready.status, 200);
+    assert.equal(((await ready.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
 
     // List never leaks the key.
     const list = await fetch(`${srv.base}/v1/admin/custom-providers`, { headers: ADMIN });
@@ -92,6 +99,9 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
     });
     assert.equal(del.status, 200);
     assert.equal(resolveModel("acme-large"), undefined);
+    const after = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(after.status, 200);
+    assert.equal(((await after.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, false);
   } finally {
     await srv.close();
   }
