@@ -54,6 +54,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       'OpenRouter API key: bills the base model when modelProvider is "openrouter", an optional deployment fallback otherwise.',
   },
   {
+    name: "DEEPSEEK_API_KEY",
+    service: "core",
+    required: { when: { kind: "model-provider", provider: "deepseek" }, optionalOtherwise: true },
+    description:
+      'DeepSeek API key: bills the base model when modelProvider is "deepseek", an optional deployment fallback otherwise.',
+  },
+  {
     name: "OPENAI_API_KEY",
     service: "core",
     required: {

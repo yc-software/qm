@@ -407,6 +407,7 @@ export function buildApp(
       ...(config.anthropicApiKey ? { anthropic: config.anthropicApiKey } : {}),
       ...(config.openaiApiKey ? { openai: config.openaiApiKey } : {}),
       ...(config.openrouterApiKey ? { openrouter: config.openrouterApiKey } : {}),
+      ...(config.deepseekApiKey ? { deepseek: config.deepseekApiKey } : {}),
     },
   });
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"));
@@ -698,10 +699,11 @@ export function buildApp(
     console.error("[wiring] custom provider hydration failed:", errMessage(e)),
   );
   const resolveModelProviderKeys = async () => {
-    const [anthropic, openai, openrouter, enabledCustom] = await Promise.all([
+    const [anthropic, openai, openrouter, deepseek, enabledCustom] = await Promise.all([
       modelCredentials.resolve("anthropic"),
       modelCredentials.resolve("openai"),
       modelCredentials.resolve("openrouter"),
+      modelCredentials.resolve("deepseek"),
       customProviders.enabled(),
     ]);
     const customKeys = Object.fromEntries(
@@ -724,6 +726,7 @@ export function buildApp(
       ...(anthropic ? { anthropic } : {}),
       ...(openai ? { openai } : {}),
       ...(openrouter ? { openrouter } : {}),
+      ...(deepseek ? { deepseek } : {}),
       ...customKeys,
     };
   };

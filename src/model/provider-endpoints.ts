@@ -9,13 +9,14 @@
  * reads its own override.
  */
 
-export const PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
+export const PROVIDER_IDS = ["anthropic", "openai", "openrouter", "deepseek"] as const;
 type ProviderId = (typeof PROVIDER_IDS)[number];
 
 const PROVIDER_BASE_URL_ENV: Record<ProviderId, string> = {
   anthropic: "ANTHROPIC_BASE_URL",
   openai: "OPENAI_BASE_URL",
   openrouter: "OPENROUTER_BASE_URL",
+  deepseek: "DEEPSEEK_BASE_URL",
 };
 
 export type ProviderBaseUrls = Partial<Record<ProviderId, string>>;
