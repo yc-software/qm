@@ -15,3 +15,7 @@ This means that the agent scoped to that channel, would only have access to file
 Allow the QM admin to upload a Google Service Account JSON with scoped permissions intended for shared use. A logical boundary could be an agent per channel.
 
 The credential should belong to the organization or scope, not to the admin who happened to configure it, so changing admins does not change or orphan the security boundary.
+
+## Alternative fix
+
+Support uploading and using Service Accounts. Allow an admin switch which disables "standing" grants in channels. All future requests would need approved, and the only "standing" access would be through linked service accounts to a given channel
