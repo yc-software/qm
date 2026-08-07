@@ -1,4 +1,5 @@
-import { html, nothing, render, type TemplateResult } from "lit";
+import { nothing, render, type TemplateResult } from "lit";
+import { html, t } from "./i18n.ts";
 import {
   ArrowLeft,
   Boxes,
@@ -191,23 +192,27 @@ function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconN
     const memberCount = projectPeople(c).length;
     return {
       title: c.project.name,
-      sub: `${memberCount} ${memberCount === 1 ? "member" : "members"}`,
+      sub: t(`${memberCount} ${memberCount === 1 ? "member" : "members"}`),
       glyph: Folder,
     };
   }
   if (c.kind === "personal") {
-    return { title: "Personal", sub: "Just you — your web chats and DMs with the agent live here.", glyph: User };
+    return {
+      title: t("Personal"),
+      sub: t("Just you — your web chats and DMs with the agent live here."),
+      glyph: User,
+    };
   }
   if (c.kind === "group") {
     return {
-      title: sharedContextLabel(c.scopeId, c.name) ?? "Group DM",
-      sub: "Shared with everyone in this group conversation.",
+      title: sharedContextLabel(c.scopeId, c.name) ?? t("Group DM"),
+      sub: t("Shared with everyone in this group conversation."),
       glyph: Users,
     };
   }
   return {
-    title: sharedContextLabel(c.scopeId, c.name) ?? "Channel",
-    sub: "Shared with everyone in this channel.",
+    title: sharedContextLabel(c.scopeId, c.name) ?? t("Channel"),
+    sub: t("Shared with everyone in this channel."),
     glyph: Hash,
   };
 }
@@ -247,8 +252,8 @@ function metaForScope(scopeId: string | null, fallbackName?: string | null): { t
   const shared = sharedContextLabel(scopeId, fallbackName ?? null);
   if (shared) return { title: shared, glyph: scopeId?.startsWith("group:") ? Users : Hash };
   if (scopeId?.startsWith("personal:") && scopeId !== personalScopeId())
-    return { title: "Shared personal space", glyph: User };
-  return { title: fallbackName?.trim() || "Personal", glyph: User };
+    return { title: t("Shared personal space"), glyph: User };
+  return { title: fallbackName?.trim() || t("Personal"), glyph: User };
 }
 
 export function scopeTitle(scopeId: string | null, fallbackName?: string | null): string {
@@ -257,13 +262,13 @@ export function scopeTitle(scopeId: string | null, fallbackName?: string | null)
 
 export function scopeChip(scopeId: string | null, fallbackName?: string | null): TemplateResult {
   const { title, glyph } = metaForScope(scopeId, fallbackName);
-  return html`<span class="scope-chip" title=${`In ${title}`}
+  return html`<span class="scope-chip" title=${`${t("In")} ${title}`}
     >${icon(glyph, 12)}<span>${title.replace(/^#/, "")}</span></span
   >`;
 }
 
 export function scopeFilterControl(current: string | null, onSelect: (scopeId: string | null) => void): TemplateResult {
-  const label = current ? metaForScope(current).title : "All contexts";
+  const label = current ? metaForScope(current).title : t("All contexts");
   const option = (scopeId: string | null, text: string, glyph: IconNode) => {
     const active = (current ?? null) === scopeId;
     return html`
@@ -286,11 +291,11 @@ export function scopeFilterControl(current: string | null, onSelect: (scopeId: s
   return html`
     <div class="menu-control form-menu-control scope-filter">
       <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" @click=${toggleFormMenu}>
-        ${icon(ListFilter, 14)}<span class="menu-label">Filter by: ${label}</span>${icon(ChevronDown, 14)}
+        ${icon(ListFilter, 14)}<span class="menu-label">${t("Filter by:")} ${label}</span>${icon(ChevronDown, 14)}
       </button>
       <div class="menu-popover" role="menu" hidden>
         <div class="menu-title">Filter by context</div>
-        ${option(null, "All contexts", Boxes)}
+        ${option(null, t("All contexts"), Boxes)}
         ${contextsState.list.map((c) => option(c.scopeId, contextMeta(c).title, contextMeta(c).glyph))}
       </div>
     </div>
@@ -317,7 +322,7 @@ function drawContexts(): void {
 }
 
 function gridTpl(): TemplateResult {
-  const status = contextsNotice || (contextsLoading && contextsState.list.length === 0 ? "Loading projects…" : "");
+  const status = contextsNotice || (contextsLoading && contextsState.list.length === 0 ? t("Loading projects…") : "");
   const q = contextsQuery.trim().toLowerCase();
   const matches = (context: CoreContext) => {
     const meta = contextMeta(context);
@@ -339,7 +344,7 @@ function gridTpl(): TemplateResult {
   if (projects.length) projectList = html`<div class="grid project-grid">${projects.map(contextCard)}</div>`;
   else if (!contextsLoading) {
     projectList = html`<div class="empty compact project-empty">
-      ${projectsFiltered ? "No projects match your search." : "No projects yet."}
+      ${t(projectsFiltered ? "No projects match your search." : "No projects yet.")}
     </div>`;
   }
   return html`
@@ -411,10 +416,12 @@ function contextCard(c: CoreContext): TemplateResult {
         <span class="context-glyph">${icon(glyph, 17)}</span>
         <h2 class="card-title">${title}</h2>
         ${c.isPrivate ? html`<span class="context-lock" title="Private channel">${icon(Lock, 13)}</span>` : nothing}
-        <span class="badge">${access}</span>
+        <span class="badge">${t(access)}</span>
       </div>
       <div class="card-meta context-card-sub">${sub}</div>
-      <div class="card-meta">${count}${c.lastActivityAt ? ` · active ${relTime(c.lastActivityAt)}` : ""}</div>
+      <div class="card-meta">
+        ${t(count)}${c.lastActivityAt ? ` · ${t("active")} ${relTime(c.lastActivityAt)}` : ""}
+      </div>
     </button>
   `;
 }
@@ -482,7 +489,7 @@ function detailTpl(c: CoreContext): TemplateResult {
                 `
           }
         </div>
-        <aside class="context-settings" aria-label=${c.project ? "Project settings" : "Context settings"}>
+        <aside class="context-settings" aria-label=${t(c.project ? "Project settings" : "Context settings")}>
           ${c.project ? projectMembersSection(c) : nothing} ${contextModelSection(c.scopeId)}
           ${ambientPolicySection(c.scopeId)}
         </aside>
@@ -534,8 +541,8 @@ function projectMembersSection(context: CoreContext): TemplateResult {
                   ? html`<button
                       class="project-icon-button danger"
                       type="button"
-                      aria-label=${`Remove ${label}`}
-                      title=${`Remove ${label}`}
+                      aria-label=${`${t("Remove")} ${label}`}
+                      title=${`${t("Remove")} ${label}`}
                       ?disabled=${contextsState.memberSearching || contextsState.memberBusy}
                       @click=${() => void removeProjectMember(context, principalId)}
                     >
@@ -709,7 +716,7 @@ function resourceGroup(label: string, rows: TemplateResult[]): TemplateResult {
   return html`
     <section class="context-panel context-resource-group">
       <div class="context-panel-heading context-resource-heading">
-        <h2 class="context-panel-title">${label}</h2>
+        <h2 class="context-panel-title">${t(label)}</h2>
         <a href=${href}>View all</a>
       </div>
       <div class="context-session-list">${rows}</div>
@@ -750,7 +757,7 @@ function cronRow(c: CronView, manage = false): TemplateResult {
       <span class="context-session-title">${c.title ?? actionSnippet(c.message ?? c.action ?? "")}</span>
       <span class="context-session-meta">
         <span class="badge">${cronScheduleSummary(c)}</span>
-        <span class="badge">${status}</span>
+        <span class="badge">${t(status)}</span>
         <span title=${cronRunSummaryTitle(c)}>${cronRunSummary(c)}</span>
         ${
           manage && !c.archived
@@ -761,7 +768,7 @@ function cronRow(c: CronView, manage = false): TemplateResult {
                   ?disabled=${busy}
                   @click=${() => void manageCron(c.id, c.enabled ? "disable" : "enable")}
                 >
-                  ${c.enabled ? "Disable" : "Enable"}
+                  ${t(c.enabled ? "Disable" : "Enable")}
                 </button>
                 <button
                   class="context-resource-action danger"
@@ -786,7 +793,7 @@ function skillRow(s: ScopeSkill, manage = false): TemplateResult {
       <span class="context-session-title">${s.name}</span>
       <span class="context-session-meta">
         ${s.description ? html`<span class="context-resource-desc">${s.description}</span>` : nothing}
-        <span class="badge">${s.status}</span>
+        <span class="badge">${t(s.status)}</span>
         ${
           manage
             ? html`<button
@@ -810,8 +817,8 @@ function deploymentRow(d: ScopeDeployment): TemplateResult {
       <span class="context-session-title">${d.name}</span>
       <span class="context-session-meta">
         <span class="badge">v${d.currentVersion}</span>
-        <span class="badge">${d.status}</span>
-        <span class="badge">${d.permission === "write" ? "manage" : "read"}</span>
+        <span class="badge">${t(d.status)}</span>
+        <span class="badge">${t(d.permission === "write" ? "manage" : "read")}</span>
       </span>
     </div>
   `;
@@ -883,10 +890,10 @@ function createProjectDialog(): TemplateResult | typeof nothing {
         <div class="form-error" aria-live="polite">${contextsState.createError}</div>
         <div class="project-dialog-actions">
           <button class="btn" type="button" @click=${closeCreateProject}>
-            ${contextsState.createSaving ? "Close" : "Cancel"}
+            ${t(contextsState.createSaving ? "Close" : "Cancel")}
           </button>
           <button class="btn primary" type="submit" ?disabled=${contextsState.createSaving}>
-            ${icon(FolderPlus, 15)}<span>${contextsState.createSaving ? "Creating…" : "Create project"}</span>
+            ${icon(FolderPlus, 15)}<span>${t(contextsState.createSaving ? "Creating…" : "Create project")}</span>
           </button>
         </div>
       </form>
@@ -1118,7 +1125,7 @@ async function addProjectMember(context: CoreContext, member: DirectoryMatch): P
 async function removeProjectMember(context: CoreContext, principalId: string): Promise<void> {
   if (!context.project || contextsState.memberBusy) return;
   const label = memberLabel(context, principalId);
-  if (!window.confirm(`Remove ${label} from ${context.name || "this project"}?`)) return;
+  if (!window.confirm(t(`Remove ${label} from ${context.name || "this project"}?`))) return;
   const resetSeq = contextsResetSeq;
   memberSearchSeq++;
   cancelMemberSearchTimer();

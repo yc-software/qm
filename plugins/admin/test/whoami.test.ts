@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
@@ -42,7 +43,11 @@ test("admin HTML ships a hash-only script policy and transport/browser isolation
   const r = await api("/");
   assert.equal(r.status, 200);
   const csp = r.headers.get("content-security-policy") ?? "";
+  const body = await r.text();
+  const script = body.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+  const scriptHash = createHash("sha256").update(script).digest("base64");
   assert.match(csp, /script-src 'sha256-/);
+  assert.ok(csp.includes(`script-src 'sha256-${scriptHash}'`));
   assert.doesNotMatch(csp, /script-src[^;]*'unsafe-inline'/);
   assert.equal(r.headers.get("strict-transport-security"), "max-age=63072000; includeSubDomains");
   assert.equal(r.headers.get("referrer-policy"), "no-referrer");

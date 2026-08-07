@@ -1,12 +1,13 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { ArrowLeft, Plus, RefreshCw, Search } from "lucide";
 import { icon } from "./ui";
+import { html, t } from "./i18n.ts";
 import { scopeFilterControl } from "./contexts";
 
 export function listBackLink(label: string, onBack: () => void): TemplateResult {
   return html`<button class="context-back" type="button" @click=${onBack}>
-    ${icon(ArrowLeft, 15)}<span>${label}</span>
+    ${icon(ArrowLeft, 15)}<span>${t(label)}</span>
   </button>`;
 }
 
@@ -26,7 +27,7 @@ export interface ListPageOpts {
 export function listPageTpl(o: ListPageOpts): TemplateResult {
   return html`
     <div class="list-page-head">
-      <h1 class="pane-title">${o.title}</h1>
+      <h1 class="pane-title">${t(o.title)}</h1>
       <div class="list-page-actions">
         ${o.controls ?? nothing} ${o.onScope ? scopeFilterControl(o.scope ?? null, o.onScope) : nothing}
         ${
@@ -45,7 +46,7 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
         ${
           o.action
             ? html`<button class="btn primary list-page-action" type="button" @click=${o.action.onClick}>
-                ${icon(Plus, 15)}<span>${o.action.label}</span>
+                ${icon(Plus, 15)}<span>${t(o.action.label)}</span>
               </button>`
             : nothing
         }
@@ -57,8 +58,8 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
             ${icon(Search, 16)}
             <input
               type="search"
-              aria-label=${o.search.placeholder.replace(/…$/, "")}
-              placeholder=${o.search.placeholder}
+              aria-label=${t(o.search.placeholder).replace(/…$/, "")}
+              placeholder=${t(o.search.placeholder)}
               .value=${live(o.search.value)}
               @input=${(e: Event) => o.search!.onInput((e.currentTarget as HTMLInputElement).value)}
             />
@@ -66,6 +67,10 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
         : nothing
     }
     ${o.filters ?? nothing}
-    ${o.rows.length ? html`<div class="list-rows">${o.rows}</div>` : html`<div class="empty compact">${o.empty}</div>`}
+    ${
+      o.rows.length
+        ? html`<div class="list-rows">${o.rows}</div>`
+        : html`<div class="empty compact">${typeof o.empty === "string" ? t(o.empty) : o.empty}</div>`
+    }
   `;
 }

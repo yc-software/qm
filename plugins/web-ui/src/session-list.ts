@@ -1,4 +1,5 @@
 import { sharedContextLabel, type CoreContext, type CoreProject, type CoreSession } from "./core-bridge.ts";
+import { t } from "./i18n.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
@@ -175,8 +176,8 @@ export function backgroundLabel(
   watches: number,
 ): { jobs: number; watches: number; label: string } | null {
   const parts: string[] = [];
-  if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
-  if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
+  if (jobs > 0) parts.push(t(`${jobs} background job${jobs === 1 ? "" : "s"} running`));
+  if (watches > 0) parts.push(t(`${watches} watch${watches === 1 ? "" : "es"} armed`));
   return parts.length ? { jobs, watches, label: parts.join(" · ") } : null;
 }
 

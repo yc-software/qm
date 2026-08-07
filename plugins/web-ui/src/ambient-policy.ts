@@ -1,4 +1,5 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
+import { html, t } from "./i18n.ts";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
@@ -166,7 +167,7 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
       ${fieldSelect({
         className: "ambient-bot-mode",
         compact: true,
-        ariaLabel: `Handling for ${b.name}`,
+        ariaLabel: t(`Handling for ${b.name}`),
         disabled: ambientPolicyState.saving,
         value: b.mode,
         onChange: (value) => {
@@ -174,7 +175,7 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
           ambientPolicyState.bots = ambientPolicyState.bots.map((x, j) => (j === i ? { ...x, mode } : x));
           markDirty();
         },
-        options: BOT_MODES.map((m) => html`<option value=${m}>${BOT_MODE_LABELS[m]}</option>`),
+        options: BOT_MODES.map((m) => html`<option value=${m}>${t(BOT_MODE_LABELS[m])}</option>`),
       })}
       ${
         b.mode === "rollup"
@@ -185,7 +186,7 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
                 min="1"
                 step="1"
                 data-focus-key=${`ambient-hours-${i}`}
-                aria-label=${`Batch interval for ${b.name} in hours`}
+                aria-label=${t(`Batch interval for ${b.name} in hours`)}
                 .value=${String(b.rollupHours ?? 24)}
                 ?disabled=${ambientPolicyState.saving}
                 @input=${(e: InputEvent) => {
@@ -203,7 +204,7 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
       <button
         class="project-icon-button danger"
         type="button"
-        aria-label=${`Remove ${b.name} from the ledger`}
+        aria-label=${t(`Remove ${b.name} from the ledger`)}
         title="Remove"
         ?disabled=${ambientPolicyState.saving}
         @click=${() => {
@@ -312,7 +313,7 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           ?disabled=${!ambientPolicyState.dirty || ambientPolicyState.saving}
           @click=${() => void save()}
         >
-          ${ambientPolicyState.saving ? "Saving…" : "Save"}
+          ${t(ambientPolicyState.saving ? "Saving…" : "Save")}
         </button>
         ${
           ambientPolicyState.notice

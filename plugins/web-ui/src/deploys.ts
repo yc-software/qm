@@ -1,4 +1,4 @@
-import { html, nothing, render, type TemplateResult } from "lit";
+import { nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Archive, Check, Copy, ExternalLink, MoreHorizontal, Pencil, RotateCcw, X } from "lucide";
 import { api, withBase } from "./core-bridge";
@@ -15,6 +15,7 @@ import {
   withoutDeploymentDetailNotice,
   type DeploymentNotices,
 } from "./deploy-notices";
+import { html, localeCode, t } from "./i18n.ts";
 import {
   deploymentAfterRestore,
   deploymentActionView,
@@ -90,30 +91,32 @@ function permissionBadge(d: DeploymentView): TemplateResult {
   const title = manage
     ? "You own this app or have permission to manage it."
     : "This app is shared with a context you can access. You can open and clone it, but not change it.";
-  return html`<span class="deploy-permission ${manage ? "manage" : "view"}" title=${title}
-    >${manage ? "Can manage" : "Can view"}</span
+  return html`<span class="deploy-permission ${manage ? "manage" : "view"}" title=${t(title)}
+    >${t(manage ? "Can manage" : "Can view")}</span
   >`;
 }
 
 function versionLabel(d: DeploymentView): string {
-  if (d.currentVersion === undefined) return "Version unknown";
+  if (d.currentVersion === undefined) return t("Version unknown");
   if (d.appliedVersion !== undefined && d.appliedVersion !== d.currentVersion)
-    return `v${d.appliedVersion} live · v${d.currentVersion} pending`;
+    return `v${d.appliedVersion} ${t("live")} · v${d.currentVersion} ${t("pending")}`;
   return `v${d.currentVersion}`;
 }
 
 function deployedLabel(d: DeploymentView): string {
   const at = deploymentLatestAt(d);
-  return at ? `Deployed ${relTime(at)}` : "Deployment time unavailable";
+  return at ? `${t("Deployed")} ${relTime(at)}` : t("Deployment time unavailable");
 }
 
 function ownerLabel(d: DeploymentView): string {
   const me = appState.me?.user;
-  if (d.ownerScopeId === `personal:${me}`) return "Your personal context";
+  if (d.ownerScopeId === `personal:${me}`) return t("Your personal context");
   if (d.ownerScopeId?.startsWith("personal:"))
-    return `${friendlyPrincipal(d.ownerScopeId.slice("personal:".length))} · Personal`;
-  if (d.ownerScopeId?.startsWith("org:")) return "Organization";
-  return d.createdBy ? `Shared context · created by ${friendlyPrincipal(d.createdBy)}` : "Shared context";
+    return `${friendlyPrincipal(d.ownerScopeId.slice("personal:".length))} · ${t("Personal")}`;
+  if (d.ownerScopeId?.startsWith("org:")) return t("Organization");
+  return d.createdBy
+    ? `${t("Shared context")} · ${t("created by")} ${friendlyPrincipal(d.createdBy)}`
+    : t("Shared context");
 }
 
 function deployTabs(): TemplateResult {
@@ -138,7 +141,7 @@ function deployTabs(): TemplateResult {
               drawDeploysPage();
             }}
           >
-            <span>${tab.label}</span><span class="cron-filter-count">${counts[tab.value]}</span>
+            <span>${t(tab.label)}</span><span class="cron-filter-count">${counts[tab.value]}</span>
           </button>
         `,
       )}
@@ -154,7 +157,7 @@ function deploymentRow(d: DeploymentView): TemplateResult {
       <button class="deploy-row-main" type="button" @click=${() => void openDeploy(d)}>
         <span class="deploy-row-title">
           <span class="list-row-title">${deploymentTitle(d)}</span>
-          <span class="deploy-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+          <span class="deploy-status ${statusClass(d)}"><span></span>${t(statusLabel(d))}</span>
         </span>
         <span class="deploy-row-url">/d/${deploymentSlug(d)}/</span>
         <span class="list-row-meta deploy-row-meta">
@@ -200,7 +203,7 @@ function deployMenu(d: DeploymentView): TemplateResult {
         class="session-menu-btn deploy-menu-trigger"
         data-deployment-id=${d.id}
         type="button"
-        aria-label=${`More actions for ${deploymentTitle(d)}`}
+        aria-label=${t(`More actions for ${deploymentTitle(d)}`)}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
         @click=${(event: Event) => {
@@ -277,11 +280,11 @@ function drawDeploysPage(): void {
   const allForTab = deployList.filter(
     (d) => deploymentTab(d, viewer) === deployTab && deploymentInScope(d, deployScope),
   );
-  let empty = deploymentTabEmptyMessage(deployTab);
+  let empty = t(deploymentTabEmptyMessage(deployTab));
   if (!deployList.length && deployNotices.list) empty = deployNotices.list;
-  else if (deployLoading && deployList.length === 0) empty = "Loading apps…";
-  else if (deployQuery && allForTab.length) empty = "No apps match your search.";
-  else if (deployScope) empty = "No apps in this context.";
+  else if (deployLoading && deployList.length === 0) empty = t("Loading apps…");
+  else if (deployQuery && allForTab.length) empty = t("No apps match your search.");
+  else if (deployScope) empty = t("No apps in this context.");
   const content = deployList.length
     ? [
         deployTabs(),
@@ -373,7 +376,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           <div>
             <div class="deploy-heading-title">
               <h2>${deploymentTitle(d)}</h2>
-              <span class="deploy-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+              <span class="deploy-status ${statusClass(d)}"><span></span>${t(statusLabel(d))}</span>
             </div>
             <div class="deploy-detail-url">/d/${deploymentSlug(d)}/</div>
           </div>
@@ -389,16 +392,18 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
         <section class="deploy-detail-section">
           <h3>Overview</h3>
           <div class="deploy-facts">
-            <div><span>Status</span><strong>${statusLabel(d)}</strong></div>
+            <div><span>Status</span><strong>${t(statusLabel(d))}</strong></div>
             <div><span>Live version</span><strong>${d.appliedVersion ?? d.currentVersion ?? "—"}</strong></div>
             <div><span>Latest version</span><strong>${d.currentVersion ?? "—"}</strong></div>
             <div>
               <span>Last deployed</span
-              ><strong>${deploymentLatestAt(d) ? new Date(deploymentLatestAt(d)).toLocaleString() : "—"}</strong>
+              ><strong
+                >${deploymentLatestAt(d) ? new Date(deploymentLatestAt(d)).toLocaleString(localeCode()) : "—"}</strong
+              >
             </div>
             <div>
               <span>Last opened</span
-              ><strong>${d.lastAccessAt ? relTime(d.lastAccessAt) : "No recorded access"}</strong>
+              ><strong>${d.lastAccessAt ? relTime(d.lastAccessAt) : t("No recorded access")}</strong>
             </div>
             <div><span>Access</span><strong>${permissionBadge(d)}</strong></div>
           </div>
@@ -408,7 +413,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           <h3>Ownership and access</h3>
           <div class="field">
             <label>Created in</label>
-            <div class="value">${contextScope ? scopeChip(contextScope) : "Unknown"}</div>
+            <div class="value">${contextScope ? scopeChip(contextScope) : t("Unknown")}</div>
           </div>
           <div class="field">
             <label>Owner</label>
@@ -439,7 +444,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                     </button>
                   </div>
                   <p class="hint">
-                    ${d.permission === "write" ? "Clone or push a new version with this short-lived authenticated URL." : "Clone source with this short-lived read-only authenticated URL."}
+                    ${t(d.permission === "write" ? "Clone or push a new version with this short-lived authenticated URL." : "Clone source with this short-lived read-only authenticated URL.")}
                   </p>
                 </div>`
               : nothing
@@ -494,7 +499,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                           >${version.version === d.appliedVersion ? html`<span class="badge ok">Live</span>` : nothing}${version.version === d.currentVersion && version.version !== d.appliedVersion ? html`<span class="badge">Latest</span>` : nothing}
                         </div>
                         <div>
-                          <span>${new Date(version.createdAt).toLocaleString()}</span
+                          <span>${new Date(version.createdAt).toLocaleString(localeCode())}</span
                           >${version.commit ? html`<code title=${version.commit}>${version.commit.slice(0, 10)}</code>` : nothing}
                         </div>
                       </div>
@@ -534,7 +539,7 @@ function deployEditForm(d: DeploymentView, field: "displayName" | "name"): Templ
         <span class="deploy-slug-input ${slug ? "" : "name"}"
           >${slug ? html`<span>/d/</span>` : nothing}<input
             class="deploy-edit-input"
-            aria-label=${slug ? "URL slug" : "Display name"}
+            aria-label=${t(slug ? "URL slug" : "Display name")}
             ?disabled=${deploySaving}
             .value=${live(deployDraft)}
             @input=${(event: InputEvent) => {

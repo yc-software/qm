@@ -1,4 +1,4 @@
-import { html, render, type TemplateResult } from "lit";
+import { render, type TemplateResult } from "lit";
 import { Activity, KeyRound, Link, LockKeyhole, Plug, Plus, RefreshCw, ShieldCheck } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
@@ -6,6 +6,7 @@ import { icon } from "./ui";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { isActiveGrant, isExpiredCredential, KeychainOperations, keychainSummary } from "./keychain-state";
+import { html, localeCode, t } from "./i18n.ts";
 
 interface ConnectorProvider {
   connected?: boolean;
@@ -140,6 +141,11 @@ let confirmation: { title: string; body: string; action: string; run: () => Prom
 let confirmationOpener: HTMLElement | null = null;
 const keychainOperations = new KeychainOperations();
 
+function connectorErrorNotice(error: unknown, fallback: string): string {
+  const message = errMessage(error, fallback);
+  return message === fallback ? t(fallback) : message;
+}
+
 export function resetKeychainState(): void {
   keychainOperations.reset();
   connectorProviders = {};
@@ -159,7 +165,7 @@ export function resetKeychainState(): void {
 function fmtDate(ms?: number): string {
   if (!ms) return "";
   try {
-    return new Date(ms).toLocaleDateString();
+    return new Date(ms).toLocaleDateString(localeCode());
   } catch {
     return "";
   }
@@ -172,8 +178,9 @@ function credentialCard(c: KeychainCredential): TemplateResult {
   const asks = keychainAsks.filter((ask) => ask.credentialId === c.id);
   const lastUse = keychainUsage.find((usage) => usage.credentialId === c.id);
   let added = "Encrypted at rest";
-  if (c.kind !== "file" && c.expiresAt) added = `Expires ${fmtDate(c.expiresAt)}`;
-  else if (c.createdAt) added = `Added ${fmtDate(c.createdAt)}`;
+  if (c.kind !== "file" && c.expiresAt) added = `${t("Expires")} ${fmtDate(c.expiresAt)}`;
+  else if (c.createdAt) added = `${t("Added")} ${fmtDate(c.createdAt)}`;
+  else added = t(added);
   return html`
     <article class="kc-resource kc-credential">
       <div class="kc-resource-main">
@@ -186,7 +193,10 @@ function credentialCard(c: KeychainCredential): TemplateResult {
           ${subtitle ? html`<div class="kc-resource-meta">${subtitle}</div>` : ""}
           <div class="kc-credential-facts">
             <div class="kc-audit-line">
-              ${icon(Activity, 14)}${lastUse ? html`Last used ${fmtDate(lastUse.ts)} in ${scopeName(lastUse.scopeLabel)} · ${lastUse.status}` : "No audited use yet"}
+              ${icon(
+                Activity,
+                14,
+              )}${lastUse ? html`${t("Last used")} ${fmtDate(lastUse.ts)} ${t("in")} ${scopeName(lastUse.scopeLabel)} · ${lastUse.status}` : t("No audited use yet")}
             </div>
             <div class="kc-resource-foot">${added}</div>
           </div>
@@ -257,15 +267,15 @@ function scopeName(scope: string): string {
   const ref = rest.join(":");
   switch (kind) {
     case "personal":
-      return ref || "a personal DM";
+      return ref || t("a personal DM");
     case "channel":
-      return ref ? `a Slack channel (${ref})` : "a Slack channel";
+      return ref ? `${t("a Slack channel")} (${ref})` : t("a Slack channel");
     case "group":
-      return "a group DM";
+      return t("a group DM");
     case "team":
-      return ref ? `a team (${ref})` : "a team";
+      return ref ? `${t("a team")} (${ref})` : t("a team");
     case "org":
-      return "the whole org";
+      return t("the whole org");
     default:
       return scope;
   }
@@ -364,7 +374,7 @@ function addCredentialCard(): TemplateResult {
                 ?disabled=${keychainOperations.dropInFlight}
                 @click=${() => void createDrop()}
               >
-                ${keychainOperations.dropInFlight ? "Preparing…" : "Continue"}
+                ${t(keychainOperations.dropInFlight ? "Preparing…" : "Continue")}
               </button>
             </div>
           `
@@ -418,7 +428,7 @@ export function clearConnectorNotice(): void {
 
 export function noteConnectorResult(provider: string, status: string): void {
   const name = CONNECTOR_LABELS[provider]?.name ?? provider;
-  connectorNotice = status === "connected" ? `${name}: connected.` : `${name}: connection failed.`;
+  connectorNotice = `${name}: ${t(status === "connected" ? "connected." : "connection failed.")}`;
 }
 
 function drawConnectors(loading = false): void {
@@ -492,7 +502,7 @@ function drawConnectors(loading = false): void {
             : ""
         }
         <div class="kc-resource-actions">
-          ${available ? html`<button class="btn" type="button" @click=${() => void startConnector(id)}>${connected || needsReconnect ? "Reconnect" : "Connect account"}</button>` : ""}
+          ${available ? html`<button class="btn" type="button" @click=${() => void startConnector(id)}>${t(connected || needsReconnect ? "Reconnect" : "Connect account")}</button>` : ""}
           ${connected || needsReconnect ? html`<button class="kc-text-action danger" type="button" data-confirm-key=${`disconnect:${id}`} ?disabled=${keychainOperations.mutationInFlight} @click=${() => void revokeConnector(id)}>Disconnect</button>` : ""}
         </div>
       </article>
@@ -546,7 +556,7 @@ function drawConnectors(loading = false): void {
             <span>${loading ? "—" : summary.attention}</span><small>Need attention</small>
           </div>
         </div>
-        ${connectorNotice || loading ? html`<div class="kc-notice" role="status">${loading ? "Loading your keychain…" : connectorNotice}</div>` : ""}
+        ${connectorNotice || loading ? html`<div class="kc-notice" role="status">${loading ? t("Loading your keychain…") : connectorNotice}</div>` : ""}
         ${addingCredential ? addCredentialCard() : ""}
         <section class="kc-section" aria-labelledby="kc-accounts-title">
           <div class="kc-section-head">
@@ -636,7 +646,7 @@ export async function renderConnectors(): Promise<void> {
     );
   } else {
     connectorProviders = {};
-    notices.push(errMessage(conn.reason, "Failed to load connectors."));
+    notices.push(connectorErrorNotice(conn.reason, "Failed to load connectors."));
   }
   if (keys.status === "fulfilled") {
     keychainCredentials = (keys.value.credentials ?? []).slice().sort((a, b) => a.service.localeCompare(b.service));
@@ -652,7 +662,7 @@ export async function renderConnectors(): Promise<void> {
     keychainAsks = [];
     keychainUsage = [];
     keychainScopeNames = {};
-    notices.push(errMessage(keys.reason, "Failed to load stored keys."));
+    notices.push(connectorErrorNotice(keys.reason, "Failed to load stored keys."));
   }
   if (notices.length) connectorNotice = notices.join(" ");
   drawConnectors(false);
@@ -663,13 +673,13 @@ async function deleteCredential(credential: KeychainCredential): Promise<void> {
     (grant) => grant.credentialId === credential.id && isActiveGrant(grant, credential),
   );
   const impact = active.length
-    ? ` It will immediately revoke ${active.length} active grant${active.length === 1 ? "" : "s"}: ${active.map((grant) => scopeName(grant.audienceScopeId)).join(", ")}.`
+    ? ` ${t("It will immediately revoke")} ${t(`${active.length} active grant${active.length === 1 ? "" : "s"}`)}: ${active.map((grant) => scopeName(grant.audienceScopeId)).join(", ")}.`
     : "";
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
-    title: `Delete ${credential.service}?`,
-    body: `${impact} Automations using it may stop working. The credential cannot be recovered.`.trim(),
-    action: "Delete credential",
+    title: `${t("Delete")} ${credential.service}?`,
+    body: `${impact} ${t("Automations using it may stop working. The credential cannot be recovered.")}`.trim(),
+    action: t("Delete credential"),
     run: async () => {
       const operation = beginKeychainMutation();
       if (!operation) return;
@@ -691,7 +701,7 @@ function beginKeychainMutation() {
   if (operation) return operation;
   confirmation = null;
   confirmationOpener = null;
-  connectorNotice = "Another keychain change is still in progress.";
+  connectorNotice = t("Another keychain change is still in progress.");
   drawConnectors();
   return null;
 }
@@ -701,7 +711,8 @@ async function performDeleteCredential(credential: KeychainCredential, stateEpoc
   try {
     await api(`/api/keychain/credentials/${encodeURIComponent(credential.id)}`, { method: "DELETE" });
   } catch (e) {
-    if (keychainOperations.isCurrentEpoch(stateEpoch)) connectorNotice = errMessage(e, "Could not delete the key.");
+    if (keychainOperations.isCurrentEpoch(stateEpoch))
+      connectorNotice = connectorErrorNotice(e, "Could not delete the key.");
   }
   if (keychainOperations.isCurrentEpoch(stateEpoch)) await renderConnectors();
 }
@@ -709,9 +720,9 @@ async function performDeleteCredential(credential: KeychainCredential, stateEpoc
 async function revokeGrant(grant: KeychainGrant): Promise<void> {
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
-    title: `Revoke access for ${scopeName(grant.audienceScopeId)}?`,
-    body: `This ${grant.mode === "standing" ? "standing" : "one-time"} access ends immediately. Automations using it may stop working.`,
-    action: "Revoke access",
+    title: `${t("Revoke access for")} ${scopeName(grant.audienceScopeId)}?`,
+    body: `${t("This")} ${t(grant.mode === "standing" ? "standing" : "one-time")} ${t("access ends immediately. Automations using it may stop working.")}`,
+    action: t("Revoke access"),
     run: async () => {
       const operation = beginKeychainMutation();
       if (!operation) return;
@@ -731,9 +742,10 @@ async function revokeGrant(grant: KeychainGrant): Promise<void> {
 async function performRevokeGrant(id: string, stateEpoch: number): Promise<void> {
   try {
     await api(`/api/keychain/grants/${encodeURIComponent(id)}/revoke`, { method: "POST", body: "{}" });
-    if (keychainOperations.isCurrentEpoch(stateEpoch)) connectorNotice = "Access revoked ✓";
+    if (keychainOperations.isCurrentEpoch(stateEpoch)) connectorNotice = t("Access revoked ✓");
   } catch (e) {
-    if (keychainOperations.isCurrentEpoch(stateEpoch)) connectorNotice = errMessage(e, "Could not revoke access.");
+    if (keychainOperations.isCurrentEpoch(stateEpoch))
+      connectorNotice = connectorErrorNotice(e, "Could not revoke access.");
   }
   if (keychainOperations.isCurrentEpoch(stateEpoch)) await renderConnectors();
 }
@@ -741,7 +753,7 @@ async function performRevokeGrant(id: string, stateEpoch: number): Promise<void>
 async function createDrop(): Promise<void> {
   if (keychainOperations.dropInFlight) return;
   if (!addingCredential?.service.trim() || !addingCredential.purpose.trim()) {
-    connectorNotice = "Service and purpose are required.";
+    connectorNotice = t("Service and purpose are required.");
     return drawConnectors();
   }
   const submittedDraft = { ...addingCredential };
@@ -756,10 +768,10 @@ async function createDrop(): Promise<void> {
     if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
     if (!result.url) throw new Error("No one-time page URL was returned.");
     secureDropUrl = result.url;
-    connectorNotice = "Your one-time page is ready.";
+    connectorNotice = t("Your one-time page is ready.");
   } catch (e) {
     if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
-    connectorNotice = errMessage(e, "Could not create the one-time page.");
+    connectorNotice = connectorErrorNotice(e, "Could not create the one-time page.");
   } finally {
     if (keychainOperations.isCurrentEpoch(stateEpoch)) {
       keychainOperations.finishDrop(stateEpoch);
@@ -780,10 +792,10 @@ async function startConnector(provider: string): Promise<void> {
       location.href = r.authorizeUrl;
       return;
     }
-    connectorNotice = "No authorization URL was returned.";
+    connectorNotice = t("No authorization URL was returned.");
   } catch (e) {
     if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
-    connectorNotice = errMessage(e, "Could not start the connector.");
+    connectorNotice = connectorErrorNotice(e, "Could not start the connector.");
   }
   drawConnectors(false);
 }
@@ -806,13 +818,13 @@ async function revokeConnector(provider: string): Promise<void> {
     (grant) => credentialIds.has(grant.credentialId) && isActiveGrant(grant, credentialsById.get(grant.credentialId)),
   );
   const impact = active.length
-    ? ` It will also stop ${active.length} active credential grant${active.length === 1 ? "" : "s"} for this account.`
+    ? ` ${t("It will also stop")} ${t(`${active.length} active credential grant${active.length === 1 ? "" : "s"}`)} ${t("for this account.")}`
     : "";
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
-    title: `Disconnect ${CONNECTOR_LABELS[provider]?.name ?? provider}?`,
-    body: `${impact} Automations using this account may stop working.`.trim(),
-    action: "Disconnect account",
+    title: `${t("Disconnect")} ${CONNECTOR_LABELS[provider]?.name ?? provider}?`,
+    body: `${impact} ${t("Automations using this account may stop working.")}`.trim(),
+    action: t("Disconnect account"),
     run: async () => {
       const operation = beginKeychainMutation();
       if (!operation) return;
@@ -834,7 +846,8 @@ async function performRevokeConnector(provider: string, stateEpoch: number): Pro
   try {
     await api("/api/connectors/revoke", { method: "POST", body: JSON.stringify({ provider }) });
   } catch (e) {
-    if (keychainOperations.isCurrentEpoch(stateEpoch)) connectorNotice = errMessage(e, "Could not disconnect.");
+    if (keychainOperations.isCurrentEpoch(stateEpoch))
+      connectorNotice = connectorErrorNotice(e, "Could not disconnect.");
   }
   if (keychainOperations.isCurrentEpoch(stateEpoch)) await renderConnectors();
 }
