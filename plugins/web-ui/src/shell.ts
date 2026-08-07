@@ -1,4 +1,4 @@
-import { html, nothing, render, type TemplateResult } from "lit";
+import { nothing, render, type TemplateResult } from "lit";
 import {
   ArrowLeft,
   Box,
@@ -65,6 +65,7 @@ import { renderSkills } from "./skills";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
+import { currentLocale, html, setLocale, t } from "./i18n.ts";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let authMode: AuthMode = "portal";
@@ -380,7 +381,7 @@ function devGate(gate: { value?: string; error?: string; pending?: boolean }) {
         ?disabled=${gate.pending === true}
       />
       <button class="btn primary" type="submit" ?disabled=${gate.pending === true}>
-        ${gate.pending ? "Signing in…" : "Continue"}
+        ${t(gate.pending ? "Signing in…" : "Continue")}
       </button>
       ${gate.error ? html`<div class="hint error" role="alert">${gate.error}</div>` : nothing}
     </form>
@@ -448,6 +449,16 @@ export function mountShell(): void {
             <a class="icon-btn subtle" href=${ADMIN_HOME_URL} title="Back to admin" aria-label="Back to admin"
               >${icon(ArrowLeft, 17)}</a
             >
+            <button
+              class="language-toggle"
+              type="button"
+              data-i18n-skip
+              title=${currentLocale() === "en" ? "Switch to Chinese" : "切换到英文"}
+              aria-label=${currentLocale() === "en" ? "Switch to Chinese" : "切换到英文"}
+              @click=${() => setLocale(currentLocale() === "en" ? "zh-CN" : "en")}
+            >
+              ${currentLocale() === "en" ? "中文" : "EN"}
+            </button>
             <theme-toggle .includeSystem=${true} title="Color scheme: light / dark / system"></theme-toggle>
             <button class="icon-btn subtle" title="Sign out" aria-label="Sign out" @click=${signOut}>
               ${icon(LogOut, 17)}
@@ -497,10 +508,10 @@ export function renderSidebarTop(): void {
       type="button"
       aria-expanded=${open ? "true" : "false"}
       aria-controls=${id}
-      title=${open ? `Hide ${title}` : `Show ${title}`}
+      title=${open ? `${t("Hide")} ${t(title)}` : `${t("Show")} ${t(title)}`}
       @click=${toggle}
     >
-      <span>${title}</span>
+      <span>${t(title)}</span>
       <span class="nav-section-chevron">${icon(ChevronDown, 14)}</span>
     </button>
     <div id=${id} class="nav-group ${open ? "" : "collapsed"}">
@@ -511,13 +522,13 @@ export function renderSidebarTop(): void {
     html`
       <button
         class="new-chat"
-        title=${splitState.active ? "New session" : "New chat"}
+        title=${t(splitState.active ? "New session" : "New chat")}
         @click=${() => {
           closeSidebarOnNarrowView();
           if (!addBlankPane()) mainConversation().newChat();
         }}
       >
-        ${icon(ICON.newChat, 17)}<span>${splitState.active ? "New session" : "New chat"}</span>
+        ${icon(ICON.newChat, 17)}<span>${t(splitState.active ? "New session" : "New chat")}</span>
       </button>
       <nav class="nav" @click=${onNavClick}>
         ${navGroup(
@@ -526,10 +537,10 @@ export function renderSidebarTop(): void {
           navWorkspaceOpen,
           toggleNavWorkspace,
           html`
-            ${navRow("contexts", ICON.contexts, "Projects")} ${navRow("chats", ICON.chats, "Chats")}
-            ${navRow("files", ICON.files, "Files")} ${navRow("crons", ICON.crons, "Crons")}
-            ${navRow("keychain", ICON.keychain, "Keychain")} ${navRow("deploys", ICON.deploys, "Apps")}
-            ${navRow("memory", ICON.memory, "Memory")} ${navRow("skills", ICON.skills, "Skills")}
+            ${navRow("contexts", ICON.contexts, t("Projects"))} ${navRow("chats", ICON.chats, t("Chats"))}
+            ${navRow("files", ICON.files, t("Files"))} ${navRow("crons", ICON.crons, t("Crons"))}
+            ${navRow("keychain", ICON.keychain, t("Keychain"))} ${navRow("deploys", ICON.deploys, t("Apps"))}
+            ${navRow("memory", ICON.memory, t("Memory"))} ${navRow("skills", ICON.skills, t("Skills"))}
           `,
         )}
       </nav>
@@ -537,16 +548,16 @@ export function renderSidebarTop(): void {
         appState.currentView === "chats"
           ? html`
               <div class="section-label recents-label">
-                <span>Sessions</span>
+                <span>${t("Sessions")}</span>
                 <button
                   class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
                   type="button"
                   role="switch"
                   aria-checked=${sessionsState.webOnly ? "true" : "false"}
-                  title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
+                  title=${t(sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations")}
                   @click=${toggleWebOnly}
                 >
-                  <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
+                  <span>${t("Web only")}</span><span class="mini-switch"><span class="mini-knob"></span></span>
                 </button>
               </div>
             `
@@ -652,7 +663,7 @@ export function showMainEmpty(text: string): void {
   mainConversation().state.host = null;
   if (appState.mainEl)
     appState.mainEl.replaceChildren(
-      Object.assign(document.createElement("div"), { className: "empty", textContent: text }),
+      Object.assign(document.createElement("div"), { className: "empty", textContent: t(text) }),
     );
 }
 
@@ -706,7 +717,7 @@ function onSidebarKeydown(event: KeyboardEvent): void {
 }
 
 function updateSidebarToggleLabels(): void {
-  const collapseLabel = sidebarOpen ? "Hide sidebar" : "Show sidebar";
+  const collapseLabel = t(sidebarOpen ? "Hide sidebar" : "Show sidebar");
   (appEl as HTMLElement).querySelectorAll<HTMLButtonElement>(".sidebar-toggle").forEach((btn) => {
     btn.setAttribute("aria-expanded", sidebarOpen ? "true" : "false");
     btn.setAttribute("title", collapseLabel);
@@ -722,13 +733,13 @@ export function renderPane(
   controls: unknown = "",
 ): void {
   if (!appState.mainEl) return;
-  const refreshLabel = `Refresh ${title.toLowerCase()}`;
+  const refreshLabel = t(`Refresh ${title.toLowerCase()}`);
   const host = document.createElement("div");
   host.className = "pane";
   render(
     html`
       <div class="pane-head">
-        <h1 class="pane-title">${title}</h1>
+        <h1 class="pane-title">${t(title)}</h1>
         <div class="list-page-actions">
           ${controls}
           <button

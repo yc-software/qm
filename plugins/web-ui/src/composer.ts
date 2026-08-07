@@ -1,7 +1,7 @@
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, type DropEntryLike } from "./folder-drop";
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import {
   ArrowUp,
@@ -49,6 +49,7 @@ import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions"
 import { adminSessionLogUrl, appState, can } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
+import { html, t } from "./i18n.ts";
 
 export type ComposerMenu = "effort" | "harness" | "model" | "settings";
 
@@ -334,8 +335,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const fastAvailable = fastSupported && modelSupportsFastMode(scopeKey(), selectedModel.model.id);
     const fastOn = fastAvailable && effectiveFastMode();
     const fastCharging = fastModeCharging && fastOn;
-    let fastTitle = "Fast mode is only available on Opus models";
-    if (fastAvailable) fastTitle = fastOn ? "Fast mode active" : "Fast mode";
+    let fastTitle = t("Fast mode is only available on Opus models");
+    if (fastAvailable) fastTitle = fastOn ? t("Fast mode active") : t("Fast mode");
     const approvalPauses = ctx.chat.activePendingApprovals();
     const runtimePending = activeRuntimeConfig === null;
     const effectiveEffort =
@@ -349,9 +350,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         fastOn !== effectiveFast);
     const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0 || approvalPauses.length > 0;
     const attachingDisabled = inputBlocked;
-    let placeholder = "Ask anything";
-    if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
-    else if (agent.state.isStreaming) placeholder = "Steer the running task…";
+    let placeholder = t("Ask anything");
+    if (inputBlocked) placeholder = runtimePending ? t("Loading runtime…") : t("Approve or deny to continue");
+    else if (agent.state.isStreaming) placeholder = t("Steer the running task…");
     let composerNotice: TemplateResult | typeof nothing = nothing;
     if (composerState.processingFiles) {
       composerNotice = html`<div class="composer-note">Preparing files...</div>`;
@@ -470,7 +471,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
             <button
               class="icon-btn"
               type="button"
-              title="Attach files"
+              title=${t("Attach files")}
               ?disabled=${attachingDisabled}
               @click=${() => pickFiles()}
             >
@@ -485,10 +486,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                         ? menuControl({
                             kind: "effort",
                             glyph: Brain,
-                            label: effortLabel(composerState.effortLevel),
+                            label: t(effortLabel(composerState.effortLevel)),
                             title: "Effort",
                             selected: composerState.effortLevel,
-                            options: EFFORT_LEVELS,
+                            options: EFFORT_LEVELS.map((option) => ({ ...option, label: t(option.label) })),
                             disabled: inputBlocked,
                             onSelect: (value: string) => selectEffort(value as EffortLevel, agent),
                           })
@@ -550,13 +551,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                     }
                     ${menuControl({
                       kind: "model",
-                      label: selectedModel.buttonLabel,
+                      label: selectedModel.value === "auto" ? t(selectedModel.buttonLabel) : selectedModel.buttonLabel,
                       title: "Model",
                       selected: selectedModel.value,
                       align: "right",
                       options: getModelOptionsForHarness(selectedModel.harnessId, scopeKey()).map((option) => ({
                         value: option.value,
-                        label: option.label,
+                        label: option.value === "auto" ? t(option.label) : option.label,
                       })),
                       disabled: inputBlocked,
                       onSelect: (value: string) => selectModel(value, agent),
@@ -659,14 +660,16 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function sendControls(agent: Agent): TemplateResult {
     if (!agent.state.isStreaming) {
-      return html`<button class="send-btn" type="submit" title="Send" ?disabled=${!composerCanSend()}>
+      return html`<button class="send-btn" type="submit" title=${t("Send")} ?disabled=${!composerCanSend()}>
         ${icon(ArrowUp, 17)}
       </button>`;
     }
     const canSteer = Boolean(composerState.draft.trim());
-    const steerTitle = composerState.attachments.length
-      ? "Steer the running task (attachments stay for your next message)"
-      : "Steer the running task";
+    const steerTitle = t(
+      composerState.attachments.length
+        ? "Steer the running task (attachments stay for your next message)"
+        : "Steer the running task",
+    );
     return html`
       <button class="stop-btn" type="button" title="Stop" aria-label="Stop" @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
@@ -864,7 +867,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         <button
           class="menu-button"
           type="button"
-          title=${args.title}
+          title=${t(args.title)}
           aria-haspopup="menu"
           aria-expanded=${open ? "true" : "false"}
           aria-controls=${menuId}
@@ -879,7 +882,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           open && !args.disabled
             ? html`
                 <div class="menu-popover" id=${menuId} role="menu" @click=${(e: Event) => e.stopPropagation()}>
-                  <div class="menu-title">${args.title}</div>
+                  <div class="menu-title">${t(args.title)}</div>
                   ${args.options.map(
                     (option) => html`
                       <button

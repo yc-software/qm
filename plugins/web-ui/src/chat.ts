@@ -5,7 +5,8 @@ import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import "./marked-dedupe";
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
-import { html, nothing, render, type TemplateResult } from "lit";
+import { nothing, render, type TemplateResult } from "lit";
+import { html, localeCode, t } from "./i18n.ts";
 import {
   Activity,
   Ban,
@@ -789,7 +790,7 @@ export function createChatSurface(
                           >`
                         : nothing
                     }`
-                  : "This conversation is read-only here."
+                  : t("This conversation is read-only here.")
               }
             </div>
             ${backgroundActivityStrip()}
@@ -804,7 +805,7 @@ export function createChatSurface(
                           @click=${async (e: Event) => {
                             const btn = e.currentTarget as HTMLButtonElement;
                             btn.disabled = true;
-                            btn.textContent = "Loading earlier messages\u2026";
+                            btn.textContent = t("Loading earlier messages…");
                             try {
                               const page = await fetchTranscript(
                                 s.id,
@@ -834,7 +835,7 @@ export function createChatSurface(
                               });
                             } catch {
                               btn.disabled = false;
-                              btn.textContent = "Show earlier messages";
+                              btn.textContent = t("Show earlier messages");
                             }
                           }}
                         >
@@ -894,7 +895,7 @@ export function createChatSurface(
         ?disabled=${chatState.loadingEarlier || agent.state.isStreaming}
         @click=${() => void loadEarlierMessages()}
       >
-        ${chatState.loadingEarlier ? "Loading earlier messages…" : "Show earlier messages"}
+        ${t(chatState.loadingEarlier ? "Loading earlier messages…" : "Show earlier messages")}
       </button>
     </div>`;
   }
@@ -978,11 +979,11 @@ export function createChatSurface(
   }
 
   function paneNowLine(agent: Agent): string | null {
-    if (activePendingApprovals().length) return "Needs your approval";
+    if (activePendingApprovals().length) return t("Needs your approval");
     if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
       const work = chatState.liveWork ?? { status: "thinking", activity: [] };
       const summary = liveWorkSummary(work);
-      if (!summary) return "Thinking…";
+      if (!summary) return t("Thinking…");
       return summary.detail ? `${summary.label} — ${summary.detail}` : summary.label;
     }
     return null;
@@ -1092,9 +1093,11 @@ export function createChatSurface(
     const glyph = chatState.scopeId?.startsWith("group:") ? Users : Hash;
     return html`<div
       class="context-banner"
-      title="This chat runs in the ${label} context — the agent works with that context's files and memory, separate from your personal context."
+      title=${`${t("This chat runs in the")} ${label} ${t(
+        "context — the agent works with that context's files and memory, separate from your personal context.",
+      )}`}
     >
-      ${icon(glyph, 13)}<span><strong>${label}</strong> context</span>
+      ${icon(glyph, 13)}<span><strong>${label}</strong> ${t("context")}</span>
     </div>`;
   }
 
@@ -1103,7 +1106,7 @@ export function createChatSurface(
       <header class="chat-topbar">
         <div class="chat-heading">
           <div class="chat-title">${title}</div>
-          <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
+          <div class="chat-subtitle">${readOnly ? t("Read-only") : detail}</div>
         </div>
         <div class="topbar-actions">
           ${
@@ -1303,7 +1306,7 @@ export function createChatSurface(
 
   function formatClock(ms: number): string {
     try {
-      return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      return new Date(ms).toLocaleTimeString(localeCode(), { hour: "numeric", minute: "2-digit" });
     } catch {
       return "";
     }
@@ -1550,7 +1553,9 @@ export function createChatSurface(
       bgPanel.error = "";
     } catch (e) {
       if (seq !== bgPanel.fetchSeq) return;
-      bgPanel.error = errMessage(e, "Failed to load background activity.");
+      const fallback = "Failed to load background activity.";
+      const message = errMessage(e, fallback);
+      bgPanel.error = message === fallback ? t(fallback) : message;
     } finally {
       if (seq === bgPanel.fetchSeq) {
         bgPanel.loading = false;
@@ -1611,9 +1616,9 @@ export function createChatSurface(
 
   function timeLeft(expiresAt: number): string {
     const mins = Math.round((expiresAt - Date.now()) / 60_000);
-    if (mins <= 0) return "expiring";
-    if (mins < 60) return `${mins}m left`;
-    return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`;
+    if (mins <= 0) return t("expiring");
+    if (mins < 60) return t(`${mins}m left`);
+    return t(`${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`);
   }
 
   function backgroundActivityStrip(): TemplateResult | typeof nothing {
@@ -1630,10 +1635,10 @@ export function createChatSurface(
           type="button"
           class="bg-activity-strip"
           aria-expanded=${String(bgPanel.open)}
-          title=${bgPanel.open ? "Hide background activity" : "Work continuing on the agent's computer — click to inspect"}
+          title=${t(bgPanel.open ? "Hide background activity" : "Work continuing on the agent's computer — click to inspect")}
           @click=${toggleBackgroundPanel}
         >
-          ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
+          ${icon(Activity, 13)}<span class="bg-activity-label">${label ? t(label) : t("Background activity")}</span>
           <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
         </button>
         ${bgPanel.open ? backgroundPanelBody() : nothing}
@@ -1658,7 +1663,7 @@ export function createChatSurface(
     const out = bgPanel.output.get(j.processId);
     const status =
       out?.state === "exited"
-        ? `exited${out.exitCode !== undefined ? ` (${out.exitCode})` : ""}`
+        ? `${t("exited")}${out.exitCode !== undefined ? ` (${out.exitCode})` : ""}`
         : timeLeft(j.expiresAt);
     return html`
       <div class="bg-row ${open ? "open" : ""}">
@@ -1666,29 +1671,30 @@ export function createChatSurface(
           type="button"
           class="bg-row-head"
           aria-expanded=${String(open)}
-          title=${open ? "Hide output" : "Show live output"}
+          title=${t(open ? "Hide output" : "Show live output")}
           @click=${() => toggleJobOutput(j.processId)}
         >
           ${icon(Terminal, 13)}
           <code class="bg-row-cmd">${j.command}</code>
-          <span class="bg-row-meta">started ${relTime(j.startedAt)} · ${status}</span>
+          <span class="bg-row-meta">${t("started")} ${relTime(j.startedAt)} · ${status}</span>
           <span class="bg-row-toggle">${icon(ChevronRight, 13)}</span>
         </button>
-        ${open ? html`<pre class="bg-row-output">${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
+        ${open ? html`<pre class="bg-row-output">${out ? out.text || t("(no output yet)") : t("Loading output…")}</pre>` : nothing}
       </div>
     `;
   }
 
   function backgroundWatchRow(w: SessionBackgroundView["watches"][number]): TemplateResult {
-    const what = w.pattern ? `output matching /${w.pattern}/` : "any new output";
+    const what = w.pattern ? `${t("output matching")} /${w.pattern}/` : t("any new output");
     const note = w.instructions?.trim();
     return html`
       <div class="bg-row watch">
         <div class="bg-row-head static">
           ${icon(Radar, 13)}
-          <span class="bg-row-cmd">Watch — wakes on ${what}${note ? ` · “${note}”` : ""}</span>
+          <span class="bg-row-cmd">${t("Watch — wakes on")} ${what}${note ? ` · “${note}”` : ""}</span>
           <span class="bg-row-meta"
-            >armed ${relTime(w.createdAt)}${w.lastFiredAt ? ` · last fired ${relTime(w.lastFiredAt)}` : ""} ·
+            >${t("armed")}
+            ${relTime(w.createdAt)}${w.lastFiredAt ? ` · ${t("last fired")} ${relTime(w.lastFiredAt)}` : ""} ·
             ${timeLeft(w.expiresAt)}</span
           >
         </div>
@@ -1704,7 +1710,7 @@ export function createChatSurface(
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && liveWorkExpanded;
     let title = "";
-    if (expandable) title = liveWorkExpanded ? "Show less" : "Show more";
+    if (expandable) title = t(liveWorkExpanded ? "Show less" : "Show more");
     return html`
       <section class="live-work-dock ${expanded ? "expanded" : ""}" aria-live="polite">
         <button
@@ -1717,7 +1723,7 @@ export function createChatSurface(
         >
           ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
           <span class="live-work-label"
-            >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
+            >${summary ? t(summary.label) : sheenLabel(`${t("Thinking")}${usedToolsSuffix(work)}`, true)}</span
           >
           ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
           ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
@@ -1739,7 +1745,7 @@ export function createChatSurface(
       const verb = active ? (TOOL_META[tool] ?? UNKNOWN_TOOL).active : null;
       return {
         icon: RefreshCw,
-        label: verb ? `${verb} interrupted — resuming…` : "Interrupted — resuming…",
+        label: verb ? `${t(verb)} — ${t("interrupted — resuming…")}` : t("Interrupted — resuming…"),
         detail: active ? toolDetail(tool, call, (active.result?.payload ?? {}) as ToolPayload) : "",
       };
     }
@@ -1764,7 +1770,7 @@ export function createChatSurface(
     const secs = elapsedSeconds(row.call?.createdAt) || workSeconds(work);
     return {
       icon: meta.icon,
-      label: secs > 0 ? `${meta.active} for ${secs}s` : meta.active,
+      label: secs > 0 ? `${t(meta.active)} ${t("for")} ${secs}s` : t(meta.active),
       detail: toolDetail(tool, call, result),
     };
   }
@@ -1782,14 +1788,14 @@ export function createChatSurface(
 
   function usedToolsSuffix(work: WorkBlock): string {
     const n = work.activity.filter((a) => a.type === "tool_call").length;
-    return n > 0 ? ` (used ${n} tool${n === 1 ? "" : "s"})` : "";
+    return n > 0 ? ` (${t("used")} ${t(`${n} tool${n === 1 ? "" : "s"}`)})` : "";
   }
 
   function workLabel(work: WorkBlock): string {
-    if (work.stale && (work.status === "thinking" || work.status === "working")) return "Interrupted — resuming…";
-    if (work.status === "thinking") return "Thinking";
+    if (work.stale && (work.status === "thinking" || work.status === "working")) return t("Interrupted — resuming…");
+    if (work.status === "thinking") return t("Thinking");
     const secs = workSeconds(work);
-    return work.status === "working" ? `Working for ${secs}s` : `Worked for ${secs}s`;
+    return t(work.status === "working" ? `Working for ${secs}s` : `Worked for ${secs}s`);
   }
 
   function workBlock(work: WorkBlock, isStreaming: boolean): TemplateResult {
@@ -1819,7 +1825,7 @@ export function createChatSurface(
       seg = [];
       parts.push(
         html`<details class="work-fold" ?open=${openFolds}>
-          <summary class="work-head">${segmentSummaryLabel(items, work)}${icon(ChevronRight, 14)}</summary>
+          <summary class="work-head">${t(segmentSummaryLabel(items, work))}${icon(ChevronRight, 14)}</summary>
           <div class="work-divider"></div>
           <div class="work-rows">${items.map((it) => renderTimelineItem(it, work))}</div>
         </details>`,
@@ -1843,7 +1849,7 @@ export function createChatSurface(
     const tools = items.filter((it) => it.kind === "tool").length;
     if (tools > 0) return `${tools} tool call${tools === 1 ? "" : "s"}`;
     const secs = workSeconds(work);
-    return work.status === "failed" ? `Failed after ${secs}s` : `Worked for ${secs}s`;
+    return t(work.status === "failed" ? `Failed after ${secs}s` : `Worked for ${secs}s`);
   }
 
   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
@@ -1887,8 +1893,9 @@ export function createChatSurface(
   }
 
   function sheenLabel(label: string, active: boolean): TemplateResult {
-    return html`<span class="sheen-label ${active ? "thinking-sheen" : ""}" data-sheen=${active ? label : ""}
-      >${label}</span
+    const localized = t(label);
+    return html`<span class="sheen-label ${active ? "thinking-sheen" : ""}" data-sheen=${active ? localized : ""}
+      >${localized}</span
     >`;
   }
 
@@ -1954,16 +1961,16 @@ export function createChatSurface(
       case "recall":
       case "history": {
         const q = call.query ?? result.query ?? "";
-        return result.count !== undefined ? `${q} · ${result.count} result${result.count === 1 ? "" : "s"}` : q;
+        return result.count !== undefined ? `${q} · ${t(`${result.count} result${result.count === 1 ? "" : "s"}`)}` : q;
       }
       case "memory": {
         const action = call.action ?? result.action ?? "";
         const q = call.query ?? result.query ?? "";
         let detail = q;
         if (result.count !== undefined) {
-          detail = `${q} · ${result.count} result${result.count === 1 ? "" : "s"}`;
+          detail = `${q} · ${t(`${result.count} result${result.count === 1 ? "" : "s"}`)}`;
         } else if (result.added !== undefined) {
-          detail = `${result.added} saved`;
+          detail = t(`${result.added} saved`);
         }
         return [action, detail].filter(Boolean).join(" ");
       }
@@ -2001,11 +2008,13 @@ export function createChatSurface(
     if (kind === "approval") why = firstLine(result.reason ?? "", 90);
     else if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
     const base = kind === "approval" ? "" : toolDetail(tool, call, result);
-    const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
+    const attempts = row.attempts && row.attempts > 1 ? t(`${row.attempts} attempts`) : "";
     const detail = [base, why, attempts].filter(Boolean).join(" · ");
     const classes = ["tool-row", `tool-${kind}`].join(" ");
     const head = html`<span class="tool-icon">${icon(meta.icon, 15)}</span>
-      <span class="tool-label">${label}${detail ? html` <span class="tool-detail">${detail}</span>` : nothing}</span>`;
+      <span class="tool-label"
+        >${t(label)}${detail ? html` <span class="tool-detail">${detail}</span>` : nothing}</span
+      >`;
     if (tool === "execute" && row.result && (result.stdout || result.stderr)) {
       return html`<details class="${classes} tool-expandable">
         <summary class="tool-summary">${head}${icon(ChevronRight, 14)}</summary>
@@ -2021,7 +2030,7 @@ export function createChatSurface(
       <div class="code-card-head"><span class="code-card-lang">bash</span></div>
       <pre class="code-card-body">${out}</pre>
       <div class="code-card-foot">
-        exit ${result.code ?? 0}${result.timedOut ? " · timed out" : ""}
+        ${t("exit")} ${result.code ?? 0}${result.timedOut ? ` · ${t("timed out")}` : ""}
         ${
           activity?.truncated
             ? html`<button class="show-full-btn" type="button" @click=${() => void loadFullEntry(work, activity)}>

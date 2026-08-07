@@ -1,5 +1,6 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
 import { ChevronDown, createElement, type IconNode } from "lucide";
+import { currentLocale, html, t } from "./i18n.ts";
 
 export function brandName(): string {
   if (typeof document === "undefined") return "QM";
@@ -39,7 +40,7 @@ export function fieldSelect(props: {
   >
     <select
       id=${props.id ?? nothing}
-      aria-label=${props.ariaLabel ?? nothing}
+      aria-label=${props.ariaLabel ? t(props.ariaLabel) : nothing}
       aria-describedby=${props.describedBy ?? nothing}
       data-focus-key=${props.focusKey ?? nothing}
       .value=${props.value ?? nothing}
@@ -61,7 +62,12 @@ export function initials(s: string): string {
 
 export function relTime(ms: number): string {
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (s < 60) return "just now";
+  if (s < 60) return t("just now");
+  if (currentLocale() === "zh-CN") {
+    if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+    if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+    return `${Math.floor(s / 86400)} 天前`;
+  }
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
@@ -102,7 +108,7 @@ export async function copyText(text: string, btn?: HTMLButtonElement): Promise<v
       const active = copyFeedback.get(btn);
       if (active) clearTimeout(active.timer);
       const html = active?.html ?? btn.innerHTML;
-      btn.textContent = "Copied";
+      btn.textContent = t("Copied");
       const timer = setTimeout(() => {
         btn.innerHTML = html;
         copyFeedback.delete(btn);
