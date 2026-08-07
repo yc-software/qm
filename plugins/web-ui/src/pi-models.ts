@@ -1,7 +1,7 @@
 import { getModel } from "@earendil-works/pi-ai";
 import type { Api, Model } from "@earendil-works/pi-ai";
 
-const KNOWN_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
+const KNOWN_PROVIDERS = ["anthropic", "openai", "openrouter", "deepseek"] as const;
 
 const CLONE_TEMPLATES: Readonly<Record<string, { template: string; name: string }>> = {
   "claude-fable-5": { template: "claude-opus-4-8", name: "Claude Fable 5" },

@@ -60,6 +60,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { provider: "anthropic", configured: true, source: "environment" },
         { provider: "openai", configured: false, source: "absent" },
         { provider: "openrouter", configured: false, source: "absent" },
+        { provider: "deepseek", configured: false, source: "absent" },
       ],
       models: [
         { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
@@ -71,6 +72,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
         { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
         { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
+        { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", provider: "deepseek" },
       ],
     });
     const scopeBefore = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
@@ -410,6 +412,23 @@ test("admin model credentials survive a second app instance on the same durable 
   assert.equal(await second.resolve("openrouter"), "durable-openrouter-key");
   assert.doesNotMatch(JSON.stringify(await backing.all()), /durable-openrouter-key/);
   assert.doesNotMatch(JSON.stringify(await second.statuses()), /durable-openrouter-key/);
+});
+
+test("a deployment-configured DeepSeek fallback key reports as environment-sourced", async () => {
+  const backing = createMemoryMap<StoredModelCredential>();
+  const store = createModelCredentialStore({
+    backing,
+    keyMaterial: "shared-model-key",
+    fallback: { deepseek: "deployment-deepseek-key" },
+  });
+
+  assert.equal(await store.resolve("deepseek"), "deployment-deepseek-key");
+  assert.deepEqual((await store.statuses()).find((status) => status.provider === "deepseek"), {
+    provider: "deepseek",
+    configured: true,
+    source: "environment",
+  });
+  assert.equal((await store.availability()).deepseek, true);
 });
 
 test("a stored scope override outside the configured picker refuses web turns; the org default stays exempt", async () => {

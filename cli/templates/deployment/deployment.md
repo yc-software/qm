@@ -25,7 +25,7 @@ it in place. If the repository has not been initialized, collect:
   domain, and no DNS, and domain verification is the step most likely to stall
   a deploy. Recommend Slack sign-in to a Slack workspace and the broker
   otherwise;
-- model provider: Anthropic, OpenAI, or OpenRouter (one key that routes to
+- model provider: Anthropic, OpenAI, OpenRouter, or DeepSeek (one key that routes to
   many models). This is a deployment choice, not a post-deploy one: it becomes
   `modelProvider` in `qm.config.jsonc`, which makes that provider's API key a
   required secret. Collect the key in the same pass as the other credentials —
@@ -69,7 +69,7 @@ npm install
 lands in the deployment repository and its lockfile rather than in the command
 that bootstraps it.
 
-`--model-provider` takes `anthropic`, `openai`, or `openrouter` and defaults to
+`--model-provider` takes `anthropic`, `openai`, `openrouter`, or `deepseek` and defaults to
 `anthropic`. It writes `modelProvider` into the scaffolded config, which is what
 promotes that provider's key from an optional fallback to a required secret.
 
@@ -174,7 +174,7 @@ mint limits, the boot refusals, and what anonymous visitors are denied.
 
 Whichever sign-in route the deployment takes, the base model needs a key in the
 same pass. `modelProvider` decides which one `qm setup` asks for —
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` — and the wizard
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `DEEPSEEK_API_KEY` — and the wizard
 prints where to mint it. The operator owns the billing relationship, so they
 create the key; you only place it. It is a required secret, so `qm doctor` calls
 the provider to prove the key is accepted and `qm up` refuses a deployment that
@@ -184,7 +184,7 @@ administrator and then fails their first message.
 
 `modelProvider` also picks the model itself, so no model id has to be chosen at
 deploy time: Anthropic serves `claude-opus-5`, OpenAI `gpt-5.6-sol`, OpenRouter
-`openrouter/auto`. Set `model` in `qm.config.jsonc` only to override that, and
+`openrouter/auto`, DeepSeek `deepseek-v4-flash`. Set `model` in `qm.config.jsonc` only to override that, and
 only with a model the chosen provider can bill — a mismatch is refused at
 startup rather than at the first message. The same rule covers the harness:
 `HARNESS` `codex` runs OpenAI models alone, `claude` runs Anthropic models

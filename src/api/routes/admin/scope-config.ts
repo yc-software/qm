@@ -250,7 +250,10 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const currentModel =
     runtime &&
     typeof runtime.modelId === "string" &&
-    (currentProvider === "anthropic" || currentProvider === "openai" || currentProvider === "openrouter")
+    (currentProvider === "anthropic" ||
+      currentProvider === "openai" ||
+      currentProvider === "openrouter" ||
+      currentProvider === "deepseek")
       ? ({ id: runtime.modelId, name: resolvedCurrent!.name, provider: currentProvider } satisfies ModelCatalogEntry)
       : null;
   const modelsFor = (harnessId: string) => {

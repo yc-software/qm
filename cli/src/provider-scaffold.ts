@@ -45,8 +45,8 @@ function renderConfig(orgId: string, values: ConfigValues): string {
   // and "aws" runs the control plane on ECS and agent computers on Lambda MicroVMs.
   "target": ${JSON.stringify(values.target)},
 
-  // The vendor supplying the base model: "anthropic", "openai", or "openrouter"
-  // (one key, many models). Naming one makes that vendor's API key a required
+  // The vendor supplying the base model: "anthropic", "openai", "openrouter", or
+  // "deepseek" (one key, many models). Naming one makes that vendor's API key a required
   // deployment secret and points the base model at that vendor: \`qm setup\`
   // collects the key, \`qm doctor\` proves the provider accepts it, and \`qm up\`
   // refuses a stack that cannot serve an agent turn. Delete this line to leave

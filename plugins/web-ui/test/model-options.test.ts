@@ -96,6 +96,18 @@ test("runtime options preserve a fetched OpenRouter model as the selected web tu
   assert.equal(defaultModelValue(), "pi:anthropic/claude-sonnet-4.5");
 });
 
+test("runtime options render the built-in DeepSeek model", () => {
+  applyRuntimeOptions(
+    null,
+    ["pi"],
+    { pi: ["deepseek-v4-flash"] },
+    { harnessId: "pi", modelId: "deepseek-v4-flash" },
+    { "deepseek-v4-flash": { name: "DeepSeek V4 Flash", provider: "deepseek" } },
+  );
+  assert.equal(defaultModelValue(), "pi:deepseek-v4-flash");
+  assert.equal(getModelOptionsForHarness("pi")[0]?.label, "DeepSeek V4 Flash");
+});
+
 test("runtime options hide retired persisted model ids", () => {
   applyRuntimeOptions(
     null,

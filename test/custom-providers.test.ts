@@ -123,24 +123,25 @@ test("store validates specs on upsert", async () => {
     keyMaterial: "k",
   });
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
+  await assert.rejects(store.upsert({ ...GATEWAY, id: "deepseek" }, "k", "a@b.c"), /reserved/);
 });
 
 test("registered models surface in the catalog and vanish on unregister", () => {
   setCustomProviders([
     {
-      id: "deepseek",
-      name: "DeepSeek",
+      id: "deepseek-proxy",
+      name: "DeepSeek Proxy",
       protocol: "openai",
-      baseUrl: "https://api.deepseek.com/v1",
-      models: [{ id: "deepseek-chat", name: "DeepSeek Chat" }],
+      baseUrl: "https://proxy.example.com/deepseek/v1",
+      models: [{ id: "deepseek-proxy-chat", name: "DeepSeek Proxy Chat" }],
     },
   ]);
   const catalog = builtInModelCatalog();
-  const entry = catalog.find((m) => m.id === "deepseek-chat");
+  const entry = catalog.find((m) => m.id === "deepseek-proxy-chat");
   assert.ok(entry, "custom model appears in the catalog");
-  assert.equal(entry!.provider, "deepseek");
+  assert.equal(entry!.provider, "deepseek-proxy");
   setCustomProviders([]);
-  assert.ok(!builtInModelCatalog().some((m) => m.id === "deepseek-chat"));
+  assert.ok(!builtInModelCatalog().some((m) => m.id === "deepseek-proxy-chat"));
 });
 
 test("opencode modelRef routes slashed custom model ids to the registered provider, not a phantom slash-prefix", async () => {
