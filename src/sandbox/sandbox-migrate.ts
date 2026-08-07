@@ -48,58 +48,62 @@ export async function copyHome(args: CopyHomeArgs): Promise<CopyHomeResult> {
   const { fromSandbox, fromHandle, fromHome, toSandbox, toHandle, toHome } = args;
   const timeoutMs = (args.timeoutSec ?? 900) * 1000;
   const uid = randomUUID();
-  const tarPath = `/tmp/.home-${uid}.tgz`;
+  const fromTarPath = posix.join(fromHandle.rootDir, `.qm-home-${uid}.tgz`);
+  const toTarPath = posix.join(toHandle.rootDir, `.qm-home-${uid}.tgz`);
   const H = shq(fromHome);
   const T = shq(toHome);
-  const fromRel = posix.relative(fromHandle.rootDir, tarPath);
-  const toRel = posix.relative(toHandle.rootDir, tarPath);
-
-  const packed = await fromSandbox.run(
-    fromHandle,
-    `cd ${H} && tar czf ${tarPath} . 2>/dev/null && sha256sum ${tarPath} | cut -d' ' -f1 && wc -c < ${tarPath} && find . -type f | wc -l`,
-    { timeoutMs },
-  );
-  if (packed.code !== 0)
-    throw new Error(`copyHome: source tar failed (${packed.code}): ${(packed.stderr || packed.stdout).slice(0, 200)}`);
-  const [shaLine = "", sizeLine = "", filesLine = ""] = packed.stdout.trim().split("\n");
-  const sha = shaLine.trim();
-  const bytes = Number.parseInt(sizeLine.trim(), 10);
-  const sourceFiles = Number.parseInt(filesLine.trim(), 10);
-  if (!/^[0-9a-f]{64}$/.test(sha) || !Number.isFinite(bytes) || !Number.isFinite(sourceFiles)) {
-    throw new Error(`copyHome: unreadable source manifest: ${packed.stdout.slice(0, 200)}`);
-  }
-
-  if (supportsBlobStaging(fromSandbox) && supportsBlobStaging(toSandbox)) {
-    const blobId = await fromSandbox.stageOut(fromHandle, fromRel);
-    await toSandbox.stageIn(toHandle, toRel, blobId);
-  } else {
-    const tarBytes = await fromSandbox.readFileBytes(fromHandle, fromRel);
-    if (!tarBytes) throw new Error("copyHome: source tar vanished before read");
-    await toSandbox.writeFileBytes(toHandle, toRel, tarBytes);
-  }
-
-  const extracted = await toSandbox.run(
-    toHandle,
-    `dsha=$(sha256sum ${tarPath} | cut -d' ' -f1); [ "$dsha" = ${shq(sha)} ] || { echo "sha-mismatch:$dsha"; exit 3; }; mkdir -p ${T} && cd ${T} && tar xzf ${tarPath} 2>/dev/null && find . -type f | wc -l`,
-    { timeoutMs },
-  );
-  if (extracted.code !== 0) {
-    throw new Error(
-      `copyHome: dest verify/extract failed (${extracted.code}): ${(extracted.stderr || extracted.stdout).slice(0, 200)}`,
+  const fromRel = posix.relative(fromHandle.rootDir, fromTarPath);
+  const toRel = posix.relative(toHandle.rootDir, toTarPath);
+  try {
+    const packed = await fromSandbox.run(
+      fromHandle,
+      `cd ${H} && tar czf ${shq(fromTarPath)} . 2>/dev/null && sha256sum ${shq(fromTarPath)} | cut -d' ' -f1 && wc -c < ${shq(fromTarPath)} && find . -type f | wc -l`,
+      { timeoutMs },
     );
+    if (packed.code !== 0)
+      throw new Error(
+        `copyHome: source tar failed (${packed.code}): ${(packed.stderr || packed.stdout).slice(0, 200)}`,
+      );
+    const [shaLine = "", sizeLine = "", filesLine = ""] = packed.stdout.trim().split("\n");
+    const sha = shaLine.trim();
+    const bytes = Number.parseInt(sizeLine.trim(), 10);
+    const sourceFiles = Number.parseInt(filesLine.trim(), 10);
+    if (!/^[0-9a-f]{64}$/.test(sha) || !Number.isFinite(bytes) || !Number.isFinite(sourceFiles)) {
+      throw new Error(`copyHome: unreadable source manifest: ${packed.stdout.slice(0, 200)}`);
+    }
+
+    if (supportsBlobStaging(fromSandbox) && supportsBlobStaging(toSandbox)) {
+      const blobId = await fromSandbox.stageOut(fromHandle, fromRel);
+      await toSandbox.stageIn(toHandle, toRel, blobId);
+    } else {
+      const tarBytes = await fromSandbox.readFileBytes(fromHandle, fromRel);
+      if (!tarBytes) throw new Error("copyHome: source tar vanished before read");
+      await toSandbox.writeFileBytes(toHandle, toRel, tarBytes);
+    }
+
+    const extracted = await toSandbox.run(
+      toHandle,
+      `dsha=$(sha256sum ${shq(toTarPath)} | cut -d' ' -f1); [ "$dsha" = ${shq(sha)} ] || { echo "sha-mismatch:$dsha"; exit 3; }; mkdir -p ${T} && cd ${T} && tar xzf ${shq(toTarPath)} 2>/dev/null && find . -type f | wc -l`,
+      { timeoutMs },
+    );
+    if (extracted.code !== 0) {
+      throw new Error(
+        `copyHome: dest verify/extract failed (${extracted.code}): ${(extracted.stderr || extracted.stdout).slice(0, 200)}`,
+      );
+    }
+    const destFiles = Number.parseInt(extracted.stdout.trim().split("\n").pop() ?? "", 10);
+
+    if (fromHome !== toHome) {
+      const t = await toSandbox.run(toHandle, translateScript(toHome, fromHome), { timeoutMs: 120_000 });
+      if (t.code !== 0)
+        throw new Error(`copyHome: translation failed (${t.code}): ${(t.stderr || t.stdout).slice(0, 200)}`);
+    }
+
+    return { bytes, sha, sourceFiles, destFiles };
+  } finally {
+    await Promise.all([
+      fromSandbox.run(fromHandle, `rm -f ${shq(fromTarPath)}`, { timeoutMs: 30_000 }).catch(() => {}),
+      toSandbox.run(toHandle, `rm -f ${shq(toTarPath)}`, { timeoutMs: 30_000 }).catch(() => {}),
+    ]);
   }
-  const destFiles = Number.parseInt(extracted.stdout.trim().split("\n").pop() ?? "", 10);
-
-  if (fromHome !== toHome) {
-    const t = await toSandbox.run(toHandle, translateScript(toHome, fromHome), { timeoutMs: 120_000 });
-    if (t.code !== 0)
-      throw new Error(`copyHome: translation failed (${t.code}): ${(t.stderr || t.stdout).slice(0, 200)}`);
-  }
-
-  await Promise.all([
-    fromSandbox.run(fromHandle, `rm -f ${tarPath}`, { timeoutMs: 30_000 }).catch(() => {}),
-    toSandbox.run(toHandle, `rm -f ${tarPath}`, { timeoutMs: 30_000 }).catch(() => {}),
-  ]);
-
-  return { bytes, sha, sourceFiles, destFiles };
 }
