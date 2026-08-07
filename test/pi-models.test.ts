@@ -5,6 +5,7 @@ import {
   auxiliaryModelForProvider,
   defaultModelForHarness,
   defaultModelForProvider,
+  harnessSuppliesOwnModelAuth,
   modelServiceable,
   modelSupportedByHarness,
   onlyProvider,
@@ -173,5 +174,13 @@ test("context token budget is half of each model's real input room", () => {
   for (const m of SELECTABLE_BASE_MODELS) {
     const budget = contextTokenBudgetForModel(m.id);
     assert.ok(budget !== undefined && budget >= 60_000, `${m.id} budget ${budget} suspiciously small`);
+  }
+});
+
+test("harnesses that carry their own model auth are exactly the ones needing no provider key", () => {
+  assert.equal(harnessSuppliesOwnModelAuth("claude"), true);
+  assert.equal(harnessSuppliesOwnModelAuth("mock"), true);
+  for (const harness of ["pi", "opencode", "codex"]) {
+    assert.equal(harnessSuppliesOwnModelAuth(harness), false, `${harness} bills through a provider key`);
   }
 });
