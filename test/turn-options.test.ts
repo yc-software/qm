@@ -7,6 +7,9 @@ import {
   validateWebTurnModelOptions,
   webTurnRuntimeModelRefusal,
 } from "../src/core/turn-options.ts";
+import { setCustomProviders } from "../src/model/custom-providers.ts";
+
+test.afterEach(() => setCustomProviders([]));
 
 test("triggered turns default to extra-high thinking and non-fast mode", () => {
   assert.deepEqual(turnModelOptions({ triggered: true }), {
@@ -29,6 +32,19 @@ test("web model controls are bounded by admin configuration", () => {
   );
   assert.equal(validateWebTurnModelOptions({ thinkingLevel: "infinite" }, null), "unsupported thinking level");
   assert.equal(validateWebTurnModelOptions({ model: "claude-opus-4-8", thinkingLevel: "high" }, null), null);
+});
+
+test("web model controls allow an active custom provider by default", () => {
+  setCustomProviders([
+    {
+      id: "deepseek",
+      name: "DeepSeek",
+      protocol: "openai",
+      baseUrl: "https://api.deepseek.com",
+      models: [{ id: "deepseek-v4-flash", name: "deepseek-v4" }],
+    },
+  ]);
+  assert.equal(validateWebTurnModelOptions({ model: "deepseek-v4-flash" }, null), null);
 });
 
 test("a resolved scope override outside the configured picker is refused, the org default is not", () => {
