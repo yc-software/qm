@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { copyHome } from "../src/sandbox/sandbox-migrate.ts";
@@ -128,6 +128,8 @@ test("copyHome throws on a corrupt transfer instead of leaving a truncated $HOME
       }),
       /sha-mismatch|verify\/extract failed/,
     );
+    assert.deepEqual(readdirSync(src.handle.rootDir).filter((name) => name.startsWith(".qm-home-")), []);
+    assert.deepEqual(readdirSync(dst.handle.rootDir).filter((name) => name.startsWith(".qm-home-")), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
