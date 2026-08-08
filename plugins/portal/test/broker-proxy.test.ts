@@ -184,6 +184,7 @@ test("isPrivateNetworkUrl admits only unroutable hosts", () => {
   for (const url of [
     "http://qm-auth.internal:8080",
     "http://qm-web-ui.flycast",
+    "http://auth:8080",
     "http://localhost:8099",
     "http://127.0.0.1:8099",
     "http://10.1.2.3:8080",

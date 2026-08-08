@@ -802,14 +802,22 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
   const env = config.env.portal ?? {};
   const issuer = env.OIDC_ISSUER?.trim() || "https://slack.com";
   const jwksUri = env.OIDC_JWKS_URI?.trim();
+  const brokerUpstream = env.AUTH_BROKER_UPSTREAM?.trim();
+  const brokerOrigin = privateNetworkOrigin(brokerUpstream);
+  if (brokerUpstream !== undefined && !brokerOrigin) {
+    throw new CliError(`${path}: env.portal.AUTH_BROKER_UPSTREAM must address a private-network host`);
+  }
   if (issuer !== "https://slack.com" && isMissingOrPlaceholder(jwksUri)) {
     throw new CliError(`${path}: portal requires env.portal.OIDC_JWKS_URI when using a non-Slack OIDC issuer`);
   }
   if (jwksUri !== undefined) {
     try {
-      if (new URL(jwksUri).protocol !== "https:") throw new Error("protocol");
+      const jwks = new URL(jwksUri);
+      if (jwks.protocol !== "https:" && (!brokerOrigin || jwks.origin !== brokerOrigin)) throw new Error("protocol");
     } catch {
-      throw new CliError(`${path}: env.portal.OIDC_JWKS_URI must be a non-placeholder HTTPS URL`);
+      throw new CliError(
+        `${path}: env.portal.OIDC_JWKS_URI must be a non-placeholder HTTPS URL or use the configured private broker origin`,
+      );
     }
   }
   if (env.OIDC_CLIENT_ID !== undefined && isMissingOrPlaceholder(env.OIDC_CLIENT_ID)) {
@@ -854,6 +862,33 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
       `${path}: portal requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or a non-placeholder PORTAL_EXPECTED_TEAM_ID in env.portal or the target secret store`,
     );
   }
+}
+
+function privateNetworkOrigin(raw: string | undefined): string {
+  if (!raw) return "";
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return "";
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const privateHost =
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    !host.includes(".") ||
+    host.endsWith(".internal") ||
+    host.endsWith(".flycast") ||
+    host.endsWith(".local") ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === "::1" ||
+    host === "0:0:0:0:0:0:0:1" ||
+    /^f[cd][0-9a-f]{2}:/.test(host);
+  return privateHost ? url.origin : "";
 }
 
 function validateAwsFrontDoor(config: QmConfig, path: string): void {
