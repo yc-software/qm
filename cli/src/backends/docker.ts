@@ -28,7 +28,7 @@ import {
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
-import { dockerBasePort, sandboxCoreEnv, securityScreenEnv, type QmConfig } from "../config.ts";
+import { dockerBasePort, portalPluginRoutesEnv, sandboxCoreEnv, securityScreenEnv, type QmConfig } from "../config.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../secrets.ts";
 import { readDeploymentState, withDeploymentLock, writeDeploymentState, type DeploymentState } from "../state.ts";
@@ -285,6 +285,8 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
   if (service === "portal") {
     if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
     if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://admin:8080";
+    const pluginRoutes = portalPluginRoutesEnv(config, (plugin) => `http://${plugin}:8080`);
+    if (pluginRoutes) out.PORTAL_PLUGIN_ROUTES = pluginRoutes;
   }
   if (config.services.includes("auth")) {
     Object.assign(

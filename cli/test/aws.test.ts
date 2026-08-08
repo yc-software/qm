@@ -467,6 +467,21 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
   assert.equal(core.PORT, "8080");
 });
 
+test("AWS derives portal plugin routes from Cloud Map and sorts them deterministically", () => {
+  const routed: QmConfig = {
+    ...config,
+    plugins: [{ name: "programme" }, { name: "edge-registry" }],
+    portalRoutes: [
+      { pathPrefix: "/edge/v1", plugin: "edge-registry", access: "signed-upstream" },
+      { pathPrefix: "/programme", plugin: "programme", access: "session" },
+    ],
+  };
+  assert.deepEqual(JSON.parse(serviceEnvironment(routed, "portal").PORTAL_PLUGIN_ROUTES!), [
+    { pathPrefix: "/programme", access: "session", upstreamBase: "http://programme.acme.internal:8080" },
+    { pathPrefix: "/edge/v1", access: "signed-upstream", upstreamBase: "http://edge-registry.acme.internal:8080" },
+  ]);
+});
+
 test("AWS routes security screen proxy configuration and its token only to core", () => {
   const screened: QmConfig = {
     ...config,
