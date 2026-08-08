@@ -112,6 +112,64 @@ test("plugins: image is OPTIONAL (source plugins); env attaches to either; bad i
   );
 });
 
+test("portalRoutes validates session and signed-upstream plugin mounts", () => {
+  const portalRoutes = [
+    { pathPrefix: "/programme", plugin: "programme", access: "session" },
+    { pathPrefix: "/edge/v1", plugin: "edge-registry", access: "signed-upstream" },
+  ];
+  withConfig(
+    {
+      services: ["core", "web-ui", "portal"],
+      plugins: [{ name: "programme" }, { name: "edge-registry" }],
+      portalRoutes,
+    },
+    ({ path }) => assert.deepEqual(loadConfigAt(path).config.portalRoutes, portalRoutes),
+  );
+});
+
+test("portalRoutes rejects unsafe, ambiguous, and unresolved mounts", () => {
+  const base = { services: ["core", "portal"], plugins: [{ name: "programme" }, { name: "edge-registry" }] };
+  for (const pathPrefix of ["programme", "/", "/admin", "/api/jobs", "/edge%2fv1", "/edge%5Cv1", "/edge/"]) {
+    withConfig(
+      { ...base, portalRoutes: [{ pathPrefix, plugin: "programme", access: "session" }] },
+      ({ path }) => assert.throws(() => loadConfigAt(path), /portalRoutes/),
+    );
+  }
+  withConfig(
+    { ...base, portalRoutes: [{ pathPrefix: "/programme", plugin: "missing", access: "session" }] },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /unknown plugin/),
+  );
+  withConfig(
+    {
+      ...base,
+      portalRoutes: [
+        { pathPrefix: "/edge", plugin: "edge-registry", access: "session" },
+        { pathPrefix: "/edge/v1", plugin: "edge-registry", access: "signed-upstream" },
+      ],
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /overlap/),
+  );
+  withConfig(
+    {
+      services: ["core"],
+      plugins: [{ name: "programme" }],
+      portalRoutes: [{ pathPrefix: "/programme", plugin: "programme", access: "session" }],
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /requires.*portal/),
+  );
+});
+
+test("PORTAL_PLUGIN_ROUTES is deployment-managed", () => {
+  withConfig(
+    { services: ["core", "portal"], env: { portal: { PORTAL_PLUGIN_ROUTES: "[]" } } },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /PORTAL_PLUGIN_ROUTES.*managed/),
+  );
+  withConfig(
+    { plugins: [{ name: "programme", env: { PORTAL_PLUGIN_ROUTES: "[]" } }] },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /PORTAL_PLUGIN_ROUTES.*managed/),
+  );
+});
+
 test("env (per-service) and imageOverrides validate by service name", () => {
   withConfig({ env: { core: { PUBLIC_WEB_URL: "http://x" } }, imageOverrides: { core: "ghcr.io/x:1" } }, ({ path }) => {
     const { config } = loadConfigAt(path);

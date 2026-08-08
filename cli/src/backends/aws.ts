@@ -15,6 +15,7 @@ import { CliError, dim, errMessage, header, note, ok, step, warn } from "../log.
 import {
   awsWorkloadArchitecture,
   isDigestPinned,
+  portalPluginRoutesEnv,
   sandboxCoreEnv,
   securityScreenEnv,
   type AwsConfig,
@@ -261,6 +262,11 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
     env.WEB_UI_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080`;
     env.ADMIN_UPSTREAM = `http://admin.${aws.networking.cloudMapNamespace}:8080`;
     env.PORTAL_XFF_TRUSTED_HOPS = "1";
+    const pluginRoutes = portalPluginRoutesEnv(
+      config,
+      (plugin) => `http://${plugin}.${aws.networking.cloudMapNamespace}:8080`,
+    );
+    if (pluginRoutes) env.PORTAL_PLUGIN_ROUTES = pluginRoutes;
   }
   if (config.services.includes("auth")) {
     Object.assign(

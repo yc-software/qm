@@ -38,6 +38,12 @@ export interface PluginEntry {
   secrets?: PluginSecret[];
 }
 
+export interface PortalRoute {
+  pathPrefix: string;
+  plugin: string;
+  access: "session" | "signed-upstream";
+}
+
 export interface SandboxConfig {
   backend?: "sprites" | "aws";
   app?: string;
@@ -139,6 +145,7 @@ export interface QmConfig {
   basePort?: number;
   services: DeclaredServiceName[];
   plugins: PluginEntry[];
+  portalRoutes?: PortalRoute[];
   skills: string[];
   env: Partial<Record<DeclaredServiceName, Record<string, string>>>;
   secretEnv?: Partial<Record<DeclaredServiceName, Record<string, string>>>;
@@ -163,6 +170,19 @@ export function securityScreenEnv(config: Pick<QmConfig, "securityScreen">): Rec
     SECURITY_SCREEN_PROXY_ENDPOINT: screen.endpoint,
     SECURITY_SCREEN_PROXY_ROLLOUT: screen.rollout,
   };
+}
+
+export function portalPluginRoutesEnv(
+  config: Pick<QmConfig, "portalRoutes">,
+  upstreamBaseFor: (plugin: string) => string,
+): string | undefined {
+  const routes = [...(config.portalRoutes ?? [])].sort(
+    (left, right) => right.pathPrefix.length - left.pathPrefix.length || left.pathPrefix.localeCompare(right.pathPrefix),
+  );
+  if (!routes.length) return undefined;
+  return JSON.stringify(
+    routes.map(({ pathPrefix, plugin, access }) => ({ pathPrefix, access, upstreamBase: upstreamBaseFor(plugin) })),
+  );
 }
 
 export function configPathInDir(dir: string): string | undefined {
@@ -548,6 +568,7 @@ function validate(raw: unknown, path: string): QmConfig {
   }
 
   const plugins = validatePlugins(o["plugins"], path);
+  const portalRoutes = validatePortalRoutes(o["portalRoutes"], path, services, plugins);
   const skills = validateStringArray(o["skills"], path, "skills");
   const env = validateServiceMap(o["env"], path, "env", (v, k) => validateStringMap(v, path, `env.${k}`));
   const secretEnv = validateServiceMap(o["secretEnv"], path, "secretEnv", (v, k) => {
@@ -627,6 +648,14 @@ function validate(raw: unknown, path: string): QmConfig {
         `${path}: "plugins[${i}].env.PORT" is managed by the deployment target and cannot be overridden`,
       );
     }
+    if (plugin.env?.PORTAL_PLUGIN_ROUTES !== undefined) {
+      throw new CliError(
+        `${path}: "plugins[${i}].env.PORTAL_PLUGIN_ROUTES" is managed by portalRoutes and cannot be overridden`,
+      );
+    }
+  }
+  if (env.portal?.PORTAL_PLUGIN_ROUTES !== undefined) {
+    throw new CliError(`${path}: "env.portal.PORTAL_PLUGIN_ROUTES" is managed by portalRoutes and cannot be overridden`);
   }
   const imageOverrides = validateServiceMap(o["imageOverrides"], path, "imageOverrides", (v, k) => {
     if (typeof v !== "string") throw new CliError(`${path}: "imageOverrides.${k}" must be a string`);
@@ -641,6 +670,7 @@ function validate(raw: unknown, path: string): QmConfig {
     target,
     services,
     plugins,
+    portalRoutes,
     skills,
     env,
     imageOverrides,
@@ -708,6 +738,62 @@ function validate(raw: unknown, path: string): QmConfig {
     });
   }
   return out;
+}
+
+const BUILT_IN_PORTAL_PREFIXES = ["/", "/admin", "/auth", "/idp", "/api", "/v1", "/connect", "/drop", "/d"];
+
+function portalPrefixesOverlap(left: string, right: string): boolean {
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+function validatePortalRoutes(
+  raw: unknown,
+  path: string,
+  services: DeclaredServiceName[],
+  plugins: PluginEntry[],
+): PortalRoute[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) throw new CliError(`${path}: "portalRoutes" must be an array`);
+  if (raw.length && !services.includes("portal")) {
+    throw new CliError(`${path}: "portalRoutes" requires the "portal" service`);
+  }
+  const pluginNames = new Set(plugins.map((plugin) => plugin.name));
+  const routes = raw.map((value, index): PortalRoute => {
+    const field = `portalRoutes[${index}]`;
+    if (!isPlainObject(value)) throw new CliError(`${path}: ${field} must be an object`);
+    const allowed = new Set(["pathPrefix", "plugin", "access"]);
+    for (const key of Object.keys(value)) {
+      if (!allowed.has(key)) throw new CliError(`${path}: ${field}.${key} is not recognized`);
+    }
+    const pathPrefix = value.pathPrefix;
+    if (
+      typeof pathPrefix !== "string" ||
+      !/^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(pathPrefix) ||
+      /%2f|%5c/i.test(pathPrefix)
+    ) {
+      throw new CliError(`${path}: ${field}.pathPrefix must be a normalized absolute path prefix without encoded separators`);
+    }
+    if (BUILT_IN_PORTAL_PREFIXES.some((builtIn) => builtIn !== "/" && portalPrefixesOverlap(pathPrefix, builtIn))) {
+      throw new CliError(`${path}: ${field}.pathPrefix collides with a built-in portal route`);
+    }
+    const plugin = value.plugin;
+    if (typeof plugin !== "string" || !pluginNames.has(plugin)) {
+      throw new CliError(`${path}: ${field}.plugin names an unknown plugin`);
+    }
+    const access = value.access;
+    if (access !== "session" && access !== "signed-upstream") {
+      throw new CliError(`${path}: ${field}.access must be "session" or "signed-upstream"`);
+    }
+    return { pathPrefix, plugin, access };
+  });
+  for (let i = 0; i < routes.length; i += 1) {
+    for (let j = i + 1; j < routes.length; j += 1) {
+      if (portalPrefixesOverlap(routes[i]!.pathPrefix, routes[j]!.pathPrefix)) {
+        throw new CliError(`${path}: portalRoutes path prefixes overlap`);
+      }
+    }
+  }
+  return routes;
 }
 
 function configuredHarness(config: QmConfig): string {

@@ -29,6 +29,7 @@ import {
 import {
   appPrefixOf,
   CONFIG_FILENAME,
+  portalPluginRoutesEnv,
   sandboxCoreEnv,
   securityScreenEnv,
   updateConfigImageOverrides,
@@ -199,6 +200,10 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
           ...(sandboxEnv.FLY_BASE_IMAGE ? { FLY_DEPLOY_BASE_IMAGE: sandboxEnv.FLY_BASE_IMAGE } : {}),
         }
       : {};
+  const portalRoutes =
+    service === "portal"
+      ? portalPluginRoutesEnv(ctx.config, (plugin) => `http://${ctx.appPrefix}-${plugin}.internal:8080`)
+      : undefined;
   const overrides: Record<string, string> = {
     ...spec.managed(ctx.serviceCtx),
     ...sandboxEnv,
@@ -207,6 +212,7 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
     ...configuredEnv,
     ...(service === "core" ? securityScreenEnv(ctx.config) : {}),
     ...deploymentEnv,
+    ...(portalRoutes ? { PORTAL_PLUGIN_ROUTES: portalRoutes } : {}),
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(ctx.flyOrg, ctx.orgId, ctx.appPrefix),
   };
   const provided = new Set(Object.keys(overrides));
