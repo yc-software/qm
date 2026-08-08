@@ -1,0 +1,24 @@
+{
+  "repo_path": "/Users/kenneth/AG_Mission/qm",
+  "repo_url": "https://github.com/yc-software/qm",
+  "pr_url": "https://github.com/yc-software/qm/pull/245",
+  "fork_url": "https://github.com/RollingStonie/qm",
+  "pr_number": 245,
+  "patch_commit": "20e0f43",
+  "patch_branch": "fork/worktree-portal-isPrivateNetworkUrl-v1",
+  "draft_path": "ai/plans/2026-08-14-pr-245-followup.md",
+  "draft_word_count": 76,
+  "last_ping_date": "2026-08-07",
+  "intended_post_date": "2026-08-14",
+  "intended_post_age_days": 7,
+  "dependencies": [
+    "requires no yc-software maintainer response over 2026-08-07 → 2026-08-14",
+    "supersedes the 2026-08-07 re-ping (do not post both)"
+  ],
+  "execution_constraints": [
+    "do NOT actually post — the file is a draft",
+    "do NOT comment on PR #245",
+    "do NOT amend any prior commit",
+    "do NOT push to origin"
+  ]
+}

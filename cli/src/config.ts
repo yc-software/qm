@@ -39,7 +39,7 @@ export interface PluginEntry {
 }
 
 export interface SandboxConfig {
-  backend?: "sprites" | "aws";
+  backend?: "sprites" | "aws" | "local";
   app?: string;
   image?: string;
   baseImage?: string;
@@ -1252,9 +1252,9 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   };
   const out: SandboxConfig = {};
   if (o["backend"] !== undefined) {
-    if (o["backend"] !== "sprites" && o["backend"] !== "aws") {
+    if (o["backend"] !== "sprites" && o["backend"] !== "aws" && o["backend"] !== "local") {
       throw new CliError(
-        `${path}: "sandbox.backend" must be "sprites" (Fly Sprites, booting the operator-published layer image from the Fly app in "sandbox.app") or "aws" (Lambda MicroVM sandboxes)`,
+        `${path}: "sandbox.backend" must be "sprites" (Fly Sprites, booting the operator-published layer image from the Fly app in "sandbox.app"), "aws" (Lambda MicroVM sandboxes), or "local" (docker run the operator-published layer image on the same Docker host as the qm stack — requires target docker)`,
       );
     }
     out.backend = o["backend"];
@@ -1307,6 +1307,19 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     throw new CliError(
       `${path}: "sandbox.backend": ${JSON.stringify(out.backend)} requires "sandbox.app" (the Fly app agents execute in)`,
     );
+  }
+  if (out.backend === "local") {
+    if (target !== "docker") {
+      throw new CliError(
+        `${path}: "sandbox.backend": "local" requires target "docker" (the local sandbox docker-runs the agent-computer image on the same host as the qm stack)`,
+      );
+    }
+    const stray = (["app"] as const).filter((key) => out[key] !== undefined);
+    if (stray.length) {
+      throw new CliError(
+        `${path}: "sandbox.backend": "local" ignores ${stray.map((key) => `"sandbox.${key}"`).join(", ")} (Fly app names) — remove it; the local sandbox reads the agent-computer image from "sandbox.image" or the built-in default`,
+      );
+    }
   }
   if (target === "aws" && out.backend === undefined) {
     throw new CliError(

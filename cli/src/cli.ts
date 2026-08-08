@@ -150,8 +150,10 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
                                            or manifest id/release label; Fly: sandbox image/tag)
   sandbox build [--from <img>] [--tag <t>] [--dry-run]
                                            build and validate the sandbox image locally
-  sandbox publish [--from <img>] [--app <registry/repo>] [--tag <t>] [--dry-run]
+  sandbox publish [--from <img>] [--app <registry/repo>] [--tag <t>] [--dry-run] [--local-only]
                                            build, push, resolve digest, and record the immutable pin
+                                           (--local-only is docker-target only: load into the local
+                                           Docker daemon, skip the registry push, record the pin)
 
   ${dim("Options (apply to all deploy commands):")}
     --config <path>                        path to deploy config (default: qm.config.jsonc in deploy dir)
@@ -482,7 +484,7 @@ async function dispatch(argv: string[]): Promise<void> {
       const sub = positionals[0];
       if (sub !== "build" && sub !== "publish") {
         throw new CliError(
-          `usage: ${CLI_NAME} sandbox build|publish [--from <image>] [--app <registry/repo>] [--tag <label>] [--dry-run]`,
+          `usage: ${CLI_NAME} sandbox build|publish [--from <image>] [--app <registry/repo>] [--tag <label>] [--dry-run] [--local-only]`,
         );
       }
       rejectExtraPositionals(positionals, 1);
@@ -494,6 +496,7 @@ async function dispatch(argv: string[]): Promise<void> {
         "from",
         "tag",
         "dry-run",
+        "local-only",
         ...(sub === "publish" ? ["app"] : []),
       ]);
       const ctx = deployContext(flags);
@@ -501,12 +504,20 @@ async function dispatch(argv: string[]): Promise<void> {
       const from = strFlag(flags, "from");
       const app = strFlag(flags, "app");
       const tag = strFlag(flags, "tag");
+      const localOnly = boolFlag(flags, "local-only");
+      if (localOnly && ctx.target !== "docker") {
+        throw new CliError(
+          `--local-only is only supported for --target docker (got --target ${ctx.target}); the Fly and AWS publish paths still require a registry push`,
+          { clause: "cli.invocation" },
+        );
+      }
       const common = {
         sandboxDir: ctx.sandboxDir,
         config: ctx.config,
         ...(from ? { from } : {}),
         ...(tag ? { tag } : {}),
         dryRun: boolFlag(flags, "dry-run"),
+        ...(localOnly ? { localOnly: true } : {}),
       };
       if (sub === "build") runSandboxBuild(common);
       else {

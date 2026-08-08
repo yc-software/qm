@@ -48,7 +48,7 @@ export interface HostingProvider {
   upOptions(ctx: DeployContext, flags: Readonly<Record<string, string | boolean>>, dryRun: boolean): BackendUpOptions;
   createBackend(ctx: DeployContext): Backend;
   coordinates(config: QmConfig): { accountOrOrganization?: string; region?: string };
-  requiresSandboxApp: boolean;
+  requiresSandboxApp: boolean | ((config: QmConfig) => boolean);
   publishSandbox(ctx: DeployContext, opts: SandboxPublishOpts): Promise<void>;
   scaffold: ProviderScaffold;
   validateConfig(config: QmConfig, plugins: readonly ResolvedPlugin[]): Array<{ clause: string; message: string }>;
@@ -153,7 +153,7 @@ const docker: HostingProvider = {
     },
   }),
   coordinates: () => ({}),
-  requiresSandboxApp: true,
+  requiresSandboxApp: (config) => config.sandbox?.backend !== "local",
   publishSandbox: (ctx, opts) => publishFlySandbox(ctx, opts, false),
   validateConfig: (config) => sandboxImagePinErrors(config),
 };
