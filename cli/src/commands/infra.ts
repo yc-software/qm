@@ -352,6 +352,35 @@ function getImageVersion(awsBin: string, region: string, imageArn: string, image
   ) as ImageVersionSummary;
 }
 
+function latestMicrovmImageBuildReason(
+  awsBin: string,
+  region: string,
+  imageArn: string,
+  imageVersion: string,
+): string | undefined {
+  try {
+    const parsed = JSON.parse(
+      capture(awsBin, [
+        "lambda-microvms",
+        "list-microvm-image-builds",
+        "--image-identifier",
+        imageArn,
+        "--image-version",
+        imageVersion,
+        "--region",
+        region,
+        "--output",
+        "json",
+        "--no-cli-pager",
+      ]),
+    ) as { items?: Array<{ stateReason?: string; buildState?: string }> };
+    const failed = (parsed.items ?? []).filter((item) => item.buildState === "FAILED" && item.stateReason?.trim());
+    return failed[0]?.stateReason?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function waitForImageVersion(
   awsBin: string,
   region: string,
@@ -369,9 +398,9 @@ async function waitForImageVersion(
     }
     if (version.state === "SUCCESSFUL" && version.status === "ACTIVE") return;
     if (version.state === "FAILED") {
-      throw new CliError(
-        `MicroVM image version ${imageVersion} failed${version.stateReason ? `: ${version.stateReason}` : ""}`,
-      );
+      const buildReason = latestMicrovmImageBuildReason(awsBin, region, imageArn, imageVersion);
+      const reason = buildReason || version.stateReason;
+      throw new CliError(`MicroVM image version ${imageVersion} failed${reason ? `: ${reason}` : ""}`);
     }
     if (["DELETING", "DELETED", "DELETE_FAILED"].includes(version.state)) {
       throw new CliError(`MicroVM image version ${imageVersion} entered unexpected state ${version.state}`);
@@ -484,6 +513,8 @@ async function buildAwsMicrovmImageLocked(
             baseImageArn,
             "--build-role-arn",
             buildRoleArn,
+            "--logging",
+            `cloudWatch={logGroup=/aws/lambda/microvms/${imageName}}`,
             "--client-token",
             `${digest}-${randomUUID()}`,
             "--region",
