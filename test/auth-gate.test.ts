@@ -227,3 +227,23 @@ test("egress-audit ingest requires source auth: unsigned is 401, signed lands â€
     await srv.close();
   }
 });
+
+test("source-only run reads remain available under portal-identity enforcement", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-run-read-")) }));
+  const server = createServer(built.app, {
+    signingSecret: SECRET,
+    runs: built.runs,
+    requireSignedPortalIdentity: true,
+    capabilitySecret: `${SECRET}-cap`,
+    portalIdentitySecret: `${SECRET}-portal`,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  try {
+    const path = "/v1/runs/missing";
+    const response = await fetch(`${base}${path}`, { headers: sign("GET", path, "") });
+    assert.equal(response.status, 404);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

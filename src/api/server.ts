@@ -257,7 +257,7 @@ async function gate(
       await deps.identity.refresh();
       if (deps.identity.classify(actor.p).type !== "internal") actor = null;
     }
-    if (!isPublicRoute && requirePortalIdentity) {
+    if (!isPublicRoute && routeAuth !== "source" && requirePortalIdentity) {
       const webTurn =
         method === "POST" &&
         pathname === "/v1/turns" &&
