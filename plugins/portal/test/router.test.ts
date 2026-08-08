@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
 let whoamiProbes = 0;
 let lastConsentClicker: string | null = null;
@@ -81,8 +82,13 @@ process.env.CORE_SIGNING_SECRET = "router-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
+process.env.PORTAL_IDENTITY_SECRET = "router-test-identity-secret";
+process.env.PORTAL_PLUGIN_ROUTES = JSON.stringify([
+  { pathPrefix: "/programme", access: "session", upstreamBase: upstreamUrl },
+  { pathPrefix: "/edge/v1", access: "signed-upstream", upstreamBase: upstreamUrl },
+]);
 
-const { server } = await import("../src/index.ts");
+const { server, parsePluginRoutes } = await import("../src/index.ts");
 const { deriveKey, seal, open } = await import("../src/session.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -102,6 +108,34 @@ test.after(() => {
 test("healthz is unauthenticated", async () => {
   const r = await fetch(`${base}/healthz`);
   assert.equal(r.status, 200);
+});
+
+test("plugin route parsing fails closed on public, overlapping, and built-in destinations", () => {
+  assert.throws(
+    () => parsePluginRoutes(JSON.stringify([{ pathPrefix: "/x", access: "session", upstreamBase: "https://example.com" }])),
+    /private HTTP\(S\) origin/,
+  );
+  assert.throws(
+    () =>
+      parsePluginRoutes(
+        JSON.stringify([
+          { pathPrefix: "/x", access: "session", upstreamBase: "http://plugin:8080" },
+          { pathPrefix: "/x/y", access: "session", upstreamBase: "http://plugin:8080" },
+        ]),
+      ),
+    /overlap/,
+  );
+  assert.throws(
+    () => parsePluginRoutes(JSON.stringify([{ pathPrefix: "/admin/x", access: "session", upstreamBase: "http://plugin:8080" }])),
+    /built-in/,
+  );
+  assert.throws(
+    () =>
+      parsePluginRoutes(
+        JSON.stringify([{ pathPrefix: "/x", access: "session", upstreamBase: "http://plugin:8080", extra: true }]),
+      ),
+    /exactly/,
+  );
 });
 
 test("favicon: served unauthenticated as an SVG of the pirate-flag emoji", async () => {
@@ -144,6 +178,73 @@ test("valid session: upstream receives ONLY the synthesized cookie, prefix strip
   assert.equal(body.cookie, "webuiuser=U1");
   assert.equal(body.headers["x-as-principal"], undefined);
   assert.equal(body.headers["x-admin-actor"], undefined);
+});
+
+test("authenticated plugin route requires a session, strips its prefix, and mints portal identity", async () => {
+  const anonymousJson = await fetch(`${base}/programme/api/summary?q=1`, { redirect: "manual" });
+  assert.equal(anonymousJson.status, 401);
+  const anonymousHtml = await fetch(`${base}/programme`, { headers: { accept: "text/html" }, redirect: "manual" });
+  assert.equal(anonymousHtml.status, 302);
+
+  const r = await fetch(`${base}/programme/api/summary?q=1`, {
+    headers: {
+      cookie: `${sessionCookie("U-programme")}; programme=EVIL`,
+      "x-portal-identity": "forged",
+      "x-as-principal": "EVIL",
+      "x-admin-actor": "EVIL@acme",
+    },
+  });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { url: string; cookie: string | null; headers: Record<string, string> };
+  assert.equal(body.url, "/api/summary?q=1");
+  assert.equal(body.cookie, null, "plugin routes do not receive legacy identity cookies");
+  assert.equal(body.headers["x-as-principal"], undefined);
+  assert.equal(body.headers["x-admin-actor"], undefined);
+  assert.equal(
+    verifyPortalIdentity(body.headers["x-portal-identity"] ?? "", "router-test-identity-secret", Date.now())?.p,
+    "U-programme",
+  );
+});
+
+test("signed-upstream plugin route is sessionless and forwards only the machine protocol allowlist", async () => {
+  const r = await fetch(`${base}/edge/v1/heartbeat?wait=1`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      authorization: "Bearer enrollment-token",
+      "x-qm-agent-id": "agent-1",
+      "x-qm-timestamp": "123",
+      "x-qm-nonce": "nonce-1",
+      "x-qm-body-digest": "sha256=abc",
+      "x-qm-signature": "v1=signed",
+      cookie: `${sessionCookie("U1")}; edge=EVIL`,
+      "x-portal-identity": "forged",
+      "x-as-principal": "EVIL",
+      "x-admin-actor": "EVIL@acme",
+      origin: "https://evil.example",
+    },
+    body: "{}",
+  });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { url: string; cookie: string | null; headers: Record<string, string> };
+  assert.equal(body.url, "/heartbeat?wait=1");
+  for (const name of [
+    "content-type",
+    "content-length",
+    "accept",
+    "authorization",
+    "x-qm-agent-id",
+    "x-qm-timestamp",
+    "x-qm-nonce",
+    "x-qm-body-digest",
+    "x-qm-signature",
+  ]) {
+    assert.ok(body.headers[name], `${name} must be forwarded`);
+  }
+  for (const name of ["cookie", "x-portal-identity", "x-as-principal", "x-admin-actor", "origin"]) {
+    assert.equal(body.headers[name], undefined, `${name} must be dropped`);
+  }
 });
 
 test("web-ui /app-edit drops x-frame-options so its own frame-ancestors CSP can allow the app origin", async () => {

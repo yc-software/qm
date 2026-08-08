@@ -77,7 +77,7 @@ export interface SurfaceTarget {
   upstreamBase: string;
   forwardPath: string;
   search: string;
-  cookieName: string;
+  cookieName?: string;
   principal: string;
   displayName?: string;
   impersonator?: string;
@@ -87,11 +87,13 @@ export interface SurfaceTarget {
 
 export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: SurfaceTarget): void {
   const upstream = new URL(t.upstreamBase);
-  const cookie =
-    `${t.cookieName}=${encodeURIComponent(t.principal)}` +
-    (t.displayName ? `; ${t.cookieName}_name=${encodeURIComponent(t.displayName)}` : "") +
-    (t.impersonator ? `; webui_impersonator=${encodeURIComponent(t.impersonator)}` : "");
-  const base: Record<string, string> = { host: upstream.host, cookie };
+  const base: Record<string, string> = { host: upstream.host };
+  if (t.cookieName) {
+    base.cookie =
+      `${t.cookieName}=${encodeURIComponent(t.principal)}` +
+      (t.displayName ? `; ${t.cookieName}_name=${encodeURIComponent(t.displayName)}` : "") +
+      (t.impersonator ? `; webui_impersonator=${encodeURIComponent(t.impersonator)}` : "");
+  }
   if (t.identitySecret) {
     const now = t.nowMs ?? Date.now();
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
@@ -197,3 +199,15 @@ export function proxyToUpstream(
 }
 
 export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type", "content-length"];
+
+export const FORWARD_SIGNED_PLUGIN_HEADERS = [
+  "content-type",
+  "content-length",
+  "accept",
+  "authorization",
+  "x-qm-agent-id",
+  "x-qm-timestamp",
+  "x-qm-nonce",
+  "x-qm-body-digest",
+  "x-qm-signature",
+] as const;
