@@ -1,0 +1,56 @@
+{
+  "repo_path": "/Users/kenneth/AG_Mission/qm",
+  "repo_url": "https://github.com/yc-software/qm",
+  "pr_kind": "chore",
+  "pr_title": "chore: revert local fork patch (upstream PR #245 merged)",
+  "upstream_pr": 245,
+  "upstream_pr_url": "https://github.com/yc-software/qm/pull/245",
+  "patch_commit": "20e0f43",
+  "patch_branch": "fork/worktree-portal-isPrivateNetworkUrl-v1",
+  "draft_path": "ai/plans/2026-08-XX-qm-pilot-cleanup-pr.md",
+  "gated_on": [
+    "yc-software merges PR #245 on github.com/yc-software/qm",
+    "yc-software publishes a portal image to ghcr.io/yc-software/qm/portal that includes 20e0f43",
+    "image tag is verified equivalent to or newer than the local fork's 20e0f43 patch"
+  ],
+  "revert_files": [
+    "cli/src/backends/registry.ts",
+    "cli/src/cli.ts",
+    "cli/src/commands/check.ts",
+    "cli/src/commands/sandbox.ts",
+    "cli/src/config.ts",
+    "cli/test/sandbox-local-only.test.ts",
+    "deploy/core/Dockerfile",
+    "plugins/portal/src/index.ts",
+    "plugins/portal/test/broker-proxy.test.ts"
+  ],
+  "revert_files_total": 9,
+  "patch_in_commit_20e0f43": 8,
+  "patch_in_uncommitted_working_tree": 1,
+  "revert_commands": [
+    "git checkout HEAD -- deploy/core/Dockerfile",
+    "git revert --no-edit 20e0f43",
+    "git status --short   # should be empty",
+    "git diff origin/main --stat   # should be empty"
+  ],
+  "alternative_revert_commands": [
+    "git fetch origin",
+    "git reset --hard origin/main   # WARNING: nukes local fork state"
+  ],
+  "rollback_command": "git revert <cleanup-commit-sha>",
+  "verification_steps": [
+    "docker pull ghcr.io/yc-software/qm/portal:<upstream-tag>",
+    "docker run --rm ghcr.io/yc-software/qm/portal:<upstream-tag> sh -c 'cd /app && git log --oneline | grep -E \"isPrivateNetworkUrl|20e0f43\"'",
+    "qm up against the published image; confirm stack reaches healthy",
+    "OIDC smoke: docker-compose auth broker hostname succeeds without the fix",
+    "npm audit --omit=dev --audit-level=moderate against the published image does not error",
+    "Run the local 4-test smoke (2026-08-06) for parity"
+  ],
+  "execution_constraints": [
+    "do NOT execute the cleanup — the file is a draft plan",
+    "do NOT modify the working tree",
+    "do NOT push to origin"
+  ],
+  "intended_post_date": "TBD-when-upstream-merges",
+  "intended_post_branch": "origin/main"
+}
