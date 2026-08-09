@@ -40,3 +40,25 @@ test("fast-mode support is fed from core's runtime config, not a hardcoded clien
   assert.equal(modelSupportsFastMode(null, "claude-haiku-4-5"), false);
   assert.equal(modelSupportsFastMode(null, undefined), false);
 });
+
+test("web UI resolves custom-provider models regardless of provider id", () => {
+  const openaiProtocol = getBaseModel("acme-large", {
+    name: "Acme Large",
+    provider: "acme",
+    api: "openai-completions",
+  });
+  assert.equal(openaiProtocol.id, "acme-large");
+  assert.equal(openaiProtocol.name, "Acme Large");
+  assert.equal(openaiProtocol.provider, "acme");
+  assert.equal(openaiProtocol.api, "openai-completions");
+
+  const anthropicProtocol = getBaseModel("vendor-messages-model", {
+    name: "Vendor Messages Model",
+    provider: "vendor",
+    api: "anthropic-messages",
+  });
+  assert.equal(anthropicProtocol.provider, "vendor");
+  assert.equal(anthropicProtocol.api, "anthropic-messages");
+
+  assert.throws(() => getBaseModel("still-unknown"), /Unsupported/);
+});

@@ -78,7 +78,7 @@ function buildOption(
   id: string,
   harnessId = "pi",
   qualified = false,
-  catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
+  catalog: Readonly<Record<string, { name: string; provider: string; api?: string }>> = {},
 ): ModelOption | null {
   try {
     const dynamic = catalog[id];
@@ -101,7 +101,7 @@ function buildOptions(
   ids: readonly string[],
   harnessId = "pi",
   qualified = false,
-  catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
+  catalog: Readonly<Record<string, { name: string; provider: string; api?: string }>> = {},
 ): ModelOption[] {
   const seen = new Set<string>();
   const out: ModelOption[] = [];
@@ -154,7 +154,7 @@ export function applyPickerModelIds(ids: readonly string[] | null | undefined, b
 export function runtimeModelOptions(
   approvedHarnesses: readonly string[],
   modelsByHarness: Readonly<Record<string, readonly string[]>>,
-  catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
+  catalog: Readonly<Record<string, { name: string; provider: string; api?: string }>> = {},
 ): ModelOption[] {
   const options = approvedHarnesses.flatMap((harnessId) => {
     const configured = buildOptions(modelsByHarness[harnessId] ?? [], harnessId, true, catalog);
@@ -170,7 +170,7 @@ export function applyRuntimeOptions(
   approvedHarnesses: readonly string[],
   modelsByHarness: Readonly<Record<string, readonly string[]>>,
   effective: { harnessId: string; modelId: string },
-  catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
+  catalog: Readonly<Record<string, { name: string; provider: string; api?: string }>> = {},
 ): void {
   const options = runtimeModelOptions(approvedHarnesses, modelsByHarness, catalog);
   const applied = { options, defaultValue: `${effective.harnessId}:${effective.modelId}` };

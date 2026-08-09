@@ -22,7 +22,7 @@ function builtinModel(id: string): PiModel | undefined {
   return undefined;
 }
 
-export function getBaseModel(id: string, fallback?: { name: string; provider: string }): PiModel {
+export function getBaseModel(id: string, fallback?: { name: string; provider: string; api?: string }): PiModel {
   const builtin = builtinModel(id);
   if (builtin) return builtin;
   const clone = CLONE_TEMPLATES[id];
@@ -30,9 +30,16 @@ export function getBaseModel(id: string, fallback?: { name: string; provider: st
     const template = builtinModel(clone.template);
     if (template) return cloneModel(template, id, clone.name);
   }
-  if (fallback?.provider === "openrouter") {
-    const template = getModel("openrouter", "openrouter/auto" as Parameters<typeof getModel>[1]) as PiModel | undefined;
-    if (template) return cloneModel(template, id, fallback.name);
+  if (fallback) {
+    const templateId = fallback.api === "anthropic-messages" ? "claude-sonnet-4-6" : "gpt-5.5";
+    const template =
+      fallback.provider === "openrouter"
+        ? (getModel("openrouter", "openrouter/auto" as Parameters<typeof getModel>[1]) as PiModel | undefined)
+        : builtinModel(templateId);
+    if (template) {
+      const cloned = cloneModel(template, id, fallback.name);
+      return { ...cloned, provider: fallback.provider, ...(fallback.api ? { api: fallback.api } : {}) } as PiModel;
+    }
   }
   throw new Error(`Unsupported model: ${id}`);
 }
