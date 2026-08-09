@@ -126,6 +126,7 @@ export interface S3DurableByteOptions {
   bucket: string;
   region?: string;
   prefix?: string;
+  forcePathStyle?: boolean;
   _client?: S3Send;
 }
 
@@ -133,7 +134,12 @@ export function createS3DurableByteStore(options: S3DurableByteOptions): Durable
   const bucket = options.bucket;
   const prefix = options.prefix ?? "";
   const s3Key = (blobKey: string): string => prefix + blobKey;
-  const client = options._client ?? s3Client(options.region);
+  const client =
+    options._client ??
+    s3Client({
+      ...(options.region ? { region: options.region } : {}),
+      forcePathStyle: options.forcePathStyle,
+    });
 
   return {
     async put(source, opts) {

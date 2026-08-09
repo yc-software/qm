@@ -216,6 +216,7 @@ test("the Fly S3 probe is valid CommonJS that reports async failures", () => {
     assert.doesNotMatch(source, /^\s*import\s/m, "eval never receives a static ESM import");
     assert.match(source, /\(async \(\) => \{/);
     assert.match(source, /\.catch\(\(error\) => \{/);
+    assert.match(source, /forcePathStyle:.*S3_FORCE_PATH_STYLE/);
     const path = join(dir, "probe.cjs");
     writeFileSync(path, source);
     const checked = spawnSync(process.execPath, ["--check", path], { encoding: "utf8" });

@@ -163,6 +163,7 @@ export interface S3BlobTransferOptions {
   bucket: string;
   region?: string;
   prefix?: string;
+  forcePathStyle?: boolean;
   _client?: S3Send;
 }
 
@@ -170,7 +171,12 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
   const bucket = options.bucket;
   const prefix = (options.prefix ?? "") + "transfer/";
   const keyFor = (blobId: string): string => prefix + blobId;
-  const client = options._client ?? s3Client(options.region);
+  const client =
+    options._client ??
+    s3Client({
+      ...(options.region ? { region: options.region } : {}),
+      forcePathStyle: options.forcePathStyle,
+    });
 
   return {
     async put(source, opts) {
