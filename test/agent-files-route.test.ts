@@ -82,6 +82,27 @@ describe("agent files self-API", async () => {
     assert.deepEqual(page.shared, []);
   });
 
+  it("adds UTF-8 to text file content responses", async () => {
+    const res = await get(`/v1/files/${mineId}/content`, await capFor("U1"));
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "text/plain; charset=utf-8");
+    assert.equal(Buffer.from(await res.arrayBuffer()).toString("utf8"), "mine");
+
+    await built.files.put({
+      id: "parameterized-text",
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      name: "parameterized.txt",
+      path: "parameterized.txt",
+      mimetype: "text/plain; charset=iso-8859-1",
+      data: Buffer.from("bytes"),
+      direction: "out",
+    });
+    const parameterized = await get("/v1/files/parameterized-text/content", await capFor("U1"));
+    assert.equal(parameterized.status, 200);
+    assert.equal(parameterized.headers.get("content-type"), "text/plain; charset=iso-8859-1");
+  });
+
   it("returns 404 for another principal's file content", async () => {
     const res = await get(`/v1/files/${theirsId}/content`, await capFor("U1"));
     assert.equal(res.status, 404);
