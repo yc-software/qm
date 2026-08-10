@@ -18,6 +18,10 @@ import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts"
 import { samePerson } from "../directory/person.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 
+const MEMBERSHIP_SKIP_NOTE = "the acting person is no longer a member of this trigger's home scope — run skipped";
+const UNKNOWN_HOME_SKIP_NOTE =
+  "this trigger's home scope is missing from the directory snapshot (roster sync gap) and the acting person has no session there — run skipped";
+
 export interface TriggerDeps {
   deliveries: DeliveryStore;
   idempotency: IdempotencyStore;
@@ -27,7 +31,9 @@ export interface TriggerDeps {
   directory?: VisibilityDirectory & {
     get(principalId: string): Promise<{ displayName: string } | null>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
+    groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
   };
+  sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
 }
 
 export interface TriggerSpec {
@@ -99,20 +105,41 @@ async function relayAttribution(deps: TriggerDeps, spec: TriggerSpec): Promise<s
   return member?.displayName;
 }
 
+async function participatesInScope(deps: TriggerDeps, actorId: string, scope: ScopeId): Promise<boolean> {
+  const sessions = await deps.sessions?.listByParticipant(actorId).catch(() => []);
+  return sessions?.some((s) => s.scopeId === scope) === true;
+}
+
 async function actorMayReadScope(
   deps: TriggerDeps,
   actorId: string,
   kind: string | null,
   ref: string,
-): Promise<boolean> {
-  if (!ref) return false;
-  if (kind === "personal") return samePerson(actorId, ref);
-  if (!deps.directory) return kind !== "group" && kind !== "channel";
-  if (kind === "group") return isVisible(deps.directory, actorId, { kind: "group", groupId: ref });
-  if (kind !== "channel") return true;
+  scope: ScopeId,
+  snapshotGap: boolean,
+): Promise<{ ok: boolean; note?: string }> {
+  if (!ref) return { ok: false, note: MEMBERSHIP_SKIP_NOTE };
+  if (kind === "personal") return samePerson(actorId, ref) ? { ok: true } : { ok: false, note: MEMBERSHIP_SKIP_NOTE };
+  if (!deps.directory)
+    return kind !== "group" && kind !== "channel" ? { ok: true } : { ok: false, note: MEMBERSHIP_SKIP_NOTE };
+  if (kind === "group") {
+    if (await isVisible(deps.directory, actorId, { kind: "group", groupId: ref })) return { ok: true };
+    if (snapshotGap) {
+      if (await participatesInScope(deps, actorId, scope)) return { ok: true };
+      return { ok: false, note: UNKNOWN_HOME_SKIP_NOTE };
+    }
+    const known = await deps.directory.groupMembership?.(ref, actorId).catch(() => undefined);
+    if (known === undefined && (await participatesInScope(deps, actorId, scope))) return { ok: true };
+    return { ok: false, note: MEMBERSHIP_SKIP_NOTE };
+  }
+  if (kind !== "channel") return { ok: true };
   const isPrivate = await deps.directory.channelPrivacy?.(ref);
-  if (isPrivate === undefined) return false;
-  return isVisible(deps.directory, actorId, { kind: "channel", channelId: ref, isPrivate });
+  if (isPrivate === undefined) {
+    if (await participatesInScope(deps, actorId, scope)) return { ok: true };
+    return { ok: false, note: UNKNOWN_HOME_SKIP_NOTE };
+  }
+  if (await isVisible(deps.directory, actorId, { kind: "channel", channelId: ref, isPrivate })) return { ok: true };
+  return { ok: false, note: MEMBERSHIP_SKIP_NOTE };
 }
 
 export async function destinationVisible(
@@ -170,7 +197,27 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     conversation = { kind: "group", channelRef: ownerRef, threadRef, ...(audience ? { audience } : {}) };
   }
 
-  const deliverable = spec.destination ? await destinationVisible(deps, actorId, spec.destination) : true;
+  let homeAccess: { ok: boolean; note?: string };
+  if (currentMembers !== undefined) {
+    homeAccess = currentMembers.some((member) => samePerson(member.id, actorId))
+      ? { ok: true }
+      : { ok: false, note: MEMBERSHIP_SKIP_NOTE };
+  } else if (!deps.directory) {
+    homeAccess = { ok: true };
+  } else {
+    homeAccess = await actorMayReadScope(
+      deps,
+      actorId,
+      ownerKind,
+      ownerRef,
+      spec.ownerScopeId,
+      deps.currentScopeMembers !== undefined,
+    );
+  }
+  const destinationIsHome = spec.destination?.audienceScopeId === spec.ownerScopeId;
+  const deliverable = spec.destination
+    ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
+    : true;
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
   const requiredRecipient = consentRequiredRecipient({
     owner: spec.owner,
@@ -224,12 +271,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       });
       return;
     }
-    const canReadHome =
-      currentMembers === undefined
-        ? !deps.directory || (await actorMayReadScope(deps, actorId, ownerKind, ownerRef))
-        : currentMembers.some((member) => samePerson(member.id, actorId));
-    if (!canReadHome) {
-      note = "the acting person is no longer a member of this trigger's home scope — run skipped";
+    if (!homeAccess.ok) {
+      note = homeAccess.note ?? MEMBERSHIP_SKIP_NOTE;
       return;
     }
     const res = await deps.run({

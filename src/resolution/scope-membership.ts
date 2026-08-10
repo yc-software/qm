@@ -126,7 +126,9 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps): CurrentSco
           : null,
       ),
     );
-    return included.filter((member): member is Principal => member !== null);
+    const present = included.filter((member): member is Principal => member !== null);
+    if (kind === "group" && present.length === 0) return undefined;
+    return present;
   };
 }
 

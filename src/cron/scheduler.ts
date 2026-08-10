@@ -4,7 +4,7 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import type { CronStore } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
-import { runTrigger } from "../triggers/run-trigger.ts";
+import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
@@ -43,6 +43,7 @@ export interface SchedulerDeps {
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
+  sessions?: TriggerDeps["sessions"];
 }
 
 function truncate(s: string, maxChars: number): string {
@@ -125,6 +126,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           run: deps.run,
           ...(deps.directory ? { directory: deps.directory } : {}),
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
+          ...(deps.sessions ? { sessions: deps.sessions } : {}),
         },
         {
           owner: cron.owner,

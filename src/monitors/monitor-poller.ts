@@ -36,6 +36,7 @@ export interface MonitorPollerDeps {
   run: (req: TurnRequest) => Promise<TurnResult>;
   directory?: TriggerDeps["directory"];
   currentScopeMembers?: CurrentScopeMembers;
+  sessions?: TriggerDeps["sessions"];
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
@@ -114,6 +115,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     run: deps.run,
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
+    ...(deps.sessions ? { sessions: deps.sessions } : {}),
   };
 
   async function fire(

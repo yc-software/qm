@@ -1266,6 +1266,7 @@ export function buildApp(
     leaderLease,
     directory,
     currentScopeMembers,
+    sessions,
     ...(config.databaseUrl
       ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
       : {}),
@@ -1287,6 +1288,7 @@ export function buildApp(
           run: (req) => app.turn(req),
           directory,
           currentScopeMembers,
+          sessions,
           leaderLease,
           heartbeatMs: config.monitorHeartbeatMs,
         })
