@@ -41,6 +41,9 @@ const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const MISSING_RC = 44;
 const READ_CHUNK = 512 * 1024;
 const EXIT_GRACE_MS = 60_000;
+const RESTART_TIMEOUT_MS = 60_000;
+const CHECK_TIMEOUT_MS = 30_000;
+const GUEST_PROBE_TIMEOUT_SEC = 15;
 const DEFAULT_SPRITES_BASE_URL = "https://api.sprites.dev";
 
 export interface SpritesClientLike {
@@ -161,7 +164,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   }
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
-    const script = `mkdir -p "$(dirname ${shq(absPath)})" && cat > ${shq(absPath)} && wc -c < ${shq(absPath)}`;
+    const tmp = `${absPath}.part.${randomUUID()}`;
+    const script =
+      `mkdir -p "$(dirname ${shq(absPath)})" && cat > ${shq(tmp)} && ` +
+      `mv -f ${shq(tmp)} ${shq(absPath)} && wc -c < ${shq(absPath)}`;
     const r = await postExec(name, ["sh", "-c", script], 120, data);
     const written = Number.parseInt(r.stdout.toString("utf8").trim(), 10);
     if (r.rc !== 0 || written !== data.length) {
@@ -477,6 +483,39 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     },
 
     backupComputer: execBackup.backupComputer,
+
+    async computerStatus(scopeId: string) {
+      const name = spriteScopeName(prefix, scopeId);
+      let machine: string;
+      try {
+        const res = await fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}/check`, {
+          headers: { authorization: `Bearer ${opts.token ?? ""}` },
+          signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+        });
+        const body = res.ok ? ((await res.json().catch(() => null)) as { status?: string } | null) : null;
+        machine = body?.status ?? `check failed: http ${res.status}`;
+      } catch (e) {
+        machine = `check failed: ${errMessage(e)}`;
+      }
+      let guestResponsive = false;
+      try {
+        guestResponsive = (await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC)).code === 0;
+      } catch (e) {
+        void e;
+      }
+      return { machine, guestResponsive };
+    },
+
+    async restartComputer(scopeId: string): Promise<void> {
+      const name = spriteScopeName(prefix, scopeId);
+      ensured.delete(name);
+      const res = await fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}/restart`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${opts.token ?? ""}` },
+        signal: AbortSignal.timeout(RESTART_TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`sprites restart ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+    },
 
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       if (handle.scratch) {

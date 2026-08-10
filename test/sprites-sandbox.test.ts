@@ -256,3 +256,53 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
   assert.match(script, /mv -f /, "and only then moves it into place");
   assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
+
+test("restartComputer reboots the scope's sprite and heals a wedged exec channel", async () => {
+  const h = await sandbox.provision(layers);
+  fake.fail502(h.id);
+  await assert.rejects(sandbox.run(h, "echo back"), /http 502/);
+
+  await sandbox.restartComputer!(scope);
+  assert.deepEqual(fake.restarts(), [h.id]);
+
+  const after = await sandbox.run(h, "echo back");
+  assert.equal(after.code, 0);
+  assert.equal(after.stdout.trim(), "back");
+});
+
+test("computerStatus reports a healthy machine whose shell has stopped answering", async () => {
+  const h = await sandbox.provision(layers);
+  assert.deepEqual(await sandbox.computerStatus!(scope), { machine: "healthy", guestResponsive: true });
+
+  fake.fail502(h.id);
+  assert.deepEqual(await sandbox.computerStatus!(scope), { machine: "healthy", guestResponsive: false });
+});
+
+test("restartComputer surfaces a refused restart instead of swallowing it", async () => {
+  const h = await sandbox.provision(layers);
+  fake.refuseRestart(h.id);
+  await assert.rejects(sandbox.restartComputer!(scope), /sprites restart .*: http 502/);
+  assert.deepEqual(fake.restarts(), []);
+});
+
+test("a command that ran before the response was lost is never re-executed", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.run(h, ": > /home/sprite/workspace/ledger");
+  fake.stallAfterRun(h.id);
+
+  await assert.rejects(sandbox.run(h, "echo entry >> /home/sprite/workspace/ledger"));
+
+  const ledger = await sandbox.readFile(h, "ledger");
+  assert.equal(ledger, "entry\n", "the side effect must have happened exactly once");
+});
+
+test("an inline write lands atomically, so a reboot mid-write cannot truncate the target", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.writeFile(h, "cfg.txt", "value\n");
+  assert.equal(await sandbox.readFile(h, "cfg.txt"), "value\n");
+
+  const write = fake.execScripts().find((s) => s.includes("cfg.txt") && s.includes("cat >"));
+  assert.ok(write, "expected an inline write script");
+  assert.match(write!, /\.part\./, "the payload must land on a temp path");
+  assert.match(write!, /mv -f/, "and be renamed over the target, never streamed into it");
+});

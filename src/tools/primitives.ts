@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import { BASE_RESIDENT_AUTH_PATHS, residentAuthPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
-import type { ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
+import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { CapabilityUnsupportedError, hasParentPathSegment, supportsAgentComputerBackup } from "../sandbox/sandbox.ts";
 import type {
   CommandPolicy,
@@ -165,6 +165,8 @@ export interface ToolContext extends SurfaceToolDeps {
       signal?: AbortSignal;
     },
   ): Promise<ExecResult & { reached?: ReachedProvenance }>;
+  computerStatus(): Promise<ComputerStatus>;
+  restartComputer(): Promise<void>;
   read(path: string): Promise<ReadResult>;
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
   publish(input: PublishInput): Promise<PublishResult>;
@@ -472,6 +474,20 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   return {
     ...(deps.credentialExecServices ? { credentialExecServices: deps.credentialExecServices } : {}),
     ...(deps.credentialExec ? { credentialExec: deps.credentialExec } : {}),
+    async computerStatus(): Promise<ComputerStatus> {
+      if (!deps.sandbox.computerStatus) {
+        throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
+      }
+      if (!writableScopeId) throw new Error("this turn has no scoped computer");
+      return deps.sandbox.computerStatus(writableScopeId);
+    },
+    async restartComputer(): Promise<void> {
+      if (!deps.sandbox.restartComputer) {
+        throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
+      }
+      if (!writableScopeId) throw new Error("this turn has no scoped computer to restart");
+      await deps.sandbox.restartComputer(writableScopeId);
+    },
     async execute(
       command: string,
       execOpts?: {

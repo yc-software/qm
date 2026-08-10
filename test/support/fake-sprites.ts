@@ -25,6 +25,10 @@ export interface FakeSprites {
   names(): string[];
   policy(name: string): NetworkRule[] | null;
   execScripts(): string[];
+  stallAfterRun(name: string): void;
+  fail502(name: string): void;
+  refuseRestart(name: string): void;
+  restarts(): string[];
   reset(): void;
   cleanup(): void;
 }
@@ -38,6 +42,10 @@ export function installFakeSprites(): FakeSprites {
   const policies = new Map<string, NetworkRule[]>();
   const execScripts: string[] = [];
   const calls: SpritesCall[] = [];
+  const gateway502 = new Set<string>();
+  const stallAfterRun = new Set<string>();
+  const refusedRestart = new Set<string>();
+  const restarts: string[] = [];
 
   const ensureDir = (name: string): string => {
     let s = sprites.get(name);
@@ -97,6 +105,21 @@ export function installFakeSprites(): FakeSprites {
     const url = new URL(typeof input === "string" ? input : input.toString());
     const method = init?.method ?? "GET";
     calls.push({ method, path: url.pathname });
+    const health = /^\/v1\/sprites\/([^/]+)\/check$/.exec(url.pathname);
+    if (health) {
+      const name = decodeURIComponent(health[1]!);
+      if (!sprites.has(name)) return new Response("sprite not found", { status: 404 });
+      return Response.json({ sprite_name: name, status: "healthy" });
+    }
+    const boot = /^\/v1\/sprites\/([^/]+)\/restart$/.exec(url.pathname);
+    if (boot && method === "POST") {
+      const name = decodeURIComponent(boot[1]!);
+      if (!sprites.has(name)) return new Response("sprite not found", { status: 404 });
+      if (refusedRestart.has(name)) return new Response('{"error":"upstream restart failed"}', { status: 502 });
+      restarts.push(name);
+      gateway502.delete(name);
+      return Response.json({ sprite_name: name });
+    }
     const sub = /\/v1\/sprites\/([^/]+)\/(exec|policy\/network)$/.exec(url.pathname);
     if (sub) {
       const name = decodeURIComponent(sub[1]!);
@@ -105,6 +128,17 @@ export function installFakeSprites(): FakeSprites {
         const script = argv[argv.length - 1] ?? "";
         calls[calls.length - 1]!.script = script;
         const stdin = url.searchParams.get("stdin") === "true" ? toBuf(init?.body) : undefined;
+        const stall = (): never => {
+          throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+        };
+        if (stallAfterRun.has(name)) {
+          stallAfterRun.delete(name);
+          runExec(name, script, stdin);
+          stall();
+        }
+        if (gateway502.has(name)) {
+          return new Response('{"error":"bad gateway"}', { status: 502 });
+        }
         return new Response(runExec(name, script, stdin), { status: 200 });
       }
       if (method === "GET") return Response.json({ rules: policies.get(name) ?? [] });
@@ -155,10 +189,24 @@ export function installFakeSprites(): FakeSprites {
     names: () => [...sprites.keys()],
     policy: (name) => policies.get(name) ?? null,
     execScripts: () => [...execScripts],
+    stallAfterRun: (name) => {
+      stallAfterRun.add(name);
+    },
+    fail502: (name) => {
+      gateway502.add(name);
+    },
+    refuseRestart: (name) => {
+      refusedRestart.add(name);
+    },
+    restarts: () => [...restarts],
     reset: () => {
       for (const name of Array.from(sprites.keys())) deleteSprite(name);
       execScripts.length = 0;
       calls.length = 0;
+      stallAfterRun.clear();
+      gateway502.clear();
+      refusedRestart.clear();
+      restarts.length = 0;
     },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };

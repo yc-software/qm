@@ -123,6 +123,11 @@ export interface ProcessSession {
   status: ProcessState;
 }
 
+export interface ComputerStatus {
+  machine: string;
+  guestResponsive: boolean;
+}
+
 export interface TeardownOptions {
   keepWarm?: boolean;
   destroy?: boolean;
@@ -148,6 +153,8 @@ export interface Sandbox {
   writeStdin?(handle: SandboxHandle, processId: string, data: string): Promise<void>;
   signalProcess?(handle: SandboxHandle, processId: string, signal: string): Promise<void>;
   listProcesses?(handle: SandboxHandle): Promise<ProcessSession[]>;
+  computerStatus?(scopeId: string): Promise<ComputerStatus>;
+  restartComputer?(scopeId: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;
 }

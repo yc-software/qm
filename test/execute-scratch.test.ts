@@ -84,7 +84,7 @@ const schemaRequired = (tool: ReturnType<typeof createPiTools>[number]): string[
 test("flag OFF: the execute surface is exactly the legacy one (no scope/durable, scoped box)", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createPiTools({ current: tc });
-  assert.deepEqual(schemaProps(execute!), ["command", "purpose", "timeout_seconds"]);
+  assert.deepEqual(schemaProps(execute!), ["command", "computer", "purpose", "timeout_seconds"]);
   assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
   await call(execute, { command: "echo hi" });
   assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
@@ -94,7 +94,7 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
   const { tc, seen } = sinkToolContext();
   const ref: ToolContextRef = { current: tc };
   const [execute] = createPiTools(ref, { scratchExec: true });
-  assert.deepEqual(schemaProps(execute!), ["command", "purpose", "timeout_seconds", "scope", "durable"]);
+  assert.deepEqual(schemaProps(execute!), ["command", "computer", "purpose", "timeout_seconds", "scope", "durable"]);
 
   await call(execute, { command: "echo hi" });
   assert.deepEqual(
