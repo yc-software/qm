@@ -991,8 +991,11 @@ a.chat-row-open {
   position: relative;
 }
 /* Glance tiers render no top bar: two children (glance, dock), two rows. */
+/* Panes render no session topbar either (the pane tab is the header) — same two-row
+   grid, or the transcript falls into the auto row and the composer into the 1fr row. */
 [data-density="card"] .custom-chat-shell,
-[data-density="strip"] .custom-chat-shell {
+[data-density="strip"] .custom-chat-shell,
+.custom-chat-shell.in-pane {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 .drop-overlay {
