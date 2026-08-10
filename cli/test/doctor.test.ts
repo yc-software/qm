@@ -113,6 +113,41 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   );
 });
 
+test("portal trust accepts cleartext JWKS only on the configured private broker origin", () => {
+  const { sandbox: _sandbox, ...withoutSandbox } = config;
+  void _sandbox;
+  const portalConfig: QmConfig = {
+    ...withoutSandbox,
+    services: ["core", "portal"],
+    env: {
+      portal: {
+        OIDC_CLIENT_ID: "real-client-id",
+        OIDC_ISSUER: "https://agent.example.com/idp",
+        OIDC_JWKS_URI: "http://auth:8080/.well-known/jwks.json",
+        AUTH_BROKER_UPSTREAM: "http://auth:8080",
+        PORTAL_EXPECTED_TEAM_ID: "T123",
+      },
+    },
+  };
+
+  assert.doesNotThrow(() => validatePortalTrust(portalConfig));
+  const portal = portalConfig.env.portal!;
+  const { AUTH_BROKER_UPSTREAM: _broker, ...withoutBroker } = portal;
+  void _broker;
+  for (const rejectedPortal of [
+    withoutBroker,
+    { ...portal, AUTH_BROKER_UPSTREAM: "http://other.internal:8080" },
+    { ...portal, AUTH_BROKER_UPSTREAM: "http://auth:8081" },
+    { ...portal, AUTH_BROKER_UPSTREAM: "https://auth:8080" },
+    { ...portal, AUTH_BROKER_UPSTREAM: "https://auth.example.com" },
+  ]) {
+    assert.throws(
+      () => validatePortalTrust({ ...portalConfig, env: { portal: rejectedPortal } }),
+      /private broker|private-network host|HTTPS URL/,
+    );
+  }
+});
+
 test("Fly doctor requires the signing secret for source plugins absent from config", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-"));
   const bin = join(dir, "fake-fly.cjs");
