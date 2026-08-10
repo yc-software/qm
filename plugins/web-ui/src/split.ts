@@ -1,6 +1,21 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { Binoculars, Clock3, Cog, Expand, Maximize2, Plus, Shrink, X } from "lucide";
+import {
+  Binoculars,
+  Box,
+  Brain,
+  Clock3,
+  Cog,
+  Expand,
+  Files,
+  KeyRound,
+  Maximize2,
+  MoreHorizontal,
+  Plus,
+  Rocket,
+  Shrink,
+  X,
+} from "lucide";
 import {
   createDockview,
   type DockviewApi,
@@ -30,7 +45,7 @@ import {
 import { preservingFocus } from "./pane-focus";
 import { hideTooltip, showTooltip } from "./tooltip";
 import { icon } from "./ui";
-import { contextsState } from "./contexts";
+import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
 import { appState } from "./shell-state";
 import { renderSidebarTop, switchView, syncUrlFromState } from "./shell";
@@ -54,6 +69,7 @@ import {
   syncWorkingPulse,
 } from "./sessions";
 import { conversationBackground, type RowIndicators } from "./session-list";
+import { setScopedSession, type SessionTool } from "./session-scope";
 import type { CoreSession } from "./core-bridge";
 import { fetchUiState, putUiState } from "./core-bridge";
 
@@ -727,7 +743,10 @@ export function drawCanvas(): void {
 
 function computeHeaderSignature(): string {
   return (dockApi?.panels ?? [])
-    .map((p) => `${p.id}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}`)
+    .map(
+      (p) =>
+        `${p.id}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}`,
+    )
     .join("~");
 }
 
@@ -753,6 +772,41 @@ function paneTitle(panel: IDockviewPanel): string {
   if (session) return sessionTitle(session);
   if (panelParams(panel).sessionId) return "Conversation";
   return "New session";
+}
+
+function paneScopeId(panel: IDockviewPanel): string | null {
+  return paneSession(panel)?.scopeId || panelParams(panel).scopeId || null;
+}
+
+function paneCrumb(panel: IDockviewPanel): string | null {
+  const scope = paneScopeId(panel);
+  if (!scope || scope.startsWith("personal:")) return null;
+  const context = contextsState.list.find((c) => c.scopeId === scope);
+  return scopeTitle(scope, context?.name ?? null);
+}
+
+const PANE_TOOLS: { tool: SessionTool; glyph: Parameters<typeof icon>[0]; label: string }[] = [
+  { tool: "crons", glyph: Clock3, label: "Crons" },
+  { tool: "files", glyph: Files, label: "Files" },
+  { tool: "apps", glyph: Rocket, label: "Apps" },
+  { tool: "skills", glyph: Box, label: "Skills" },
+  { tool: "memory", glyph: Brain, label: "Memory" },
+  { tool: "keychain", glyph: KeyRound, label: "Your keychain" },
+];
+
+function openPaneTool(panel: IDockviewPanel, tool: SessionTool): void {
+  const params = panelParams(panel);
+  const session = paneSession(panel);
+  const scope = paneScopeId(panel) ?? "";
+  setScopedSession({
+    scopeId: scope,
+    sessionId: params.sessionId ?? session?.id ?? null,
+    threadRef: params.threadRef ?? null,
+    title: session?.title?.trim() || "New chat",
+    crumb: paneCrumb(panel),
+  });
+  if (scope && (tool === "crons" || tool === "files" || tool === "apps")) contextsState.selected = scope;
+  switchView(tool === "apps" ? "deploys" : tool);
 }
 
 function paneIsWorking(panel: IDockviewPanel): boolean {
@@ -919,10 +973,11 @@ class PaneTab implements ITabRenderer {
     const panel = this.panel;
     if (!panel) return;
     const title = paneTitle(panel);
+    const crumb = paneCrumb(panel);
     const working = paneIsWorking(panel);
     const awaiting = paneAwaitsInput(panel);
     const background = paneBackground(panel);
-    this.element.title = title;
+    this.element.title = crumb ? `${crumb} / ${title}` : title;
     render(
       html`
         ${working ? html`<span class="working-dot" ${ref(syncWorkingPulse)} title="Agent is working"></span>` : nothing}
@@ -938,6 +993,11 @@ class PaneTab implements ITabRenderer {
                   background.watches > 0 ? icon(Binoculars, 11) : nothing
                 }${background.crons > 0 ? icon(Clock3, 11) : nothing}</span
               >`
+            : nothing
+        }
+        ${
+          crumb
+            ? html`<span class="split-pane-crumb">${crumb}</span><span class="split-pane-crumb-sep">/</span>`
             : nothing
         }
         <span class="split-pane-title-text">${title}</span>
@@ -970,6 +1030,7 @@ class PaneTab implements ITabRenderer {
 class GroupActions implements IHeaderActionsRenderer {
   readonly element: HTMLElement;
   private props: IGroupHeaderProps | null = null;
+  private menuOpen = false;
 
   constructor() {
     this.element = document.createElement("span");
@@ -979,8 +1040,26 @@ class GroupActions implements IHeaderActionsRenderer {
   init(props: IGroupHeaderProps): void {
     this.props = props;
     groupActions.add(this);
+    document.addEventListener("click", this.onDocClick);
     this.draw();
   }
+
+  private readonly onDocClick = (e: Event): void => {
+    if (!this.menuOpen) return;
+    if (this.element.querySelector(".split-tools")?.contains(e.target as Node)) return;
+    this.menuOpen = false;
+    this.draw();
+  };
+
+  private readonly placeMenu = (el?: Element): void => {
+    if (!(el instanceof HTMLElement)) return;
+    const rect = this.element.querySelector(".split-tools-btn")?.getBoundingClientRect();
+    if (!rect) return;
+    el.style.position = "fixed";
+    el.style.top = `${rect.bottom + 6}px`;
+    el.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    el.style.left = "auto";
+  };
 
   draw(): void {
     const props = this.props;
@@ -990,6 +1069,46 @@ class GroupActions implements IHeaderActionsRenderer {
       return g?.activePanel ?? g?.panels[0] ?? null;
     };
     const maximized = props.api.isMaximized();
+    const runTool = (tool: SessionTool): void => {
+      this.menuOpen = false;
+      const p = activePanel();
+      this.draw();
+      if (p) openPaneTool(p, tool);
+    };
+    const menu = this.menuOpen
+      ? html`
+          <div
+            class="session-menu-popover split-tools-menu"
+            role="menu"
+            ${ref(this.placeMenu)}
+            @click=${(e: Event) => e.stopPropagation()}
+          >
+            ${PANE_TOOLS.map(
+              (t) => html`
+                <button class="session-menu-option" type="button" role="menuitem" @click=${() => runTool(t.tool)}>
+                  ${icon(t.glyph, 15)}<span>${t.label}</span>
+                </button>
+              `,
+            )}
+            <div class="split-tools-menu-sep" role="separator"></div>
+            <button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${() => {
+                this.menuOpen = false;
+                this.draw();
+                if (maximized) props.api.exitMaximized();
+                else props.api.maximize();
+              }}
+            >
+              ${icon(maximized ? Shrink : Expand, 15)}<span
+                >${maximized ? "Restore to grid (Esc)" : "Focus over the grid"}</span
+              >
+            </button>
+          </div>
+        `
+      : nothing;
     const buttons: { label: string; glyph: TemplateResult | SVGElement; cls?: string; run: () => void }[] = [
       {
         label: "Split this pane with a new session",
@@ -998,11 +1117,6 @@ class GroupActions implements IHeaderActionsRenderer {
           const p = activePanel();
           if (p) paneSplitWithBlank(p);
         },
-      },
-      {
-        label: maximized ? "Restore to grid (Esc)" : "Focus this pane over the grid",
-        glyph: icon(maximized ? Shrink : Expand, 14),
-        run: () => (maximized ? props.api.exitMaximized() : props.api.maximize()),
       },
       {
         label: "Open full screen",
@@ -1023,23 +1137,41 @@ class GroupActions implements IHeaderActionsRenderer {
       },
     ];
     render(
-      html`${buttons.map(
-        (b) =>
-          html`<button
-            class="icon-btn subtle${b.cls ?? ""}"
+      html`<span class="split-tools">
+          <button
+            class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
             type="button"
-            title=${b.label}
-            aria-label=${b.label}
-            @click=${b.run}
+            title="Tools"
+            aria-label="Tools"
+            aria-haspopup="menu"
+            aria-expanded=${this.menuOpen ? "true" : "false"}
+            @click=${() => {
+              this.menuOpen = !this.menuOpen;
+              this.draw();
+            }}
           >
-            ${b.glyph}
-          </button>`,
-      )}`,
+            ${icon(MoreHorizontal, 15)}
+          </button>
+          ${menu}
+        </span>
+        ${buttons.map(
+          (b) =>
+            html`<button
+              class="icon-btn subtle${b.cls ?? ""}"
+              type="button"
+              title=${b.label}
+              aria-label=${b.label}
+              @click=${b.run}
+            >
+              ${b.glyph}
+            </button>`,
+        )}`,
       this.element,
     );
   }
 
   dispose(): void {
+    document.removeEventListener("click", this.onDocClick);
     groupActions.delete(this);
   }
 }
