@@ -52,7 +52,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
     const after = cursor?.lastJudgedTs;
     const all = await deps.surfaceCache.readMessages(container, { limit: 60, noFallback: true });
-    const backdrop = after ? all.filter((m) => m.ts <= after).slice(-10) : [];
+    const backdrop = after ? all.filter((m) => m.ts <= after).slice(-30) : [];
     const rawDelta = (after ? all.filter((m) => m.ts > after) : all).filter((m) => !m.self);
     const ledger = new Map<string, BotPolicy>();
     for (const [name, b] of Object.entries(policy?.bots ?? {})) ledger.set(name.toLowerCase(), b);

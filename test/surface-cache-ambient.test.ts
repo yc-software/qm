@@ -477,14 +477,14 @@ test("ambient judge: backdrop renders before NEW MESSAGES, absent on the first j
   }
 });
 
-test("ambient judge: backdrop is capped at the last 10 (§2.1)", async () => {
+test("ambient judge: backdrop is capped at the last 30 (§2.1)", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
     const container = "C-bdcap";
     await built.app.setChannelPolicy(container, "watch", "U-admin");
     await built.app.ingestSurfaceEvents(
-      Array.from({ length: 12 }, (_v, i) => ({
+      Array.from({ length: 32 }, (_v, i) => ({
         container,
         ts: `${1000 + i}.0`,
         authorId: `U${i + 1}`,
@@ -493,13 +493,13 @@ test("ambient judge: backdrop is capped at the last 10 (§2.1)", async () => {
       })),
     );
     await sleep(300);
-    await built.app.ingestSurfaceEvents([{ container, ts: "1013.0", authorId: "U13", text: "m13", createdAt: 13 }]);
+    await built.app.ingestSurfaceEvents([{ container, ts: "1033.0", authorId: "U33", text: "m33", createdAt: 33 }]);
     await sleep(300);
     const rows = await listFull(built.ambientJudgments!, { container });
-    const last = rows.find((r: any) => r.prompt?.includes("m13") && r.prompt?.includes("EARLIER CONTEXT"))!;
+    const last = rows.find((r: any) => r.prompt?.includes("m33") && r.prompt?.includes("EARLIER CONTEXT"))!;
     const backdrop = last.prompt!.slice(last.prompt!.indexOf("EARLIER CONTEXT"), last.prompt!.indexOf("NEW MESSAGES"));
     const backdropCount = (backdrop.match(/^U\d+: m\d+$/gm) ?? []).length;
-    assert.equal(backdropCount, 10, "backdrop capped at the last 10");
+    assert.equal(backdropCount, 30, "backdrop capped at the last 30");
     assert.ok(!/: m1$/m.test(backdrop) && !/: m2$/m.test(backdrop), "the oldest messages fell off the cap");
   } finally {
     await built.runtime.stop();
