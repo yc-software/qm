@@ -1063,7 +1063,7 @@ export function createChatSurface(
                 </div>`
               : nothing
           }
-          ${glanceTier ? nothing : sessionTopbar(agent)}
+          ${glanceTier || ctx.pane ? nothing : sessionTopbar(agent)}
           ${
             glanceTier
               ? paneGlance(agent, messages, glanceTier)

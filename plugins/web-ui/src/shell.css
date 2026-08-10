@@ -6748,6 +6748,45 @@ h3.ambient-field-label {
   flex: 0 0 auto;
 }
 
+/* Single-header multiview: the pane title is a scope / title breadcrumb, and the
+   chat's project tools live behind the header's own overflow menu. */
+.split-pane-crumb {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.split-pane-crumb-sep {
+  flex: 0 0 auto;
+  margin-right: 5px;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--muted-foreground) 65%, transparent);
+}
+
+.split-tools {
+  position: relative;
+  display: inline-flex;
+}
+
+.split-tools-btn.active {
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  color: var(--foreground);
+}
+
+.split-tools-menu {
+  z-index: 60;
+}
+
+.split-tools-menu-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
+}
+
 /* In the strip the shared hover wash needs to differ from the strip's own background. */
 .dockview-theme-qm .dv-tabs-and-actions-container .icon-btn:hover {
   background: color-mix(in srgb, var(--foreground) 7%, var(--secondary));
