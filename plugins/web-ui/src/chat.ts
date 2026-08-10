@@ -1051,7 +1051,7 @@ export function createChatSurface(
     render(
       html`
         <div
-          class="custom-chat-shell ${ctx.composer.state.dragging ? "dragging" : ""}"
+          class="custom-chat-shell ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""}"
           @dragenter=${(e: DragEvent) => ctx.composer.onDragEnter(e)}
           @dragover=${(e: DragEvent) => ctx.composer.onDragOver(e)}
           @dragleave=${(e: DragEvent) => ctx.composer.onDragLeave(e)}
