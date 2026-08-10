@@ -6,7 +6,7 @@ import test from "node:test";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 const piCodingAgentTarball =
-  "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.2/earendil-works-pi-coding-agent-0.82.0-qm-security.2.tgz";
+  "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.3/earendil-works-pi-coding-agent-0.82.0-qm-security.3.tgz";
 
 function installedVersion(path: string): string {
   const manifestUrl = new URL(`../node_modules/${path}/package.json`, import.meta.url);
@@ -45,10 +45,14 @@ test("Pi and MCP security overrides are materialized by the root lockfile", () =
 
   assert.equal(pi?.resolved, piCodingAgentTarball);
   assert.equal(pi?.hasShrinkwrap, true);
-  assert.deepEqual(lockedVersions(packages, "brace-expansion"), ["5.0.8"]);
+  assert.deepEqual(lockedVersions(packages, "brace-expansion"), ["5.0.9"]);
+  assert.deepEqual(lockedVersions(packages, "fast-uri").sort(), ["3.1.5", "4.1.2"]);
+  assert.deepEqual(lockedVersions(packages, "hono"), ["4.12.34"]);
   assert.deepEqual(lockedVersions(packages, "protobufjs"), ["7.6.5"]);
+  assert.deepEqual(lockedVersions(packages, "undici"), ["8.9.0"]);
   assert.deepEqual(lockedVersions(packages, "@hono/node-server"), ["2.0.10"]);
-  assert.equal(dependencyVersion(minimatchManifest, "brace-expansion"), "5.0.8");
+  assert.equal(dependencyVersion(minimatchManifest, "brace-expansion"), "5.0.9");
+  assert.equal(dependencyVersion(piManifest, "undici"), "8.9.0");
   assert.equal(dependencyVersion(piManifest, "protobufjs"), "7.6.5");
   assert.equal(installedVersion("@hono/node-server"), "2.0.10");
   assert.match(
