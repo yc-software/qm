@@ -47,3 +47,8 @@ test("inline pane chrome is exactly tools, split, full screen, close", () => {
   assert.match(inlineButtons, /Open full screen/);
   assert.match(inlineButtons, /Close pane/);
 });
+
+test("a topbar-less pane keeps the two-row grid: transcript bounded, composer at the bottom", () => {
+  assert.match(chat, /class="custom-chat-shell \$\{ctx\.pane \? "in-pane" : ""\}/);
+  assert.match(css, /\.custom-chat-shell\.in-pane \{\s*grid-template-rows: minmax\(0, 1fr\) auto;\s*\}/);
+});

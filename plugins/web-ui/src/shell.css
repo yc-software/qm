@@ -981,6 +981,11 @@ a.chat-row-open {
   grid-template-rows: minmax(0, 1fr) auto;
   position: relative;
 }
+/* Panes render no session topbar either (the pane tab is the header) — same two-row
+   grid, or the transcript falls into the auto row and the composer into the 1fr row. */
+.custom-chat-shell.in-pane {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
 .drop-overlay {
   position: absolute;
   inset: 0;
