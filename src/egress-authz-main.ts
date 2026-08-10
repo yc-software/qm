@@ -18,12 +18,16 @@ const DENY_ALL: EgressPolicy = { allowedHosts: ["deny.invalid"], deniedHosts: []
 
 const METADATA_HOSTS = ["metadata.google.internal", "metadata.goog"];
 
-const LINK_LOCAL = new BlockList();
-LINK_LOCAL.addSubnet("169.254.0.0", 16, "ipv4");
-LINK_LOCAL.addSubnet("fe80::", 10, "ipv6");
-LINK_LOCAL.addAddress("fd00:ec2::254", "ipv6");
+const BLOCKED = new BlockList();
+BLOCKED.addSubnet("169.254.0.0", 16, "ipv4");
+BLOCKED.addSubnet("fe80::", 10, "ipv6");
+BLOCKED.addAddress("fd00:ec2::254", "ipv6");
+BLOCKED.addSubnet("127.0.0.0", 8, "ipv4");
+BLOCKED.addSubnet("0.0.0.0", 8, "ipv4");
+BLOCKED.addAddress("::1", "ipv6");
+BLOCKED.addAddress("::", "ipv6");
 
-export function isLinkLocalOrMetadataIp(ip: string): boolean {
+export function isBlockedDestinationIp(ip: string): boolean {
   const s = ip
     .trim()
     .toLowerCase()
@@ -31,7 +35,7 @@ export function isLinkLocalOrMetadataIp(ip: string): boolean {
     .replace(/%.*$/, "");
   const fam = isIP(s);
   if (!fam) return false;
-  return LINK_LOCAL.check(s, fam === 4 ? "ipv4" : "ipv6");
+  return BLOCKED.check(s, fam === 4 ? "ipv4" : "ipv6");
 }
 
 function isAlwaysBlockedHost(host: string): boolean {
@@ -40,7 +44,7 @@ function isAlwaysBlockedHost(host: string): boolean {
     .toLowerCase()
     .replace(/^\[(.*)\]$/, "$1")
     .replace(/\.$/, "");
-  if (isIP(h)) return isLinkLocalOrMetadataIp(h);
+  if (isIP(h)) return isBlockedDestinationIp(h);
   return METADATA_HOSTS.some((m) => h === m || h.endsWith(`.${m}`));
 }
 
@@ -108,7 +112,7 @@ async function decide(
   if (
     ips.some(
       (ip) =>
-        isLinkLocalOrMetadataIp(ip) ||
+        isBlockedDestinationIp(ip) ||
         isHostDenied(ip, policy?.deniedHosts) ||
         (policy?.denyPrivateNetworks === true && !privateAllowed && isPrivateNetworkIp(ip)),
     )

@@ -6,6 +6,16 @@
 #
 # Cloud metadata authorities (IMDS 169.254.169.254, GCP metadata, AWS IPv6 IMDS) are ALSO denied
 # statically here at the Envoy layer — belt and braces.
+
+# A UNIX SOCKET, never a TCP port — not even loopback. This process is a forward proxy: a
+# sandbox that asks it to `CONNECT 127.0.0.1:<port>` makes it dial its own namespace, so a
+# loopback admin listener is reachable by every sandbox and /quitquitquit would drop fleet
+# egress on demand. The decision service denies loopback destinations too; this is the other half.
+# Read it with `curl --unix-socket /tmp/envoy-admin.sock http://localhost/stats`. mode 384 = 0600.
+admin:
+  address:
+    pipe: { path: /tmp/envoy-admin.sock, mode: 384 }
+
 static_resources:
   listeners:
     - name: egress_proxy
@@ -17,6 +27,17 @@ static_resources:
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: egress_proxy
+                # One line per connection, on stdout (`fly logs`). %RESPONSE_FLAGS% and
+                # %RESPONSE_CODE_DETAILS% are the point: they name WHY a request failed
+                # (lua_response, upstream_reset_before_response_started{…}), which the
+                # 503's body carries but a failed CONNECT throws away.
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        text_format_source:
+                          inline_string: "[envoy] %REQ(:METHOD)% %REQ(:AUTHORITY):256% %RESPONSE_CODE% flags=%RESPONSE_FLAGS% detail=%RESPONSE_CODE_DETAILS% upstream=%UPSTREAM_HOST% dur=%DURATION%\n"
                 http_protocol_options:
                   allow_absolute_url: true
                 upgrade_configs:
