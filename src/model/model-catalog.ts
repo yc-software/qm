@@ -6,6 +6,9 @@ export interface ModelCatalogEntry {
   name: string;
   /** A built-in provider or the slug of an admin-registered custom provider. */
   provider: string;
+  api?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 }
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?supported_parameters=tools&sort=most-popular";

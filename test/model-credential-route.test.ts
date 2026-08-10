@@ -401,6 +401,39 @@ test("surface-config reports whether any model provider is configured", async ()
   }
 });
 
+test("web turns allow a configured custom model without an explicit picker allowlist", async () => {
+  const srv = start({ harness: "pi" });
+  try {
+    await srv.built.customProviders.upsert(
+      {
+        id: "acme-gateway",
+        name: "Acme Gateway",
+        protocol: "openai",
+        baseUrl: "https://llm.acme.internal/v1",
+        models: [{ id: "acme-large", name: "Acme Large" }],
+      },
+      "sk-acme-secret",
+      "admin-alice@default-org",
+    );
+    await srv.built.refreshCustomProviders();
+    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "acme-large" });
+    await srv.built.config.flushScope("org:default-org");
+
+    const result = await srv.built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:custom-provider" },
+      text: "hello",
+      harness: "pi",
+      model: "acme-large",
+      async: true,
+    });
+    assert.equal(result.status, "queued");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("admin model credentials survive a second app instance on the same durable store", async () => {
   const backing = createMemoryMap<StoredModelCredential>();
   const first = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });

@@ -473,7 +473,10 @@ export interface RuntimeConfig {
   scopeId: string;
   approvedHarnesses: string[];
   modelsByHarness: Record<string, string[]>;
-  modelCatalog: Record<string, { name: string; provider: string }>;
+  modelCatalog: Record<
+    string,
+    { name: string; provider: string; api?: Api; contextWindow?: number; maxTokens?: number }
+  >;
   orgDefault: { harnessId: string; modelId: string; effortLevel?: string; fastMode?: boolean; revision: number };
   scopeOverride: {
     harnessId: string;

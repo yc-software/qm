@@ -30,6 +30,22 @@ test("models this pi-ai build lacks are cloned from a template of their own prov
   assert.equal(sol.provider, "openai", "an OpenAI model never resolves through an Anthropic template");
 });
 
+test("custom provider models are materialized from protocol metadata", () => {
+  const model = getBaseModel("acme-large", {
+    name: "Acme Large",
+    provider: "acme-gateway",
+    api: "openai-completions",
+    contextWindow: 128000,
+    maxTokens: 8192,
+  });
+  assert.equal(model.id, "acme-large");
+  assert.equal(model.name, "Acme Large");
+  assert.equal(model.provider, "acme-gateway");
+  assert.equal(model.api, "openai-completions");
+  assert.equal(model.contextWindow, 128000);
+  assert.equal(model.maxTokens, 8192);
+});
+
 test("fast-mode support is fed from core's runtime config, not a hardcoded client copy", () => {
   setFastModeModelIds(null, []);
   assert.equal(modelSupportsFastMode(null, "claude-opus-4-8"), false);

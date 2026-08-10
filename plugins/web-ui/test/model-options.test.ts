@@ -96,6 +96,28 @@ test("runtime options preserve a fetched OpenRouter model as the selected web tu
   assert.equal(defaultModelValue(), "pi:anthropic/claude-sonnet-4.5");
 });
 
+test("runtime options render and select a custom provider model", () => {
+  applyRuntimeOptions(
+    null,
+    ["pi"],
+    { pi: ["acme-large"] },
+    { harnessId: "pi", modelId: "acme-large" },
+    {
+      "acme-large": {
+        name: "Acme Large",
+        provider: "acme-gateway",
+        api: "openai-completions",
+        contextWindow: 128000,
+        maxTokens: 8192,
+      },
+    },
+  );
+  const option = getModelOptions()[0]!;
+  assert.equal(option.value, "pi:acme-large");
+  assert.equal(option.model.provider, "acme-gateway");
+  assert.equal(defaultModelValue(), "pi:acme-large");
+});
+
 test("runtime options hide retired persisted model ids", () => {
   applyRuntimeOptions(
     null,

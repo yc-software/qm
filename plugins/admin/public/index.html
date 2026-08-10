@@ -6977,6 +6977,7 @@
 
       let onboardingModels = {};
       let onboardingModelStatuses = [];
+      let onboardingCustomProviderStatuses = [];
       function onboardingBadge(id, text, ready, optional = false) {
         const el = $(id);
         el.textContent = text;
@@ -6997,6 +6998,15 @@
           onboardingModelStatuses[0]?.provider ||
           ""
         );
+      }
+      function onboardingModelStatus(modelId) {
+        const provider = onboardingProviderForModel(modelId);
+        const managed = onboardingModelStatuses.find((item) => item.provider === provider);
+        if (managed?.configured) return managed;
+        const custom = onboardingCustomProviderStatuses.find(
+          (item) => item.id === provider && !item.disabled && item.hasKey,
+        );
+        return custom ? { provider, configured: true, source: "custom" } : managed;
       }
       function renderOnboardingProviderOptions(preferred) {
         const select = $("onboarding-model-provider");
@@ -7043,13 +7053,14 @@
           return;
         }
         onboardingModelStatuses = models.data.providers || [];
+        onboardingCustomProviderStatuses = models.data.customProviders || [];
         onboardingModels = {};
         (models.data.models || []).forEach((model) => {
           (onboardingModels[model.provider] ||= []).push(model);
         });
         const baseModel = config.data.baseModel || config.data.baseModelDefault || "";
         const baseProvider = onboardingProviderForModel(baseModel);
-        const baseStatus = onboardingModelStatuses.find((item) => item.provider === baseProvider);
+        const baseStatus = onboardingModelStatus(baseModel);
         onboardingBadge(
           "onboarding-model-badge",
           baseStatus?.configured ? "Ready" : "Needs a key",
@@ -7058,7 +7069,13 @@
         $("onboarding-model-summary").textContent = !baseModel
           ? "No base model is configured yet — pick a provider and model below."
           : baseStatus?.configured
-            ? baseModel + " · " + (baseStatus.source === "admin" ? "admin-managed key" : "deployment key")
+            ? baseModel +
+              " · " +
+              (baseStatus.source === "admin"
+                ? "admin-managed key"
+                : baseStatus.source === "custom"
+                  ? "custom provider key"
+                  : "deployment key")
             : baseModel +
               " cannot run until its " +
               (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
@@ -7087,6 +7104,7 @@
         $("onboarding-oauth-summary").textContent = configured.length
           ? configured.map((item) => connectorName(item.provider)).join(", ") + " available in the web UI."
           : "Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.";
+        await loadCustomProviders();
         viewLoadedAt.onboarding = Date.now();
       }
       $("onboarding-model-provider").onchange = () => renderOnboardingModelOptions();
@@ -7110,7 +7128,6 @@
         $("onboarding-model-save").disabled = false;
         $("onboarding-model-key").value = "";
         await loadOnboarding();
-        await loadCustomProviders();
         setStatus(
           "st-onboarding-model",
           selected.ok ? "Key and base model saved." : "Key saved, but the base model could not be changed.",
@@ -7132,7 +7149,6 @@
           return;
         }
         await loadOnboarding();
-        await loadCustomProviders();
         setStatus("st-onboarding-model", "Provider disabled.", "ok");
       };
       let customProvidersLoaded = [];
@@ -7196,7 +7212,7 @@
               setStatus("st-custom-provider", removed.data?.message || "Could not remove this provider.", "err");
               return;
             }
-            await loadCustomProviders();
+            await loadOnboarding();
             setStatus("st-custom-provider", "Provider removed.", "ok");
           };
           actions.appendChild(edit);
@@ -7232,7 +7248,7 @@
           return;
         }
         $("custom-provider-key").value = "";
-        await loadCustomProviders();
+        await loadOnboarding();
         setStatus("st-custom-provider", "Provider saved. Its models are now in the picker.", "ok");
       };
       function openOnboardingTarget(target) {

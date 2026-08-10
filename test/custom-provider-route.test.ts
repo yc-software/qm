@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, afterEach } from "node:test";
@@ -71,6 +71,35 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
     assert.equal(putBody.status.hasKey, true);
     assert.equal(JSON.stringify(putBody).includes("sk-acme-secret"), false);
 
+    const surface = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(surface.status, 200);
+    assert.equal(((await surface.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+
+    const providers = await fetch(`${srv.base}/v1/admin/model-providers`, { headers: ADMIN });
+    assert.equal(providers.status, 200);
+    const providersBody = (await providers.json()) as {
+      customProviders: Array<{ id: string; disabled: boolean; hasKey: boolean }>;
+    };
+    assert.deepEqual(
+      providersBody.customProviders.map(({ id, disabled, hasKey }) => ({ id, disabled, hasKey })),
+      [{ id: "acme-gateway", disabled: false, hasKey: true }],
+    );
+
+    const runtime = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+    assert.equal(runtime.status, 200);
+    const runtimeBody = (await runtime.json()) as {
+      modelsByHarness: Record<string, string[]>;
+      modelCatalog: Record<string, { name: string; provider: string; api?: string }>;
+    };
+    assert.ok(runtimeBody.modelsByHarness.pi?.includes("acme-large"));
+    assert.deepEqual(runtimeBody.modelCatalog["acme-large"], {
+      name: "Acme Large",
+      provider: "acme-gateway",
+      api: "openai-completions",
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+
     // The runtime registry serves the model immediately.
     assert.equal(String(resolveModel("acme-large")?.provider), "acme-gateway");
 
@@ -95,6 +124,12 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
   } finally {
     await srv.close();
   }
+});
+
+test("production entrypoint wires custom provider routes into the core server", () => {
+  const entrypoint = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+  assert.match(entrypoint, /customProviders:\s*built\.customProviders/);
+  assert.match(entrypoint, /refreshCustomProviders:\s*built\.refreshCustomProviders/);
 });
 
 test("a rejected key blocks registration unless validate:false", async () => {

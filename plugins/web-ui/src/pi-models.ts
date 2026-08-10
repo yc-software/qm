@@ -13,6 +13,13 @@ const CLONE_TEMPLATES: Readonly<Record<string, { template: string; name: string 
 };
 
 type PiModel = Model<Api>;
+type DynamicModel = {
+  name: string;
+  provider: string;
+  api?: Api;
+  contextWindow?: number;
+  maxTokens?: number;
+};
 
 function builtinModel(id: string): PiModel | undefined {
   for (const provider of KNOWN_PROVIDERS) {
@@ -22,7 +29,7 @@ function builtinModel(id: string): PiModel | undefined {
   return undefined;
 }
 
-export function getBaseModel(id: string, fallback?: { name: string; provider: string }): PiModel {
+export function getBaseModel(id: string, fallback?: DynamicModel): PiModel {
   const builtin = builtinModel(id);
   if (builtin) return builtin;
   const clone = CLONE_TEMPLATES[id];
@@ -33,6 +40,18 @@ export function getBaseModel(id: string, fallback?: { name: string; provider: st
   if (fallback?.provider === "openrouter") {
     const template = getModel("openrouter", "openrouter/auto" as Parameters<typeof getModel>[1]) as PiModel | undefined;
     if (template) return cloneModel(template, id, fallback.name);
+  }
+  if (fallback?.api) {
+    const templateId = fallback.api === "anthropic-messages" ? "claude-opus-4-8" : "gpt-5.5";
+    const template = builtinModel(templateId);
+    if (template)
+      return {
+        ...cloneModel(template, id, fallback.name),
+        provider: fallback.provider,
+        api: fallback.api,
+        ...(fallback.contextWindow ? { contextWindow: fallback.contextWindow } : {}),
+        ...(fallback.maxTokens ? { maxTokens: fallback.maxTokens } : {}),
+      };
   }
   throw new Error(`Unsupported model: ${id}`);
 }

@@ -997,14 +997,16 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
 async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
-  const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
-    deps.config.getWebuiModelsDurable(orgScope(deps)),
-    deps.config.getBaseModelDurable(orgScope(deps)),
-    deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
-    deps.config.getBrandingDurable(orgScope(deps)),
-  ]);
+  const [webuiModels, baseModel, externalSlackParticipants, branding, managedKeys, customProviderStatuses] =
+    await Promise.all([
+      deps.config.getWebuiModelsDurable(orgScope(deps)),
+      deps.config.getBaseModelDurable(orgScope(deps)),
+      deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
+      deps.config.getBrandingDurable(orgScope(deps)),
+      deps.modelCredentials?.availability() ?? null,
+      deps.customProviders?.statuses() ?? [],
+    ]);
   const harnessId = deps.harnessId ?? "pi";
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
   const catalog = managedKeys?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
@@ -1038,7 +1040,13 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     webuiModels: configuredPicker.length ? configuredPicker : allowed,
     baseModel: resolvedBase,
     harnessId,
-    ...(managedKeys ? { modelProviderConfigured: Object.values(managedKeys).some(Boolean) } : {}),
+    ...(managedKeys
+      ? {
+          modelProviderConfigured:
+            Object.values(managedKeys).some(Boolean) ||
+            customProviderStatuses.some((provider) => !provider.disabled && provider.hasKey),
+        }
+      : {}),
     externalSlackParticipants,
     ...(Object.keys(resolvedBranding).length ? { branding: resolvedBranding } : {}),
   });
@@ -1165,7 +1173,19 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
   const modelCatalog = Object.fromEntries(
     [...advertisedModelIds].flatMap((id) => {
       const model = catalog.find((candidate) => candidate.id === id);
-      if (model) return [[id, { name: model.name, provider: model.provider }]];
+      if (model)
+        return [
+          [
+            id,
+            {
+              name: model.name,
+              provider: model.provider,
+              ...(model.api ? { api: model.api } : {}),
+              ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+              ...(model.maxTokens ? { maxTokens: model.maxTokens } : {}),
+            },
+          ],
+        ];
       const resolved = resolveModel(id);
       return resolved ? [[id, { name: resolved.name, provider: resolved.provider }]] : [];
     }),

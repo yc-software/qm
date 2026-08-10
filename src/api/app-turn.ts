@@ -13,7 +13,7 @@ import {
   modelProviderAvailabilityFor,
   modelServiceable,
 } from "../model/pi-models.ts";
-import { selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
+import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
 import { errMessage } from "../util/errors.ts";
 
@@ -170,16 +170,16 @@ export function createTurnMethods(
           };
         }
         const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
-        let enabledWebuiModels: string[] | null = null;
+        let enabledWebuiModels: string[];
         if (configuredWebuiModels?.length) {
           enabledWebuiModels = [...new Set([...configuredWebuiModels, orgRuntime.modelId])];
-        } else if (providers?.openrouter) {
+        } else {
+          const catalog = providers?.openrouter
+            ? await selectableModelCatalog(deps.modelCredentialFetch)
+            : builtInModelCatalog();
           enabledWebuiModels = [
             ...new Set([
-              ...selectableCatalogForHarness(
-                await selectableModelCatalog(deps.modelCredentialFetch),
-                runtime.harnessId,
-              ).map((model) => model.id),
+              ...selectableCatalogForHarness(catalog, runtime.harnessId).map((model) => model.id),
               ...(orgRuntime.harnessId === runtime.harnessId ? [orgRuntime.modelId] : []),
             ]),
           ];

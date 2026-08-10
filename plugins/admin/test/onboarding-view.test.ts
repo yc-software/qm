@@ -43,3 +43,32 @@ test("?view=onboarding resolves to the onboarding view", () => {
 test("unknown views still fall back to the default view", () => {
   assert.equal(resolveView("/admin/no-such-view", ""), "history");
 });
+
+test("a keyed custom provider makes its base model ready", () => {
+  const src = [
+    slice("function onboardingProviderForModel(modelId) {", "function renderOnboardingProviderOptions"),
+    "onboardingModelStatus('acme-large');",
+  ].join("\n");
+  const context = vm.createContext({
+    onboardingModels: { "acme-gateway": [{ id: "acme-large", name: "Acme Large" }] },
+    onboardingModelStatuses: [],
+    onboardingCustomProviderStatuses: [{ id: "acme-gateway", disabled: false, hasKey: true }],
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext(src, context))), {
+    provider: "acme-gateway",
+    configured: true,
+    source: "custom",
+  });
+});
+
+test("onboarding loads the custom provider table on entry", () => {
+  assert.match(
+    slice("async function loadOnboarding() {", '$("onboarding-model-provider").onchange'),
+    /await loadCustomProviders\(\)/,
+  );
+});
+
+test("custom provider mutations refresh onboarding readiness", () => {
+  const handlers = slice("async function loadCustomProviders() {", "function openOnboardingTarget");
+  assert.equal(handlers.match(/await loadOnboarding\(\)/g)?.length, 2);
+});
