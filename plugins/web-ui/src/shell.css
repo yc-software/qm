@@ -972,6 +972,10 @@ a.chat-row-open {
   flex: 1;
   min-height: 0;
   display: flex;
+  /* Chat layout (gutters, content width) is driven by this surface's own width via
+     container queries below, so a pane in the split canvas lays out by its pane size,
+     not by whatever the window happens to be. */
+  container: chat / inline-size;
 }
 .custom-chat-shell {
   flex: 1;
@@ -4061,10 +4065,6 @@ a.chat-row-open {
 }
 
 @media (max-width: 860px) {
-  :root {
-    --chat-pad: 14px;
-    --content-w: 100%;
-  }
   .layout {
     position: relative;
   }
@@ -4153,23 +4153,11 @@ a.chat-row-open {
   .message-bubble {
     max-width: 88%;
   }
-  .composer-wrap {
-    width: auto;
-    margin-right: calc(10px + env(safe-area-inset-right));
-    margin-bottom: calc(10px + env(safe-area-inset-bottom));
-    margin-left: calc(10px + env(safe-area-inset-left));
-    border-radius: 18px;
-  }
   .composer-approval {
     grid-template-columns: 1fr;
   }
   .composer-approval .approval-actions {
     justify-content: flex-start;
-  }
-  .live-work-dock {
-    width: auto;
-    margin-right: calc(10px + env(safe-area-inset-right));
-    margin-left: calc(10px + env(safe-area-inset-left));
   }
   .composer-toolbar {
     align-items: flex-end;
@@ -6682,7 +6670,7 @@ h3.ambient-field-label {
 }
 
 [data-density="compact"] .chat-scroll {
-  padding: 14px 14px 4px;
+  padding: 14px var(--chat-pad) 4px;
 }
 [data-density="compact"] .message-row {
   --meta-lane: 16px;
@@ -6693,6 +6681,33 @@ h3.ambient-field-label {
 }
 [data-density="compact"] .live-work-detail {
   display: none;
+}
+
+/* The chat's column width and gutters follow the surface's own width (window or pane),
+   never the window's size — resizing the window must not flip a pane's alignment. */
+@container chat (max-width: 860px) {
+  .custom-chat-shell {
+    --content-w: 100%;
+  }
+}
+@container chat (max-width: 470px) {
+  .custom-chat-shell {
+    --chat-pad: 14px;
+  }
+  /* The floating composer/dock margins pair with the full-bleed 14px chat pad and must
+     follow the surface's width too, or a window resize misaligns them with the column. */
+  .composer-wrap {
+    width: auto;
+    margin-right: calc(10px + env(safe-area-inset-right));
+    margin-bottom: calc(10px + env(safe-area-inset-bottom));
+    margin-left: calc(10px + env(safe-area-inset-left));
+    border-radius: 18px;
+  }
+  .live-work-dock {
+    width: auto;
+    margin-right: calc(10px + env(safe-area-inset-right));
+    margin-left: calc(10px + env(safe-area-inset-left));
+  }
 }
 [data-density="card"] .context-banner,
 [data-density="strip"] .context-banner,
