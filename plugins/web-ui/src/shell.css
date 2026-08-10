@@ -2290,7 +2290,7 @@ a.chat-row-open {
 .composer-wrap {
   position: relative;
   width: min(var(--content-w), calc(100% - 32px));
-  margin: 0 auto 18px;
+  margin: 0 auto max(18px, calc(10px + env(safe-area-inset-bottom)));
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 24px;
@@ -6948,6 +6948,15 @@ h3.ambient-field-label {
   .custom-chat-shell {
     --content-w: 100%;
   }
+  /* Mid-width surfaces: the floating composer/dock hug the full-width column with 16px
+     side margins, but must still clear the device safe areas — the 10px variant below
+     only kicks in at <=470px, so the insets need a floor here too. */
+  .composer-wrap,
+  .live-work-dock {
+    width: auto;
+    margin-right: max(16px, calc(10px + env(safe-area-inset-right)));
+    margin-left: max(16px, calc(10px + env(safe-area-inset-left)));
+  }
 }
 @container chat (max-width: 470px) {
   .custom-chat-shell {
@@ -6956,14 +6965,12 @@ h3.ambient-field-label {
   /* The floating composer/dock margins pair with the full-bleed 14px chat pad and must
      follow the surface's width too, or a window resize misaligns them with the column. */
   .composer-wrap {
-    width: auto;
     margin-right: calc(10px + env(safe-area-inset-right));
     margin-bottom: calc(10px + env(safe-area-inset-bottom));
     margin-left: calc(10px + env(safe-area-inset-left));
     border-radius: 18px;
   }
   .live-work-dock {
-    width: auto;
     margin-right: calc(10px + env(safe-area-inset-right));
     margin-left: calc(10px + env(safe-area-inset-left));
   }

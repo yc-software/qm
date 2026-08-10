@@ -110,12 +110,17 @@ test("touch layouts expose row actions and preserve readable composer choices", 
     compactCss,
     /padding: calc\(20px \+ var\(--surface-safe-top\)\) max\(14px, env\(safe-area-inset-right\)\) calc\(32px \+ env\(safe-area-inset-bottom\)\) max\(14px, env\(safe-area-inset-left\)\)/,
   );
+  assert.match(compactCss, /margin: 0 auto max\(18px, calc\(10px \+ env\(safe-area-inset-bottom\)\)\)/);
   assert.match(
     compactCss,
-    /\.composer-wrap \{\s*width: auto;\s*margin-right: calc\(10px \+ env\(safe-area-inset-right\)\);[\s\S]*margin-left: calc\(10px \+ env\(safe-area-inset-left\)\)/,
+    /\.composer-wrap,\s*\.live-work-dock \{\s*width: auto;\s*margin-right: max\(16px, calc\(10px \+ env\(safe-area-inset-right\)\)\);\s*margin-left: max\(16px, calc\(10px \+ env\(safe-area-inset-left\)\)\)/,
   );
   assert.match(
     compactCss,
-    /\.live-work-dock \{\s*width: auto;\s*margin-right: calc\(10px \+ env\(safe-area-inset-right\)\);\s*margin-left: calc\(10px \+ env\(safe-area-inset-left\)\)/,
+    /\.composer-wrap \{\s*margin-right: calc\(10px \+ env\(safe-area-inset-right\)\);\s*margin-bottom: calc\(10px \+ env\(safe-area-inset-bottom\)\);\s*margin-left: calc\(10px \+ env\(safe-area-inset-left\)\)/,
+  );
+  assert.match(
+    compactCss,
+    /\.live-work-dock \{\s*margin-right: calc\(10px \+ env\(safe-area-inset-right\)\);\s*margin-left: calc\(10px \+ env\(safe-area-inset-left\)\)/,
   );
 });
