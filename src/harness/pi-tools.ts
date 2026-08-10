@@ -418,10 +418,23 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     "higher for builds/installs/tsc/test runs that legitimately take minutes, or lower for " +
     "commands you expect to be quick so a hang frees the machine fast. For work that " +
     `legitimately exceeds the ${execCeilingSec}s ceiling (long builds, installs, test suites, servers), use ` +
-    "the `background` tool to run it detached and poll for the result across turns.";
+    "the `background` tool to run it detached and poll for the result across turns. " +
+    "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
+    'wedged — use `computer:"status"` to check it out-of-band and `computer:"restart"` to reboot it.';
 
   const executeBaseParams = {
-    command: Type.String({ description: "The shell command to run." }),
+    command: Type.String({
+      description: 'The shell command to run. With `computer`, pass "" — no command runs.',
+    }),
+    computer: Type.Optional(
+      Type.String({
+        enum: ["status", "restart"],
+        description:
+          "Manage the scoped computer itself instead of running a command — these act out-of-band, so they work even when the computer is unresponsive. " +
+          '"status" reports the machine\'s health and whether its shell answers; "restart" reboots it (files survive; running processes don\'t, and an interrupted command may or may not have taken effect). ' +
+          "Reach for these when commands hang or fail with transport errors that nothing you ran explains: check status first, restart only if the machine is up but its shell is not answering.",
+      }),
+    ),
     purpose: Type.String({
       description:
         "One short sentence on what this command accomplishes and why you're running it now — " +
@@ -442,11 +455,45 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
 
   const runExecute = async (
     callId: string,
-    params: { command: string; timeout_seconds?: number; purpose?: string },
+    params: { command: string; computer?: string; timeout_seconds?: number; purpose?: string },
     route?: { scratch?: boolean; ownerAuth?: boolean; reachTarget?: string },
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
+    if (params.computer) {
+      await recordCall(callId, { tool: "execute", computer: params.computer });
+      if (route?.scratch || route?.ownerAuth || route?.reachTarget !== undefined) {
+        return recordResult(
+          callId,
+          { tool: "execute", computer: params.computer, invalid: "scoped_only" },
+          text("[error] `computer` manages this conversation's scoped computer only — drop `scope`"),
+          true,
+        );
+      }
+      try {
+        if (params.computer === "restart") {
+          await tc.restartComputer();
+          return recordResult(
+            callId,
+            { tool: "execute", computer: "restart", restarted: true },
+            text("Computer restarting. Give it a moment to boot before running the next command."),
+          );
+        }
+        const s = await tc.computerStatus();
+        return recordResult(
+          callId,
+          { tool: "execute", computer: "status", ...s },
+          text(`machine: ${s.machine}; shell: ${s.guestResponsive ? "answering" : "NOT answering"}`),
+        );
+      } catch (e) {
+        return recordResult(
+          callId,
+          { tool: "execute", computer: params.computer, failed: true },
+          text(`[error] ${errMessage(e)}`),
+          true,
+        );
+      }
+    }
     let scopeNote: { scope?: string } = {};
     if (route?.reachTarget !== undefined) {
       scopeNote = { scope: route.reachTarget };
@@ -562,7 +609,14 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
 
   const runScopedExecute = async (
     callId: string,
-    params: { command: string; timeout_seconds?: number; purpose?: string; scope?: string; durable?: boolean },
+    params: {
+      command: string;
+      computer?: string;
+      timeout_seconds?: number;
+      purpose?: string;
+      scope?: string;
+      durable?: boolean;
+    },
   ) => {
     const scope = (params.scope ?? "scoped").trim();
     const keyword = scope.toLowerCase();

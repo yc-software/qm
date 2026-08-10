@@ -11,6 +11,10 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       if (sink) sink.lastExecOpts = opts;
       return { stdout: `ran ${command}`, stderr: "", code: 0, timedOut: false };
     },
+    async restartComputer() {},
+    async computerStatus() {
+      return { machine: "healthy", guestResponsive: true };
+    },
     async read(path) {
       return path === "a.txt"
         ? { content: "data", sourceScopeId: "personal:U1" }
@@ -327,6 +331,41 @@ test("each pi tool emits a tool_call then a tool_result", async () => {
     emitted.every((e) => e.scopeLabel === "personal:U1"),
     true,
   );
+});
+
+test("execute's computer param manages the box out-of-band instead of running a command", async () => {
+  const restarted: number[] = [];
+  const tc = {
+    ...fakeToolContext(),
+    restartComputer: async () => {
+      restarted.push(1);
+    },
+    computerStatus: async () => ({ machine: "healthy", guestResponsive: false }),
+  };
+  const ref: ToolContextRef = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
+  const [execute] = createPiTools(ref);
+
+  const status = (await call(execute, { command: "", computer: "status", purpose: "p" })) as {
+    content: Array<{ text?: string }>;
+  };
+  assert.match(status.content[0]!.text!, /machine: healthy; shell: NOT answering/);
+
+  const restart = (await call(execute, { command: "", computer: "restart", purpose: "p" })) as {
+    content: Array<{ text?: string }>;
+  };
+  assert.equal(restarted.length, 1);
+  assert.match(restart.content[0]!.text!, /restarting/i);
+
+  ref.current = {
+    ...tc,
+    restartComputer: async () => {
+      throw new Error("this computer's substrate (local) does not support restarting the computer");
+    },
+  };
+  const err = (await call(execute, { command: "", computer: "restart", purpose: "p" })) as {
+    content: Array<{ text?: string }>;
+  };
+  assert.match(err.content[0]!.text!, /does not support restarting/);
 });
 
 test("a giant tool result is capped for the model, keeping the tail and matching the persisted replay record", async () => {

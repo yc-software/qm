@@ -98,13 +98,13 @@
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
     "@types/tar-stream": "^3.1.4",
+    "@yc-software/qm": "file:./cli",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",
     "knip": "^6.26.0",
     "oxlint": "^1.74.0",
     "prettier": "3.9.1",
     "typescript": "^5.8.2",
-    "typescript-eslint": "^8.61.0",
-    "@yc-software/qm": "file:./cli"
+    "typescript-eslint": "^8.61.0"
   }
 }
