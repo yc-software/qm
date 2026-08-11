@@ -148,6 +148,41 @@ test("a stale-image container is recreated while its home volume survives", asyn
   assert.equal(h2.coldStart, false, "existing volume means a warm home");
 });
 
+test("a container with a missing network is recreated while its home volume survives", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const layers = rw(scopeId("personal", "U-network"));
+  const firstSandbox = makeSandbox(fake);
+  const h1 = await firstSandbox.provision(layers);
+  const volume = fake.containers.get(h1.id)!.volume!;
+  await firstSandbox.teardown(h1);
+  fake.networks.delete(localNetworkName(h1.id));
+
+  const h2 = await makeSandbox(fake).provision(layers);
+  assert.equal(h2.id, h1.id);
+  assert.equal(fake.runCount, 2, "container recreated after its network disappeared");
+  assert.equal(fake.volumes.has(volume), true, "volume survived the recreate");
+  assert.equal(fake.networks.has(localNetworkName(h2.id)), true, "network recreated");
+  assert.equal(h2.coldStart, false, "existing volume means a warm home");
+});
+
+test("a container attached to a replaced network is recreated", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const layers = rw(scopeId("personal", "U-replaced-network"));
+  const firstSandbox = makeSandbox(fake);
+  const h1 = await firstSandbox.provision(layers);
+  const network = localNetworkName(h1.id);
+  const originalNetworkId = fake.containers.get(h1.id)!.networkId;
+  await firstSandbox.teardown(h1);
+  fake.networks.delete(network);
+  await fake.dockerExec(["network", "create", network]);
+
+  const h2 = await makeSandbox(fake).provision(layers);
+  assert.equal(h2.id, h1.id);
+  assert.equal(fake.runCount, 2, "container recreated after its network was replaced");
+  assert.notEqual(fake.containers.get(h2.id)!.networkId, originalNetworkId);
+  assert.equal(h2.coldStart, false, "existing volume means a warm home");
+});
+
 test("a scratch box has no volume and is removed on teardown", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
@@ -157,6 +192,24 @@ test("a scratch box has no volume and is removed on teardown", async () => {
   assert.equal(fake.containers.get(h.id)!.volume, undefined);
   await sb.teardown(h);
   assert.equal(fake.containers.has(h.id), false, "scratch container destroyed");
+});
+
+test("a scratch box with a missing network is recreated", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const firstSandbox = makeSandbox(fake);
+  const h1 = await firstSandbox.provision(rw(scopeId("personal", "U-scratch-network")), {
+    scratch: { key: "missing-network" },
+  });
+  fake.containers.get(h1.id)!.running = false;
+  fake.networks.delete(localNetworkName(h1.id));
+
+  const h2 = await makeSandbox(fake).provision(rw(scopeId("personal", "U-scratch-network")), {
+    scratch: { key: "missing-network" },
+  });
+  assert.equal(h2.id, h1.id);
+  assert.equal(fake.runCount, 2, "scratch container recreated after its network disappeared");
+  assert.equal(fake.networks.has(localNetworkName(h2.id)), true, "scratch network recreated");
+  assert.equal(h2.coldStart, true);
 });
 
 test("teardown destroy removes both the container and its volume", async () => {
