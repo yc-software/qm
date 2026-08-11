@@ -7,6 +7,7 @@ import {
   channelPrivacyChange,
   createRefreshCoalescer,
   hasContent,
+  messageBodyText,
   dmThreadRef,
   mentionsBot,
   threadHasBotStake,
@@ -287,4 +288,30 @@ test("createInFlightThreadMap: clear is runId-guarded so a finished run can't un
   assert.equal(runs.get("dm:C1"), "run-2");
   runs.clear("dm:C1", "run-2");
   assert.equal(runs.get("dm:C1"), undefined);
+});
+
+test("messageBodyText returns text verbatim when present", () => {
+  assert.equal(messageBodyText({ text: "hello" }), "hello");
+  assert.equal(messageBodyText({ text: "hello", attachments: [{ fallback: "ignored" }] }), "hello");
+});
+
+test("messageBodyText falls back to attachment content for empty-text bot notifications", () => {
+  assert.equal(messageBodyText({ text: "" }), "");
+  assert.equal(messageBodyText({}), "");
+  assert.equal(
+    messageBodyText({ text: "", attachments: [{ fallback: "[org/repo] Pull request opened by someone" }] }),
+    "[org/repo] Pull request opened by someone",
+  );
+  assert.equal(
+    messageBodyText({ text: " ", attachments: [{ pretext: "pre", title: "PR #1", text: "body" }] }),
+    "pre\nPR #1\nbody",
+  );
+  assert.equal(
+    messageBodyText({ text: "", attachments: [{ fallback: "first" }, { title: "second" }, {}] }),
+    "first\nsecond",
+  );
+  assert.equal(
+    messageBodyText({ text: "", attachments: [{ fallback: "fb", title: "title only" }] }),
+    "title only",
+  );
 });

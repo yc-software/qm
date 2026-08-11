@@ -75,6 +75,27 @@ export function hasContent(text: string, files: readonly unknown[]): boolean {
   return text.trim().length > 0 || files.length > 0;
 }
 
+export interface LegacyAttachment {
+  fallback?: string;
+  pretext?: string;
+  title?: string;
+  text?: string;
+}
+
+export function messageBodyText(m: { text?: string; attachments?: LegacyAttachment[] }): string {
+  if (m.text?.trim()) return m.text;
+  return (m.attachments ?? [])
+    .map((a) => {
+      const composed = [a.pretext, a.title, a.text]
+        .map((s) => s?.trim())
+        .filter(Boolean)
+        .join("\n");
+      return composed || a.fallback?.trim() || "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function isThreadReply(m: { thread_ts?: string; ts?: string }): boolean {
   return Boolean(m.thread_ts) && m.thread_ts !== m.ts;
 }

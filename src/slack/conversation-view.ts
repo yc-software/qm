@@ -10,6 +10,7 @@ import {
   collectEarlierThreadFiles,
   decodeSlackEntities,
   isOversize,
+  messageBodyText,
   recentWindow,
 } from "./lib.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -157,7 +158,7 @@ export function createConversationSerializer(deps: {
       ts: m.ts as string,
       name: messageAuthorName(m, nameById, botNameById),
       ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
-      text: decodeSlackEntities(String(m.text ?? "").trim()),
+      text: decodeSlackEntities(messageBodyText(m).trim()),
       ...(m.ts === triggerTs ? { isTrigger: true } : {}),
       ...(m.bot_id ? { isBot: true } : {}),
       ...(isSelfMessage(m) ? { isSelf: true } : {}),
@@ -234,7 +235,7 @@ export function createConversationSerializer(deps: {
         kind: "thread",
         youOpenedIt,
         ...(starterName ? { starterName } : {}),
-        ...(youOpenedIt && root?.text ? { openerText: decodeSlackEntities(String(root.text).trim()) } : {}),
+        ...(youOpenedIt && root && messageBodyText(root).trim() ? { openerText: decodeSlackEntities(messageBodyText(root).trim()) } : {}),
       };
     } else {
       here = { kind: "top-level" };
