@@ -9,6 +9,7 @@ function pat(method: string, template: string, field?: Field): Rule {
 }
 
 const USER_SCOPED: Rule[] = [
+  pat("GET", "/v1/sessions/search", { in: "query", name: "principalId" }),
   pat("GET", "/v1/sessions/:id", { in: "query", name: "viewer" }),
   pat("GET", "/v1/sessions/:id/entries/:seq", { in: "query", name: "viewer" }),
   pat("GET", "/v1/sessions/:id/approvals", { in: "query", name: "viewer" }),

@@ -270,6 +270,15 @@ export interface DistinctScope {
   channelName?: string;
 }
 
+export interface EntrySearchHit {
+  sessionId: string;
+  seq: number;
+  type: EntryType;
+  author?: string;
+  text: string;
+  createdAt: number;
+}
+
 export interface SessionSummary {
   id: string;
   type: SessionType;
@@ -460,6 +469,8 @@ export interface SessionStore {
   updateParticipantView(sessionId: string, principalId: string, patch: ParticipantViewPatch): Promise<void>;
 
   visibleEntries(sessionId: string, principalId: string): Promise<SessionEntry[]>;
+
+  searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
 
   listAll(): Promise<Session[]>;
 

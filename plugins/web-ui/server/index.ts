@@ -804,6 +804,22 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/search",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const q = url.searchParams.get("q") ?? "";
+      const limit = url.searchParams.get("limit");
+      return relayCore(
+        res,
+        "GET",
+        `/v1/sessions/search?principalId=${encodeURIComponent(user)}&q=${encodeURIComponent(q)}${
+          limit ? `&limit=${encodeURIComponent(limit)}` : ""
+        }`,
+      );
+    },
+  },
+  {
+    method: "GET",
     path: "/api/sessions",
     handle: async (c) => {
       const { res, user } = c;

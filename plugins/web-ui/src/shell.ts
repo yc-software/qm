@@ -14,6 +14,7 @@ import {
   Plus,
   RefreshCw,
   Rocket,
+  Search,
   ShieldCheck,
   type IconNode,
 } from "lucide";
@@ -61,6 +62,8 @@ import {
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
+import { openChatSearch, SEARCH_HOTKEY_LABEL } from "./search";
+import { hideTooltip, showTooltip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
@@ -543,6 +546,21 @@ export function renderSidebarTop(): void {
       ${html`
         <div class="section-label recents-label">
           <span>Sessions</span>
+          <button
+            class="chat-search-open"
+            type="button"
+            aria-label="Search chats"
+            @click=${() => {
+              hideTooltip();
+              openChatSearch();
+            }}
+            @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search chats · ${SEARCH_HOTKEY_LABEL}`)}
+            @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+            @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search chats · ${SEARCH_HOTKEY_LABEL}`)}
+            @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+          >
+            ${icon(Search, 13)}
+          </button>
           <button
             class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
             type="button"

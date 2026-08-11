@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Session, SessionEntry, ScopeId } from "../types.ts";
 import type {
   AttributedTurn,
+  EntrySearchHit,
   CronGroupSummary,
   GetEntriesOptions,
   GetTapeOptions,
@@ -19,6 +20,7 @@ import type {
   StoreOptions,
   TapeRecord,
 } from "./session-store.ts";
+import { entrySearchAuthor, entrySearchText, matchesSearchTerms, searchTerms } from "./entry-search.ts";
 import {
   cronIdOf,
   isOverheardEntry,
@@ -355,6 +357,34 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       if (!win) return [];
       const log = entries.get(sessionId) ?? [];
       return log.filter((e) => e.seq >= win.validFromSeq && (win.validToSeq === null || e.seq < win.validToSeq));
+    },
+
+    async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {
+      const terms = searchTerms(query);
+      if (!terms.length) return [];
+      const searchable = new Set(["user", "assistant", "text"]);
+      const hits: EntrySearchHit[] = [];
+      for (const sessionId of participants.get(principalId) ?? []) {
+        const win = windows.get(sessionId)?.get(principalId);
+        if (!win) continue;
+        for (const e of entries.get(sessionId) ?? []) {
+          if (!searchable.has(e.type)) continue;
+          if (e.seq < win.validFromSeq || (win.validToSeq !== null && e.seq >= win.validToSeq)) continue;
+          const text = entrySearchText(e.payload);
+          if (!text || !matchesSearchTerms(text, terms)) continue;
+          const author = entrySearchAuthor(e);
+          hits.push({
+            sessionId,
+            seq: e.seq,
+            type: e.type,
+            ...(author ? { author } : {}),
+            text,
+            createdAt: e.createdAt,
+          });
+        }
+      }
+      hits.sort((a, b) => b.createdAt - a.createdAt || idDesc(a.sessionId, b.sessionId) || b.seq - a.seq);
+      return hits.slice(0, Math.max(1, Math.min(limit, 200)));
     },
 
     async listAll() {

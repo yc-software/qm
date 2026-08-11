@@ -3,6 +3,7 @@ import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId } from "../files/file-artifact-store.ts";
 import { transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
+import { SEARCH_HIT_LIMIT, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
 import { cronRef, deployRef, encodeRef, fileRef, skillRef } from "../acl/resource-ref.ts";
@@ -14,7 +15,7 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
-import { toFileItem, type ScopeDeployment } from "./app-types.ts";
+import { toFileItem, type ScopeDeployment, type SessionSearchHit } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
 export function createSessionMethods(
@@ -29,6 +30,7 @@ export function createSessionMethods(
   | "uploadFileForViewer"
   | "openFileForViewer"
   | "listSessions"
+  | "searchSessions"
   | "sessionBackground"
   | "readSessionBackgroundOutput"
   | "listContexts"
@@ -208,6 +210,32 @@ export function createSessionMethods(
         ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
         ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),
       }));
+    },
+
+    async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
+      const capped = Math.max(1, Math.min(limit, 100));
+      const hits = await deps.sessions.searchEntries(principalId, query, capped);
+      if (!hits.length) return [];
+      const visible = new Map((await sessionsForViewer(principalId)).map((s) => [s.id, s]));
+      const terms = searchTerms(query);
+      return hits.flatMap((hit) => {
+        const session = visible.get(hit.sessionId);
+        if (!session) return [];
+        return [
+          {
+            sessionId: hit.sessionId,
+            title: session.title ?? null,
+            scopeId: session.scopeId,
+            ...(session.channelName ? { channelName: session.channelName } : {}),
+            ...(session.surface ? { surface: session.surface } : {}),
+            seq: hit.seq,
+            entryType: hit.type,
+            ...(hit.author ? { author: hit.author } : {}),
+            snippet: searchSnippet(hit.text, terms),
+            createdAt: hit.createdAt,
+          },
+        ];
+      });
     },
 
     async sessionBackground(sessionId, viewer) {

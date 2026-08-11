@@ -4,6 +4,7 @@ import { jsonbSafeStringify } from "../util/text.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
 import type {
   AttributedTurn,
+  EntrySearchHit,
   CronGroupSummary,
   DistinctScope,
   GetEntriesOptions,
@@ -26,6 +27,7 @@ import type {
   StoreOptions,
   TapeRecord,
 } from "./session-store.ts";
+import { tsPrefixQuery } from "./entry-search.ts";
 import {
   LEGACY_CRON_ID_PATTERN,
   legacyOriginPattern,
@@ -257,6 +259,19 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC)`,
     `CREATE INDEX IF NOT EXISTS session_entries_user_ts ON session_entries(created_at) WHERE type = 'user'`,
     `CREATE INDEX IF NOT EXISTS session_entries_session_created ON session_entries(session_id, created_at DESC)`,
+    `CREATE OR REPLACE FUNCTION entry_search_text(payload text) RETURNS text
+        LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $entry_search_text$
+        DECLARE j json;
+        BEGIN
+          j := replace(payload, '\\u0000', '')::json;
+          RETURN CASE WHEN json_typeof(j -> 'text') = 'string' THEN j ->> 'text'
+                      WHEN json_typeof(j) = 'string' THEN j #>> '{}'
+                      ELSE NULL END;
+        EXCEPTION WHEN others THEN RETURN NULL;
+        END $entry_search_text$`,
+    `CREATE INDEX IF NOT EXISTS session_entries_search_fts
+        ON session_entries USING GIN (to_tsvector('simple', COALESCE(entry_search_text(payload), '')))
+        WHERE type IN ('user', 'assistant', 'text')`,
     `DELETE FROM session_entries WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
     `DELETE FROM participants WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
     `DELETE FROM session_leases WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
@@ -717,6 +732,39 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         [sessionId, principalId],
       );
       return rows.map(rowToEntry);
+    },
+
+    async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {
+      const ts = tsPrefixQuery(query);
+      if (!ts) return [];
+      const rows = await q(
+        `SELECT e.session_id, e.seq, e.type, e.created_at,
+                entry_search_text(e.payload) AS text,
+                (SELECT CASE WHEN e.type = 'user' AND json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
+                   FROM (SELECT safe_json(replace(e.payload, '\\u0000', '')) AS j) _) AS author
+           FROM session_entries e
+           JOIN participants p ON p.session_id = e.session_id AND p.principal_id = $1
+          WHERE e.type IN ('user', 'assistant', 'text')
+            AND ${withinParticipantWindow("e", "p")}
+            AND to_tsvector('simple', COALESCE(entry_search_text(e.payload), '')) @@ to_tsquery('simple', $2)
+          ORDER BY e.created_at DESC, e.session_id, e.seq DESC
+          LIMIT $3`,
+        [principalId, ts, Math.max(1, Math.min(limit, 200))],
+      );
+      return rows.flatMap((r) => {
+        const text = (r.text as string | null) ?? "";
+        if (!text.trim()) return [];
+        return [
+          {
+            sessionId: r.session_id as string,
+            seq: Number(r.seq),
+            type: r.type as EntrySearchHit["type"],
+            ...(r.author ? { author: r.author as string } : {}),
+            text,
+            createdAt: Number(r.created_at),
+          },
+        ];
+      });
     },
 
     async listAll(): Promise<Session[]> {

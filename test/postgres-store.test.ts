@@ -1272,6 +1272,44 @@ test("pg participant view: pin/color are per-participant, survive re-add, and cl
   assert.equal(cleared.color ?? null, null, "null clears the color");
 });
 
+test("pg search: full-text over entries with prefix match, window ACL, and type filter", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "USRCH");
+  const sess = await s.getOrCreateByThread("srch-1", "dm", scope);
+  await s.addParticipant(sess.id, "USRCH", undefined, { includeHistory: true });
+
+  const att = await s.acquireLease(sess.id);
+  const lease = att.lease!;
+  await s.append(lease, {
+    type: "user",
+    payload: { text: "can you refresh the memo board data?", name: "josh" },
+    scopeLabel: scope,
+  });
+  await s.append(lease, {
+    type: "assistant",
+    payload: { text: "Done — pushed the memo board refresh." },
+    scopeLabel: scope,
+  });
+  await s.append(lease, { type: "tool_call", payload: { text: "memo board tool noise" }, scopeLabel: scope });
+  // A latecomer joins without history, then one more message lands.
+  await s.addParticipant(sess.id, "ULATE");
+  await s.append(lease, { type: "user", payload: { text: "memo board postscript" }, scopeLabel: scope });
+  await s.releaseLease(lease);
+
+  const hits = await s.searchEntries("USRCH", "memo boar");
+  assert.equal(hits.length, 3, "prefix terms match user and assistant text; tool calls are ignored");
+  assert.equal(hits[0]!.text, "memo board postscript", "newest first");
+  assert.equal(hits[2]!.author, "josh", "user hits carry the author");
+
+  const late = await s.searchEntries("ULATE", "memo");
+  assert.equal(late.length, 1, "a latecomer only searches inside their window");
+  assert.equal(late[0]!.text, "memo board postscript");
+
+  assert.deepEqual(await s.searchEntries("UNONE", "memo"), [], "a non-participant sees nothing");
+  assert.deepEqual(await s.searchEntries("USRCH", "  !!  "), [], "an unusable query is empty, not an error");
+  assert.deepEqual(await s.searchEntries("USRCH", "memo missing"), [], "every term must match");
+});
+
 test(
   "pg deleteSessionIfEmpty: an expired lease forfeits, and the stale holder cannot orphan entries",
   { skip },
