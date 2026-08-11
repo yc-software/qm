@@ -7,6 +7,7 @@ import {
   type OverheardMessage,
   type ReactionTally,
   type RunTaskView,
+  type NativeAgentPresenter,
   type SlackFile,
   type TaskListPresenter,
   DEFAULT_ACK_REACTIONS,
@@ -16,6 +17,7 @@ import {
   buildReactionTurnText,
   createAckPresenter,
   createDeduper,
+  createNativeAgentPresenter,
   createTaskListPresenter,
   createThreadTracker,
   decodeSlackEntities,
@@ -59,6 +61,7 @@ import {
   type SlackConversationKind,
   applyAndLogReactions,
   cleanAgentReplyForSlack,
+  createStreamingReplyFilter,
   conversationPlaceLabel,
   slackSurfaceInstructions,
 } from "./messaging.ts";
@@ -257,6 +260,7 @@ export function createTurnHandler(deps: {
 
     let queuedRunId: string | undefined;
     let taskList: TaskListPresenter | undefined;
+    let nativeAgent: NativeAgentPresenter | undefined;
     const ack = inc.unprompted
       ? undefined
       : createAckPresenter({
@@ -292,6 +296,7 @@ export function createTurnHandler(deps: {
     }
     const settleAck = async (): Promise<void> => {
       await ack?.settle().catch(swallowAs("slack: ack settle", undefined));
+      await nativeAgent?.settle().catch(swallowAs("slack: native agent settle", undefined));
     };
 
     if (inc.kind === "channel") {
@@ -403,6 +408,35 @@ export function createTurnHandler(deps: {
 
     if (inc.unprompted && !text.trim() && attachments.length === 0) return;
 
+    if (!inc.unprompted) {
+      const nativeThreadTs = replyThreadTs ?? inc.ts;
+      nativeAgent = createNativeAgentPresenter({
+        setStatus: (status) =>
+          client.assistant.threads
+            .setStatus({ channel_id: inc.channel, thread_ts: nativeThreadTs, status })
+            .then(() => {}),
+        start: async (chunks) => {
+          const response = await client.chat.startStream({
+            channel: inc.channel,
+            thread_ts: nativeThreadTs,
+            chunks,
+            task_display_mode: "timeline",
+            ...(inc.kind === "channel" ? { recipient_team_id: ids.ownTeamId, recipient_user_id: inc.userId } : {}),
+          });
+          return typeof response.ts === "string" ? response.ts : undefined;
+        },
+        append: (ts, chunks) => client.chat.appendStream({ channel: inc.channel, ts, chunks }).then(() => {}),
+        stop: (ts) => client.chat.stopStream({ channel: inc.channel, ts }).then(() => {}),
+        checkpoint: async (ts) => {
+          if (queuedRunId) await checkpointRunEditRef(queuedRunId, ts);
+        },
+        onSurfacePosted: () => ack?.onSurfacePosted(),
+        onError: (error) => console.error("[slack-plugin] native agent update failed:", errMessage(error)),
+      });
+      await nativeAgent.begin();
+    }
+    const streamingReply = createStreamingReplyFilter();
+
     const turn: Omit<CoreTurnBody, "approval"> = {
       actor,
       conversation: {
@@ -455,8 +489,12 @@ export function createTurnHandler(deps: {
           onSteered: () => inc.ackGate?.persisted(),
           ...(ack
             ? {
+                onDelta: async (delta: string) => {
+                  const visible = streamingReply.push(delta);
+                  if (visible) await nativeAgent?.onDelta(visible);
+                },
                 onFirstBlock: (blockText: string) => {
-                  ack.onFirstBlock(cleanAgentReplyForSlack(blockText).text);
+                  if (!nativeAgent?.ownsSurface()) ack.onFirstBlock(cleanAgentReplyForSlack(blockText).text);
                 },
                 onSurfacePosted: () => ack.onSurfacePosted(),
               }
@@ -465,6 +503,7 @@ export function createTurnHandler(deps: {
             ? {
                 onTasks: async (tasks: RunTaskView[]) => {
                   await ack?.drain();
+                  if (await nativeAgent?.onTasks(tasks)) return;
                   await taskList?.onTasks(tasks);
                 },
               }
@@ -523,6 +562,9 @@ export function createTurnHandler(deps: {
       const postText = reply;
       const tDeliverStart = performance.now();
       let finalizedTaskList = false;
+      const finalStreamDelta = streamingReply.flush();
+      if (finalStreamDelta) await nativeAgent?.onDelta(finalStreamDelta);
+      const finalizedNative = (await nativeAgent?.finalize()) ?? false;
       if (result.attachments?.length) {
         let uploadError: unknown;
         try {
@@ -539,13 +581,13 @@ export function createTurnHandler(deps: {
           console.error("[slack-plugin] file upload failed:", (err as Error).message);
         }
         await settleAck();
-        if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
+        if (postText && !finalizedNative) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
+        if (postText && !finalizedNative && !finalizedTaskList) await postReply(postText);
         if (uploadError) await postReply(uploadFailureNote(uploadError));
       } else {
         await settleAck();
-        if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
+        if (postText && !finalizedNative) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
+        if (postText && !finalizedNative && !finalizedTaskList) await postReply(postText);
       }
       if (queuedRunId) {
         reportTurnMetrics(queuedRunId, {

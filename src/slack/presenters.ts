@@ -175,6 +175,137 @@ export interface TaskListPresenter {
   settle(): Promise<void>;
 }
 
+type NativeAgentChunk =
+  | { type: "markdown_text"; text: string }
+  | {
+      type: "task_update";
+      id: string;
+      title: string;
+      status: "pending" | "in_progress" | "complete" | "error";
+    };
+
+export interface NativeAgentPresenter {
+  begin(): Promise<void>;
+  onDelta(delta: string): Promise<boolean>;
+  onTasks(tasks: RunTaskView[]): Promise<boolean>;
+  finalize(): Promise<boolean>;
+  settle(): Promise<void>;
+  ownsSurface(): boolean;
+}
+
+export function createNativeAgentPresenter(deps: {
+  setStatus(status: string): Promise<void>;
+  start(chunks: NativeAgentChunk[]): Promise<string | undefined>;
+  append(ts: string, chunks: NativeAgentChunk[]): Promise<void>;
+  stop(ts: string): Promise<void>;
+  checkpoint(ts: string): Promise<void>;
+  onSurfacePosted(): void;
+  onError?(error: unknown): void;
+}): NativeAgentPresenter {
+  let state: "idle" | "starting" | "active" | "disabled" | "stopped" = "idle";
+  let messageTs: string | undefined;
+  let chain = Promise.resolve();
+  let statusStarted = false;
+  let statusCleared = false;
+  const nativeTaskStatus = (status: RunTaskStatus): "pending" | "in_progress" | "complete" | "error" => {
+    if (status === "completed" || status === "skipped") return "complete";
+    if (status === "failed") return "error";
+    return status;
+  };
+  const clearStatus = async (): Promise<void> => {
+    if (!statusStarted || statusCleared) return;
+    statusCleared = true;
+    await deps.setStatus("").catch((error) => deps.onError?.(error));
+  };
+  const enqueue = (operation: () => Promise<void>): Promise<void> => {
+    chain = chain.then(operation);
+    return chain;
+  };
+  const send = async (chunks: NativeAgentChunk[]): Promise<boolean> => {
+    if (state === "disabled" || state === "stopped") return false;
+    if (!messageTs && state === "idle") state = "starting";
+    await enqueue(async () => {
+      if (state === "disabled" || state === "stopped") return;
+      try {
+        if (!messageTs) {
+          const ts = await deps.start(chunks);
+          if (!ts) throw new Error("chat.startStream returned no message timestamp");
+          await deps.checkpoint(ts);
+          messageTs = ts;
+          state = "active";
+          deps.onSurfacePosted();
+          return;
+        }
+        await deps.append(messageTs, chunks);
+      } catch (error) {
+        state = "disabled";
+        deps.onError?.(error);
+      }
+    });
+    return state === "active";
+  };
+  return {
+    async begin() {
+      try {
+        await deps.setStatus("Thinking…");
+        statusStarted = true;
+      } catch (error) {
+        deps.onError?.(error);
+      }
+    },
+    onDelta(delta) {
+      if (!delta) return Promise.resolve(state === "active");
+      return send([{ type: "markdown_text", text: delta }]);
+    },
+    onTasks(tasks) {
+      if (!tasks.length) return Promise.resolve(state === "active");
+      const chunks: NativeAgentChunk[] = tasks.slice(0, 20).map((task) => ({
+        type: "task_update",
+        id: task.id,
+        title: task.title
+          .replace(/[\r\n\t]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 120),
+        status: nativeTaskStatus(task.status),
+      }));
+      return send(chunks);
+    },
+    async finalize() {
+      await chain;
+      if (state !== "active" || !messageTs) {
+        await clearStatus();
+        return false;
+      }
+      try {
+        await deps.stop(messageTs);
+        state = "stopped";
+        await clearStatus();
+        return true;
+      } catch (error) {
+        deps.onError?.(error);
+        await clearStatus();
+        return true;
+      }
+    },
+    async settle() {
+      await chain;
+      if (state === "active" && messageTs) {
+        try {
+          await deps.stop(messageTs);
+          state = "stopped";
+        } catch (error) {
+          deps.onError?.(error);
+        }
+      }
+      await clearStatus();
+    },
+    ownsSurface() {
+      return state === "starting" || state === "active" || state === "stopped";
+    },
+  };
+}
+
 export function createTaskListPresenter(deps: {
   post(text: string, blocks: Array<Record<string, unknown>>): Promise<string | undefined>;
   update(ts: string, text: string, blocks: Array<Record<string, unknown>>): Promise<void>;

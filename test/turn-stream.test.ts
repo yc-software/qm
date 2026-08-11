@@ -21,6 +21,22 @@ test("accumulates deltas per run and isolates runs", () => {
   assert.equal(s.snapshot("r2"), "world");
 });
 
+test("subscribers receive public reply deltas in order", () => {
+  const s = createTurnStream();
+  const deltas: string[] = [];
+  const unsubscribe = s.subscribe("r1", {
+    onDelta: (delta) => {
+      deltas.push(delta);
+    },
+  });
+  s.publish("r1", "Hel");
+  s.publish("r1", "lo");
+  s.publish("r2", "private to another run");
+  unsubscribe();
+  s.publish("r1", "!");
+  assert.deepEqual(deltas, ["Hel", "lo"]);
+});
+
 test("ignores empty deltas", () => {
   const s = createTurnStream();
   s.publish("r1", "");

@@ -28,6 +28,7 @@ import { resolveRuntimeChoiceDurable, type RuntimeChoice } from "../harness/harn
 import { modelDisplayName } from "../model/pi-models.ts";
 
 interface SlackRunHooks {
+  onDelta?(delta: string): void | Promise<void>;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
   onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
@@ -187,6 +188,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       const waiters = terminalWaiters.get(runId) ?? new Set();
       terminalWaiters.set(runId, waiters);
       const unsubscribe = deps.turnStream.subscribe(runId, {
+        onDelta: (delta) => hooks.onDelta?.(delta),
         onFirstBlock: signalFirstBlock,
         onSurfacePosted: signalSurface,
       });

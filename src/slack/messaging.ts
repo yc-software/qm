@@ -74,6 +74,33 @@ export function stripSlackDirectives(text: string): string {
   return stripAgentRequestDirectives(stripReactionDirectives(text));
 }
 
+export interface StreamingReplyFilter {
+  push(delta: string): string;
+  flush(): string;
+}
+
+export function createStreamingReplyFilter(): StreamingReplyFilter {
+  let raw = "";
+  let emitted = "";
+  const take = (flush: boolean): string => {
+    const cleaned = stripSlackDirectives(raw);
+    const limit = flush ? cleaned.length : Math.max(0, cleaned.length - 16);
+    if (limit <= emitted.length) return "";
+    const next = cleaned.slice(emitted.length, limit);
+    emitted += next;
+    return next;
+  };
+  return {
+    push(delta) {
+      raw += delta;
+      return take(false);
+    },
+    flush() {
+      return take(true);
+    },
+  };
+}
+
 export async function applyAndLogReactions(
   client: any,
   channel: string,

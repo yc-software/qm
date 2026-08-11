@@ -1,6 +1,85 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderTaskList, createTaskListPresenter, createAckPresenter, stripAckPrefix } from "../src/slack/lib.ts";
+import {
+  renderTaskList,
+  createTaskListPresenter,
+  createAckPresenter,
+  createNativeAgentPresenter,
+  stripAckPrefix,
+} from "../src/slack/lib.ts";
+
+test("native agent presenter streams text and public task progress into one message", async () => {
+  const calls: Array<{ method: string; body: unknown }> = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push({ method: "status", body: status });
+    },
+    start: async (chunks) => {
+      calls.push({ method: "start", body: chunks });
+      return "171.1";
+    },
+    append: async (ts, chunks) => {
+      calls.push({ method: `append:${ts}`, body: chunks });
+    },
+    stop: async (ts) => {
+      calls.push({ method: `stop:${ts}`, body: null });
+    },
+    checkpoint: async (ts) => {
+      calls.push({ method: "checkpoint", body: ts });
+    },
+    onSurfacePosted: () => calls.push({ method: "surface", body: null }),
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("Checking "), true);
+  assert.equal(await presenter.onTasks([{ id: "lookup", title: "Inspect deployment", status: "in_progress" }]), true);
+  assert.equal(await presenter.onDelta("now."), true);
+  assert.equal(await presenter.finalize(), true);
+
+  assert.deepEqual(calls, [
+    { method: "status", body: "Thinking…" },
+    { method: "start", body: [{ type: "markdown_text", text: "Checking " }] },
+    { method: "checkpoint", body: "171.1" },
+    { method: "surface", body: null },
+    {
+      method: "append:171.1",
+      body: [{ type: "task_update", id: "lookup", title: "Inspect deployment", status: "in_progress" }],
+    },
+    { method: "append:171.1", body: [{ type: "markdown_text", text: "now." }] },
+    { method: "stop:171.1", body: null },
+    { method: "status", body: "" },
+  ]);
+});
+
+test("native agent presenter falls back cleanly when Slack streaming is unavailable", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      throw new Error("unknown_method");
+    },
+    append: async () => {
+      calls.push("append");
+    },
+    stop: async () => {
+      calls.push("stop");
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+    onError: (error) => calls.push(`error:${(error as Error).message}`),
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("Answer"), false);
+  assert.equal(await presenter.onTasks([{ id: "lookup", title: "Inspect deployment", status: "in_progress" }]), false);
+  assert.equal(await presenter.finalize(), false);
+  assert.deepEqual(calls, ["status:Thinking…", "start", "error:unknown_method", "status:"]);
+});
 
 test("renderTaskList renders every terminal state", () => {
   assert.equal(

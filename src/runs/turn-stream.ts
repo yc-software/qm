@@ -16,6 +16,7 @@ export interface TurnStream {
 }
 
 interface TurnStreamListener {
+  onDelta?(delta: string): void | Promise<void>;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
 }
@@ -101,6 +102,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
         entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
       if (entry.text.length < maxChars) entry.text = (entry.text + delta).slice(0, maxChars);
+      for (const l of listeners.get(runId) ?? []) l.onDelta?.(delta);
     },
 
     publishBlockStart(runId) {
