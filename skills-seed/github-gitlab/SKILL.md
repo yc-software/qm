@@ -12,9 +12,20 @@ requiredCapabilities:
 Use this skill when the user asks to inspect repos, issues, pull requests, merge
 requests, code history, branches, or to make a small code change in a hosted repo.
 
-This is a resident-machine-auth connector. Prefer the native CLIs (`gh`, `glab`) and
-`git`, using the agent computer's logged-in state. Do not ask the user to paste tokens,
-and do not rely on proxy bearer-token injection.
+Prefer the native CLIs (`gh`, `glab`) and `git`. GitHub supports either the requesting
+user's product OAuth token or resident machine auth. When
+`$VAULT_TOKEN_API_GITHUB_COM` is present, pass it to `gh` only through `GH_TOKEN` for
+the command being run:
+
+```bash
+GH_TOKEN="$VAULT_TOKEN_API_GITHUB_COM" gh auth status
+GH_TOKEN="$VAULT_TOKEN_API_GITHUB_COM" gh repo view OWNER/REPO --json name,description,url,defaultBranchRef
+```
+
+Never print either variable, persist it in a file, or use another principal's token. If
+the vault variable is absent in a direct DM, the user has not connected GitHub through
+the product; use resident login only when the computer profile says durable process
+sessions are supported. Do not ask the user to paste a token.
 
 One exception: if the system prompt lists a shared org credential for a Git remote, the
 token is broker-only and never appears on the computer. For clone/fetch/push, use the
@@ -24,7 +35,8 @@ server-side.
 
 ## Logging in
 
-If `gh auth status` (or `glab auth status`) fails, log in with the native command:
+When no product OAuth token is available and `gh auth status` (or `glab auth status`)
+fails, log in with the native command only on a computer with durable process sessions:
 
 ```bash
 gh auth login
