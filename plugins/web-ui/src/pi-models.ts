@@ -30,7 +30,7 @@ export function getBaseModel(id: string, fallback?: { name: string; provider: st
     const template = builtinModel(clone.template);
     if (template) return cloneModel(template, id, clone.name);
   }
-  if (fallback?.provider === "openrouter") {
+  if (fallback) {
     const template = getModel("openrouter", "openrouter/auto" as Parameters<typeof getModel>[1]) as PiModel | undefined;
     if (template) return cloneModel(template, id, fallback.name);
   }
