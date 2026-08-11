@@ -214,10 +214,11 @@ npm exec qm -- outputs --json
 ```
 
 `check --live` verifies provider infrastructure, private storage, public
-health, and a private end-to-end web session. The session canary makes one real
-model call, verifies the reply and transcript were persisted, requires a
-generated title, checks the session-scoped error log, and archives itself after
-success. Fly runs it inside the core machine; AWS runs it as a one-off task on
+health, and a private end-to-end web session. The session canary runs one real
+agent turn plus auxiliary title generation, verifies the exact reply and
+persisted transcript, requires a generated title, checks the session-scoped
+error log, and archives itself. It does not recall or capture administrator
+memory. Fly runs it inside the core machine; AWS runs it as a one-off task on
 the core service's private network. It does not add a public session endpoint.
 
 Open `adminOnboardingUrl` from the JSON output and confirm Model provider

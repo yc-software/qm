@@ -403,6 +403,7 @@ export interface TurnRequest {
   thinkingLevel?: string;
   fastMode?: boolean;
   readOnly?: boolean;
+  skipMemory?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
   envelopeWrapped?: boolean;

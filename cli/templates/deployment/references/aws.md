@@ -46,6 +46,12 @@ npm exec qm -- up --yes
 npm exec qm -- check --live
 ```
 
+Existing deployments created before private session canaries must rerun
+`npm exec qm -- infra render`, review the Terraform plan, and apply it with
+infrastructure-administrator credentials before enabling `check --live`. This
+adds the deploy role's stack-scoped permission to run and inspect the one-off
+core canary task.
+
 The package image manifest supplies first-party control-plane images. The AWS
 backend transfers them into deployment-owned ECR and records immutable digests.
 After the first successful deployment, rerun `npm exec qm -- up --yes` and

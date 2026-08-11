@@ -747,16 +747,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
       }
       const strictReadOnly = input.readOnly === true;
+      const useMemory = input.skipMemory !== true;
       const environmentId = await resolveEnvironmentId(deps.environments, scopeId);
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
       if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
       for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
 
       const memoryScopeId = writableMemoryScope(resolution.layers, scopeId);
-      const recallScopes = recallMemoryScopes(memoryPolicy, resolution.layers, memoryScopeId);
+      const recallScopes = useMemory ? recallMemoryScopes(memoryPolicy, resolution.layers, memoryScopeId) : [];
       const memoryAccess =
-        memoryPolicy.capture !== "off" || recallScopes.length > 0
-          ? { ...(memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}), read: recallScopes }
+        (useMemory && memoryPolicy.capture !== "off") || recallScopes.length > 0
+          ? { ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}), read: recallScopes }
           : undefined;
       const skillScopes = visibleSkillScopes(resolution, scopeId);
       const recalledSections: string[] = [];
@@ -803,7 +804,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .profileFor(memoryScopeId)
             .catch(swallowAs("orchestrator: scope profile read", deps.sandbox.profile))
         : deps.sandbox.profile;
-      const strategyLines = memoryStrategy.promptLines?.() ?? [];
+      const strategyLines = useMemory ? (memoryStrategy.promptLines?.() ?? []) : [];
       if (strategyLines.length) {
         systemPrompt += `\n\n${strategyLines.join("\n")}`;
       }
@@ -876,7 +877,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         : "";
 
       let onboardingBlock = "";
-      if (conversation.kind === "dm" && onboardingSkillVisible(visibleSkills)) {
+      if (useMemory && conversation.kind === "dm" && onboardingSkillVisible(visibleSkills)) {
         const fullMemory = await deps.memory.read(memoryScopeId).catch(swallowAs("orchestrator: memory read", ""));
         onboardingBlock = renderPendingOnboardingPrompt(detectOnboardingStatus(fullMemory));
       }
@@ -1032,7 +1033,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .adminStatusOf(actor)
             .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
           actorIsOrgAdmin = status.isAdmin;
-          if (actorIsOrgAdmin && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId) {
+          if (
+            actorIsOrgAdmin &&
+            useMemory &&
+            memoryPolicy.capture !== "off" &&
+            resolution.orgScopeId !== memoryScopeId
+          ) {
             orgMemoryWrite = resolution.orgScopeId;
           }
         }
@@ -2589,7 +2595,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
         });
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && memoryPolicy.capture !== "off" && onTurnEnd) {
+        if (!pausing && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));

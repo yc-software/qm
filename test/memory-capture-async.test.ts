@@ -11,6 +11,8 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
+import type { MemoryService } from "../src/memory/memory-service.ts";
+import type { MemoryStrategy } from "../src/memory/strategy.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
@@ -86,7 +88,7 @@ function gatedHarness() {
   };
 }
 
-function buildOrchestrator(harness: Harness) {
+function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrategy?: MemoryStrategy) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -109,11 +111,35 @@ function buildOrchestrator(harness: Harness) {
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
     harness,
-    memory: createMemoryService(workspace),
+    memory: memory ?? createMemoryService(workspace),
+    ...(memoryStrategy ? { memoryStrategy } : {}),
     deploy,
     acl,
   });
 }
+
+test("skipMemory turns neither recall nor capture", async () => {
+  let recalls = 0;
+  let captures = 0;
+  const memory: MemoryService = {
+    recall: async () => (recalls++, "remembered deployment state"),
+    capture: async () => 0,
+    query: async () => [],
+    read: async () => "",
+    replace: async () => {},
+  };
+  const orch = buildOrchestrator(createMockHarness(), memory, {
+    onTurnEnd: async () => {
+      captures++;
+    },
+  });
+
+  const result = await orch.handleTurn({ ...dm("dm:U1:canary", "deployment canary"), skipMemory: true });
+
+  assert.equal(result.status, "ok");
+  assert.equal(recalls, 0);
+  assert.equal(captures, 0);
+});
 
 test("capture does NOT block the turn: the reply returns while extraction is still in flight", async () => {
   const g = gatedHarness();

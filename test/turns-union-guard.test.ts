@@ -36,6 +36,7 @@ test("POST /v1/turns strips ownerKeychainUnion from the external body but keeps 
     triggered: true,
     ownerKeychainUnion: true,
     readOnly: true,
+    skipMemory: true,
     async: true,
   });
   const r = await fetch(`${base}/v1/turns`, {
@@ -52,6 +53,7 @@ test("POST /v1/turns strips ownerKeychainUnion from the external body but keeps 
     "external union injection is removed while trigger provenance survives",
   );
   assert.equal(run?.request.readOnly, true, "non-internal fields are still forwarded");
+  assert.equal(run?.request.skipMemory, true, "the source-authenticated memory opt-out is forwarded");
 });
 
 test("POST /v1/turns strips nested owner-keychain union from typed automation origin", async () => {

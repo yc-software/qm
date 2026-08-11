@@ -96,7 +96,8 @@ test("live session smoke proves a model turn, persistence, title, error log, and
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
     calls.push({ method, path: `${url.pathname}${url.search}`, body: String(init?.body ?? "") });
-    if (url.pathname === "/v1/turns") return Response.json({ status: "ok", sessionId: "sess-1", reply: "PONG" });
+    if (url.pathname === "/v1/turns")
+      return Response.json({ status: "ok", sessionId: "sess-1", reply: "QM deployment canary passed." });
     if (url.pathname === "/v1/admin/errors") return Response.json({ errors: [] });
     if (method === "POST") return Response.json({ session: { id: "sess-1", archived: true } });
     return Response.json({
@@ -114,14 +115,28 @@ test("live session smoke proves a model turn, persistence, title, error log, and
     ],
   );
   assert.equal(JSON.parse(calls[0]!.body).readOnly, true);
+  assert.equal(JSON.parse(calls[0]!.body).skipMemory, true);
   assert.deepEqual(JSON.parse(calls[3]!.body), { principalId: "josh@example.com", archived: true });
+
+  let archivedFailedSession = false;
+  await assert.rejects(
+    checkLiveSession(config, "http://core.internal:8080", async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/turns")
+        return Response.json({ status: "ok", sessionId: "sess-2", reply: "QM deployment canary passed." });
+      if (path === "/v1/sessions/sess-2" && init?.method === "POST") archivedFailedSession = true;
+      return Response.json({ session: { id: "sess-2" }, entries: [{ type: "user" }, { type: "assistant" }] });
+    }),
+    /generated title/,
+  );
+  assert.equal(archivedFailedSession, true);
 
   await assert.rejects(
     checkLiveSession(config, "http://core.internal:8080", async (input) => {
       const path = new URL(String(input)).pathname;
-      if (path === "/v1/turns") return Response.json({ status: "ok", sessionId: "sess-2", reply: "PONG" });
-      return Response.json({ session: { id: "sess-2" }, entries: [{ type: "user" }, { type: "assistant" }] });
+      if (path === "/v1/turns") return Response.json({ status: "ok", sessionId: "sess-3", reply: "Looks good" });
+      return Response.json({ session: { id: "sess-3", archived: true } });
     }),
-    /generated title/,
+    /unexpected model reply/,
   );
 });

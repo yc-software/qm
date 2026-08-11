@@ -2,7 +2,6 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { scopeId } from "../src/types.ts";
-import { settle } from "./support/settle.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres error-log tests";
@@ -28,7 +27,6 @@ test("pg error log: persists events, filters by scope, newest-first, shape-only"
     sessionId: "sess-1",
   });
   log.record({ category: "turn", code: "error", message: "boom (shape-only)", scopeLabel: s2 });
-  await settle(async () => (await log.list({ limit: 100 })).length === 2);
 
   const all = await log.list({ limit: 100 });
   assert.equal(all.length, 2, "both events persisted");
