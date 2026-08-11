@@ -184,6 +184,8 @@ type NativeAgentChunk =
       status: "pending" | "in_progress" | "complete" | "error";
     };
 
+const NATIVE_STREAM_BUFFER_SIZE = 256;
+
 export interface NativeAgentPresenter {
   begin(): Promise<void>;
   onDelta(delta: string): Promise<boolean>;
@@ -208,6 +210,7 @@ export function createNativeAgentPresenter(deps: {
   let chain = Promise.resolve();
   let statusStarted = false;
   let statusCleared = false;
+  let pendingText = "";
   const nativeTaskStatus = (status: RunTaskStatus): "pending" | "in_progress" | "complete" | "error" => {
     if (status === "completed" || status === "skipped") return "complete";
     if (status === "failed") return "error";
@@ -259,6 +262,12 @@ export function createNativeAgentPresenter(deps: {
     });
     return state === "active";
   };
+  const flushPendingText = (): Promise<boolean> => {
+    if (!pendingText) return Promise.resolve(state === "starting" || state === "active");
+    const text = pendingText;
+    pendingText = "";
+    return send([{ type: "markdown_text", text }]);
+  };
   return {
     async begin() {
       statusStarted = true;
@@ -270,12 +279,17 @@ export function createNativeAgentPresenter(deps: {
         }
       });
     },
-    onDelta(delta) {
-      if (!delta) return Promise.resolve(state === "active");
-      return send([{ type: "markdown_text", text: delta }]);
+    async onDelta(delta) {
+      if (!delta) return state === "starting" || state === "active";
+      if (state === "disabled" || state === "stopped") return false;
+      pendingText += delta;
+      if (state === "idle") state = "starting";
+      if (pendingText.length < NATIVE_STREAM_BUFFER_SIZE) return true;
+      return flushPendingText();
     },
-    onTasks(tasks) {
-      if (!tasks.length) return Promise.resolve(state === "active");
+    async onTasks(tasks) {
+      if (!tasks.length) return state === "starting" || state === "active";
+      if (pendingText && !(await flushPendingText())) return false;
       const chunks: NativeAgentChunk[] = tasks.slice(0, 20).map((task) => ({
         type: "task_update",
         id: task.id,
@@ -289,6 +303,7 @@ export function createNativeAgentPresenter(deps: {
       return send(chunks);
     },
     async finalize() {
+      if (pendingText) await flushPendingText();
       await chain;
       if (state === "orphaned") {
         await clearStatus();
@@ -310,6 +325,7 @@ export function createNativeAgentPresenter(deps: {
       }
     },
     async settle() {
+      pendingText = "";
       await chain;
       if (state === "active" && messageTs) {
         try {

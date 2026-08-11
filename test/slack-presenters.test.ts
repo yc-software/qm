@@ -54,6 +54,39 @@ test("native agent presenter streams text and public task progress into one mess
   ]);
 });
 
+test("native agent presenter coalesces token deltas into Slack-sized stream updates", async () => {
+  const calls: Array<{ method: string; text?: string }> = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async () => {},
+    start: async (chunks) => {
+      calls.push({ method: "start", text: chunks[0]?.type === "markdown_text" ? chunks[0].text : undefined });
+      return "171.6";
+    },
+    append: async (_ts, chunks) => {
+      calls.push({ method: "append", text: chunks[0]?.type === "markdown_text" ? chunks[0].text : undefined });
+    },
+    stop: async () => {
+      calls.push({ method: "stop" });
+    },
+    remove: async () => {},
+    checkpoint: async () => {},
+    onSurfacePosted: () => {},
+  });
+
+  for (const character of "x".repeat(600)) assert.equal(await presenter.onDelta(character), true);
+  assert.equal(await presenter.finalize(), true);
+
+  assert.deepEqual(
+    calls.map(({ method, text }) => ({ method, length: text?.length })),
+    [
+      { method: "start", length: 256 },
+      { method: "append", length: 256 },
+      { method: "append", length: 88 },
+      { method: "stop", length: undefined },
+    ],
+  );
+});
+
 test("native agent presenter falls back cleanly when Slack streaming is unavailable", async () => {
   const calls: string[] = [];
   const presenter = createNativeAgentPresenter({
@@ -81,7 +114,7 @@ test("native agent presenter falls back cleanly when Slack streaming is unavaila
   });
 
   await presenter.begin();
-  assert.equal(await presenter.onDelta("Answer"), false);
+  assert.equal(await presenter.onDelta("x".repeat(256)), false);
   assert.equal(await presenter.onTasks([{ id: "lookup", title: "Inspect deployment", status: "in_progress" }]), false);
   assert.equal(await presenter.finalize(), false);
   assert.deepEqual(calls, ["status:Thinking…", "start", "error:unknown_method", "status:"]);
@@ -115,7 +148,7 @@ test("native agent presenter removes an uncheckpointed stream before falling bac
   });
 
   await presenter.begin();
-  assert.equal(await presenter.onDelta("Answer"), false);
+  assert.equal(await presenter.onDelta("x".repeat(256)), false);
   assert.equal(await presenter.finalize(), false);
   assert.deepEqual(calls, [
     "status:Thinking…",
@@ -155,8 +188,8 @@ test("native agent presenter deletes a partial stream before fallback after appe
   });
 
   await presenter.begin();
-  assert.equal(await presenter.onDelta("Partial"), true);
-  assert.equal(await presenter.onDelta(" answer"), false);
+  assert.equal(await presenter.onDelta("x".repeat(256)), true);
+  assert.equal(await presenter.onDelta("y".repeat(256)), false);
   assert.equal(await presenter.finalize(), false);
   assert.deepEqual(calls, [
     "status:Thinking…",
@@ -213,8 +246,8 @@ test("native agent presenter suppresses fallback when a failed partial stream ca
   });
 
   await presenter.begin();
-  assert.equal(await presenter.onDelta("Partial"), true);
-  assert.equal(await presenter.onDelta(" answer"), false);
+  assert.equal(await presenter.onDelta("x".repeat(256)), true);
+  assert.equal(await presenter.onDelta("y".repeat(256)), false);
   assert.equal(await presenter.finalize(), true);
 });
 

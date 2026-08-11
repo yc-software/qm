@@ -447,12 +447,11 @@ test("a queued DM uses Slack native status, reply streaming, and task updates wi
       {
         channel: "D1",
         thread_ts: "100.9",
-        chunks: [{ type: "markdown_text", text: "Checking " }],
+        chunks: [{ type: "markdown_text", text: "Checking now." }],
         task_display_mode: "timeline",
       },
     ]);
     assert.deepEqual(f.client.streamsAppended, [
-      { channel: "D1", ts: "stream-1", chunks: [{ type: "markdown_text", text: "now." }] },
       {
         channel: "D1",
         ts: "stream-1",
