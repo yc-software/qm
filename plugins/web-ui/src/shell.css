@@ -487,7 +487,7 @@ a.chat-row-open {
   box-sizing: border-box;
   text-align: left;
 
-  padding: 5px 34px 5px 11px;
+  padding: 5px 62px 5px 11px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -4252,7 +4252,7 @@ a.chat-row-open {
     min-height: 44px;
   }
   .session {
-    padding-right: 48px;
+    padding-right: 92px;
   }
   .session-menu {
     right: 0;
