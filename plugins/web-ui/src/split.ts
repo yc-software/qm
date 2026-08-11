@@ -823,7 +823,7 @@ class PaneTab implements ITabRenderer {
                 @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
                 >${background.jobs > 0 ? icon(Cog, 11) : nothing}${
                   background.watches > 0 ? icon(Binoculars, 11) : nothing
-                }</span
+                }${background.crons > 0 ? icon(Clock3, 11) : nothing}</span
               >`
             : nothing
         }

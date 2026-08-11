@@ -199,6 +199,7 @@ interface SessionBackgroundView {
     expiresAt: number;
     lastFiredAt?: number;
   }>;
+  crons: Array<{ id: string; title?: string; nextFireAt?: number }>;
 }
 
 interface SessionBackgroundOutput {
