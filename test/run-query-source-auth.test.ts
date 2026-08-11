@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { isUserScoped } from "../src/api/user-scoped-routes.ts";
 
 const SECRET = "source-auth-secret-for-run-query-tests-01";
+const CAP = "core-only-capability-secret-for-tests-01";
 const PID = "portal-only-identity-secret-for-tests-01";
 
 describe("run queries authenticate with source auth under production portal enforcement", () => {
@@ -23,6 +24,7 @@ describe("run queries authenticate with source auth under production portal enfo
     const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-query-auth-")) }));
     server = createServer(built.app, {
       signingSecret: SECRET,
+      capabilitySecret: CAP,
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
       scheduler: built.scheduler,
