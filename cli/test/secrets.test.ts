@@ -94,7 +94,7 @@ test("portal deployment coordinates can come from the target secret store", () =
 
   const configured = makeConfig({
     services: ["core", "portal"],
-    env: { portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" } },
+    env: { portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_GROUPS: "qm-users" } },
   });
   assert.ok(!computedSecrets(configured).some((secret) => secret.name === "OIDC_CLIENT_ID"));
   assert.ok(!computedSecrets(configured).some((secret) => secret.name === "PORTAL_EXPECTED_TEAM_ID"));

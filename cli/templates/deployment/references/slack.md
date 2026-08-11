@@ -54,9 +54,11 @@ silently skip the SSO manifest and its links when the values are left implicit.
 
 Every deployment needs one tenant trust boundary or the portal refuses to start:
 `PORTAL_EXPECTED_TEAM_ID` (the workspace id, and Slack-only),
-`OIDC_ALLOWED_EMAIL_DOMAIN`, or `OIDC_ALLOWED_EMAILS`. Copy the workspace id from
-the Slack About dialog. `PORTAL_EXPECTED_TEAM_ID` is refused while `"auth"` is
-enabled — the two sign-in paths are mutually exclusive, so switch fully.
+`OIDC_ALLOWED_EMAIL_DOMAIN`, `OIDC_ALLOWED_EMAILS`, or exact groups through
+`OIDC_ALLOWED_GROUPS` with an optional `OIDC_GROUPS_CLAIM` (default `groups`). Copy
+the workspace id from the Slack About dialog. `PORTAL_EXPECTED_TEAM_ID` is refused
+while `"auth"` is enabled — the two sign-in paths are mutually exclusive, so switch
+fully.
 
 `qm outputs` requires the `slack` service even when only the SSO app is wanted.
 Keep `"slack"` in `services` and leave its bot tokens unset if the operator does

@@ -137,6 +137,15 @@ verified work email, lowercased; sign-in fails unless the IdP marks the email ve
 `OIDC_ALLOWED_EMAIL_DOMAIN` — with `email`, additionally reject any account outside this domain
 (checked against the email suffix and Google's `hd` claim).
 
+`OIDC_ALLOWED_GROUPS` — a comma-separated exact group allowlist. `OIDC_GROUPS_CLAIM`
+selects the claim name and defaults to `groups`. A group claim may be a string or a
+string array in either the verified `id_token` or the verified `userinfo` response.
+If both responses provide it, their sets must match exactly; a disagreement, malformed
+claim, or an absent claim rejects sign-in. Whitespace around CSV separators is ignored;
+claim values are case-sensitive and otherwise not normalized.
+This check is independent of the email and Slack workspace gates, so configured gates
+all must pass.
+
 ### Google Workspace SSO with the email principal
 
 The OIDC client is generic, so Google is pure config. One-time setup:

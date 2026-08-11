@@ -7,6 +7,8 @@ import {
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserinfo,
+  normalizeGroupClaim,
+  requireAllowedGroup,
   resolvePrincipal,
   verifyIdToken,
   type OidcConfig,
@@ -230,5 +232,39 @@ test("resolvePrincipal allowedEmails permits only the seeded verified addresses"
     () =>
       resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "other@example.com", email_verified: true } }),
     /permitted email list/,
+  );
+});
+
+test("requireAllowedGroup accepts exact matching groups from either verified response", () => {
+  const rule = { claim: "groups", allowedGroups: ["engineering", "operations"] };
+  assert.doesNotThrow(() =>
+    requireAllowedGroup(rule, {
+      claims: { groups: ["engineering", "other"] },
+      userinfo: { groups: ["other", "engineering"] },
+    }),
+  );
+  assert.doesNotThrow(() => requireAllowedGroup(rule, { claims: { groups: "operations" }, userinfo: {} }));
+  assert.doesNotThrow(() => requireAllowedGroup(rule, { claims: {}, userinfo: { groups: ["operations"] } }));
+});
+
+test("normalizeGroupClaim trims configured claim names and defaults to groups", () => {
+  assert.equal(normalizeGroupClaim(undefined), "groups");
+  assert.equal(normalizeGroupClaim("  memberships  "), "memberships");
+});
+
+test("requireAllowedGroup rejects missing, malformed, mismatched, and non-matching group claims", () => {
+  const rule = { claim: "groups", allowedGroups: ["engineering"] };
+  assert.throws(() => requireAllowedGroup(rule, { claims: {}, userinfo: {} }), /no groups group claim/);
+  assert.throws(
+    () => requireAllowedGroup(rule, { claims: { groups: ["engineering", 1] }, userinfo: {} }),
+    /must be a string or string array/,
+  );
+  assert.throws(
+    () => requireAllowedGroup(rule, { claims: { groups: ["engineering"] }, userinfo: { groups: ["other"] } }),
+    /differs/,
+  );
+  assert.throws(
+    () => requireAllowedGroup(rule, { claims: { groups: "Engineering" }, userinfo: {} }),
+    /not in a permitted group/,
   );
 });

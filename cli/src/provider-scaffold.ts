@@ -116,7 +116,8 @@ const AWS_AGENTS_APPENDIX = `
    portal's client credentials and wires \`OIDC_*\` itself. To use an external
    identity provider instead, drop \`"auth"\` from \`services\`, configure
    \`env.portal\` with the provider's OIDC endpoints and an \`OIDC_ALLOWED_EMAILS\`
-   or \`OIDC_ALLOWED_EMAIL_DOMAIN\` tenant gate, and register
+   or \`OIDC_ALLOWED_EMAIL_DOMAIN\` tenant gate, or exact \`OIDC_ALLOWED_GROUPS\`
+   with optional \`OIDC_GROUPS_CLAIM\` (default \`groups\`), and register
    \`<publicUrl>/auth/callback\` with the provider. Add optional services and their
    ECS/ECR entries now, then render and apply once more.
 4. Run \`npm exec qm -- infra build-image\` to build the Lambda MicroVM guest image

@@ -125,6 +125,15 @@ export interface PrincipalRule {
   allowedEmails?: readonly string[];
 }
 
+export interface GroupRule {
+  claim: string;
+  allowedGroups?: readonly string[];
+}
+
+export function normalizeGroupClaim(claim: string | undefined): string {
+  return claim?.trim() || "groups";
+}
+
 export function resolvePrincipal(
   rule: PrincipalRule,
   args: { sub: string; claims: Record<string, unknown>; userinfo: Record<string, unknown> },
@@ -149,6 +158,34 @@ export function resolvePrincipal(
       throw new Error("account is outside the permitted domain");
   }
   return email;
+}
+
+export function requireAllowedGroup(
+  rule: GroupRule,
+  args: { claims: Record<string, unknown>; userinfo: Record<string, unknown> },
+): void {
+  if (!rule.allowedGroups?.length) return;
+  const tokenGroups = groupsFrom(args.claims[rule.claim], "id_token", rule.claim);
+  const userinfoGroups = groupsFrom(args.userinfo[rule.claim], "userinfo", rule.claim);
+  if (tokenGroups && userinfoGroups && !sameGroups(tokenGroups, userinfoGroups)) {
+    throw new Error("group claim differs between id_token and userinfo");
+  }
+  const groups = tokenGroups ?? userinfoGroups;
+  if (!groups) throw new Error(`identity provider returned no ${rule.claim} group claim`);
+  if (!rule.allowedGroups.some((allowed) => groups.has(allowed))) {
+    throw new Error("account is not in a permitted group");
+  }
+}
+
+function groupsFrom(value: unknown, source: string, claim: string): Set<string> | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return new Set([value]);
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) return new Set(value);
+  throw new Error(`${source} ${claim} group claim must be a string or string array`);
+}
+
+function sameGroups(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && [...left].every((group) => right.has(group));
 }
 
 async function readJson(r: Response, what: string): Promise<Record<string, unknown>> {

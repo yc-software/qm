@@ -45,6 +45,7 @@ test("production boot requires an explicit OIDC tenant trust boundary", () => {
   delete baseEnv.PORTAL_EXPECTED_TEAM_ID;
   delete baseEnv.OIDC_ALLOWED_EMAIL_DOMAIN;
   delete baseEnv.OIDC_ALLOWED_EMAILS;
+  delete baseEnv.OIDC_ALLOWED_GROUPS;
   for (const value of [undefined, "", " ", "replace-me"]) {
     const env = { ...baseEnv };
     if (value !== undefined) env.PORTAL_EXPECTED_TEAM_ID = value;
@@ -54,11 +55,15 @@ test("production boot requires an explicit OIDC tenant trust boundary", () => {
       encoding: "utf8",
     });
     assert.notEqual(missing.status, 0);
-    assert.match(missing.stderr, /OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or PORTAL_EXPECTED_TEAM_ID/);
+    assert.match(
+      missing.stderr,
+      /OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, OIDC_ALLOWED_GROUPS, or PORTAL_EXPECTED_TEAM_ID/,
+    );
   }
   for (const gate of [
     { OIDC_ALLOWED_EMAILS: "admin@example.com" },
     { OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" },
+    { OIDC_ALLOWED_GROUPS: "qm-users" },
     { PORTAL_EXPECTED_TEAM_ID: "T123" },
     { OIDC_ALLOWED_EMAIL_DOMAIN: "example.com", PORTAL_EXPECTED_TEAM_ID: "T123" },
   ]) {
@@ -69,6 +74,34 @@ test("production boot requires an explicit OIDC tenant trust boundary", () => {
     });
     assert.equal(accepted.status, 0, accepted.stderr);
   }
+});
+
+test("production boot validates a configured OIDC group gate", () => {
+  const command = "import('./src/index.ts').then(m => m.bootChecks())";
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "production",
+    PORTAL_PUBLIC_URL: "https://agent.example.com",
+    PORTAL_SESSION_SECRET: "portal-session-secret",
+    CORE_SIGNING_SECRET: "core-signing-secret",
+    SKILL_SIGNING_SECRET: "skill-signing-secret",
+    SANDBOX_BACKEND: "local",
+    OIDC_CLIENT_ID: "client-id",
+    OIDC_CLIENT_SECRET: "client-secret",
+    OIDC_ALLOWED_GROUPS: "qm-users",
+  };
+  const boot = (env: NodeJS.ProcessEnv): { status: number | null; stderr: string } =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", command], { cwd: process.cwd(), env, encoding: "utf8" });
+
+  assert.equal(boot(baseEnv).status, 0);
+  assert.equal(boot({ ...baseEnv, OIDC_ALLOWED_GROUPS: "todo" }).status, 0);
+  assert.equal(boot({ ...baseEnv, OIDC_GROUPS_CLAIM: "  memberships  " }).status, 0);
+  const emptyGroups = boot({ ...baseEnv, OIDC_ALLOWED_GROUPS: " " });
+  assert.notEqual(emptyGroups.status, 0);
+  assert.match(emptyGroups.stderr, /OIDC_ALLOWED_GROUPS must be a comma-separated list of non-empty group values/);
+  const emptyClaim = boot({ ...baseEnv, OIDC_GROUPS_CLAIM: " " });
+  assert.notEqual(emptyClaim.status, 0);
+  assert.match(emptyClaim.stderr, /OIDC_GROUPS_CLAIM must be a non-empty claim name/);
 });
 
 test("production boot requires an explicit JWKS URI for custom issuers", () => {

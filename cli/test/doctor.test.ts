@@ -89,6 +89,8 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   }
   const acceptedGates: Array<Record<string, string>> = [
     { OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" },
+    { OIDC_ALLOWED_GROUPS: "qm-users" },
+    { OIDC_ALLOWED_GROUPS: "qm-users", OIDC_GROUPS_CLAIM: "  memberships  " },
     { PORTAL_EXPECTED_TEAM_ID: "T123" },
     { OIDC_ALLOWED_EMAIL_DOMAIN: "example.com", PORTAL_EXPECTED_TEAM_ID: "T123" },
   ];

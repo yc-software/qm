@@ -130,9 +130,11 @@ require Slack sign-in.
 
 ### Another OIDC provider
 
-To use a different work-email OIDC provider, drop `"auth"` from
-`services`, register `<publicUrl>/auth/callback` with the provider, and put its
-endpoints and the email gate in `env.portal`. For Google Workspace:
+To use a different OIDC provider, drop `"auth"` from `services`, register
+`<publicUrl>/auth/callback` with the provider, and put its endpoints plus an identity
+provider trust boundary in `env.portal`. That boundary can be an email allowlist or
+domain, a Slack team, or an exact group allowlist with `OIDC_ALLOWED_GROUPS` and an
+optional `OIDC_GROUPS_CLAIM` (default `groups`). For Google Workspace:
 
 ```json
 {

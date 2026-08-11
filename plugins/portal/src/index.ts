@@ -22,8 +22,11 @@ import {
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserinfo,
+  normalizeGroupClaim,
+  requireAllowedGroup,
   resolvePrincipal,
   verifyIdToken,
+  type GroupRule,
   type OidcConfig,
   type PrincipalRule,
 } from "./oidc.ts";
@@ -170,6 +173,13 @@ const PRINCIPAL_RULE: PrincipalRule = {
   allowedEmailDomain: process.env.OIDC_ALLOWED_EMAIL_DOMAIN || undefined,
   allowedEmails: process.env.OIDC_ALLOWED_EMAILS?.split(",")
     .map((email) => email.trim())
+    .filter(Boolean),
+};
+const OIDC_GROUPS_CLAIM = process.env.OIDC_GROUPS_CLAIM;
+const GROUP_RULE: GroupRule = {
+  claim: normalizeGroupClaim(OIDC_GROUPS_CLAIM),
+  allowedGroups: process.env.OIDC_ALLOWED_GROUPS?.split(",")
+    .map((group) => group.trim())
     .filter(Boolean),
 };
 
@@ -1138,6 +1148,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
+    requireAllowedGroup(GROUP_RULE, { claims, userinfo: info });
     sub = resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info });
     const rawName = info.name ?? claims.name;
     if (typeof rawName === "string") name = rawName.trim().slice(0, 200);
@@ -1225,6 +1236,9 @@ export function bootChecks(): void {
   if ((PRINCIPAL_RULE.allowedEmailDomain || PRINCIPAL_RULE.allowedEmails?.length) && PRINCIPAL_RULE.claim !== "email") {
     problems.push("OIDC_ALLOWED_EMAIL_DOMAIN and OIDC_ALLOWED_EMAILS require OIDC_PRINCIPAL_CLAIM=email");
   }
+  if (OIDC_GROUPS_CLAIM !== undefined && !OIDC_GROUPS_CLAIM.trim()) {
+    problems.push("OIDC_GROUPS_CLAIM must be a non-empty claim name when set");
+  }
   if (IS_PROD) {
     if (isMissingOrPlaceholder(SESSION_SECRET))
       problems.push("PORTAL_SESSION_SECRET is required and may not be a placeholder in production");
@@ -1249,12 +1263,19 @@ export function bootChecks(): void {
       problems.push("OIDC_ALLOWED_EMAILS must be a comma-separated list of valid, non-placeholder email addresses");
     }
     if (
+      process.env.OIDC_ALLOWED_GROUPS !== undefined &&
+      !GROUP_RULE.allowedGroups?.length
+    ) {
+      problems.push("OIDC_ALLOWED_GROUPS must be a comma-separated list of non-empty group values");
+    }
+    if (
       !PRINCIPAL_RULE.allowedEmailDomain &&
       !PRINCIPAL_RULE.allowedEmails?.length &&
+      !GROUP_RULE.allowedGroups?.length &&
       isMissingOrPlaceholder(OIDC.expectedTeamId)
     ) {
       problems.push(
-        "production requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or PORTAL_EXPECTED_TEAM_ID as an identity-provider trust boundary",
+        "production requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, OIDC_ALLOWED_GROUPS, or PORTAL_EXPECTED_TEAM_ID as an identity-provider trust boundary",
       );
     }
     if (OIDC.expectedTeamId !== undefined && isMissingOrPlaceholder(OIDC.expectedTeamId)) {

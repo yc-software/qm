@@ -234,7 +234,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
           {
             kind: "env-all-absent",
             service: "portal",
-            names: ["OIDC_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAIL_DOMAIN", "PORTAL_EXPECTED_TEAM_ID"],
+            names: ["OIDC_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_GROUPS", "PORTAL_EXPECTED_TEAM_ID"],
           },
         ],
       },

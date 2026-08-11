@@ -825,6 +825,11 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
     env.OIDC_ALLOWED_EMAILS?.split(",")
       .map((email) => email.trim())
       .filter(Boolean) ?? [];
+  const allowedGroups =
+    env.OIDC_ALLOWED_GROUPS?.split(",")
+      .map((group) => group.trim())
+      .filter(Boolean) ?? [];
+  const groupsClaim = env.OIDC_GROUPS_CLAIM;
   const configuredTeam = env.PORTAL_EXPECTED_TEAM_ID?.trim();
   if (domain !== undefined && (isMissingOrPlaceholder(domain) || !validEmailDomain(domain))) {
     throw new CliError(
@@ -833,6 +838,15 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
   }
   if (allowedEmails.some((email) => isMissingOrPlaceholder(email) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))) {
     throw new CliError(`${path}: env.portal.OIDC_ALLOWED_EMAILS must contain valid, non-placeholder email addresses`);
+  }
+  if (
+    env.OIDC_ALLOWED_GROUPS !== undefined &&
+    !allowedGroups.length
+  ) {
+    throw new CliError(`${path}: env.portal.OIDC_ALLOWED_GROUPS must contain non-empty group values`);
+  }
+  if (groupsClaim !== undefined && !groupsClaim.trim()) {
+    throw new CliError(`${path}: env.portal.OIDC_GROUPS_CLAIM must be a non-empty claim name when set`);
   }
   if ((domain || allowedEmails.length) && (env.OIDC_PRINCIPAL_CLAIM ?? "email") !== "email") {
     throw new CliError(
@@ -848,10 +862,11 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
     secrets &&
     !domain &&
     !allowedEmails.length &&
+    !allowedGroups.length &&
     isMissingOrPlaceholder(configuredTeam ?? secrets.get("PORTAL_EXPECTED_TEAM_ID"))
   ) {
     throw new CliError(
-      `${path}: portal requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or a non-placeholder PORTAL_EXPECTED_TEAM_ID in env.portal or the target secret store`,
+      `${path}: portal requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, OIDC_ALLOWED_GROUPS, or a non-placeholder PORTAL_EXPECTED_TEAM_ID in env.portal or the target secret store`,
     );
   }
 }

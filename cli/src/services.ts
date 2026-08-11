@@ -221,6 +221,8 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "OIDC_CLIENT_ID",
         "OIDC_ALLOWED_EMAILS",
         "OIDC_ALLOWED_EMAIL_DOMAIN",
+        "OIDC_ALLOWED_GROUPS",
+        "OIDC_GROUPS_CLAIM",
         "PORTAL_EXPECTED_TEAM_ID",
         "OIDC_AUTH_ENDPOINT",
         "OIDC_TOKEN_ENDPOINT",
