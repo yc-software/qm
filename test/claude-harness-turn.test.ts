@@ -6,19 +6,31 @@ import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
-type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
+type Script = (
+  prompts: AsyncIterable<{ message: { content: unknown } }>,
+  signal: AbortSignal,
+) => AsyncGenerator<FakeSdkMessage>;
 
 let currentScript: Script = async function* () {};
+let currentInitialization = async () => ({});
+let interruptHangs = false;
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
-    query: ({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
-      const generator = currentScript(prompt);
+    query: ({
+      prompt,
+      options,
+    }: {
+      prompt: AsyncIterable<{ message: { content: unknown } }>;
+      options: { abortController: AbortController };
+    }) => {
+      const generator = currentScript(prompt, options.abortController.signal);
       return {
         async initializationResult() {
-          return {};
+          return currentInitialization();
         },
         async interrupt() {
+          if (interruptHangs) await new Promise(() => {});
           await generator.return?.(undefined as never);
         },
         close() {
@@ -269,6 +281,117 @@ test("a turn that dies before its first result still records exactly one request
   assert.equal(llmRequests[0]!.step, 0);
   assert.equal(llmRequests[0]!.truncated, false);
   assert.equal((llmRequests[0]!.request as { system: string }).system, "be brief");
+});
+
+test("a Claude turn fails when the model stream stays inactive", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    await new Promise(() => {});
+    yield resultMessage("unreachable");
+  };
+
+  const harness = createClaudeHarness({ modelInactivityMs: 20 });
+  const { turn } = harnessTurn();
+
+  await assert.rejects(() => harness.turns.runTurn(turn), /Claude model produced no activity/);
+});
+
+test("Claude initialization must produce activity before the inactivity deadline", async () => {
+  currentInitialization = async () => new Promise(() => {});
+  const harness = createClaudeHarness({ modelInactivityMs: 20 });
+  const { turn } = harnessTurn();
+
+  try {
+    await assert.rejects(() => harness.turns.runTurn(turn), /Claude model produced no activity/);
+  } finally {
+    currentInitialization = async () => ({});
+  }
+});
+
+test("Claude stream activity resets the inactivity deadline", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    yield assistantMessage("msg_A", "working", {
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    yield resultMessage("done");
+  };
+
+  const harness = createClaudeHarness({ modelInactivityMs: 25 });
+  const { turn } = harnessTurn();
+
+  assert.equal((await harness.turns.runTurn(turn)).reply, "done");
+});
+
+test("slow local message persistence does not count as model inactivity", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield assistantMessage("msg_A", "working", {
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
+    yield resultMessage("done");
+  };
+
+  const harness = createClaudeHarness({ modelInactivityMs: 25 });
+  const { turn } = harnessTurn({ tape: async () => new Promise((resolve) => setTimeout(resolve, 40)) });
+
+  assert.equal((await harness.turns.runTurn(turn)).reply, "done");
+});
+
+test("cancellation aborts a silent model even when the SDK interrupt hangs", async () => {
+  const cancel = new AbortController();
+  interruptHangs = true;
+  currentScript = async function* (prompts, signal) {
+    await prompts[Symbol.asyncIterator]().next();
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    if (!signal.aborted) yield resultMessage("unreachable");
+  };
+
+  const harness = createClaudeHarness({ modelInactivityMs: 25 });
+  const { turn } = harnessTurn({ cancel: cancel.signal });
+  setTimeout(() => cancel.abort(), 5);
+
+  try {
+    assert.equal((await harness.turns.runTurn(turn)).stopped, true);
+  } finally {
+    interruptHangs = false;
+  }
+});
+
+test("Claude Agent work pauses the inactivity deadline", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield {
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-1",
+      tool_use_id: "tool-1",
+      description: "long-running child task",
+      prompt: "work",
+    };
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    yield {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-1",
+      status: "completed",
+      summary: "finished",
+    };
+    yield resultMessage("done");
+  };
+
+  const harness = createClaudeHarness({ modelInactivityMs: 25 });
+  const { turn } = harnessTurn();
+
+  assert.equal((await harness.turns.runTurn(turn)).reply, "done");
 });
 
 test("the claude harness offers compaction and detection so a utility role cannot silently disable them", async () => {
