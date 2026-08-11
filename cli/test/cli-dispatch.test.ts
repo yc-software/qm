@@ -281,8 +281,10 @@ else if (args.includes("lambda-microvms get-microvm-image")) console.log(JSON.st
 else if (args.includes("lambda-microvms list-microvm-image-versions")) console.log(JSON.stringify({ items: [{ imageVersion: "1", state: "SUCCESSFUL", status: "ACTIVE" }] }));
 else if (args.includes("get-secret-value") && args.includes("--query SecretString")) console.log("signing-secret".repeat(3));
 else if (args.includes("get-secret-value")) console.log(JSON.stringify({ ARN: "arn", SecretString: "secret-value".repeat(3) }));
-else if (args.includes("describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "s", status: "ACTIVE", desiredCount: 1, runningCount: 1, taskDefinition: "task", deployments: [{ status: "PRIMARY", rolloutState: "COMPLETED", taskDefinition: "task" }], loadBalancers: [{ targetGroupArn: "tg" }] }] }));
+else if (args.includes("describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "s", status: "ACTIVE", desiredCount: 1, runningCount: 1, taskDefinition: "task", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet"], securityGroups: ["sg"], assignPublicIp: "DISABLED" } }, deployments: [{ status: "PRIMARY", rolloutState: "COMPLETED", taskDefinition: "task" }], loadBalancers: [{ targetGroupArn: "tg" }] }] }));
 else if (args.includes("describe-task-definition")) console.log(${JSON.stringify(JSON.stringify({ taskDefinition: task }))});
+else if (args.includes("run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "canary" }] }));
+else if (args.includes("describe-tasks")) console.log(JSON.stringify({ tasks: [{ containers: [{ name: "core", exitCode: 0 }] }] }));
 else if (args.includes("dynamodb get-item") && args.includes("deployment/current")) console.log(JSON.stringify({ Item: { manifestId: { S: "manifest" } } }));
 else if (args.includes("dynamodb get-item") && args.includes("deployment/manifest/manifest")) console.log(JSON.stringify({ Item: { manifest: { S: ${JSON.stringify(JSON.stringify(manifest))} } } }));
 else if (args.includes("s3api get-object")) fs.writeFileSync(argv[argv.indexOf("--key") + 2], ${JSON.stringify(layerBody)});
