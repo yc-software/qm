@@ -214,6 +214,19 @@ interface TranscriptWindow {
   beforeSeq?: number;
 }
 
+export interface SessionSearchHit {
+  sessionId: string;
+  title: string | null;
+  scopeId: string;
+  channelName?: string;
+  surface?: string;
+  seq: number;
+  entryType: string;
+  author?: string;
+  snippet: string;
+  createdAt: number;
+}
+
 export interface App {
   turn(req: TurnRequest): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
@@ -261,6 +274,7 @@ export interface App {
     seq: number,
   ): Promise<{ entry: SessionEntry } | null>;
   listSessions(principalId: string): Promise<Session[]>;
+  searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
   sessionBackground(sessionId: string, viewer: string): Promise<SessionBackgroundView | null>;
   readSessionBackgroundOutput(
     sessionId: string,
