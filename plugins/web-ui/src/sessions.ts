@@ -8,6 +8,7 @@ import {
   ArchiveRestore,
   ChevronDown,
   ChevronRight,
+  Clock3,
   Cog,
   EllipsisVertical,
   Folder,
@@ -592,7 +593,7 @@ function statusMarks(s: CoreSession): TemplateResult {
           @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
           >${ind.background.jobs > 0 ? icon(Cog, 11) : nothing}${
             ind.background.watches > 0 ? icon(Binoculars, 11) : nothing
-          }</span
+          }${ind.background.crons > 0 ? icon(Clock3, 11) : nothing}</span
         >`
       : nothing
   }`;

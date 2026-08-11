@@ -116,3 +116,53 @@ test("readSessionBackgroundOutput binds the job to the conversation, not just th
   assert.equal(await app.readSessionBackgroundOutput(r2.sessionId!, "p-other", "U2", 0), null);
   assert.equal(await app.readSessionBackgroundOutput(r1.sessionId!, "p-ghost", "U1", 0), null);
 });
+
+function cronInput(target: string | undefined, action: string) {
+  return {
+    ownerScopeId: "personal:U1" as const,
+    owner: "U1",
+    createdBy: "U1",
+    schedule: { everyMs: 60_000 },
+    action,
+    ...(target ? { destination: { type: "web", target } } : {}),
+  };
+}
+
+test("listSessions counts session-targeted crons — enabled and unarchived only, keyed by destination target", async () => {
+  const { app, crons } = freshApp();
+  const here = "web:U1:cronned";
+  const elsewhere = "web:U1:plain";
+  await app.turn(dm("watch my PR", here));
+  await app.turn(dm("nothing scheduled", elsewhere));
+
+  await crons.create(cronInput(here, "check the pipeline"));
+  await crons.create(cronInput(here, "refresh the dashboard"));
+  const paused = await crons.create(cronInput(here, "poll the checks"));
+  await crons.setEnabled(paused.id, false);
+  const archived = await crons.create(cronInput(here, "sweep the queue"));
+  await crons.update(archived.id, { archived: true });
+  await crons.create(cronInput(undefined, "cron with no destination"));
+  await crons.create(cronInput("slack:C123", "cron aimed elsewhere"));
+
+  const list = await app.listSessions("U1");
+  const hereRow = list.find((s) => s.threadRef === here);
+  const plainRow = list.find((s) => s.threadRef === elsewhere);
+  assert.equal(hereRow?.crons, 2, "enabled, unarchived crons aimed at this conversation");
+  assert.equal(plainRow?.crons, undefined, "clean rows carry no zero-count fields");
+});
+
+test("sessionBackground lists the session's crons alongside jobs and watches", async () => {
+  const { app, crons } = freshApp();
+  const thread = "web:U1:cron-inspect";
+  const r = await app.turn(dm("schedule it", thread));
+
+  const made = await crons.create({ ...cronInput(thread, "watch PR checks"), title: "PR watch" });
+  const paused = await crons.create(cronInput(thread, "poll the checks"));
+  await crons.setEnabled(paused.id, false);
+
+  const view = await app.sessionBackground(r.sessionId!, "U1");
+  assert.equal(view?.crons.length, 1);
+  assert.equal(view?.crons[0]?.id, made.id);
+  assert.equal(view?.crons[0]?.title, "PR watch");
+  assert.ok(view?.crons[0]?.nextFireAt, "carries the next fire time");
+});

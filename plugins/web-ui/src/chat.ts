@@ -12,6 +12,7 @@ import {
   Brain,
   Check,
   ChevronRight,
+  Clock3,
   Copy,
   FileImage,
   FileText,
@@ -1597,7 +1598,7 @@ export function createChatSurface(
   async function refreshBackgroundDetail(): Promise<void> {
     const id = chatState.sessionId;
     if (!id) {
-      bgPanel.detail = { jobs: [], watches: [] };
+      bgPanel.detail = { jobs: [], watches: [], crons: [] };
       return;
     }
     const seq = ++bgPanel.fetchSeq;
@@ -1626,7 +1627,12 @@ export function createChatSurface(
       const row = sessionsState.list.find((r) =>
         chatState.sessionId ? r.id === chatState.sessionId : r.threadRef === chatState.threadRef,
       );
-      if (row && ((row.backgroundJobs ?? 0) !== d.jobs.length || (row.watches ?? 0) !== d.watches.length)) {
+      if (
+        row &&
+        ((row.backgroundJobs ?? 0) !== d.jobs.length ||
+          (row.watches ?? 0) !== d.watches.length ||
+          (row.crons ?? 0) !== d.crons.length)
+      ) {
         await refreshSessions({ silent: true });
         redrawBackgroundPanel();
       }
@@ -1679,7 +1685,7 @@ export function createChatSurface(
     const row = conversationBackground(sessionsState.list, chatState.sessionId, chatState.threadRef);
     const live =
       bgPanel.open && bgPanel.detail
-        ? backgroundLabel(bgPanel.detail.jobs.length, bgPanel.detail.watches.length)
+        ? backgroundLabel(bgPanel.detail.jobs.length, bgPanel.detail.watches.length, bgPanel.detail.crons.length)
         : null;
     const label = (live ?? row)?.label;
     if (!label && !bgPanel.open) return nothing;
@@ -1702,13 +1708,14 @@ export function createChatSurface(
 
   function backgroundPanelBody(): TemplateResult {
     const d = bgPanel.detail;
-    const empty = d && d.jobs.length === 0 && d.watches.length === 0;
+    const empty = d && d.jobs.length === 0 && d.watches.length === 0 && d.crons.length === 0;
     return html`<div class="bg-panel" role="region" aria-label="Background activity">
       ${bgPanel.error ? html`<div class="bg-panel-note">${bgPanel.error}</div>` : nothing}
       ${!d && bgPanel.loading ? html`<div class="bg-panel-note">Loading…</div>` : nothing}
       ${empty && !bgPanel.error ? html`<div class="bg-panel-note">Nothing running here anymore.</div>` : nothing}
       ${d ? d.jobs.map((j) => backgroundJobRow(j)) : nothing}
       ${d ? d.watches.map((w) => backgroundWatchRow(w)) : nothing}
+      ${d ? d.crons.map((c) => backgroundCronRow(c)) : nothing}
     </div>`;
   }
 
@@ -1736,6 +1743,26 @@ export function createChatSurface(
         ${open ? html`<pre class="bg-row-output">${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
       </div>
     `;
+  }
+
+  function backgroundCronRow(c: SessionBackgroundView["crons"][number]): TemplateResult {
+    return html`
+      <div class="bg-row watch">
+        <div class="bg-row-head static">
+          ${icon(Clock3, 13)}
+          <span class="bg-row-cmd">Cron — ${c.title ?? "scheduled task"}</span>
+          <span class="bg-row-meta">${c.nextFireAt ? `next fire ${nextFireIn(c.nextFireAt)}` : "paused"}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function nextFireIn(at: number): string {
+    const mins = Math.round((at - Date.now()) / 60_000);
+    if (mins <= 0) return "due now";
+    if (mins < 60) return `in ${mins}m`;
+    if (mins < 1440) return `in ${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+    return `in ${Math.floor(mins / 1440)}d`;
   }
 
   function backgroundWatchRow(w: SessionBackgroundView["watches"][number]): TemplateResult {

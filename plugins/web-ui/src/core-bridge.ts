@@ -61,6 +61,7 @@ export interface CoreSession {
   awaitingInput?: boolean;
   backgroundJobs?: number;
   watches?: number;
+  crons?: number;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
 }
@@ -137,6 +138,7 @@ export interface SessionBackgroundView {
     expiresAt: number;
     lastFiredAt?: number;
   }>;
+  crons: Array<{ id: string; title?: string; nextFireAt?: number }>;
 }
 
 export interface SessionBackgroundOutput {

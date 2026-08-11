@@ -187,7 +187,18 @@ export function createSessionMethods(
         if (m.expiresAt <= now) continue;
         watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
       }
-      if (workingThreadRefs.size === 0 && waiting.size === 0 && jobCounts.size === 0 && watchCounts.size === 0)
+      const cronCounts = new Map<string, number>();
+      for (const c of await deps.crons.list()) {
+        if (!c.enabled || c.archived || !c.destination) continue;
+        cronCounts.set(c.destination.target, (cronCounts.get(c.destination.target) ?? 0) + 1);
+      }
+      if (
+        workingThreadRefs.size === 0 &&
+        waiting.size === 0 &&
+        jobCounts.size === 0 &&
+        watchCounts.size === 0 &&
+        cronCounts.size === 0
+      )
         return sessions;
       return sessions.map((s) => ({
         ...s,
@@ -195,6 +206,7 @@ export function createSessionMethods(
         ...(waiting.has(s.id) ? { awaitingInput: true } : {}),
         ...(jobCounts.has(s.threadRef) ? { backgroundJobs: jobCounts.get(s.threadRef)! } : {}),
         ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
+        ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),
       }));
     },
 
@@ -219,7 +231,15 @@ export function createSessionMethods(
           expiresAt: m.expiresAt,
           ...(m.lastFiredAt !== undefined ? { lastFiredAt: m.lastFiredAt } : {}),
         }));
-      return { jobs, watches };
+      const crons = (await deps.crons.list())
+        .filter((c) => c.enabled && !c.archived && c.destination?.target === session.threadRef)
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((c) => ({
+          id: c.id,
+          ...(c.title !== undefined ? { title: c.title } : {}),
+          ...(c.nextFireAt !== undefined ? { nextFireAt: c.nextFireAt } : {}),
+        }));
+      return { jobs, watches, crons };
     },
 
     async readSessionBackgroundOutput(sessionId, processId, viewer, sinceCursor) {

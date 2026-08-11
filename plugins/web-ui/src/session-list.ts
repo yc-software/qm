@@ -167,17 +167,19 @@ export function applySessionState(
 export interface RowIndicators {
   working: boolean;
   awaiting: boolean;
-  background: { jobs: number; watches: number; label: string } | null;
+  background: { jobs: number; watches: number; crons: number; label: string } | null;
 }
 
 export function backgroundLabel(
   jobs: number,
   watches: number,
-): { jobs: number; watches: number; label: string } | null {
+  crons: number,
+): { jobs: number; watches: number; crons: number; label: string } | null {
   const parts: string[] = [];
   if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
   if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
-  return parts.length ? { jobs, watches, label: parts.join(" · ") } : null;
+  if (crons > 0) parts.push(`${crons} cron${crons === 1 ? "" : "s"} scheduled here`);
+  return parts.length ? { jobs, watches, crons, label: parts.join(" · ") } : null;
 }
 
 export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> | string | null): RowIndicators {
@@ -185,7 +187,7 @@ export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> |
   return {
     working: Boolean(s.working) || (Boolean(s.threadRef) && live.has(s.threadRef)),
     awaiting: Boolean(s.awaitingInput),
-    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0),
+    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0, s.crons ?? 0),
   };
 }
 
