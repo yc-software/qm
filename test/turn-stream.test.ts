@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
+import { createStreamingReplyFilter } from "../src/slack/messaging.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -35,6 +36,34 @@ test("subscribers receive public reply deltas in order", () => {
   unsubscribe();
   s.publish("r1", "!");
   assert.deepEqual(deltas, ["Hel", "lo"]);
+});
+
+test("a late subscriber receives the buffered prefix before live deltas", () => {
+  const s = createTurnStream();
+  s.publish("r1", "Hel");
+  const deltas: string[] = [];
+  s.subscribe("r1", {
+    onDelta: (delta) => {
+      deltas.push(delta);
+    },
+  });
+  s.publish("r1", "lo");
+  assert.deepEqual(deltas, ["Hel", "lo"]);
+});
+
+test("a directive split across buffered and live deltas stays private", () => {
+  const s = createTurnStream();
+  const filter = createStreamingReplyFilter();
+  const publicDeltas: string[] = [];
+  s.publish("r1", "Public. [[ask-agent:");
+  s.subscribe("r1", {
+    onDelta: (delta) => {
+      publicDeltas.push(filter.push(delta));
+    },
+  });
+  s.publish("r1", " <@U2> | private context]] Done.");
+  publicDeltas.push(filter.flush());
+  assert.equal(publicDeltas.join(""), "Public.  Done.");
 });
 
 test("ignores empty deltas", () => {

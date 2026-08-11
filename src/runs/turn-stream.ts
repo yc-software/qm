@@ -172,6 +172,8 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
         listeners.set(runId, set);
       }
       set.add(listener);
+      const buffered = runs.get(runId)?.text;
+      if (buffered) listener.onDelta?.(buffered);
       return () => {
         set.delete(listener);
         if (set.size === 0 && listeners.get(runId) === set) listeners.delete(runId);
