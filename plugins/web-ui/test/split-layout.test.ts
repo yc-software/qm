@@ -43,6 +43,10 @@ test("a conversation can be dropped onto a pane's tab strip to become a tab", ()
   const splitTs = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
   assert.match(splitTs, /e\.target === "tab" \|\| e\.target === "header_space"/, "no strip drop target");
   assert.match(splitTs, /api\.onDidDrop\(\(e\) => \{[\s\S]*?tabIntoPane\(/, "the strip drop must join the pane");
-  const edges = [...splitTs.matchAll(/zoneTpl\("([a-z]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(edges, ["center", "left", "right", "top", "bottom"], "the body zones must not restate the strip");
+  const edges = new Set([...splitTs.matchAll(/zoneTpl\("([a-z]+)"/g)].map((m) => m[1]));
+  assert.deepEqual(
+    edges,
+    new Set(["center", "left", "right", "top", "bottom"]),
+    "the body zones must not restate the strip",
+  );
 });

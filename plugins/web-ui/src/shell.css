@@ -6630,6 +6630,11 @@ h3.ambient-field-label {
   color: var(--foreground);
 }
 
+.split-canvas.session-dragging .dv-tabs-and-actions-container {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+
 .zone-top {
   left: 25%;
   right: 25%;

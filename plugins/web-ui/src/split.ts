@@ -152,6 +152,7 @@ function buildDock(): DockviewApi {
       guarded.add(group);
       group.model.onWillDrop(holdTileCap);
     }
+    if (sessionDrag) refreshSessionDrag();
     persistSoon();
   });
   api.onDidActivePanelChange((e) => {
@@ -513,14 +514,23 @@ function drawToast(): void {
 export function beginSessionDrag(s: CoreSession): void {
   if (!s.id) return;
   sessionDrag = { sessionId: s.id, threadRef: s.threadRef };
-  if (splitState.active) syncAllZones();
+  if (splitState.active) refreshSessionDrag();
   else showSingleDropOverlay();
+}
+
+function refreshSessionDrag(): void {
+  const drag = sessionDrag;
+  if (!drag) return;
+  const addsTab = !paneShowing(drag.sessionId) && (dockApi?.panels.length ?? 0) < MAX_PANES;
+  canvasHost?.classList.toggle("session-dragging", addsTab);
+  syncAllZones();
 }
 
 export function endSessionDrag(): void {
   if (!sessionDrag) return;
   sessionDrag = null;
   hideSingleDropOverlay();
+  canvasHost?.classList.remove("session-dragging");
   if (splitState.active) syncAllZones();
 }
 
@@ -548,12 +558,31 @@ function zoneTpl(edge: DropEdge, label: string, onDrop: () => void): TemplateRes
   </div>`;
 }
 
-function zonesTpl(act: (edge: DropEdge) => () => void): TemplateResult {
+function splitZonesTpl(act: (edge: DropEdge) => () => void): TemplateResult {
   return html`
-    ${zoneTpl("center", "Open here", act("center"))} ${zoneTpl("left", "Split left", act("left"))}
-    ${zoneTpl("right", "Split right", act("right"))} ${zoneTpl("top", "Split up", act("top"))}
-    ${zoneTpl("bottom", "Split down", act("bottom"))}
+    ${zoneTpl("left", "Split left", act("left"))} ${zoneTpl("right", "Split right", act("right"))}
+    ${zoneTpl("top", "Split up", act("top"))} ${zoneTpl("bottom", "Split down", act("bottom"))}
   `;
+}
+
+function zonesTpl(act: (edge: DropEdge) => () => void): TemplateResult {
+  return html`${zoneTpl("center", "Open here", act("center"))} ${splitZonesTpl(act)}`;
+}
+
+function paneZonesTpl(paneId: string): TemplateResult | typeof nothing {
+  const drag = sessionDrag;
+  if (!drag || !dockApi) return nothing;
+  const act = paneZoneAct(paneId);
+  const showing = paneShowing(drag.sessionId);
+  if (showing)
+    return showing.id === paneId
+      ? zoneTpl("center", "Show here", () => {
+          endSessionDrag();
+          focusPane(paneId);
+        })
+      : nothing;
+  const canSplit = dockApi.panels.length < MAX_PANES && dockApi.groups.length < MAX_TILES;
+  return html`${zoneTpl("center", "Open here", act("center"))} ${canSplit ? splitZonesTpl(act) : nothing}`;
 }
 
 function paneZoneAct(paneId: string): (edge: DropEdge) => () => void {
@@ -595,9 +624,12 @@ function showSingleDropOverlay(): void {
     }
     activateCanvas(current, { sessionId: drag.sessionId, threadRef: drag.threadRef }, edge);
   };
+  const drag = sessionDrag;
+  const splittable =
+    Boolean(drag) && mainConversation().state.sessionId !== drag?.sessionId && currentChatParams() !== null;
   singleOverlay = document.createElement("div");
   singleOverlay.className = "split-zones split-zones-single";
-  render(zonesTpl(act), singleOverlay);
+  render(splittable ? zonesTpl(act) : zoneTpl("center", "Open here", act("center")), singleOverlay);
   appState.mainEl.appendChild(singleOverlay);
 }
 
@@ -768,7 +800,7 @@ class PaneContent implements IContentRenderer {
   }
 
   syncZones(): void {
-    render(sessionDrag ? zonesTpl(paneZoneAct(this.panelId)) : nothing, this.zonesEl);
+    render(sessionDrag ? paneZonesTpl(this.panelId) : nothing, this.zonesEl);
   }
 
   dispose(): void {
