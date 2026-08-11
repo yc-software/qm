@@ -2769,6 +2769,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await tail();
           tailOwnsCleanup = true;
         }
+        await deps.errors?.flush();
         return finalResult;
       } catch (err) {
         if (err instanceof ProjectRosterChanged) {

@@ -144,22 +144,22 @@ export async function checkLiveSession(
 
   const nonce = randomUUID();
   const expectedReply = "QM deployment canary passed.";
-  const turn = (await request("POST", "/v1/turns", {
-    surface: "web",
-    actor: { externalId: principalId },
-    conversation: { kind: "dm", threadRef: `web:${principalId}:deployment-canary-${nonce}` },
-    text: `Reply with exactly: ${expectedReply}`,
-    origin: { kind: "human" },
-    addressed: true,
-    readOnly: true,
-    skipMemory: true,
-    idempotencyKey: nonce,
-  })) as { status?: string; sessionId?: string; reply?: string };
-  if (!turn.sessionId) {
-    throw new Error(`live session model turn failed with status ${turn.status ?? "missing"}`);
-  }
+  const threadRef = `web:${principalId}:deployment-canary-${nonce}`;
+  let turn: { status?: string; sessionId?: string; reply?: string } | undefined;
   let failure: unknown;
   try {
+    turn = (await request("POST", "/v1/turns", {
+      surface: "web",
+      actor: { externalId: principalId },
+      conversation: { kind: "dm", threadRef },
+      text: `Reply with exactly: ${expectedReply}`,
+      origin: { kind: "human" },
+      addressed: true,
+      readOnly: true,
+      skipMemory: true,
+      idempotencyKey: nonce,
+    })) as { status?: string; sessionId?: string; reply?: string };
+    if (!turn.sessionId) throw new Error(`live session model turn failed with status ${turn.status ?? "missing"}`);
     if (turn.status !== "ok") throw new Error(`live session model turn failed with status ${turn.status ?? "missing"}`);
     if (turn.reply?.trim() !== expectedReply) throw new Error("live session received an unexpected model reply");
 
@@ -182,16 +182,36 @@ export async function checkLiveSession(
   } catch (error) {
     failure = error;
   }
-  try {
-    await request("POST", `/v1/sessions/${encodeURIComponent(turn.sessionId)}`, { principalId, archived: true });
-  } catch (error) {
-    if (failure)
-      throw new AggregateError(
-        [failure, error],
-        `${errMessage(failure)}; session archive failed: ${errMessage(error)}`,
-        { cause: error },
-      );
-    throw error;
+  let sessionId = turn?.sessionId;
+  if (!sessionId) {
+    try {
+      const sessionsPath = `/v1/admin/sessions?scope=${encodeURIComponent(`personal:${principalId}`)}&category=all&limit=200`;
+      const listed = (await request("GET", sessionsPath, undefined, true)) as {
+        sessions?: Array<{ id?: string; threadRef?: string }>;
+      };
+      sessionId = listed.sessions?.find((session) => session.threadRef === threadRef)?.id;
+    } catch (error) {
+      if (failure)
+        throw new AggregateError(
+          [failure, error],
+          `${errMessage(failure)}; session recovery failed: ${errMessage(error)}`,
+          { cause: error },
+        );
+      throw error;
+    }
+  }
+  if (sessionId) {
+    try {
+      await request("POST", `/v1/sessions/${encodeURIComponent(sessionId)}`, { principalId, archived: true });
+    } catch (error) {
+      if (failure)
+        throw new AggregateError(
+          [failure, error],
+          `${errMessage(failure)}; session archive failed: ${errMessage(error)}`,
+          { cause: error },
+        );
+      throw error;
+    }
   }
   if (failure) throw failure;
 }

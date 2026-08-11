@@ -55,3 +55,18 @@ test("pg error log: survives a fresh log over the same table (durability)", { sk
   const rows = await reopened.list({ limit: 100 });
   assert.ok(rows.length >= 2, "events written by a prior log instance are still readable");
 });
+
+test("pg error log: flush makes writes visible to another process", { skip }, async () => {
+  const writer = createPostgresErrorLog(URL!);
+  const reader = createPostgresErrorLog(URL!);
+  writer.record({
+    category: "session_title",
+    code: "generation_failed",
+    message: "cross-process barrier",
+    scopeLabel: scopeId("personal", "U1"),
+    sessionId: "sess-cross-process",
+  });
+
+  await writer.flush();
+  assert.equal((await reader.list({ sessionId: "sess-cross-process" })).length, 1);
+});

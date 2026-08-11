@@ -189,6 +189,7 @@ test("background: an error in the detached tail still reclaims the box (no machi
     record() {
       throw new Error("error log unavailable");
     },
+    flush: () => Promise.resolve(),
     list: () => Promise.resolve([]),
     count: () => Promise.resolve(0),
   };

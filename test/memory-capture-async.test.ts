@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -139,6 +140,10 @@ test("skipMemory turns neither recall nor capture", async () => {
   assert.equal(result.status, "ok");
   assert.equal(recalls, 0);
   assert.equal(captures, 0);
+});
+
+test("approval replay preserves the memory opt-out", () => {
+  assert.equal(replayableRequest({ ...dm("dm:U1:approval", "deployment canary"), skipMemory: true }).skipMemory, true);
 });
 
 test("capture does NOT block the turn: the reply returns while extraction is still in flight", async () => {

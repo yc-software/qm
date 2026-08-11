@@ -256,6 +256,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.skipMemory ? { skipMemory: true } : {}),
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
     ...(input.addressed ? { addressed: true } : {}),
     ...(input.envelopeWrapped ? { envelopeWrapped: true } : {}),

@@ -102,6 +102,7 @@ export interface PostgresEventSinkConfig<E> {
 export interface PostgresEventSink<E> {
   q: PgPool["q"];
   record(input: Omit<E, "ts">): void;
+  flush(): Promise<void>;
   list(opts?: object): Promise<E[]>;
   count(opts?: object): Promise<number>;
 }
@@ -164,6 +165,9 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
         .catch((err) => console.error(cfg.persistErrorMessage, err))
         .finally(() => pendingWrites.delete(write));
       pendingWrites.add(write);
+    },
+    async flush() {
+      await settleWrites();
     },
     async list(input = {}) {
       await settleWrites();

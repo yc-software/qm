@@ -12,6 +12,7 @@ export interface ErrorEvent {
 
 export interface ErrorLog {
   record(e: Omit<ErrorEvent, "ts">): void;
+  flush(): Promise<void>;
   list(opts?: { scopeId?: string; sessionId?: string; limit?: number }): Promise<ErrorEvent[]>;
   count(opts?: { scopeId?: string; sessionId?: string }): Promise<number>;
 }
@@ -22,6 +23,7 @@ export function createErrorLog(): ErrorLog {
   const sink = createTimestampedEventSink<ErrorEvent>({ max: MAX, defaultLimit: 200, equalityFields: ["sessionId"] });
   return {
     record: sink.record,
+    flush: async () => {},
     list: (opts = {}) => sink.list(opts),
     count: async (opts = {}) => (await sink.list({ ...opts, limit: MAX })).length,
   };

@@ -139,4 +139,23 @@ test("live session smoke proves a model turn, persistence, title, error log, and
     }),
     /unexpected model reply/,
   );
+
+  let failedThreadRef = "";
+  let archivedFailedRequest = false;
+  await assert.rejects(
+    checkLiveSession(config, "http://core.internal:8080", async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1/turns") {
+        failedThreadRef = JSON.parse(String(init?.body)).conversation.threadRef as string;
+        return new Response("model failed", { status: 500 });
+      }
+      if (url.pathname === "/v1/admin/sessions") {
+        return Response.json({ sessions: [{ id: "sess-500", threadRef: failedThreadRef }] });
+      }
+      if (url.pathname === "/v1/sessions/sess-500" && init?.method === "POST") archivedFailedRequest = true;
+      return Response.json({ session: { id: "sess-500", archived: true } });
+    }),
+    /returned 500/,
+  );
+  assert.equal(archivedFailedRequest, true);
 });
