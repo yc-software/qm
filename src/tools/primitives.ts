@@ -259,11 +259,19 @@ export interface SurfaceDeleteInput {
   participants?: readonly string[];
 }
 
+export interface PostedFileMeta {
+  name: string;
+  mimetype: string;
+  sizeBytes: number;
+  artifactId?: string;
+}
+
 export interface SurfacePostResult {
   ok: boolean;
   deliveryId?: string;
   message?: string;
   matched?: string;
+  attachments?: PostedFileMeta[];
 }
 
 interface SurfaceReadResult {

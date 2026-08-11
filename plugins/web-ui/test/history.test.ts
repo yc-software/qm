@@ -1125,3 +1125,89 @@ test("a turn resumed past a hidden note renders as one block with the real reply
     "the work block is not split at the hidden note",
   );
 });
+
+test("a file-only post (empty text) still renders its delivered files", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "just send the file" }, createdAt: 100, seq: 0 },
+    {
+      type: "tool_call",
+      payload: { tool: "web", action: "post", text: "", files: ["out/report.pdf"], callId: "c2" },
+      createdAt: 110,
+      seq: 1,
+      parentSeq: 0,
+    },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "web",
+        action: "post",
+        ok: true,
+        callId: "c2",
+        isError: false,
+        result: "[sent]",
+        files: [{ name: "report.pdf", mimetype: "application/pdf", sizeBytes: 512, artifactId: "art-7" }],
+      },
+      createdAt: 120,
+      seq: 2,
+      parentSeq: 1,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  const reply = msgs[1] as AssistantWork & { content: Array<{ text?: string }> };
+  assert.equal(reply.role, "assistant");
+  assert.equal(reply.content[0]?.text, "");
+  assert.deepEqual(
+    reply.deliveredFiles?.map((f) => ({ name: f.name, artifactId: f.artifactId })),
+    [{ name: "report.pdf", artifactId: "art-7" }],
+    "the file-only post's attachment still surfaces on the message",
+  );
+});
+
+test("a surface post's sent files render as delivered files on the reply bubble", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "send the drafts" }, createdAt: 100, seq: 0 },
+    {
+      type: "tool_call",
+      payload: {
+        tool: "web",
+        action: "post",
+        text: "Here they are — profiles A/B/C.",
+        files: ["qm-brand/profile_A.png", "qm-brand/profile_B.png"],
+        callId: "c1",
+      },
+      createdAt: 110,
+      seq: 1,
+      parentSeq: 0,
+    },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "web",
+        action: "post",
+        ok: true,
+        callId: "c1",
+        isError: false,
+        result: "[sent]",
+        files: [
+          { name: "profile_A.png", mimetype: "image/png", sizeBytes: 28720, artifactId: "art-1" },
+          { name: "profile_B.png", mimetype: "image/png", sizeBytes: 21922, artifactId: "art-2" },
+        ],
+      },
+      createdAt: 120,
+      seq: 2,
+      parentSeq: 1,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  const reply = msgs[1] as AssistantWork & { content: Array<{ text?: string }> };
+  assert.equal(reply.role, "assistant");
+  assert.equal(reply.content[0]?.text, "Here they are — profiles A/B/C.");
+  assert.deepEqual(
+    reply.deliveredFiles?.map((f) => ({ name: f.name, artifactId: f.artifactId })),
+    [
+      { name: "profile_A.png", artifactId: "art-1" },
+      { name: "profile_B.png", artifactId: "art-2" },
+    ],
+    "the attachments the post actually sent are surfaced on the message",
+  );
+});

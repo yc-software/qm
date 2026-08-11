@@ -2137,7 +2137,13 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
           const r = await tc.post(params.text, opts, params.files);
           return recordResult(
             callId,
-            { tool: surfaceName, action: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            {
+              tool: surfaceName,
+              action: "post",
+              ok: r.ok,
+              ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
+              ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
+            },
             text(r.ok ? "[sent]" : `[not sent] ${r.message ?? "delivery failed"}`),
             !r.ok,
           );
@@ -2174,7 +2180,13 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
           const r = await tc.reach(params.text, target, params.files);
           return recordResult(
             callId,
-            { tool: surfaceName, action: "reach", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            {
+              tool: surfaceName,
+              action: "reach",
+              ok: r.ok,
+              ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
+              ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
+            },
             text(
               r.ok
                 ? `[sent to ${r.matched ?? "the named destination"}]`

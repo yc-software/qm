@@ -179,3 +179,47 @@ test("collectOutbound: harvests every outbox file (the turn-result rail for a no
   const r = await collectOutbound(sandbox, handle, transfer);
   assert.deepEqual(r.attachments.map((a) => a.name).sort(), ["cover.png", "leftover.txt"]);
 });
+
+test("surface post returns the sent attachments' metadata (so surfaces can render them)", async () => {
+  const enqueued: unknown[] = [];
+  const tools = createSurfaceToolDeps({
+    deps: {
+      deliveries: {
+        async enqueue(input: unknown) {
+          enqueued.push(input);
+          return { id: "d1" };
+        },
+      },
+      sandbox: fakeSandbox({ "qm-brand/cover.png": bytes("PNGDATA") }, []),
+    },
+    input: { surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "group" },
+    session: { id: "S1" },
+    scopeId: scopeId("personal", "U1"),
+    defaultDestination: { type: "web", target: "web:thread" },
+    strictReadOnly: false,
+    provision: async () => handle,
+    blobTransfer: createMemoryBlobTransferStore(),
+    fileRegistration: {
+      store: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      seed: "run-post",
+    },
+    postProvenance() {
+      return {};
+    },
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+  const r = await tools.post("Here they are", undefined, ["qm-brand/cover.png"]);
+  assert.equal(r.ok, true);
+  assert.equal(enqueued.length, 1, "the delivery was enqueued");
+  assert.equal(r.attachments?.length, 1, "the post result names what it sent");
+  const a = r.attachments![0]!;
+  assert.equal(a.name, "cover.png");
+  assert.equal(a.mimetype, "image/png");
+  assert.ok(a.sizeBytes > 0);
+  assert.ok(a.artifactId, "artifact id present so the web surface can serve the bytes");
+  assert.ok(!("blobId" in a), "internal blob handle is not leaked to surfaces");
+});
