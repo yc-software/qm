@@ -80,6 +80,7 @@ export interface Session {
   awaitingInput?: boolean;
   backgroundJobs?: number;
   watches?: number;
+  crons?: number;
 }
 
 export type EntryType =

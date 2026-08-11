@@ -363,15 +363,23 @@ test("rowIndicators: awaitingInput maps through", () => {
   assert.equal(rowIndicators({ ...saved("1", "web:u:x"), awaitingInput: true }, null).awaiting, true);
 });
 
-test("backgroundLabel: jobs and watches fold into one chip with a spoken label", () => {
-  assert.deepEqual(backgroundLabel(1, 0), { jobs: 1, watches: 0, label: "1 background job running" });
-  assert.deepEqual(backgroundLabel(2, 1), {
+test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken label", () => {
+  assert.deepEqual(backgroundLabel(1, 0, 0), { jobs: 1, watches: 0, crons: 0, label: "1 background job running" });
+  assert.deepEqual(backgroundLabel(2, 1, 0), {
     jobs: 2,
     watches: 1,
+    crons: 0,
     label: "2 background jobs running · 1 watch armed",
   });
-  assert.deepEqual(backgroundLabel(0, 2), { jobs: 0, watches: 2, label: "2 watches armed" });
-  assert.equal(backgroundLabel(0, 0), null, "nothing running, nothing to say");
+  assert.deepEqual(backgroundLabel(0, 2, 0), { jobs: 0, watches: 2, crons: 0, label: "2 watches armed" });
+  assert.deepEqual(backgroundLabel(0, 0, 1), { jobs: 0, watches: 0, crons: 1, label: "1 cron scheduled here" });
+  assert.deepEqual(backgroundLabel(0, 1, 2), {
+    jobs: 0,
+    watches: 1,
+    crons: 2,
+    label: "1 watch armed · 2 crons scheduled here",
+  });
+  assert.equal(backgroundLabel(0, 0, 0), null, "nothing running, nothing to say");
 });
 
 test("rowIndicators: background counts flow through backgroundLabel — zero counts treated as absent", () => {
@@ -379,9 +387,15 @@ test("rowIndicators: background counts flow through backgroundLabel — zero cou
   assert.deepEqual(both.background, {
     jobs: 2,
     watches: 1,
+    crons: 0,
     label: "2 background jobs running · 1 watch armed",
   });
-  assert.equal(rowIndicators({ ...saved("1", "web:u:x"), backgroundJobs: 0, watches: 0 }, null).background, null);
+  const cronOnly = rowIndicators({ ...saved("1", "web:u:x"), crons: 3 }, null);
+  assert.deepEqual(cronOnly.background, { jobs: 0, watches: 0, crons: 3, label: "3 crons scheduled here" });
+  assert.equal(
+    rowIndicators({ ...saved("1", "web:u:x"), backgroundJobs: 0, watches: 0, crons: 0 }, null).background,
+    null,
+  );
   assert.equal(rowIndicators(saved("1", "web:u:x"), null).background, null);
 });
 
@@ -390,13 +404,19 @@ test("conversationBackground: resolves the mounted conversation by session id", 
   assert.deepEqual(conversationBackground(list, "2", null), {
     jobs: 2,
     watches: 1,
+    crons: 0,
     label: "2 background jobs running · 1 watch armed",
   });
 });
 
 test("conversationBackground: falls back to threadRef while the conversation is still pending adoption", () => {
   const list = [{ ...saved("1", "web:u:a"), watches: 1 }];
-  assert.deepEqual(conversationBackground(list, null, "web:u:a"), { jobs: 0, watches: 1, label: "1 watch armed" });
+  assert.deepEqual(conversationBackground(list, null, "web:u:a"), {
+    jobs: 0,
+    watches: 1,
+    crons: 0,
+    label: "1 watch armed",
+  });
 });
 
 test("conversationBackground: null when the conversation has nothing running, or isn't in the list", () => {
