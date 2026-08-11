@@ -24,6 +24,9 @@ test("native agent presenter streams text and public task progress into one mess
     stop: async (ts) => {
       calls.push({ method: `stop:${ts}`, body: null });
     },
+    remove: async (ts) => {
+      calls.push({ method: `remove:${ts}`, body: null });
+    },
     checkpoint: async (ts) => {
       calls.push({ method: "checkpoint", body: ts });
     },
@@ -67,11 +70,14 @@ test("native agent presenter falls back cleanly when Slack streaming is unavaila
     stop: async () => {
       calls.push("stop");
     },
+    remove: async () => {
+      calls.push("remove");
+    },
     checkpoint: async () => {
       calls.push("checkpoint");
     },
     onSurfacePosted: () => calls.push("surface"),
-    onError: (error) => calls.push(`error:${(error as Error).message}`),
+    onError: (error) => calls.push(`error:${error instanceof Error ? error.message : String(error)}`),
   });
 
   await presenter.begin();
@@ -79,6 +85,46 @@ test("native agent presenter falls back cleanly when Slack streaming is unavaila
   assert.equal(await presenter.onTasks([{ id: "lookup", title: "Inspect deployment", status: "in_progress" }]), false);
   assert.equal(await presenter.finalize(), false);
   assert.deepEqual(calls, ["status:Thinking…", "start", "error:unknown_method", "status:"]);
+});
+
+test("native agent presenter removes an uncheckpointed stream before falling back", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      return "171.7";
+    },
+    append: async () => {
+      calls.push("append");
+    },
+    stop: async () => {
+      calls.push("stop");
+    },
+    remove: async (ts) => {
+      calls.push(`remove:${ts}`);
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+      throw new Error("core unavailable");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+    onError: (error) => calls.push(`error:${error instanceof Error ? error.message : String(error)}`),
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("Answer"), false);
+  assert.equal(await presenter.finalize(), false);
+  assert.deepEqual(calls, [
+    "status:Thinking…",
+    "start",
+    "checkpoint",
+    "remove:171.7",
+    "error:core unavailable",
+    "status:",
+  ]);
 });
 
 test("renderTaskList renders every terminal state", () => {

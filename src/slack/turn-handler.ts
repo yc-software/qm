@@ -427,13 +427,14 @@ export function createTurnHandler(deps: {
         },
         append: (ts, chunks) => client.chat.appendStream({ channel: inc.channel, ts, chunks }).then(() => {}),
         stop: (ts) => client.chat.stopStream({ channel: inc.channel, ts }).then(() => {}),
+        remove: (ts) => client.chat.delete({ channel: inc.channel, ts }).then(() => {}),
         checkpoint: async (ts) => {
           if (queuedRunId) await checkpointRunEditRef(queuedRunId, ts);
         },
         onSurfacePosted: () => ack?.onSurfacePosted(),
         onError: (error) => console.error("[slack-plugin] native agent update failed:", errMessage(error)),
       });
-      await nativeAgent.begin();
+      void nativeAgent.begin();
     }
     const streamingReply = createStreamingReplyFilter();
 

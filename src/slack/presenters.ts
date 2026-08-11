@@ -198,6 +198,7 @@ export function createNativeAgentPresenter(deps: {
   start(chunks: NativeAgentChunk[]): Promise<string | undefined>;
   append(ts: string, chunks: NativeAgentChunk[]): Promise<void>;
   stop(ts: string): Promise<void>;
+  remove(ts: string): Promise<void>;
   checkpoint(ts: string): Promise<void>;
   onSurfacePosted(): void;
   onError?(error: unknown): void;
@@ -226,11 +227,14 @@ export function createNativeAgentPresenter(deps: {
     if (!messageTs && state === "idle") state = "starting";
     await enqueue(async () => {
       if (state === "disabled" || state === "stopped") return;
+      let uncheckpointedTs: string | undefined;
       try {
         if (!messageTs) {
           const ts = await deps.start(chunks);
           if (!ts) throw new Error("chat.startStream returned no message timestamp");
+          uncheckpointedTs = ts;
           await deps.checkpoint(ts);
+          uncheckpointedTs = undefined;
           messageTs = ts;
           state = "active";
           deps.onSurfacePosted();
@@ -238,6 +242,13 @@ export function createNativeAgentPresenter(deps: {
         }
         await deps.append(messageTs, chunks);
       } catch (error) {
+        if (uncheckpointedTs) {
+          try {
+            await deps.remove(uncheckpointedTs);
+          } catch (removeError) {
+            deps.onError?.(removeError);
+          }
+        }
         state = "disabled";
         deps.onError?.(error);
       }
