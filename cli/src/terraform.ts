@@ -72,9 +72,79 @@ function hclString(source: string, name: string): string | undefined {
   }
 }
 
+function hclJson(source: string, name: string): unknown {
+  const assignment = hclAssignment(source, name);
+  const raw = assignment?.slice(assignment.indexOf("=") + 1).trim();
+  try {
+    return raw === undefined ? undefined : JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function assertSafeAssumeRoleTransition(config: QmConfig, existing: string): void {
+  if (!config.aws) return;
+  const previous = hclJson(existing, "services");
+  if (typeof previous !== "object" || previous === null || Array.isArray(previous)) return;
+  for (const [name, prior] of Object.entries(previous)) {
+    if (typeof prior !== "object" || prior === null || Array.isArray(prior)) continue;
+    const next = config.aws.services[name];
+    if (!next) continue;
+    const managedArn = `arn:aws:iam::${config.aws.accountId}:role/${config.aws.cluster}-${name === "core" ? "core" : name}-task`;
+    const priorRole = (prior as Record<string, unknown>)["task_role_arn"];
+    const priorManaged = (prior as Record<string, unknown>)["manage_task_role"] === true;
+    const currentRole = typeof priorRole === "string" ? priorRole : managedArn;
+    const nextRole =
+      next.taskRoleArn ??
+      (name === "core" || next.assumeRoleArns?.length
+        ? managedArn
+        : `arn:aws:iam::${config.aws.accountId}:role/${config.aws.cluster}-task`);
+    if (
+      name !== "core" &&
+      !priorManaged &&
+      priorRole === managedArn &&
+      !next.taskRoleArn &&
+      Boolean(next.assumeRoleArns?.length)
+    ) {
+      throw new CliError(
+        `aws.services.${name}.taskRoleArn cannot be removed because ${managedArn} is externally managed; keep the explicit ARN or import the role into Terraform first`,
+      );
+    }
+    if (name !== "core" && priorManaged && nextRole !== managedArn) {
+      throw new CliError(
+        `aws.services.${name}.taskRoleArn cannot replace the Terraform-managed role ${managedArn}; keep that role for this workload`,
+      );
+    }
+    const priorArns = (prior as Record<string, unknown>)["assume_role_arns"];
+    if (!Array.isArray(priorArns) || priorArns.length === 0) continue;
+    if (currentRole !== nextRole) {
+      throw new CliError(
+        `aws.services.${name}.taskRoleArn cannot change while its existing assumeRoleArns policy is active; first remove assumeRoleArns while keeping taskRoleArn set to ${currentRole}, apply and deploy, then change taskRoleArn in a later change`,
+      );
+    }
+  }
+}
+
+function managedTaskRoles(existing: string): Set<string> {
+  const services = hclJson(existing, "services");
+  if (typeof services !== "object" || services === null || Array.isArray(services)) return new Set();
+  return new Set(
+    Object.entries(services)
+      .filter(
+        ([, service]) =>
+          typeof service === "object" &&
+          service !== null &&
+          !Array.isArray(service) &&
+          (service as Record<string, unknown>)["manage_task_role"] === true,
+      )
+      .map(([name]) => name),
+  );
+}
+
 function derivedValues(
   config: QmConfig,
   declared: readonly string[],
+  managedRoles = new Set<string>(),
 ): { strings: Record<string, string>; json: Record<string, unknown> } {
   if (!config.aws) throw new CliError("terraform rendering requires target aws and an aws block");
   const aws = config.aws;
@@ -84,19 +154,26 @@ function derivedValues(
     );
   }
   const services = Object.fromEntries(
-    Object.entries(aws.services).map(([name, service]) => [
-      name,
-      {
-        ecr_repository: service!.ecrRepository,
-        ecs_service: service!.ecsService,
-        cpu: service!.cpu,
-        memory: service!.memory,
-        architecture: awsWorkloadArchitecture(config, name),
-        internal_port: isServiceName(name) ? serviceDef(name).docker.internalPort : 8080,
-        ...(service!.taskRoleArn ? { task_role_arn: service!.taskRoleArn } : {}),
-        ...(service!.executionRoleArn ? { execution_role_arn: service!.executionRoleArn } : {}),
-      },
-    ]),
+    Object.entries(aws.services).map(([name, service]) => {
+      const manageTaskRole =
+        name !== "core" &&
+        (managedRoles.has(name) || (!service!.taskRoleArn && Boolean(service!.assumeRoleArns?.length)));
+      return [
+        name,
+        {
+          ecr_repository: service!.ecrRepository,
+          ecs_service: service!.ecsService,
+          cpu: service!.cpu,
+          memory: service!.memory,
+          architecture: awsWorkloadArchitecture(config, name),
+          internal_port: isServiceName(name) ? serviceDef(name).docker.internalPort : 8080,
+          ...(service!.taskRoleArn ? { task_role_arn: service!.taskRoleArn } : {}),
+          ...(service!.executionRoleArn ? { execution_role_arn: service!.executionRoleArn } : {}),
+          ...(service!.assumeRoleArns !== undefined ? { assume_role_arns: service!.assumeRoleArns } : {}),
+          ...(manageTaskRole ? { manage_task_role: true } : {}),
+        },
+      ];
+    }),
   );
   const secrets = computedSecrets(config);
   return {
@@ -140,7 +217,8 @@ export function terraformVars(
   existing = "",
   declared: string[] = [...Object.keys(OPERATOR_DEFAULTS), "github_environment"],
 ): string {
-  const { strings, json } = derivedValues(config, declared);
+  assertSafeAssumeRoleTransition(config, existing);
+  const { strings, json } = derivedValues(config, declared, managedTaskRoles(existing));
   const line = (name: string, value: string): string => `${name.padEnd(19)} = ${value}`;
   const lines = Object.entries(strings).map(([name, value]) => line(name, JSON.stringify(value)));
   for (const name of new Set([...Object.keys(OPERATOR_DEFAULTS), ...declared])) {
@@ -159,21 +237,13 @@ export function terraformVarsDrift(
   existing: string,
   declared: string[] = ["github_environment"],
 ): string[] {
-  const { strings, json } = derivedValues(config, declared);
+  const { strings, json } = derivedValues(config, declared, managedTaskRoles(existing));
   const drift: string[] = [];
   for (const [name, value] of Object.entries(strings)) {
     if (hclString(existing, name) !== value) drift.push(name);
   }
   for (const [name, value] of Object.entries(json)) {
-    const assignment = hclAssignment(existing, name);
-    const raw = assignment?.slice(assignment.indexOf("=") + 1).trim();
-    let parsed: unknown;
-    try {
-      parsed = raw === undefined ? undefined : JSON.parse(raw);
-    } catch {
-      parsed = undefined;
-    }
-    if (canonicalJson(parsed) !== canonicalJson(value)) drift.push(name);
+    if (canonicalJson(hclJson(existing, name)) !== canonicalJson(value)) drift.push(name);
   }
   return drift;
 }
@@ -183,9 +253,29 @@ function declaredInDir(configDir: string): string[] | undefined {
   return existsSync(path) ? declaredVariables(readFileSync(path, "utf8")) : undefined;
 }
 
+export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDir: string): void {
+  if (!Object.values(config.aws?.services ?? {}).some((service) => service?.assumeRoleArns !== undefined)) return;
+  const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
+  if (!existsSync(tfvarsPath)) return;
+  const variablesPath = join(configDir, "infra", "variables.tf");
+  const mainPath = join(configDir, "infra", "main.tf");
+  const variables = existsSync(variablesPath) ? readFileSync(variablesPath, "utf8") : "";
+  const main = existsSync(mainPath) ? readFileSync(mainPath, "utf8") : "";
+  if (
+    !/assume_role_arns\s*=\s*optional/.test(variables) ||
+    !/manage_task_role\s*=\s*optional/.test(variables) ||
+    !/qm_scaffold_version\s*=\s*3\b/.test(main)
+  ) {
+    throw new CliError(
+      "the vendored AWS scaffold predates aws.services.*.assumeRoleArns; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
+    );
+  }
+}
+
 export function renderTerraformVars(config: QmConfig, configDir: string): void {
   const path = join(configDir, "infra", "terraform.tfvars");
   if (!existsSync(path)) throw new CliError(`${path} does not exist; scaffold it with qm init --target aws`);
+  assertTerraformScaffoldSupportsConfig(config, configDir);
   const existing = readFileSync(path, "utf8");
   const declared = declaredInDir(configDir);
   writeFileSync(path, terraformVars(config, existing, ...(declared ? [declared] : [])));

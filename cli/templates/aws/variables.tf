@@ -102,6 +102,8 @@ variable "services" {
     internal_port      = number
     task_role_arn      = optional(string)
     execution_role_arn = optional(string)
+    assume_role_arns   = optional(set(string))
+    manage_task_role   = optional(bool, false)
   }))
 }
 variable "secret_names" { type = set(string) }

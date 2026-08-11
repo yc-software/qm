@@ -141,6 +141,43 @@ if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SEC
   }
 });
 
+test("Fly doctor rejects persisted core access on coreless plugins", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-coreless-"));
+  const bin = join(dir, "fake-fly.cjs");
+  const prior = process.env.FLY_BIN;
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const app = args[args.indexOf("-a") + 1];
+if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\n");
+if (app === "acme-signer") process.stdout.write("CORE_API_URL\\nCORE_SIGNING_SECRET\\n");
+`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.FLY_BIN = bin;
+  try {
+    await assert.rejects(
+      flyDoctor(
+        {
+          ...config,
+          target: "fly",
+          appPrefix: "acme",
+          region: "sjc",
+          flyOrg: "personal",
+          plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }],
+        },
+        dir,
+      ),
+      /unexpected CORE_API_URL[\s\S]*unexpected CORE_SIGNING_SECRET/,
+    );
+  } finally {
+    if (prior === undefined) delete process.env.FLY_BIN;
+    else process.env.FLY_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Fly doctor demands the plain name too for a dual-role (core + sandbox) secret", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-dual-"));
   const bin = join(dir, "fake-fly.cjs");

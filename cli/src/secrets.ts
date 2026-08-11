@@ -436,7 +436,8 @@ export function computedSecrets(config: QmConfig): ComputedSecret[] {
   }
   for (const plugin of config.plugins) {
     const signing = byName.get("CORE_SIGNING_SECRET");
-    if (signing && !signing.services.includes(plugin.name)) signing.services.push(plugin.name);
+    if (plugin.coreAccess !== false && signing && !signing.services.includes(plugin.name))
+      signing.services.push(plugin.name);
     for (const spec of plugin.secrets ?? []) {
       const required = spec.required !== false;
       const current = byName.get(spec.name);

@@ -101,6 +101,20 @@ test("plugins: image is OPTIONAL (source plugins); env attaches to either; bad i
   withConfig({ plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }] }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.plugins[0]!.image, "ghcr.io/acme/linear:1");
   });
+  withConfig({ plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }] }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.plugins[0]!.coreAccess, false);
+  });
+  withConfig({ plugins: [{ name: "signer", coreAccess: "no" }] }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /coreAccess must be a boolean/),
+  );
+  for (const name of ["CORE_API_URL", "CORE_SIGNING_SECRET"]) {
+    withConfig({ plugins: [{ name: "signer", coreAccess: false, env: { [name]: "forbidden" } }] }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), new RegExp(`cannot declare ${name} when coreAccess is false`)),
+    );
+    withConfig({ plugins: [{ name: "signer", coreAccess: false, secrets: [{ name }] }] }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), new RegExp(`cannot declare ${name} when coreAccess is false`)),
+    );
+  }
   withConfig({ plugins: [{ name: "x", image: "" }] }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /image must be a non-empty string/),
   );
@@ -195,6 +209,31 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
     assert.equal(loadConfigAt(path).config.aws!.services.core!.architecture, "amd64");
   });
   withConfig(
+    {
+      target: "aws",
+      aws: { ...aws, services: { core: { ...aws.services.core, assumeRoleArns: [] } } },
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /assumeRoleArns.*must contain at least one IAM role ARN/),
+  );
+  withConfig(
+    {
+      target: "aws",
+      services: ["core", "web-ui"],
+      aws: {
+        ...aws,
+        services: {
+          core: {
+            ...aws.services.core,
+            taskRoleArn: "arn:aws:iam::123456789012:role/acme-task",
+            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
+          },
+          "web-ui": { ecrRepository: "web-ui", ecsService: "acme-web-ui", cpu: 512, memory: 1024 },
+        },
+      },
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /taskRoleArn.*must be unique.*also used by web-ui/),
+  );
+  withConfig(
     { target: "aws", aws: { ...aws, services: { core: { ...aws.services.core, architecture: "ppc64" } } } },
     ({ path }) => {
       assert.throws(() => loadConfigAt(path), /architecture.*must be "arm64" or "amd64"/);
@@ -220,6 +259,70 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
     ({ path }) => {
       assert.throws(() => loadConfigAt(path), /linear\.architecture is required/);
     },
+  );
+});
+
+test("AWS workloads accept scoped commercial IAM assume-role targets", () => {
+  const aws = {
+    accountId: "123456789012",
+    region: "us-west-2",
+    cluster: "acme",
+    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+    secretsPrefix: "acme/",
+    imageLabel: "release",
+    networking: { cloudMapNamespace: "acme.internal" },
+    services: {
+      core: {
+        ecrRepository: "core",
+        ecsService: "acme-core",
+        cpu: 512,
+        memory: 1024,
+        assumeRoleArns: [
+          "arn:aws:iam::111122223333:role/model-gateway",
+          "arn:aws:iam::111122223333:role/model-gateway",
+        ],
+      },
+    },
+  };
+  withConfig({ target: "aws", aws }, ({ path }) => {
+    assert.deepEqual(loadConfigAt(path).config.aws!.services.core!.assumeRoleArns, [
+      "arn:aws:iam::111122223333:role/model-gateway",
+    ]);
+  });
+  withConfig(
+    {
+      target: "aws",
+      aws: {
+        ...aws,
+        services: {
+          core: {
+            ...aws.services.core,
+            assumeRoleArns: ["arn:aws-us-gov:iam::111122223333:role/model-gateway"],
+          },
+        },
+      },
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /commercial AWS IAM role ARNs/),
+  );
+  withConfig(
+    {
+      target: "aws",
+      aws: {
+        ...aws,
+        cluster: "a".repeat(49),
+        services: {
+          "model-gateway-signer": {
+            ...aws.services.core,
+            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
+          },
+        },
+      },
+    },
+    ({ path }) =>
+      assert.throws(
+        () => loadConfigAt(path),
+        /requires an explicit taskRoleArn because the derived IAM role name exceeds 64 characters/,
+      ),
   );
 });
 

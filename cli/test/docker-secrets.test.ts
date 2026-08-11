@@ -85,6 +85,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
             env: { LINEAR_REGION: "us", PLUG_TOKEN: "config-placeholder" },
             secrets: [{ name: "PLUG_TOKEN" }, { name: "EMPTY_TOKEN", required: false }],
           },
+          { name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false },
         ],
         sandbox: {
           app: "sekrit-sandboxes",
@@ -152,6 +153,14 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     assert.ok(argv.includes("FLY_SANDBOX_APP_NAME=sekrit-sandboxes"), "non-secret env still flows as -e");
     assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
     assert.ok(argv.includes("LINEAR_REGION=us"), "undeclared plugin env still flows as -e");
+    const signerArgs = argv
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[])
+      .find((args) => args.includes("qm-sekrit-signer"));
+    assert.ok(signerArgs, "coreless plugin starts");
+    assert.ok(!signerArgs.includes("CORE_API_URL=http://core:8080"), "coreless plugin gets no core endpoint");
+    assert.ok(!signerArgs.includes("--env-file"), "coreless plugin gets no source-auth secret");
     assert.ok(argv.includes("SECURITY_SCREEN_BACKEND=proxy"));
     assert.ok(argv.includes("SECURITY_SCREEN_PROXY_PROVIDER=example-screen"));
     assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ENDPOINT=https://screen.example.test/classify"));

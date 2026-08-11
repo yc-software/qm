@@ -126,6 +126,33 @@ test("a plugin's entry env can override the injected wiring (entry env wins)", (
   assert.match(derivedPluginTomlFor(config, plugin), /CORE_API_URL = "http:\/\/elsewhere:9000"/);
 });
 
+test("a coreless plugin gets no core endpoint", () => {
+  const config: QmConfig = {
+    contract: 1,
+    orgId: "acme",
+    publicUrl: "https://acme.example.com",
+    target: "fly",
+    appPrefix: "qm",
+    region: "sjc",
+    flyOrg: "personal",
+    services: ["core"],
+    plugins: [],
+    skills: [],
+    env: {},
+    imageOverrides: {},
+  };
+  const plugin: ResolvedPlugin = {
+    name: "signer",
+    kind: "image",
+    image: "ghcr.io/x:1",
+    env: {},
+    coreAccess: false,
+  };
+  const toml = derivedPluginTomlFor(config, plugin);
+  assert.doesNotMatch(toml, /CORE_API_URL/);
+  assert.match(toml, /CORE_ORG_ID = "acme"/);
+});
+
 test("a plugin env value with quotes/backslashes is escaped into valid TOML", () => {
   const config: QmConfig = {
     contract: 1,
@@ -235,7 +262,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     region: "sjc",
     flyOrg: "personal",
     services: ["core", "slack"],
-    plugins: [],
+    plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }],
     skills: [],
     env: { core: { HARNESS: "pi" } },
     imageOverrides: {},
@@ -261,7 +288,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
   );
   const fake = fakeFly(
     dir,
-    `const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
+    `if (a === "secrets list -a acme-signer") console.log("CORE_API_URL digest\\nCORE_SIGNING_SECRET digest"); const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
   const priorAnthropic = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "proc-wins";
@@ -290,6 +317,15 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     );
     assert.ok(calls.includes("apps create acme-core --org personal"), "the service app exists before secret staging");
     assert.ok(calls.includes("apps create acme-srcplug --org personal"), "source plugin apps are created too");
+    assert.ok(calls.includes("apps create acme-signer --org personal"), "coreless plugin apps are created too");
+    assert.ok(
+      calls.includes("secrets unset --stage -a acme-signer CORE_API_URL CORE_SIGNING_SECRET"),
+      "coreless plugins lose previously stored core access",
+    );
+    assert.ok(
+      !calls.includes("secrets set --stage -a acme-signer CORE_SIGNING_SECRET"),
+      "coreless plugins do not get the signing secret",
+    );
     assert.ok(
       !calls.includes("apps create acme-sb --org personal"),
       "secret delivery never adopts or creates the separately managed sandbox registry app",

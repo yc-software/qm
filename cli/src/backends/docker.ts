@@ -342,7 +342,8 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
 
 function secretEnvKeys(ctx: DockerCtx, service: string): Set<string> {
   const keys = new Set(Object.keys(secretValues(ctx, service)));
-  if (ctx.signingSecret) keys.add("CORE_SIGNING_SECRET");
+  const plugin = ctx.config.plugins.find((entry) => entry.name === service);
+  if (ctx.signingSecret && plugin?.coreAccess !== false) keys.add("CORE_SIGNING_SECRET");
   if (service === "core") {
     keys.add("DATABASE_URL");
     for (const key of ctx.sandboxSecretKeys) keys.add(key);
@@ -607,14 +608,14 @@ export async function dockerUp(
       "no",
     ];
     const wiring = {
-      CORE_API_URL: "http://core:8080",
+      ...(p.coreAccess === false ? {} : { CORE_API_URL: "http://core:8080" }),
       ...orgEnv(p.name, config.orgId, config.publicUrl, config.services.includes("portal")),
       PORT: "8080",
     };
     const env = {
       ...wiring,
       ...p.env,
-      ...(ctx.signingSecret ? { CORE_SIGNING_SECRET: ctx.signingSecret } : {}),
+      ...(ctx.signingSecret && p.coreAccess !== false ? { CORE_SIGNING_SECRET: ctx.signingSecret } : {}),
       ...secretValues(ctx, p.name),
     };
     const cleanup = pushEnvArgs(args, env, secretEnvKeys(ctx, p.name));

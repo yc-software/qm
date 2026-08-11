@@ -1,7 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { awsObjectStoreBucket, declaredVariables, terraformVars, terraformVarsDrift } from "../src/terraform.ts";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  awsObjectStoreBucket,
+  declaredVariables,
+  renderTerraformVars,
+  terraformVars,
+  terraformVarsDrift,
+} from "../src/terraform.ts";
 import type { QmConfig } from "../src/config.ts";
 
 const DEPLOY_IMAGE = "acme-qm-sandbox";
@@ -63,6 +71,231 @@ test("the ECS execution role can read every managed contract secret", () => {
 test("new S3 buckets use AWS's default public-access block without a separate mutation", () => {
   assert.ok(!declared.includes("manage_object_store_public_access_block"));
   assert.doesNotMatch(mainTf, /aws_s3_bucket_public_access_block/);
+});
+
+test("each AWS workload can assume configured roles through an isolated task role", () => {
+  assert.match(
+    mainTf,
+    /assume_role_services\s*=\s*\{ for name, service in var\.services : name => service if try\(length\(service\.assume_role_arns\), 0\) > 0 \}/,
+  );
+  assert.match(mainTf, /managed_assume_role_services\s*=\s*\{[\s\S]*service\.manage_task_role[\s\S]*\}/);
+  assert.match(mainTf, /qm_scaffold_version\s*=\s*3/);
+  assert.match(
+    readFileSync(new URL("../templates/aws/variables.tf", import.meta.url), "utf8"),
+    /manage_task_role\s*=\s*optional\(bool, false\)/,
+  );
+  assert.match(mainTf, /resource "aws_iam_role" "assume_role_task"/);
+  assert.match(mainTf, /for_each\s*=\s*local\.managed_assume_role_services/);
+  assert.match(mainTf, /name\s*=\s*"\$\{var\.cluster_name\}-\$\{each\.key\}-task"/);
+  assert.match(mainTf, /resource "aws_iam_role_policy" "managed_service_assume_role"/);
+  assert.match(mainTf, /role\s*=\s*aws_iam_role\.assume_role_task\[each\.key\]\.id/);
+  assert.match(mainTf, /resource "aws_iam_role_policy" "configured_service_assume_role"/);
+  assert.match(mainTf, /role\s*=\s*basename\(local\.effective_task_role_arns\[each\.key\]\)/);
+  assert.match(mainTf, /lifecycle \{ create_before_destroy = true \}/);
+  assert.match(mainTf, /Action\s*=\s*\["sts:AssumeRole"\]/);
+  assert.match(mainTf, /Resource\s*=\s*each\.value\.assume_role_arns/);
+  assert.match(mainTf, /task_role_arn\s*=\s*local\.effective_task_role_arns\[each\.key\]/);
+  const rendered = terraformVars(
+    {
+      ...config,
+      aws: {
+        ...config.aws!,
+        services: {
+          ...config.aws!.services,
+          core: {
+            ...config.aws!.services.core!,
+            taskRoleArn: "arn:aws:iam::123456789012:role/existing-core",
+            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
+          },
+        },
+      },
+    },
+    "",
+    declared,
+  );
+  assert.match(rendered, /"assume_role_arns": \[/);
+  assert.match(rendered, /arn:aws:iam::111122223333:role\/model-gateway/);
+  assert.match(rendered, /"task_role_arn": "arn:aws:iam::123456789012:role\/existing-core"/);
+  assert.doesNotMatch(terraformVars(config, "", declared), /assume_role_arns/);
+});
+
+test("an active assume-role policy blocks task-role replacement", () => {
+  const service = { ecrRepository: "qm-signer", ecsService: "acme-signer", cpu: 256, memory: 512 };
+  const role = "arn:aws:iam::111122223333:role/model-gateway";
+  const configured: QmConfig = {
+    ...config,
+    aws: {
+      ...config.aws!,
+      services: { ...config.aws!.services, signer: { ...service, assumeRoleArns: [role] } },
+    },
+  };
+  const rendered = terraformVars(configured, "", declared);
+  assert.match(rendered, /"manage_task_role": true/);
+  const managedRole = "arn:aws:iam::123456789012:role/acme-qm-signer-task";
+  const replacementRole = "arn:aws:iam::123456789012:role/acme-qm-task";
+  const removed: QmConfig = {
+    ...configured,
+    aws: {
+      ...configured.aws!,
+      services: { ...configured.aws!.services, signer: { ...service, taskRoleArn: replacementRole } },
+    },
+  };
+  assert.throws(() => terraformVars(removed, rendered, declared), /cannot replace the Terraform-managed role/);
+  const staged: QmConfig = {
+    ...configured,
+    aws: {
+      ...configured.aws!,
+      services: {
+        ...configured.aws!.services,
+        signer: { ...service, taskRoleArn: managedRole },
+      },
+    },
+  };
+  const stagedVars = terraformVars(staged, rendered, declared);
+  assert.match(stagedVars, /"manage_task_role": true/);
+  assert.match(stagedVars, /"task_role_arn": "arn:aws:iam::123456789012:role\/acme-qm-signer-task"/);
+  assert.throws(() => terraformVars(removed, stagedVars, declared), /cannot replace the Terraform-managed role/);
+
+  const explicit: QmConfig = {
+    ...configured,
+    aws: {
+      ...configured.aws!,
+      services: {
+        ...configured.aws!.services,
+        signer: { ...service, taskRoleArn: replacementRole, assumeRoleArns: [role] },
+      },
+    },
+  };
+  const explicitVars = terraformVars(explicit, "", declared);
+  assert.doesNotMatch(explicitVars, /manage_task_role/);
+  const conventionallyNamedExternal: QmConfig = {
+    ...configured,
+    aws: {
+      ...configured.aws!,
+      services: {
+        ...configured.aws!.services,
+        signer: { ...service, taskRoleArn: managedRole, assumeRoleArns: [role] },
+      },
+    },
+  };
+  const conventionallyNamedExternalVars = terraformVars(conventionallyNamedExternal, "", declared);
+  assert.doesNotMatch(conventionallyNamedExternalVars, /manage_task_role/);
+  assert.throws(
+    () => terraformVars(configured, conventionallyNamedExternalVars, declared),
+    /cannot be removed because .* is externally managed/,
+  );
+  assert.throws(
+    () =>
+      terraformVars(
+        {
+          ...explicit,
+          aws: {
+            ...explicit.aws!,
+            services: {
+              ...explicit.aws!.services,
+              signer: { ...service, taskRoleArn: managedRole, assumeRoleArns: [role] },
+            },
+          },
+        },
+        explicitVars,
+        declared,
+      ),
+    /taskRoleArn cannot change/,
+  );
+  const deauthorized: QmConfig = {
+    ...explicit,
+    aws: {
+      ...explicit.aws!,
+      services: {
+        ...explicit.aws!.services,
+        signer: { ...service, taskRoleArn: replacementRole },
+      },
+    },
+  };
+  const deauthorizedVars = terraformVars(deauthorized, explicitVars, declared);
+  assert.doesNotThrow(() =>
+    terraformVars(
+      {
+        ...deauthorized,
+        aws: {
+          ...deauthorized.aws!,
+          services: {
+            ...deauthorized.aws!.services,
+            signer: { ...service, taskRoleArn: managedRole },
+          },
+        },
+      },
+      deauthorizedVars,
+      declared,
+    ),
+  );
+
+  const coreRole = "arn:aws:iam::123456789012:role/existing-core";
+  const configuredCore: QmConfig = {
+    ...config,
+    aws: {
+      ...config.aws!,
+      services: {
+        core: { ...config.aws!.services.core!, taskRoleArn: coreRole, assumeRoleArns: [role] },
+      },
+    },
+  };
+  const configuredCoreVars = terraformVars(configuredCore, "", declared);
+  assert.throws(
+    () =>
+      terraformVars(
+        {
+          ...configuredCore,
+          aws: {
+            ...configuredCore.aws!,
+            services: {
+              core: {
+                ...configuredCore.aws!.services.core!,
+                taskRoleArn: "arn:aws:iam::123456789012:role/replacement-core",
+              },
+            },
+          },
+        },
+        configuredCoreVars,
+        declared,
+      ),
+    /taskRoleArn cannot change/,
+  );
+});
+
+test("assume-role config rejects vendored AWS scaffolds that predate workload roles", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-legacy-terraform-"));
+  try {
+    const infra = join(dir, "infra");
+    mkdirSync(infra);
+    writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
+    writeFileSync(
+      join(infra, "variables.tf"),
+      'variable "services" { type = map(object({ assume_role_arns = optional(set(string)) })) }\n',
+    );
+    writeFileSync(
+      join(infra, "main.tf"),
+      'resource "aws_iam_role" "assume_role_task" {}\nresource "aws_iam_role_policy" "managed_service_assume_role" {}\nresource "aws_iam_role_policy" "configured_service_assume_role" {}\n',
+    );
+    const configured: QmConfig = {
+      ...config,
+      aws: {
+        ...config.aws!,
+        services: {
+          core: {
+            ...config.aws!.services.core!,
+            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
+          },
+        },
+      },
+    };
+    assert.throws(
+      () => renderTerraformVars(configured, dir),
+      /AWS scaffold predates aws\.services\.\*\.assumeRoleArns[\s\S]*variables\.tf[\s\S]*main\.tf/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the deploy role registers task definitions only for configured ECS families", () => {
@@ -283,7 +516,7 @@ test("AWS module reuses account OIDC, guards account and passes configured task 
   assert.match(versions, /allowed_account_ids\s*= \[var\.account_id\]/);
   assert.match(mainTf, /concat\(local\.execution_role_arns, local\.task_role_arns\)/);
   assert.match(mainTf, /coalesce\(each\.value\.execution_role_arn, local\.default_execution_role_arn\)/);
-  assert.match(mainTf, /each\.key == "core" \? local\.core_task_role_arn : local\.default_task_role_arn/);
+  assert.match(mainTf, /effective_task_role_arns/);
   assert.match(mainTf, /role = aws_iam_role\.core_task\.id/);
   assert.match(mainTf, /dynamodb:ConditionCheckItem/);
   assert.match(mainTf, /dynamodb:DescribeTable/);

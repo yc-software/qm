@@ -49,7 +49,12 @@ import {
   streamLabeled,
 } from "../util.ts";
 import { doctorCommon } from "./doctor.ts";
-import { awsObjectStoreBucket, declaredVariables, terraformVarsDrift } from "../terraform.ts";
+import {
+  assertTerraformScaffoldSupportsConfig,
+  awsObjectStoreBucket,
+  declaredVariables,
+  terraformVarsDrift,
+} from "../terraform.ts";
 import {
   currentDeploymentLayerState,
   deploymentLayerBody,
@@ -94,6 +99,7 @@ function awsTopology(
   configDir: string,
 ): { aws: AwsConfig; workloads: string[]; plugins: ResolvedPlugin[] } {
   const aws = requireAws(config);
+  assertTerraformScaffoldSupportsConfig(config, configDir);
   const discovered = discoverPlugins(configDir, config);
   if (discovered.errors.length) throw new CliError(discovered.errors.join("\n"));
   const workloads = [...runnableServices(config.services), ...discovered.plugins.map((plugin) => plugin.name)];
@@ -286,7 +292,9 @@ function workloadEnvironment(config: QmConfig, workload: string): Record<string,
   const plugin = config.plugins.find((entry) => entry.name === workload);
   return Object.fromEntries(
     Object.entries({
-      CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080`,
+      ...(plugin?.coreAccess === false
+        ? {}
+        : { CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080` }),
       ...orgEnv(workload, config.orgId, config.publicUrl, config.services.includes("portal")),
       ...plugin?.env,
       PORT: "8080",
@@ -298,7 +306,12 @@ function workloadSecrets(config: QmConfig, workload: string, available?: Record<
   const secrets = secretsForService(config, workload).filter(
     (secret) => secret.required || Boolean(available?.[secret.name]),
   );
-  if (!isServiceName(workload) && !secrets.some((secret) => secret.name === "CORE_SIGNING_SECRET")) {
+  const plugin = config.plugins.find((entry) => entry.name === workload);
+  if (
+    !isServiceName(workload) &&
+    plugin?.coreAccess !== false &&
+    !secrets.some((secret) => secret.name === "CORE_SIGNING_SECRET")
+  ) {
     const signing = computedSecrets(config).find((secret) => secret.name === "CORE_SIGNING_SECRET");
     if (signing) return [...secrets, signing];
   }
@@ -323,9 +336,10 @@ export function renderTaskDefinition(
   if (service === "core" && usesFlySandboxes(config)) resolveAwsSandboxPin(config, () => undefined);
   const internalPort = isServiceName(service) ? serviceDef(service).docker.internalPort : 8080;
   const executionRoleArn = spec.executionRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task-execution`;
-  const taskRoleArn =
-    spec.taskRoleArn ??
-    `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-${service === "core" ? "core-task" : "task"}`;
+  const managedTaskRole = spec.assumeRoleArns?.length
+    ? `${aws.cluster}-${service}-task`
+    : `${aws.cluster}-${service === "core" ? "core-task" : "task"}`;
+  const taskRoleArn = spec.taskRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${managedTaskRole}`;
   const secrets = workloadSecrets(config, service, secretArns)
     .flatMap((secret) =>
       containerSecretNames(service, secret).map((name) => ({
@@ -764,6 +778,7 @@ interface DeploymentManifest {
   sandboxImage?: string;
   dbSnapshot?: string;
   tasks: Record<string, string>;
+  counts?: Record<string, number>;
   imageProvenance?: Record<string, DeploymentImageProvenance>;
   layer?: { key: string; sha256: string };
 }
@@ -1098,9 +1113,11 @@ function recordDeploymentManifest(
     dbSnapshot?: string;
     layer?: DeploymentManifest["layer"];
     imageProvenance?: DeploymentManifest["imageProvenance"];
+    counts?: DeploymentManifest["counts"];
   },
 ): DeploymentManifest {
   const current = currentDeploymentManifest(aws);
+  const counts = release.counts ?? current?.counts;
   const manifest: DeploymentManifest = {
     id: release.id ?? randomUUID(),
     ...(current ? { previous: current.id } : {}),
@@ -1109,6 +1126,7 @@ function recordDeploymentManifest(
     ...(release.sandboxImage ? { sandboxImage: release.sandboxImage } : {}),
     ...(release.dbSnapshot ? { dbSnapshot: release.dbSnapshot } : {}),
     tasks,
+    ...(counts ? { counts } : {}),
     ...(release.imageProvenance ? { imageProvenance: release.imageProvenance } : {}),
     ...(release.layer ? { layer: release.layer } : {}),
   };
@@ -1142,6 +1160,7 @@ function recordCarriedSandboxPin(aws: AwsConfig, image: string): DeploymentManif
   if (current.sandboxImage === image) return current;
   return recordDeploymentManifest(aws, current.tasks, {
     sandboxImage: image,
+    ...(current.counts ? { counts: current.counts } : {}),
     ...(current.imageLabel ? { imageLabel: current.imageLabel } : {}),
     ...(current.layer ? { layer: current.layer } : {}),
     ...(current.imageProvenance ? { imageProvenance: current.imageProvenance } : {}),
@@ -1256,9 +1275,8 @@ function trustedDeploymentBaseline(
   action = "deploy --only",
 ): DeploymentManifest {
   const aws = requireAws(config);
-  const allWorkloads = Object.keys(aws.services);
   const current = currentDeploymentManifest(aws);
-  if (!current || allWorkloads.some((workload) => !current.tasks[workload])) {
+  if (!current || workloads.some((workload) => !current.tasks[workload])) {
     throw new CliError(
       "the first AWS deployment must include every workload; omit --only until a complete deployment manifest exists",
     );
@@ -1290,6 +1308,27 @@ function trustedDeploymentBaseline(
     }
   }
   return current;
+}
+
+function adoptMissingWorkloads(
+  manifest: DeploymentManifest,
+  snapshot: ReturnType<typeof serviceSnapshot>,
+  workloads: string[],
+): boolean {
+  const missing = workloads.filter((workload) => !manifest.tasks[workload]);
+  const active = missing.filter((workload) => snapshot.counts[workload] !== 0);
+  if (active.length) {
+    throw new CliError(
+      `selected workload ${active.join(", ")} is missing from the current deployment manifest and must be scaled to zero before adoption`,
+    );
+  }
+  if (!missing.length) return false;
+  manifest.counts ??= {};
+  for (const workload of missing) {
+    manifest.tasks[workload] = snapshot.tasks[workload]!;
+    manifest.counts[workload] = snapshot.counts[workload]!;
+  }
+  return true;
 }
 
 async function applyServiceTargets(
@@ -1587,11 +1626,12 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     const before = serviceSnapshot(config, allServices);
     const selected = new Set(services);
     if (allServices.some((service) => !selected.has(service))) {
-      trustedDeploymentBaseline(
+      const baseline = trustedDeploymentBaseline(
         config,
         before,
         allServices.filter((name) => !selected.has(name)),
       );
+      adoptMissingWorkloads(baseline, before, services);
     }
     const images: Record<string, string> = {};
     for (const service of services) {
@@ -1644,6 +1684,15 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     assertAwsDeployImage(config);
     before = serviceSnapshot(config, allServices);
     current = currentDeploymentManifest(aws);
+    const selected = new Set(services);
+    if (allServices.some((service) => !selected.has(service))) {
+      current = trustedDeploymentBaseline(
+        config,
+        before,
+        allServices.filter((name) => !selected.has(name)),
+      );
+      if (adoptMissingWorkloads(current, before, services)) manifestTransaction(aws, current, current.id);
+    }
     if (usesFlySandboxes(config)) {
       if (services.includes("core")) {
         const pin = resolveAwsSandboxPin(config, () => current);
@@ -1700,14 +1749,6 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
           desiredLayerBody = undefined;
         }
       }
-    }
-    const selected = new Set(services);
-    if (allServices.some((service) => !selected.has(service))) {
-      trustedDeploymentBaseline(
-        config,
-        before,
-        allServices.filter((name) => !selected.has(name)),
-      );
     }
     dockerLogin(aws);
     const images: Record<string, string> = {};
@@ -1766,14 +1807,19 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       );
     }
     const releaseTasks = { ...before.tasks, ...targets };
+    const releaseCounts = Object.fromEntries(
+      allServices.map((service) => [service, workloadDesiredCount(config, service)]),
+    );
     const releaseImageProvenance = { ...current?.imageProvenance, ...selectedImageProvenance };
     const sameTasks = current && allServices.every((service) => current!.tasks[service] === releaseTasks[service]);
+    const sameCounts = current && canonicalJson(current.counts ?? {}) === canonicalJson(releaseCounts);
     const sameImageProvenance =
       current && canonicalJson(current.imageProvenance ?? {}) === canonicalJson(releaseImageProvenance);
     releaseSucceeded = true;
     if (
       !current ||
       !sameTasks ||
+      !sameCounts ||
       !sameImageProvenance ||
       current.imageLabel !== label ||
       layerChanged ||
@@ -1781,6 +1827,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     ) {
       recorded = recordDeploymentManifest(aws, releaseTasks, {
         id: releaseId,
+        counts: releaseCounts,
         ...(sandboxPinImage ? { sandboxImage: sandboxPinImage } : {}),
         imageLabel: label,
         ...(dbSnapshot ? { dbSnapshot } : {}),
@@ -1972,16 +2019,21 @@ export async function awsRollback(
       layerNeedsSync = currentManifest?.layer?.sha256 !== targetManifest.layer!.sha256;
     }
     const targets = Object.fromEntries(services.map((service) => [service, targetManifest!.tasks[service]!]));
+    const targetCounts = Object.fromEntries(
+      services.map((service) => [service, targetManifest.counts?.[service] ?? before!.counts[service]!]),
+    );
     const changedTargets = Object.fromEntries(
       services
-        .filter((service) => before!.tasks[service] !== targets[service])
+        .filter(
+          (service) => before!.tasks[service] !== targets[service] || before!.counts[service] !== targetCounts[service],
+        )
         .map((service) => [service, targets[service]!]),
     );
     if (Object.keys(changedTargets).length) {
       await applyServiceTargets(
         config,
         changedTargets,
-        Object.fromEntries(Object.keys(changedTargets).map((service) => [service, before!.counts[service]!])),
+        Object.fromEntries(Object.keys(changedTargets).map((service) => [service, targetCounts[service]!])),
       );
       applied = true;
     }
@@ -1990,12 +2042,12 @@ export async function awsRollback(
       Object.fromEntries(
         services.map((service) => [
           service,
-          { taskDefinition: targets[service]!, desiredCount: before!.counts[service]! },
+          { taskDefinition: targets[service]!, desiredCount: targetCounts[service]! },
         ]),
       ),
     );
     if (targetLayerBody && layerOpts && layerNeedsSync) {
-      if (before.counts.core === 0) {
+      if (targetCounts.core === 0) {
         note(
           "deployment layer sync deferred: core is scaled to zero, so `check --live` will flag the layer until the next `qm up` applies it",
         );
@@ -2222,6 +2274,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
         rotated = true;
         if (Object.keys(changed).length) {
           recordDeploymentManifest(aws, targets, {
+            ...(baseline.counts ? { counts: baseline.counts } : {}),
             ...(baseline.sandboxImage ? { sandboxImage: baseline.sandboxImage } : {}),
             imageLabel: baseline.imageLabel ?? aws.imageLabel,
             ...(baseline.layer ? { layer: baseline.layer } : {}),
@@ -3316,6 +3369,7 @@ export async function awsPinSandbox(
         { ...baseline.tasks, core: taskDefinition },
         {
           sandboxImage: image,
+          ...(baseline.counts ? { counts: baseline.counts } : {}),
           imageLabel: baseline.imageLabel ?? aws.imageLabel,
           ...(layer ? { layer } : {}),
           ...(baseline.imageProvenance ? { imageProvenance: baseline.imageProvenance } : {}),

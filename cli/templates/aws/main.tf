@@ -1,21 +1,36 @@
 locals {
-  tags                       = { Deployment = var.org_id, ManagedBy = "terraform" }
-  azs                        = length(data.aws_availability_zones.available.names) >= 2 ? slice(data.aws_availability_zones.available.names, 0, 2) : []
-  subnet_ids                 = values(aws_subnet.public)[*].id
-  vpc_id                     = aws_vpc.this.id
-  has_portal                 = contains(keys(var.services), "portal")
-  public_service_names       = local.has_portal ? ["portal"] : ["core"]
-  ingress_services           = { for name, service in var.services : name => service if contains(local.public_service_names, name) }
-  direct_path_services       = local.has_portal ? {} : { core = ["/v1/*"] }
-  alb_name                   = "${substr(var.cluster_name, 0, 23)}-${substr(sha1(var.cluster_name), 0, 8)}"
-  service_security_groups    = [aws_security_group.services.id]
-  default_task_role_arn      = aws_iam_role.task.arn
-  core_task_role_arn         = aws_iam_role.core_task.arn
+  qm_scaffold_version     = 3
+  tags                    = { Deployment = var.org_id, ManagedBy = "terraform" }
+  azs                     = length(data.aws_availability_zones.available.names) >= 2 ? slice(data.aws_availability_zones.available.names, 0, 2) : []
+  subnet_ids              = values(aws_subnet.public)[*].id
+  vpc_id                  = aws_vpc.this.id
+  has_portal              = contains(keys(var.services), "portal")
+  public_service_names    = local.has_portal ? ["portal"] : ["core"]
+  ingress_services        = { for name, service in var.services : name => service if contains(local.public_service_names, name) }
+  direct_path_services    = local.has_portal ? {} : { core = ["/v1/*"] }
+  alb_name                = "${substr(var.cluster_name, 0, 23)}-${substr(sha1(var.cluster_name), 0, 8)}"
+  service_security_groups = [aws_security_group.services.id]
+  default_task_role_arn   = aws_iam_role.task.arn
+  core_task_role_arn      = aws_iam_role.core_task.arn
+  assume_role_services    = { for name, service in var.services : name => service if try(length(service.assume_role_arns), 0) > 0 }
+  managed_assume_role_services = {
+    for name, service in var.services : name => service if service.manage_task_role
+  }
+  managed_assume_role_policy_services = {
+    for name, service in local.assume_role_services : name => service if service.manage_task_role
+  }
+  configured_assume_role_services = {
+    for name, service in local.assume_role_services : name => service if !service.manage_task_role
+  }
+  effective_task_role_arns = {
+    for name, service in var.services : name => coalesce(
+      service.task_role_arn,
+      try(service.manage_task_role ? aws_iam_role.assume_role_task[name].arn : null, null),
+      name == "core" ? local.core_task_role_arn : local.default_task_role_arn,
+    )
+  }
   default_execution_role_arn = aws_iam_role.task_execution.arn
-  task_role_arns = distinct(compact(concat(
-    [local.default_task_role_arn, local.core_task_role_arn],
-    [for service in values(var.services) : service.task_role_arn],
-  )))
+  task_role_arns             = distinct(values(local.effective_task_role_arns))
   execution_role_arns = distinct(compact(concat(
     [local.default_execution_role_arn],
     [for service in values(var.services) : service.execution_role_arn],
@@ -179,6 +194,32 @@ resource "aws_iam_role" "core_task" {
   name               = "${var.cluster_name}-core-task"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ecs-tasks.amazonaws.com" }, Action = "sts:AssumeRole" }] })
   tags               = local.tags
+}
+
+resource "aws_iam_role" "assume_role_task" {
+  for_each           = local.managed_assume_role_services
+  name               = "${var.cluster_name}-${each.key}-task"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ecs-tasks.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+  tags               = local.tags
+}
+
+resource "aws_iam_role_policy" "managed_service_assume_role" {
+  for_each = local.managed_assume_role_policy_services
+  role     = aws_iam_role.assume_role_task[each.key].id
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = ["sts:AssumeRole"], Resource = each.value.assume_role_arns }]
+  })
+}
+
+resource "aws_iam_role_policy" "configured_service_assume_role" {
+  for_each = local.configured_assume_role_services
+  role     = basename(local.effective_task_role_arns[each.key])
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = ["sts:AssumeRole"], Resource = each.value.assume_role_arns }]
+  })
+  lifecycle { create_before_destroy = true }
 }
 
 resource "aws_cloudwatch_log_group" "microvm" {
@@ -353,10 +394,13 @@ resource "aws_iam_role_policy" "github_deploy" {
         Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } }
       },
       {
-        Sid      = "InspectDeployRoles"
-        Effect   = "Allow"
-        Action   = ["iam:GetRole"]
-        Resource = [aws_iam_role.github_deploy.arn, aws_iam_role.task_execution.arn, aws_iam_role.task.arn, aws_iam_role.core_task.arn, aws_iam_role.microvm_build.arn, var.deploy_microvm_execution_role_arn]
+        Sid    = "InspectDeployRoles"
+        Effect = "Allow"
+        Action = ["iam:GetRole"]
+        Resource = concat(
+          [aws_iam_role.github_deploy.arn, aws_iam_role.task_execution.arn, aws_iam_role.task.arn, aws_iam_role.core_task.arn, aws_iam_role.microvm_build.arn, var.deploy_microvm_execution_role_arn],
+          [for role in aws_iam_role.assume_role_task : role.arn],
+        )
       },
       {
         Sid    = "ManageStackMicrovmImage"
@@ -606,7 +650,7 @@ resource "aws_iam_role_policy" "task_objects" {
         Resource = aws_s3_bucket.objects.arn
       },
       {
-        Effect   = "Allow"
+        Effect = "Allow"
         # AbortMultipartUpload is its own action — PutObject covers Create/UploadPart/Complete but
         # not the abort, and without it a failed staging upload strands parts that bill silently.
         Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
@@ -783,7 +827,7 @@ resource "aws_ecs_task_definition" "bootstrap" {
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   execution_role_arn       = coalesce(each.value.execution_role_arn, local.default_execution_role_arn)
-  task_role_arn            = coalesce(each.value.task_role_arn, each.key == "core" ? local.core_task_role_arn : local.default_task_role_arn)
+  task_role_arn            = local.effective_task_role_arns[each.key]
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = each.value.architecture == "amd64" ? "X86_64" : "ARM64"

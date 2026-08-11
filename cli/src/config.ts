@@ -36,6 +36,7 @@ export interface PluginEntry {
   image?: string;
   env?: Record<string, string>;
   secrets?: PluginSecret[];
+  coreAccess?: boolean;
 }
 
 export interface SandboxConfig {
@@ -63,6 +64,7 @@ export interface AwsServiceConfig {
   architecture?: "arm64" | "amd64";
   taskRoleArn?: string;
   executionRoleArn?: string;
+  assumeRoleArns?: string[];
   buildArgs?: Record<string, string>;
   dockerfile?: string;
   targetGroup?: string;
@@ -917,6 +919,20 @@ function validatePlugins(raw: unknown, path: string): PluginEntry[] {
     }
     if (e["env"] !== undefined) entry.env = validateStringMap(e["env"], path, `plugins[${i}].env`);
     if (e["secrets"] !== undefined) entry.secrets = validatePluginSecrets(e["secrets"], path, i);
+    if (e["coreAccess"] !== undefined) {
+      if (typeof e["coreAccess"] !== "boolean") {
+        throw new CliError(`${path}: plugins[${i}].coreAccess must be a boolean`);
+      }
+      entry.coreAccess = e["coreAccess"];
+    }
+    if (entry.coreAccess === false) {
+      const forbidden = ["CORE_API_URL", "CORE_SIGNING_SECRET"].filter(
+        (name) => entry.env?.[name] !== undefined || entry.secrets?.some((secret) => secret.name === name),
+      );
+      if (forbidden.length) {
+        throw new CliError(`${path}: plugins[${i}] cannot declare ${forbidden.join(", ")} when coreAccess is false`);
+      }
+    }
     return entry;
   });
 }
@@ -1146,6 +1162,25 @@ function validateAws(
     for (const role of ["taskRoleArn", "executionRoleArn"] as const) {
       if (value[role] !== undefined) service[role] = roleArn(value[role], `services.${name}.${role}`);
     }
+    if (value["assumeRoleArns"] !== undefined) {
+      const arns = validateStringArray(value["assumeRoleArns"], path, `aws.services.${name}.assumeRoleArns`);
+      if (arns.length === 0) {
+        throw new CliError(`${path}: "aws.services.${name}.assumeRoleArns" must contain at least one IAM role ARN`);
+      }
+      for (const arn of arns) {
+        if (!/^arn:aws:iam::[0-9]{12}:role\/[A-Za-z0-9_+=,.@/-]{1,512}$/.test(arn)) {
+          throw new CliError(
+            `${path}: "aws.services.${name}.assumeRoleArns" must contain commercial AWS IAM role ARNs`,
+          );
+        }
+      }
+      service.assumeRoleArns = [...new Set(arns)];
+      if (!service.taskRoleArn && `${cluster}-${name}-task`.length > 64) {
+        throw new CliError(
+          `${path}: "aws.services.${name}.assumeRoleArns" requires an explicit taskRoleArn because the derived IAM role name exceeds 64 characters`,
+        );
+      }
+    }
     if (value["architecture"] !== undefined) {
       if (value["architecture"] !== "arm64" && value["architecture"] !== "amd64") {
         throw new CliError(`${path}: "aws.services.${name}.architecture" must be "arm64" or "amd64"`);
@@ -1205,6 +1240,27 @@ function validateAws(
       service.dockerfile = dockerfile;
     }
     services[name] = service;
+  }
+  const effectiveTaskRoleArn = (name: string, service: AwsServiceConfig): string => {
+    if (service.taskRoleArn) return service.taskRoleArn;
+    if (name === "core") return `arn:aws:iam::${accountId}:role/${cluster}-core-task`;
+    const roleName = service.assumeRoleArns ? `${cluster}-${name}-task` : `${cluster}-task`;
+    return `arn:aws:iam::${accountId}:role/${roleName}`;
+  };
+  const taskRoleOwners = new Map<string, string[]>();
+  for (const [name, service] of Object.entries(services)) {
+    const role = effectiveTaskRoleArn(name, service);
+    taskRoleOwners.set(role, [...(taskRoleOwners.get(role) ?? []), name]);
+  }
+  for (const [name, service] of Object.entries(services)) {
+    if (!service.assumeRoleArns) continue;
+    const role = effectiveTaskRoleArn(name, service);
+    const owners = taskRoleOwners.get(role)!;
+    if (owners.length > 1) {
+      throw new CliError(
+        `${path}: "aws.services.${name}.taskRoleArn" must be unique because assumeRoleArns grants workload-scoped permissions; ${role} is also used by ${owners.filter((owner) => owner !== name).join(", ")}`,
+      );
+    }
   }
   for (const name of enabledServices) {
     if (!services[name]) throw new CliError(`${path}: "aws.services.${name}" is required because ${name} is enabled`);

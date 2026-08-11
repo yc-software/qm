@@ -1004,9 +1004,9 @@ test("AWS up scales services to the configured desired count and live check flag
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
-  const scaled = (): QmConfig => {
+  const scaled = (desiredCount = 2): QmConfig => {
     const base = oneServiceConfig();
-    return { ...base, aws: { ...base.aws!, services: { core: { ...base.aws!.services.core!, desiredCount: 2 } } } };
+    return { ...base, aws: { ...base.aws!, services: { core: { ...base.aws!.services.core!, desiredCount } } } };
   };
   const fake = statefulAws(dir, scaled());
   const priorPath = process.env.PATH;
@@ -1017,8 +1017,16 @@ test("AWS up scales services to the configured desired count and live check flag
     assert.equal(state.services["acme-core"].desiredCount, 2);
     assert.match(readFileSync(fake.log, "utf8"), /ecs update-service .*--desired-count 2/);
     await assert.doesNotReject(() => awsCheckLive(scaled(), { report: false }));
-    state.services["acme-core"].desiredCount = 1;
-    writeFileSync(fake.state, JSON.stringify(state));
+    await awsUp(scaled(3), dir, { yes: true });
+    const rescaled = JSON.parse(readFileSync(fake.state, "utf8"));
+    const currentId = rescaled.dynamo["deployment/current"].manifestId.S;
+    const current = JSON.parse(rescaled.dynamo[`deployment/manifest/${currentId}`].manifest.S);
+    assert.deepEqual(current.counts, { core: 3 });
+    await awsRollback(scaled(3));
+    const rolledBack = JSON.parse(readFileSync(fake.state, "utf8"));
+    assert.equal(rolledBack.services["acme-core"].desiredCount, 2);
+    rolledBack.services["acme-core"].desiredCount = 1;
+    writeFileSync(fake.state, JSON.stringify(rolledBack));
     await assert.rejects(
       () => awsCheckLive(scaled(), { report: false }),
       /core: runtime is ACTIVE with 1\/1 running, expected 2/,
@@ -1945,7 +1953,14 @@ test("AWS renders third-party plugins as private ECS workloads with scoped secre
       ...config.aws!,
       services: {
         ...config.aws!.services,
-        linear: { ecrRepository: "qm-linear", ecsService: "acme-linear", cpu: 256, memory: 512, architecture: "amd64" },
+        linear: {
+          ecrRepository: "qm-linear",
+          ecsService: "acme-linear",
+          cpu: 256,
+          memory: 512,
+          architecture: "amd64",
+          assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
+        },
       },
     },
   };
@@ -1955,6 +1970,7 @@ test("AWS renders third-party plugins as private ECS workloads with scoped secre
     LINEAR_TOKEN: "arn:linear-token",
   });
   const container = task.containerDefinitions[0]!;
+  assert.equal(task.taskRoleArn, "arn:aws:iam::123456789012:role/acme-qm-linear-task");
   assert.equal(container.name, "linear");
   assert.deepEqual(
     Object.fromEntries(
@@ -1971,6 +1987,37 @@ test("AWS renders third-party plugins as private ECS workloads with scoped secre
     { name: "CORE_SIGNING_SECRET", valueFrom: "arn:core-signing" },
     { name: "LINEAR_TOKEN", valueFrom: "arn:linear-token" },
   ]);
+});
+
+test("AWS coreless workloads receive no core endpoint or source-auth secret", () => {
+  const pluginConfig: QmConfig = {
+    ...config,
+    plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }],
+    aws: {
+      ...config.aws!,
+      services: {
+        ...config.aws!.services,
+        signer: {
+          ecrRepository: "qm-signer",
+          ecsService: "acme-signer",
+          cpu: 256,
+          memory: 512,
+          architecture: "arm64",
+        },
+      },
+    },
+  };
+  const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-signer@sha256:${"c".repeat(64)}`;
+  const task = renderTaskDefinition(pluginConfig, "signer", image, {
+    CORE_SIGNING_SECRET: "arn:core-signing",
+  });
+  const container = task.containerDefinitions[0]!;
+  const environment = Object.fromEntries(
+    (container.environment as Array<{ name: string; value: string }>).map(({ name, value }) => [name, value]),
+  );
+  assert.equal(environment.CORE_API_URL, undefined);
+  assert.equal(environment.CORE_ORG_ID, "acme");
+  assert.deepEqual(container.secrets, []);
 });
 
 test("AWS fixes third-party plugin PORT to its ECS port mapping", () => {
@@ -2220,7 +2267,10 @@ test("AWS secret upload registers and records a task revision for a newly suppli
     required.map((secret) => [secret.name, "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf"]),
   );
   state.definitions[oldTask] = renderTaskDefinition(secretsConfig, "core", image, arns);
-  state.dynamo = manifestItems([{ id: "current", imageLabel: "release", tasks: { core: oldTask } }], "current");
+  state.dynamo = manifestItems(
+    [{ id: "current", imageLabel: "release", tasks: { core: oldTask }, counts: { core: 0 } }],
+    "current",
+  );
   writeFileSync(fake.state, JSON.stringify(state));
   try {
     await awsSecretsPush(secretsConfig, dir);
@@ -2233,6 +2283,7 @@ test("AWS secret upload registers and records a task revision for a newly suppli
     assert.notEqual(currentId, "current");
     const manifest = JSON.parse(after.dynamo[`deployment/manifest/${currentId}`].manifest.S);
     assert.notEqual(manifest.tasks.core, oldTask);
+    assert.deepEqual(manifest.counts, { core: 0 });
     const names = after.definitions[manifest.tasks.core].containerDefinitions[0].secrets.map(
       (secret: { name: string }) => secret.name,
     );
@@ -2332,6 +2383,7 @@ function manifestItems(
     sandboxImage?: string;
     dbSnapshot?: string;
     tasks: Record<string, string>;
+    counts?: Record<string, number>;
     imageProvenance?: Record<
       string,
       | { kind: "configured"; source: string }
@@ -3446,6 +3498,70 @@ test("AWS up requires a complete trusted baseline before a partial deployment", 
   }
 });
 
+test("AWS up can introduce a selected workload onto a trusted deployment baseline", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-partial-add-"));
+  const multi = twoServiceConfig();
+  const coreTask = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
+  const baseline = statefulAws(
+    dir,
+    multi,
+    manifestItems(
+      [
+        {
+          id: "baseline",
+          imageLabel: "previous",
+          tasks: { core: coreTask },
+          imageProvenance: { core: { kind: "configured", source: "ghcr.io/acme/qm-core:0.1.0" } },
+        },
+      ],
+      "baseline",
+    ),
+  );
+  const state = JSON.parse(readFileSync(baseline.state, "utf8"));
+  state.definitions[coreTask] = {
+    containerDefinitions: [
+      {
+        name: "core",
+        image: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"d".repeat(64)}`,
+      },
+    ],
+  };
+  writeFileSync(baseline.state, JSON.stringify(state));
+  await assert.rejects(
+    () => awsUp(multi, dir, { dryRun: true, only: ["web-ui"] }),
+    /selected workload web-ui .* must be scaled to zero before adoption/,
+  );
+  state.services["acme-web-ui"].desiredCount = 0;
+  writeFileSync(baseline.state, JSON.stringify(state));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
+  chmodSync(dockerBin, 0o755);
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  try {
+    await awsUp(multi, dir, { yes: true, only: ["web-ui"] });
+    const after = JSON.parse(readFileSync(baseline.state, "utf8"));
+    const currentId = after.dynamo["deployment/current"].manifestId.S;
+    const current = JSON.parse(after.dynamo[`deployment/manifest/${currentId}`].manifest.S);
+    assert.equal(current.tasks.core, coreTask);
+    assert.match(current.tasks["web-ui"], /task-definition\/acme-web-ui:2$/);
+    const previous = JSON.parse(after.dynamo["deployment/manifest/baseline"].manifest.S);
+    assert.match(previous.tasks["web-ui"], /task-definition\/acme-web-ui:1$/);
+    assert.equal(previous.counts["web-ui"], 0);
+    const calls = readFileSync(baseline.log, "utf8");
+    assert.doesNotMatch(calls, /ecs update-service .*--service acme-core/);
+    assert.match(calls, /ecs update-service .*--service acme-web-ui/);
+    await awsRollback(multi);
+    const rolledBack = JSON.parse(readFileSync(baseline.state, "utf8"));
+    assert.match(rolledBack.services["acme-web-ui"].taskDefinition, /task-definition\/acme-web-ui:1$/);
+    assert.equal(rolledBack.services["acme-web-ui"].desiredCount, 0);
+  } finally {
+    process.env.PATH = priorPath;
+    baseline.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS up cleans staging tags when ECS deployment fails", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-cleanup-"));
   const dockerBin = join(dir, "docker");
@@ -3727,7 +3843,14 @@ test("sandbox pin repoints a live core through a re-rendered task and records th
     dir,
     single,
     manifestItems(
-      [{ id: "baseline", imageLabel: "previous", sandboxImage: OLD_PIN, tasks: { core: CORE_TASK } }],
+      [
+        {
+          id: "baseline",
+          imageLabel: "previous",
+          sandboxImage: OLD_PIN,
+          tasks: { core: CORE_TASK },
+        },
+      ],
       "baseline",
     ),
     { failTransactionPuts: 2 },
@@ -3764,7 +3887,15 @@ test("sandbox pin on a scaled-to-zero core records a carried manifest without to
     dir,
     single,
     manifestItems(
-      [{ id: "baseline", imageLabel: "previous", sandboxImage: OLD_PIN, tasks: { core: CORE_TASK } }],
+      [
+        {
+          id: "baseline",
+          imageLabel: "previous",
+          sandboxImage: OLD_PIN,
+          tasks: { core: CORE_TASK },
+          counts: { core: 0 },
+        },
+      ],
       "baseline",
     ),
   );
@@ -3782,6 +3913,7 @@ test("sandbox pin on a scaled-to-zero core records a carried manifest without to
       "the pin is carried on the recorded tasks; it takes effect on the next up",
     );
     assert.equal(manifest.imageLabel, "previous");
+    assert.deepEqual(manifest.counts, { core: 0 });
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service|ecs register-task-definition/);
   } finally {
     fake.restore();
