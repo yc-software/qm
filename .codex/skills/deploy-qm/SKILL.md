@@ -20,5 +20,6 @@ only once the operator has chosen the broker.
 
 Use the installed `@yc-software/qm` dependency through `npm exec qm -- <command>`. Do
 not require or clone the QM source repository. Complete every acceptance check
-and return the handoff required by `deployment.md`. A web response without a
-generated sidebar title is not a completed deployment.
+and return the handoff required by `deployment.md`. Treat `qm check --live` and
+its private live session canary as the automated release gate; still complete
+the administrator's manual sign-in and web acceptance check.

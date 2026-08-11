@@ -397,6 +397,14 @@ function flyS3RoundTrip(app: string, machineId: string): void {
   fly(["ssh", "console", "-a", app, "--machine", machineId, "--command", flyS3ProbeCommand(), "--quiet"]);
 }
 
+export function flyLiveSessionCommand(): string {
+  return "node src/deployment/postdeploy-smoke.ts session http://127.0.0.1:8080";
+}
+
+function flyLiveSession(app: string, machineId: string): void {
+  fly(["ssh", "console", "-a", app, "--machine", machineId, "--command", flyLiveSessionCommand(), "--quiet"]);
+}
+
 function flyOrgApps(flyOrg: string): Set<string> {
   const raw = fly(["apps", "list", "--org", flyOrg, "--json"]);
   let parsed: unknown;
@@ -1614,6 +1622,18 @@ export async function flyCheckLive(
     else if (report) step(`${healthUrl}: HTTP ${response.status}`);
   } catch (error) {
     failures.push(`${healthUrl}: ${errMessage(error)}`);
+  }
+  if (!failures.length) {
+    if (!coreMachineId) {
+      failures.push(`${ctx.appPrefix}-core: cannot run the live session smoke without an identified machine`);
+    } else {
+      try {
+        flyLiveSession(`${ctx.appPrefix}-core`, coreMachineId);
+        if (report) step(`${ctx.appPrefix}-core: private live session smoke passed`);
+      } catch (error) {
+        failures.push(`${ctx.appPrefix}-core: private live session smoke failed: ${errMessage(error)}`);
+      }
+    }
   }
   if (failures.length) {
     throw new CliError(`live check failed:\n${failures.map((failure) => `  - ${failure}`).join("\n")}`, {

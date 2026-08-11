@@ -7,10 +7,21 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfigAt, type QmConfig } from "../src/config.ts";
-import { derivedTomlFor, derivedPluginTomlFor, flyCheckLive, flyS3ProbeCommand, flyUp } from "../src/backends/fly.ts";
+import {
+  derivedTomlFor,
+  derivedPluginTomlFor,
+  flyCheckLive,
+  flyLiveSessionCommand,
+  flyS3ProbeCommand,
+  flyUp,
+} from "../src/backends/fly.ts";
 import type { ResolvedPlugin } from "../src/plugins.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+test("Fly runs the live session smoke inside the private core machine", () => {
+  assert.equal(flyLiveSessionCommand(), "node src/deployment/postdeploy-smoke.ts session http://127.0.0.1:8080");
+});
 
 test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image, env literals)", () => {
   const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));

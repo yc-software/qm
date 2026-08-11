@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   checkDeployedHealth,
+  checkLiveSession,
   checkSlackCredentials,
   deployedHealthUrls,
   firstAdminPrincipal,
@@ -80,5 +81,47 @@ test("deployed staging smoke verifies its own Slack bot and Socket Mode credenti
       Response.json({ ok: false, error: "invalid_auth" }),
     ),
     /Slack auth\.test failed: invalid_auth/,
+  );
+});
+
+test("live session smoke proves a model turn, persistence, title, error log, and cleanup", async () => {
+  const calls: Array<{ method: string; path: string; body: string }> = [];
+  const config = {
+    adminGrants: "josh@example.com:org_admin",
+    orgId: "acme",
+    portalIdentitySecret: "portal-secret",
+    signingSecret: "source-secret",
+  };
+  await checkLiveSession(config, "http://core.internal:8080", async (input, init) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    calls.push({ method, path: `${url.pathname}${url.search}`, body: String(init?.body ?? "") });
+    if (url.pathname === "/v1/turns") return Response.json({ status: "ok", sessionId: "sess-1", reply: "PONG" });
+    if (url.pathname === "/v1/admin/errors") return Response.json({ errors: [] });
+    if (method === "POST") return Response.json({ session: { id: "sess-1", archived: true } });
+    return Response.json({
+      session: { id: "sess-1", title: "Deployment canary" },
+      entries: [{ type: "user" }, { type: "assistant" }],
+    });
+  });
+  assert.deepEqual(
+    calls.map(({ method, path }) => [method, path]),
+    [
+      ["POST", "/v1/turns"],
+      ["GET", "/v1/sessions/sess-1?viewer=josh%40example.com&tailTurns=1"],
+      ["GET", "/v1/admin/errors?scope=personal%3Ajosh%40example.com&sessionId=sess-1"],
+      ["POST", "/v1/sessions/sess-1"],
+    ],
+  );
+  assert.equal(JSON.parse(calls[0]!.body).readOnly, true);
+  assert.deepEqual(JSON.parse(calls[3]!.body), { principalId: "josh@example.com", archived: true });
+
+  await assert.rejects(
+    checkLiveSession(config, "http://core.internal:8080", async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/turns") return Response.json({ status: "ok", sessionId: "sess-2", reply: "PONG" });
+      return Response.json({ session: { id: "sess-2" }, entries: [{ type: "user" }, { type: "assistant" }] });
+    }),
+    /generated title/,
   );
 });

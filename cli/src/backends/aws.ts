@@ -748,8 +748,73 @@ interface EcsServiceState {
   desiredCount?: number;
   runningCount?: number;
   taskDefinition?: string;
+  networkConfiguration?: {
+    awsvpcConfiguration?: {
+      subnets?: string[];
+      securityGroups?: string[];
+      assignPublicIp?: "ENABLED" | "DISABLED";
+    };
+  };
   deployments?: EcsDeploymentState[];
   tags?: Array<{ key?: string; value?: string }>;
+}
+
+function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
+  const aws = requireAws(config);
+  if (!core.taskDefinition) throw new Error("core service has no live task definition");
+  if (!core.networkConfiguration?.awsvpcConfiguration) throw new Error("core service has no VPC network configuration");
+  const started = awsJson<{
+    tasks?: Array<{ taskArn?: string }>;
+    failures?: Array<{ arn?: string; reason?: string; detail?: string }>;
+  }>(aws, [
+    "ecs",
+    "run-task",
+    "--cluster",
+    aws.cluster,
+    "--task-definition",
+    core.taskDefinition,
+    "--launch-type",
+    "FARGATE",
+    "--network-configuration",
+    JSON.stringify(core.networkConfiguration),
+    "--overrides",
+    JSON.stringify({
+      containerOverrides: [
+        {
+          name: "core",
+          command: [
+            "node",
+            "src/deployment/postdeploy-smoke.ts",
+            "session",
+            `http://core.${aws.networking.cloudMapNamespace}:8080`,
+          ],
+        },
+      ],
+    }),
+    "--count",
+    "1",
+  ]);
+  const taskArn = started.tasks?.[0]?.taskArn;
+  if (!taskArn) {
+    const failure = started.failures?.[0];
+    throw new Error(
+      `could not start canary task: ${failure?.reason ?? failure?.detail ?? failure?.arn ?? "no task returned"}`,
+    );
+  }
+  awsText(aws, ["ecs", "wait", "tasks-stopped", "--cluster", aws.cluster, "--tasks", taskArn]);
+  const stopped = awsJson<{
+    tasks?: Array<{
+      stoppedReason?: string;
+      containers?: Array<{ name?: string; exitCode?: number; reason?: string }>;
+    }>;
+  }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", taskArn]);
+  const task = stopped.tasks?.[0];
+  const coreContainer = task?.containers?.find((container) => container.name === "core");
+  if (coreContainer?.exitCode !== 0) {
+    throw new Error(
+      `canary task exited ${coreContainer?.exitCode ?? "without a code"}: ${coreContainer?.reason ?? task?.stoppedReason ?? "unknown reason"}`,
+    );
+  }
 }
 
 type DeploymentImageProvenance =
@@ -3152,6 +3217,14 @@ async function checkLive(
       });
     } catch (error) {
       failures.push(`deployment layer drift: ${errMessage(error)}`);
+    }
+  }
+  if (!failures.length) {
+    try {
+      awsLiveSession(config, states.get("core")!);
+      if (opts.report ?? true) step("core: private live session smoke passed");
+    } catch (error) {
+      failures.push(`core: private live session smoke failed: ${errMessage(error)}`);
     }
   }
   if (failures.length)

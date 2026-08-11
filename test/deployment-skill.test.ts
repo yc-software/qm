@@ -17,6 +17,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
     "slack render",
     "work-email OIDC provider",
     "check --live",
+    "private live session canary",
     "fresh UUID",
     "generated sidebar title",
     "Web chat",

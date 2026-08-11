@@ -108,6 +108,74 @@ export async function stagingApiHeaders(
   );
 }
 
+type LiveSessionConfig = Pick<Config, "adminGrants" | "orgId" | "portalIdentitySecret" | "signingSecret">;
+
+export async function checkLiveSession(
+  config: LiveSessionConfig,
+  baseUrl: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<void> {
+  const { orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
+  if (!orgId) throw new Error("live session smoke requires ORG_ID");
+  if (!sourceSecret) throw new Error("live session smoke requires CORE_SIGNING_SECRET");
+  if (!portalIdentitySecret) throw new Error("live session smoke requires PORTAL_IDENTITY_SECRET");
+  const principalId = firstAdminPrincipal(config.adminGrants);
+  const root = baseUrl.replace(/\/+$/, "");
+  const request = async (method: "GET" | "POST", path: string, body?: unknown, admin = false): Promise<unknown> => {
+    const raw = body === undefined ? "" : JSON.stringify(body);
+    const headers = admin
+      ? await stagingApiHeaders(orgId, principalId, sourceSecret, portalIdentitySecret, path)
+      : signedRequestHeaders(sourceSecret, method, path, raw);
+    const response = await fetchImpl(`${root}${path}`, {
+      method,
+      headers: { ...headers, ...(raw ? { "content-type": "application/json" } : {}) },
+      ...(raw ? { body: raw } : {}),
+    });
+    const text = await response.text();
+    if (!response.ok)
+      throw new Error(`live session ${method} ${path} returned ${response.status}: ${text.slice(0, 500)}`);
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new Error(`live session ${method} ${path} returned unparseable JSON`);
+    }
+  };
+
+  const nonce = randomUUID();
+  const turn = (await request("POST", "/v1/turns", {
+    surface: "web",
+    actor: { externalId: principalId },
+    conversation: { kind: "dm", threadRef: `web:${principalId}:deployment-canary-${nonce}` },
+    text: "Reply with exactly: QM deployment canary passed.",
+    origin: { kind: "human" },
+    addressed: true,
+    readOnly: true,
+    idempotencyKey: nonce,
+  })) as { status?: string; sessionId?: string; reply?: string };
+  if (turn.status !== "ok" || !turn.sessionId || !turn.reply?.trim()) {
+    throw new Error(`live session model turn failed with status ${turn.status ?? "missing"}`);
+  }
+
+  const sessionPath = `/v1/sessions/${encodeURIComponent(turn.sessionId)}?viewer=${encodeURIComponent(principalId)}&tailTurns=1`;
+  const persisted = (await request("GET", sessionPath)) as {
+    session?: { title?: string | null };
+    entries?: Array<{ type?: string }>;
+  };
+  if (!persisted.session?.title?.trim()) throw new Error("live session has no generated title");
+  if (!persisted.entries?.some((entry) => entry.type === "user"))
+    throw new Error("live session has no persisted user turn");
+  if (!persisted.entries.some((entry) => entry.type === "assistant")) {
+    throw new Error("live session has no persisted assistant turn");
+  }
+
+  const errorsPath = `/v1/admin/errors?scope=${encodeURIComponent(`personal:${principalId}`)}&sessionId=${encodeURIComponent(turn.sessionId)}`;
+  const logged = (await request("GET", errorsPath, undefined, true)) as { errors?: unknown[] };
+  if (!Array.isArray(logged.errors)) throw new Error("live session error log response has no errors array");
+  if (logged.errors.length) throw new Error(`live session recorded ${logged.errors.length} error event(s)`);
+
+  await request("POST", `/v1/sessions/${encodeURIComponent(turn.sessionId)}`, { principalId, archived: true });
+}
+
 async function checkApi(
   orgId: string,
   principalId: string,
@@ -172,5 +240,11 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await runPostdeploySmoke(loadConfig());
+  const config = loadConfig();
+  if (process.argv[2] === "session") {
+    await checkLiveSession(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
+    console.log("live session smoke passed");
+  } else {
+    await runPostdeploySmoke(config);
+  }
 }

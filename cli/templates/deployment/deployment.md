@@ -4,9 +4,10 @@ This repository defines one QM deployment. The `@yc-software/qm` dependency supp
 the deployment engine; this repository owns the organization-specific config,
 sandbox layer, provider coordinates, and generated Slack manifests.
 
-The task is complete only after the administrator can sign in, receive a real
-web response with a generated sidebar title, and, when Slack is requested,
-mention the bot in a test channel and receive a response.
+The automated release gate is `qm check --live`, including its private live
+session canary. The task is complete only after that gate passes, the
+administrator can sign in and receive a real web response, and, when Slack is
+requested, the bot replies in a test channel.
 
 ## 1. Collect choices and authorization
 
@@ -212,6 +213,13 @@ npm exec qm -- conformance
 npm exec qm -- outputs --json
 ```
 
+`check --live` verifies provider infrastructure, private storage, public
+health, and a private end-to-end web session. The session canary makes one real
+model call, verifies the reply and transcript were persisted, requires a
+generated title, checks the session-scoped error log, and archives itself after
+success. Fly runs it inside the core machine; AWS runs it as a one-off task on
+the core service's private network. It does not add a public session endpoint.
+
 Open `adminOnboardingUrl` from the JSON output and confirm Model provider
 reports the chosen vendor as configured, sourced from the environment. It does
 when `modelProvider` is set: the key travelled with the rest of the deployment
@@ -229,8 +237,8 @@ it.
 Open `webUiUrl`, sign in as the seeded administrator, send a message, and
 receive a real model response. Use a specific request rather than a greeting,
 then confirm its generated sidebar title replaces the `Web chat` fallback. A
-missing title leaves the deployment incomplete; inspect the core error log
-before continuing. Ask the agent to create a fresh UUID in
+missing title is one failed runtime assertion; inspect the core error log and
+rerun `check --live` before continuing. Ask the agent to create a fresh UUID in
 `/root/workspace/qm-computer-proof.txt`, then use the provider reference's
 independent proof to verify that UUID outside the model transcript.
 
@@ -270,9 +278,9 @@ Return:
 - provider, account or organization, and region;
 - the base model provider and where its key lives — the deployment `.env` or the
   Admin page — so the operator knows what to rotate and where;
-- pass/fail for health, sign-in, web chat, generated chat title, agent-computer proof, connector
-  visibility, user OAuth, Slack reply, live check, conformance, and an
-  idempotent deployment rerun;
+- pass/fail for health, the private live session canary, sign-in, manual web
+  chat and generated title, agent-computer proof, connector visibility, user
+  OAuth, Slack reply, conformance, and an idempotent deployment rerun;
 - `npm exec qm -- status`, logs, rollback, and teardown commands;
 - recurring cost or manual work still owned by the operator, including model
   usage billed directly by the provider.
