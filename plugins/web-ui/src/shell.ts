@@ -425,6 +425,15 @@ export function mountShell(): void {
     html`
       ${banner ?? nothing}
       <div class="layout ${sidebarOpen ? "" : "sidebar-closed"} ${banner ? "bannered" : ""}">
+        <button
+          class="icon-btn subtle sidebar-toggle mobile-sidebar-toggle"
+          type="button"
+          title="Show sidebar"
+          aria-label="Show sidebar"
+          @click=${toggleSidebar}
+        >
+          ${icon(PanelLeft, 17)}
+        </button>
         <aside class="sidebar" aria-label="Navigation" @keydown=${onSidebarKeydown}>
           <div class="brand">
             <div class="brand-lockup">${brandMark()}<span class="brand-name">${brandName()}</span></div>
@@ -667,8 +676,16 @@ export function closeSidebarOnNarrowView(): void {
 }
 
 narrowViewport.addEventListener("change", (event) => {
+  const root = appEl as HTMLElement;
+  const sidebar = root.querySelector<HTMLElement>(".sidebar");
+  const launcher = root.querySelector<HTMLElement>(".mobile-sidebar-toggle");
+  const focusedInside = sidebar?.contains(document.activeElement) === true;
+  const focusedLauncher = document.activeElement === launcher;
   if (event.matches && sidebarOpen) setSidebarOpen(false, false);
   else syncSidebarAccessibility(false);
+  if (event.matches && focusedInside) requestAnimationFrame(() => launcher?.focus());
+  else if (!event.matches && focusedLauncher)
+    requestAnimationFrame(() => sidebar?.querySelector<HTMLElement>(".sidebar-collapse-toggle")?.focus());
 });
 
 function setSidebarOpen(open: boolean, moveFocus = true): void {
@@ -684,14 +701,23 @@ function syncSidebarAccessibility(moveFocus: boolean): void {
   const main = root.querySelector<HTMLElement>(".main");
   const scrim = root.querySelector<HTMLButtonElement>(".sidebar-scrim");
   const modal = narrowViewport.matches && sidebarOpen;
+  const hiddenDrawer = narrowViewport.matches && !sidebarOpen;
   if (!sidebar || !main || !scrim) return;
   main.inert = modal;
+  sidebar.inert = hiddenDrawer;
   sidebar.setAttribute("role", modal ? "dialog" : "navigation");
   if (modal) sidebar.setAttribute("aria-modal", "true");
   else sidebar.removeAttribute("aria-modal");
+  if (hiddenDrawer) sidebar.setAttribute("aria-hidden", "true");
+  else sidebar.removeAttribute("aria-hidden");
   scrim.hidden = !modal;
   if (!moveFocus || !narrowViewport.matches) return;
-  requestAnimationFrame(() => sidebar.querySelector<HTMLElement>(".sidebar-collapse-toggle")?.focus());
+  requestAnimationFrame(() => {
+    const target = modal
+      ? sidebar.querySelector<HTMLElement>(".sidebar-collapse-toggle")
+      : root.querySelector<HTMLElement>(".mobile-sidebar-toggle");
+    target?.focus();
+  });
 }
 
 function onSidebarKeydown(event: KeyboardEvent): void {

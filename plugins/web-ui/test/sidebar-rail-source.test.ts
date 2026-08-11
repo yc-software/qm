@@ -22,7 +22,8 @@ test("hidden sidebar innards are out of the focus order and keep their layout wh
     /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\):not\(#sidebar-top\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;\s*\}/,
   );
   assert.doesNotMatch(css, /transition:[^;}]*visibility/);
-  assert.doesNotMatch(shell, /sidebar\.inert/);
+  assert.match(shell, /sidebar\.inert = hiddenDrawer/);
+  assert.match(shell, /if \(hiddenDrawer\) sidebar\.setAttribute\("aria-hidden", "true"\)/);
 });
 
 test("the collapsed rail keeps icon-only navigation instead of going empty", () => {
@@ -43,11 +44,31 @@ test("the collapsed rail keeps icon-only navigation instead of going empty", () 
   assert.match(shell, /class="navrow[^`]*title=\$\{label\}/);
 });
 
-test("narrow viewports keep the rail in flow and size it for touch + safe area", () => {
+test("narrow viewports use an off-canvas drawer and a safe-area-aware touch launcher", () => {
   const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
-  assert.match(narrow, /--rail-w: calc\(max\(8px, env\(safe-area-inset-left\)\) \+ 52px\)/);
-  assert.match(narrow, /\.layout\.sidebar-closed \.sidebar \{\s*position: static;\s*box-shadow: none;/);
-  assert.match(narrow, /\.sidebar \{[^}]*transition: none;/);
+  assert.match(shell, /class="icon-btn subtle sidebar-toggle mobile-sidebar-toggle"/);
+  assert.match(
+    narrow,
+    /\.layout\.sidebar-closed \.sidebar \{\s*width: min\(var\(--sidebar-w\), calc\(100vw - 48px\)\);\s*transform: translateX\(-100%\);/,
+  );
+  assert.match(
+    narrow,
+    /\.mobile-sidebar-toggle \{[^}]*left: max\(10px, env\(safe-area-inset-left\)\);[^}]*width: 44px;[^}]*height: 44px;/,
+  );
+  assert.match(narrow, /\.pane \{\s*padding: calc\(70px \+ var\(--surface-safe-top\)\)/);
+  assert.match(
+    narrow,
+    /\.main > \.custom-chat \.chat-topbar \{[^}]*max\(64px, calc\(env\(safe-area-inset-left\) \+ 54px\)\)/,
+  );
+  assert.match(
+    narrow,
+    /\.main > \.split-canvas > \.split-dock \{\s*padding: calc\(64px \+ var\(--surface-safe-top\)\) max\(5px, env\(safe-area-inset-right\)\)\s*max\(5px, env\(safe-area-inset-bottom\)\) max\(5px, env\(safe-area-inset-left\)\)/,
+  );
+  assert.match(
+    narrow,
+    /\.resource-pane \{[^}]*padding-right: max\(24px, env\(safe-area-inset-right\)\);[^}]*padding-left: max\(24px, env\(safe-area-inset-left\)\)/,
+  );
+  assert.match(shell, /focusedLauncher[\s\S]*\.sidebar-collapse-toggle/);
 });
 
 test("per-view clearance hacks for the old floating button are gone", () => {

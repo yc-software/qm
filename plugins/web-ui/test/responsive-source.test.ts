@@ -21,6 +21,8 @@ test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(shell, /class="new-chat[\s\S]{0,200}closeSidebarOnNarrowView\(\);/);
   assert.match(shell, /class="sidebar-scrim"[^>]+aria-label="Close sidebar"[^>]+@click=\$\{toggleSidebar\}/);
   assert.match(shell, /main\.inert = modal/);
+  assert.match(shell, /sidebar\.inert = hiddenDrawer/);
+  assert.match(shell, /if \(hiddenDrawer\) sidebar\.setAttribute\("aria-hidden", "true"\)/);
   assert.match(
     css,
     /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\):not\(#sidebar-top\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;/,
@@ -36,7 +38,20 @@ test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(sessions, /data-menu-id=\$\{s\.id\}/);
   assert.match(sessions, /focusSessionMenuButton\(menuKey\)/);
   assert.match(shell, /trapDialogFocus\(event, \(\) => setSidebarOpen\(false\)\)/);
-  assert.match(css, /\.layout\.sidebar-closed \.sidebar \{\s*position: static;\s*box-shadow: none;/);
+  assert.match(
+    shell,
+    /modal[\s\S]*sidebar\.querySelector<HTMLElement>\("\.sidebar-collapse-toggle"\)[\s\S]*root\.querySelector<HTMLElement>\("\.mobile-sidebar-toggle"\)/,
+  );
+  assert.match(
+    shell,
+    /const focusedInside[\s\S]*const focusedLauncher[\s\S]*if \(event\.matches && sidebarOpen\) setSidebarOpen\(false, false\)[\s\S]*if \(event\.matches && focusedInside\)[\s\S]*else if \(!event\.matches && focusedLauncher\)[\s\S]*\.sidebar-collapse-toggle/,
+  );
+  assert.match(shell, /class="icon-btn subtle sidebar-toggle mobile-sidebar-toggle"/);
+  assert.match(
+    css,
+    /\.layout\.sidebar-closed \.sidebar \{\s*width: min\(var\(--sidebar-w\), calc\(100vw - 48px\)\);\s*transform: translateX\(-100%\);/,
+  );
+  assert.match(css, /\.mobile-sidebar-toggle \{[\s\S]*display: inline-flex;[\s\S]*width: 44px;\s*height: 44px;/);
   assert.match(
     shell,
     /setSidebarOpen\(false, false\);\s*requestAnimationFrame\(\(\) => appState\.mainEl\?\.focus\(\{ preventScroll: true \}\)\)/,
@@ -104,11 +119,11 @@ test("touch layouts expose row actions and preserve readable composer choices", 
   );
   assert.match(
     compactCss,
-    /\.pane \{\s*padding: calc\(28px \+ var\(--surface-safe-top\)\) max\(28px, env\(safe-area-inset-right\)\) calc\(40px \+ env\(safe-area-inset-bottom\)\) max\(28px, env\(safe-area-inset-left\)\)/,
+    /\.pane \{\s*padding: calc\(70px \+ var\(--surface-safe-top\)\) max\(28px, env\(safe-area-inset-right\)\) calc\(40px \+ env\(safe-area-inset-bottom\)\) max\(28px, env\(safe-area-inset-left\)\)/,
   );
   assert.match(
     compactCss,
-    /padding: calc\(20px \+ var\(--surface-safe-top\)\) max\(14px, env\(safe-area-inset-right\)\) calc\(32px \+ env\(safe-area-inset-bottom\)\) max\(14px, env\(safe-area-inset-left\)\)/,
+    /padding: calc\(70px \+ var\(--surface-safe-top\)\) max\(14px, env\(safe-area-inset-right\)\) calc\(32px \+ env\(safe-area-inset-bottom\)\) max\(14px, env\(safe-area-inset-left\)\)/,
   );
   assert.match(
     compactCss,
@@ -118,4 +133,30 @@ test("touch layouts expose row actions and preserve readable composer choices", 
     compactCss,
     /\.live-work-dock \{\s*width: auto;\s*margin-right: calc\(10px \+ env\(safe-area-inset-right\)\);\s*margin-left: calc\(10px \+ env\(safe-area-inset-left\)\)/,
   );
+});
+
+test("mobile browse pages stack dense rows and keep controls reachable", () => {
+  assert.match(
+    compactCss,
+    /\.pane-head, \.resource-heading, \.deploy-detail-heading \{ align-items: flex-start; flex-direction: column;/,
+  );
+  assert.match(compactCss, /\.file-row \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\);/);
+  assert.match(compactCss, /\.chat-row \{ display: flex; flex-direction: column;/);
+  assert.match(compactCss, /\.deploy-row-meta \{ grid-column: 1;/);
+  assert.match(compactCss, /\.deploy-detail \{ width: 100%;/);
+  assert.match(compactCss, /\.context-session-row \{ align-items: flex-start; flex-direction: column;/);
+  assert.match(compactCss, /\.skill-filter-fields \{ grid-template-columns: minmax\(0, 1fr\);/);
+  assert.match(
+    compactCss,
+    /\.resource-tabs, \.cron-list-controls \{ max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain;/,
+  );
+  assert.match(
+    compactCss,
+    /\.context-resource-action, \.kc-text-action, \.resource-tabs button,[\s\S]*\.skill-variant-details summary \{ min-height: 44px;/,
+  );
+  assert.match(
+    compactCss,
+    /\.split-canvas \.split-pane-actions \.icon-btn \{ width: 26px; height: 26px; min-width: 26px;/,
+  );
+  assert.match(compactCss, /\.split-canvas \.split-tab-close \{ width: 18px; height: 18px; min-width: 18px;/);
 });
