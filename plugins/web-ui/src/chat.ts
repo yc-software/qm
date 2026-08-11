@@ -1397,7 +1397,13 @@ export function createChatSurface(
         );
       }
     }
-    if (parts.length === 0 && message.stopReason !== "error" && message.stopReason !== "aborted" && !hasWork)
+    if (
+      parts.length === 0 &&
+      message.stopReason !== "error" &&
+      message.stopReason !== "aborted" &&
+      !hasWork &&
+      !(message as AssistantWork).deliveredFiles?.length
+    )
       parts.push(typingRow());
     return parts;
   }

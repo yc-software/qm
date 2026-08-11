@@ -21,6 +21,7 @@ import { hasParentPathSegment, type SandboxHandle } from "../../sandbox/sandbox.
 import type {
   SurfaceToolDeps,
   SurfacePostResult,
+  PostedFileMeta,
   SurfaceReactInput,
   SurfaceEditInput,
   SurfaceDeleteInput,
@@ -62,6 +63,15 @@ export interface SurfaceToolsContext {
   provision: () => Promise<SandboxHandle>;
   postProvenance: (deliveryKey: string) => DeliveryProvenance;
   spine: SpineState;
+}
+
+function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFileMeta[] {
+  return attachments.map((a) => ({
+    name: a.name,
+    mimetype: a.mimetype,
+    sizeBytes: a.sizeBytes,
+    ...(a.artifactId ? { artifactId: a.artifactId } : {}),
+  }));
 }
 
 export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps | undefined {
@@ -217,7 +227,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(taskList?.length ? { taskList: taskList.map(({ id, title, status }) => ({ id, title, status })) } : {}),
         ...(footer ? { debugFooter: footer } : {}),
       };
-      return enqueue(projectedDestination, postText, f.attachments);
+      const sent = await enqueue(projectedDestination, postText, f.attachments);
+      return sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
     },
     reach: async (postText, target, files) => {
       if (spine.crossConversationPosts >= 5) return { ok: false, message: "outbound limit reached for this turn" };
@@ -233,8 +244,9 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const sending = postText.trim().length > 0 || (f.attachments?.length ?? 0) > 0;
       const d = await resolveDestination(target, { mayOpenGroup: sending });
       if (!d.ok) return { ok: false, message: d.message };
-      const r = await enqueue(d.destination, postText, f.attachments);
-      if (!r.ok) return r;
+      const r0 = await enqueue(d.destination, postText, f.attachments);
+      if (!r0.ok) return r0;
+      const r = f.attachments?.length ? { ...r0, attachments: postedFileMetas(f.attachments) } : r0;
       spine.crossConversationPosts += 1;
       let label = `a group DM (${target.participants?.length ?? 0} people)`;
       if (target.channel !== undefined) label = `#${target.channel.replace(/^#/, "")}`;
