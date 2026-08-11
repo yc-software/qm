@@ -127,6 +127,97 @@ test("native agent presenter removes an uncheckpointed stream before falling bac
   ]);
 });
 
+test("native agent presenter deletes a partial stream before fallback after append fails", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      return "171.8";
+    },
+    append: async () => {
+      calls.push("append");
+      throw new Error("stream disconnected");
+    },
+    stop: async () => {
+      calls.push("stop");
+    },
+    remove: async (ts) => {
+      calls.push(`remove:${ts}`);
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+    onError: (error) => calls.push(`error:${error instanceof Error ? error.message : String(error)}`),
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("Partial"), true);
+  assert.equal(await presenter.onDelta(" answer"), false);
+  assert.equal(await presenter.finalize(), false);
+  assert.deepEqual(calls, [
+    "status:Thinking…",
+    "start",
+    "checkpoint",
+    "surface",
+    "append",
+    "remove:171.8",
+    "error:stream disconnected",
+    "status:",
+  ]);
+});
+
+test("native agent presenter clears status after a delayed begin", async () => {
+  const calls: string[] = [];
+  let releaseStatus: (() => void) | undefined;
+  const statusGate = new Promise<void>((resolve) => {
+    releaseStatus = resolve;
+  });
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+      if (status) await statusGate;
+    },
+    start: async () => undefined,
+    append: async () => {},
+    stop: async () => {},
+    remove: async () => {},
+    checkpoint: async () => {},
+    onSurfacePosted: () => {},
+  });
+
+  const beginning = presenter.begin();
+  const finalizing = presenter.finalize();
+  releaseStatus?.();
+  await beginning;
+  assert.equal(await finalizing, false);
+  assert.deepEqual(calls, ["status:Thinking…", "status:"]);
+});
+
+test("native agent presenter suppresses fallback when a failed partial stream cannot be removed", async () => {
+  const presenter = createNativeAgentPresenter({
+    setStatus: async () => {},
+    start: async () => "171.9",
+    append: async () => {
+      throw new Error("stream disconnected");
+    },
+    stop: async () => {},
+    remove: async () => {
+      throw new Error("delete failed");
+    },
+    checkpoint: async () => {},
+    onSurfacePosted: () => {},
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("Partial"), true);
+  assert.equal(await presenter.onDelta(" answer"), false);
+  assert.equal(await presenter.finalize(), true);
+});
+
 test("renderTaskList renders every terminal state", () => {
   assert.equal(
     renderTaskList([

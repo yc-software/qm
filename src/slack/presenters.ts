@@ -203,7 +203,7 @@ export function createNativeAgentPresenter(deps: {
   onSurfacePosted(): void;
   onError?(error: unknown): void;
 }): NativeAgentPresenter {
-  let state: "idle" | "starting" | "active" | "disabled" | "stopped" = "idle";
+  let state: "idle" | "starting" | "active" | "disabled" | "orphaned" | "stopped" = "idle";
   let messageTs: string | undefined;
   let chain = Promise.resolve();
   let statusStarted = false;
@@ -242,14 +242,18 @@ export function createNativeAgentPresenter(deps: {
         }
         await deps.append(messageTs, chunks);
       } catch (error) {
-        if (uncheckpointedTs) {
+        const failedStreamTs = uncheckpointedTs ?? messageTs;
+        let cleanupFailed = false;
+        if (failedStreamTs) {
           try {
-            await deps.remove(uncheckpointedTs);
+            await deps.remove(failedStreamTs);
+            messageTs = undefined;
           } catch (removeError) {
+            cleanupFailed = true;
             deps.onError?.(removeError);
           }
         }
-        state = "disabled";
+        state = cleanupFailed ? "orphaned" : "disabled";
         deps.onError?.(error);
       }
     });
@@ -257,12 +261,14 @@ export function createNativeAgentPresenter(deps: {
   };
   return {
     async begin() {
-      try {
-        await deps.setStatus("Thinking…");
-        statusStarted = true;
-      } catch (error) {
-        deps.onError?.(error);
-      }
+      statusStarted = true;
+      await enqueue(async () => {
+        try {
+          await deps.setStatus("Thinking…");
+        } catch (error) {
+          deps.onError?.(error);
+        }
+      });
     },
     onDelta(delta) {
       if (!delta) return Promise.resolve(state === "active");
@@ -284,6 +290,10 @@ export function createNativeAgentPresenter(deps: {
     },
     async finalize() {
       await chain;
+      if (state === "orphaned") {
+        await clearStatus();
+        return true;
+      }
       if (state !== "active" || !messageTs) {
         await clearStatus();
         return false;
@@ -312,7 +322,7 @@ export function createNativeAgentPresenter(deps: {
       await clearStatus();
     },
     ownsSurface() {
-      return state === "starting" || state === "active" || state === "stopped";
+      return state === "starting" || state === "active" || state === "orphaned" || state === "stopped";
     },
   };
 }

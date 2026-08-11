@@ -28,3 +28,12 @@ test("streaming reply filter holds a split agent request directive out of Slack"
   assert.equal(visible, "I need help.  Thanks.");
   assert.equal(visible.includes("token=secret"), false);
 });
+
+test("streaming reply filter never leaks a long directive delivered one character at a time", () => {
+  const filter = createStreamingReplyFilter();
+  const raw = "Public. [[react: internal-tool-argument-secret-1234567890]] Done.";
+  const visible = [...raw].map((character) => filter.push(character)).join("") + filter.flush();
+
+  assert.equal(visible, "Public.  Done.");
+  assert.equal(visible.includes("internal-tool-argument"), false);
+});
