@@ -32,6 +32,7 @@ import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from 
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
   createMemoryAdvisoryLock,
@@ -362,6 +363,7 @@ export interface BuiltApp {
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
   channelPolicy: ChannelPolicyStore;
+  uiState: UiStateStore;
   skillSyncEngine: SkillSyncEngine;
   slackCore: SlackCoreClient;
 }
@@ -1484,6 +1486,7 @@ export function buildApp(
     ...(ambientJudgments ? { ambientJudgments } : {}),
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
+    uiState: artifactMap<PersistedUiState>("web_ui_state"),
     skillSyncEngine,
     slackCore,
   };

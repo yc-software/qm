@@ -45,6 +45,7 @@ import type { DeploymentLayerStore } from "../deployment/deployment-layer-store.
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
+import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
@@ -109,6 +110,7 @@ export interface ServerDeps {
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
   channelPolicy?: ChannelPolicyStore;
+  uiState?: UiStateStore;
   environments?: EnvironmentStore;
   deploymentLayer?: DeploymentLayerStore;
   brokeredServices?: () => readonly string[];

@@ -170,3 +170,13 @@ test("a pane gives the conversation the same height chain the full-screen .main 
   assert.match(pane, /height: 100%;/, "…of definite height");
   assert.match(pane, /overflow: hidden;/, "…that clips instead of growing the pane");
 });
+
+test("adopting a remote layout normalizes the mirrored timestamp to the server record", () => {
+  const adopt = fn(split, "adoptRemoteSplit");
+  assert.match(adopt, /persistedUpdatedAt = at;/, "the in-memory watermark takes the server record's time");
+  assert.match(
+    adopt,
+    /JSON\.stringify\(\{ \.\.\.rec\.value, updatedAt: at \}\)/,
+    "the local mirror must carry the server-clamped timestamp, not the value's inner claim",
+  );
+});

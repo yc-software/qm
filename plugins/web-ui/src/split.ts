@@ -55,6 +55,7 @@ import {
 } from "./sessions";
 import { conversationBackground, type RowIndicators } from "./session-list";
 import type { CoreSession } from "./core-bridge";
+import { fetchUiState, putUiState } from "./core-bridge";
 
 export const splitState = {
   active: false,
@@ -62,6 +63,7 @@ export const splitState = {
 };
 
 const STORE_KEY = "web-ui:split-canvas:v1";
+const REMOTE_STATE_KEY = "split-canvas";
 
 interface PaneParams {
   sessionId?: string;
@@ -85,6 +87,9 @@ let toastMsg = "";
 let toastTimer: number | null = null;
 let headerSignature = "";
 let persistTimer: number | null = null;
+let remoteTimer: number | null = null;
+let remotePayload: { updatedAt: number } | null = null;
+let persistedUpdatedAt = 0;
 
 function uid(): string {
   return crypto.randomUUID().slice(0, 8);
@@ -93,11 +98,41 @@ function uid(): string {
 function persist(): void {
   try {
     if (dockApi) lastLayout = dockApi.toJSON();
-    localStorage.setItem(STORE_KEY, JSON.stringify({ v: 2, active: splitState.active, layout: lastLayout }));
+    persistedUpdatedAt = Date.now();
+    const payload = { v: 2, active: splitState.active, layout: lastLayout, updatedAt: persistedUpdatedAt };
+    localStorage.setItem(STORE_KEY, JSON.stringify(payload));
+    pushRemoteSoon(payload);
   } catch {
     void 0;
   }
 }
+
+function pushRemoteSoon(payload: { updatedAt: number }): void {
+  remotePayload = payload;
+  if (remoteTimer !== null) window.clearTimeout(remoteTimer);
+  remoteTimer = window.setTimeout(() => {
+    remoteTimer = null;
+    const p = remotePayload;
+    remotePayload = null;
+    if (p) void putUiState(REMOTE_STATE_KEY, p, p.updatedAt).catch(() => void 0);
+  }, 400);
+}
+
+function flushRemoteNow(): void {
+  if (remoteTimer !== null) {
+    window.clearTimeout(remoteTimer);
+    remoteTimer = null;
+  }
+  const p = remotePayload;
+  if (!p) return;
+  remotePayload = null;
+  void putUiState(REMOTE_STATE_KEY, p, p.updatedAt, { keepalive: true }).catch(() => void 0);
+}
+
+window.addEventListener("pagehide", flushRemoteNow);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushRemoteNow();
+});
 
 function persistSoon(): void {
   if (persistTimer !== null) window.clearTimeout(persistTimer);
@@ -304,16 +339,13 @@ export function exitSplitIfActive(): void {
   renderSidebarTop();
 }
 
-export function loadPersistedSplit(): void {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(localStorage.getItem(STORE_KEY) ?? "null");
-  } catch {
-    return;
-  }
+function adoptPersisted(raw: unknown): void {
   if (!raw || typeof raw !== "object") return;
-  const o = raw as { v?: unknown; active?: unknown; layout?: unknown };
+  const o = raw as { v?: unknown; active?: unknown; layout?: unknown; updatedAt?: unknown };
   if (o.v === 2) {
+    if (typeof o.updatedAt === "number") persistedUpdatedAt = o.updatedAt;
+    pendingSeed = null;
+    splitState.active = false;
     if (o.active !== true || !o.layout || typeof o.layout !== "object") return;
     const panels = (o.layout as { panels?: object }).panels;
     const n = panels && typeof panels === "object" ? Object.keys(panels).length : 0;
@@ -326,6 +358,38 @@ export function loadPersistedSplit(): void {
   if (!seeds) return;
   pendingSeed = { kind: "v1", seeds };
   splitState.active = true;
+}
+
+export function loadPersistedSplit(): void {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(localStorage.getItem(STORE_KEY) ?? "null");
+  } catch {
+    return;
+  }
+  adoptPersisted(raw);
+}
+
+export async function adoptRemoteSplit(timeoutMs = 2000): Promise<void> {
+  let rec: Awaited<ReturnType<typeof fetchUiState>>;
+  try {
+    rec = await Promise.race([
+      fetchUiState(REMOTE_STATE_KEY),
+      new Promise<never>((_, reject) => window.setTimeout(reject, timeoutMs)),
+    ]);
+  } catch {
+    return;
+  }
+  if (!rec || typeof rec !== "object") return;
+  const at = typeof rec.updatedAt === "number" ? rec.updatedAt : 0;
+  if (!rec.value || typeof rec.value !== "object" || at <= persistedUpdatedAt) return;
+  adoptPersisted(rec.value);
+  persistedUpdatedAt = at;
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({ ...rec.value, updatedAt: at }));
+  } catch {
+    void 0;
+  }
 }
 
 export function restoredCanvasNeedsSessionList(): boolean {

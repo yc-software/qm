@@ -36,6 +36,7 @@ import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
 import {
   addBlankPane,
+  adoptRemoteSplit,
   canvasToast,
   drawCanvas,
   exitSplitIfActive,
@@ -838,6 +839,7 @@ export async function boot(): Promise<void> {
   ensureDeliveryStream();
   warmDeferredChunks();
   loadPersistedSplit();
+  await adoptRemoteSplit();
 
   const params = new URLSearchParams(location.search);
   const {

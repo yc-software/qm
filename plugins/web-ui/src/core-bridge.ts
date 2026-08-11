@@ -449,6 +449,19 @@ export function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
+export interface UiStateRecord {
+  value: unknown;
+  updatedAt: number;
+}
+
+export function fetchUiState(key: string): Promise<UiStateRecord> {
+  return api<UiStateRecord>(`/api/ui-state?key=${encodeURIComponent(key)}`);
+}
+
+export function putUiState(key: string, value: unknown, updatedAt: number, init?: RequestInit): Promise<unknown> {
+  return api("/api/ui-state", { method: "PUT", body: JSON.stringify({ key, value, updatedAt }), ...init });
+}
+
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(withBase(path), { headers: { "content-type": "application/json" }, ...init });
   const text = await r.text();

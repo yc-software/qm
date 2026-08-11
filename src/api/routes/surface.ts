@@ -20,6 +20,13 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
+import {
+  UI_STATE_KEY_PATTERN,
+  UI_STATE_MAX_BYTES,
+  UI_STATE_MAX_FUTURE_SKEW_MS,
+  storeUiState,
+  uiStateId,
+} from "../../surfaces/ui-state.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
@@ -476,6 +483,34 @@ async function listScopeResources(ctx: ApiCtx): Promise<void> {
     skills: out.skills,
     manageable: out.manageable,
   });
+}
+
+async function getUiState(ctx: ApiCtx): Promise<void> {
+  const { res, deps, url } = ctx;
+  const principalId = url.searchParams.get("principalId");
+  const key = url.searchParams.get("key") ?? "";
+  if (!principalId || !UI_STATE_KEY_PATTERN.test(key))
+    return sendJson(res, 400, { error: "bad_request", message: "principalId and a valid key required" });
+  if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
+  const rec = await deps.uiState.get(uiStateId(principalId, key));
+  return sendJson(res, 200, rec ?? { value: null, updatedAt: 0 });
+}
+
+async function putUiState(ctx: ApiCtx): Promise<void> {
+  const { res, deps, body } = ctx;
+  const b = body as { principalId?: unknown; key?: unknown; value?: unknown; updatedAt?: unknown };
+  const principalId = typeof b.principalId === "string" ? b.principalId : "";
+  const key = typeof b.key === "string" ? b.key : "";
+  if (!principalId || !UI_STATE_KEY_PATTERN.test(key))
+    return sendJson(res, 400, { error: "bad_request", message: "principalId and a valid key required" });
+  if (b.value === undefined) return sendJson(res, 400, { error: "bad_request", message: "value required" });
+  if (Buffer.byteLength(JSON.stringify(b.value)) > UI_STATE_MAX_BYTES)
+    return sendJson(res, 413, { error: "payload_too_large", message: "ui state too large" });
+  if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
+  const claimed = typeof b.updatedAt === "number" && Number.isFinite(b.updatedAt) ? b.updatedAt : Date.now();
+  const updatedAt = Math.min(claimed, Date.now() + UI_STATE_MAX_FUTURE_SKEW_MS);
+  const result = await storeUiState(deps.uiState, uiStateId(principalId, key), { value: b.value, updatedAt });
+  return sendJson(res, 200, result);
 }
 
 async function getSelfMemory(ctx: ApiCtx): Promise<void> {
@@ -1342,6 +1377,8 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/conversations/:id/fork", auth: "either", handle: forkAgentConversation },
   { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
   { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
+  { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },
+  { method: "PUT", path: "/v1/ui-state", auth: "source", handle: putUiState },
   { method: "GET", path: "/v1/memory", auth: "source", handle: getSelfMemory },
   { method: "PUT", path: "/v1/memory", auth: "source", handle: putSelfMemory },
   { method: "GET", path: "/v1/memory/history", auth: "either", handle: getSelfMemoryHistory },

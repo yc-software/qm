@@ -87,6 +87,7 @@ const server = createServer(built.app, {
   ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
   ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),
   channelPolicy: built.channelPolicy,
+  uiState: built.uiState,
   environments: built.environments,
   sandboxMigration: built.sandboxMigration,
 });

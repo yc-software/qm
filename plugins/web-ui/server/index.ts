@@ -916,6 +916,24 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return relay(res, r);
     }
 
+    if (method === "GET" && path === "/api/ui-state") {
+      const key = url.searchParams.get("key") ?? "";
+      const qs = new URLSearchParams({ principalId: user, key });
+      const r = await coreFetch("GET", `/v1/ui-state?${qs.toString()}`);
+      return relay(res, r);
+    }
+
+    if (method === "PUT" && path === "/api/ui-state") {
+      let body: Record<string, unknown>;
+      try {
+        body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
+      } catch {
+        return json(res, 400, { error: "bad_request" });
+      }
+      const r = await coreFetch("PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
+      return relay(res, r);
+    }
+
     if (method === "GET" && path === "/api/runtime-config") {
       const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
       const qs = new URLSearchParams({ principalId: user, scopeId });
