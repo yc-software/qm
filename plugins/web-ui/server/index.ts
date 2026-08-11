@@ -795,6 +795,18 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       );
     }
 
+    if (method === "GET" && path === "/api/search") {
+      const q = url.searchParams.get("q") ?? "";
+      const limit = url.searchParams.get("limit");
+      const r = await coreFetch(
+        "GET",
+        `/v1/sessions/search?principalId=${encodeURIComponent(user)}&q=${encodeURIComponent(q)}${
+          limit ? `&limit=${encodeURIComponent(limit)}` : ""
+        }`,
+      );
+      return relay(res, r);
+    }
+
     if (method === "GET" && path === "/api/sessions") {
       const r = await coreFetch("GET", `/v1/sessions?principalId=${encodeURIComponent(user)}`);
       return relay(res, r);

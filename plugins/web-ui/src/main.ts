@@ -1,6 +1,7 @@
 import "dockview-core/dist/styles/dockview.css";
 import "./shell.css";
 import { bootSafely } from "./shell";
+import { registerChatSearchHotkey } from "./search";
 import { closeFormMenus } from "./ui";
 import { allConversations } from "./conversations";
 import { closeOpenSessionMenu, renderList, sessionsState } from "./sessions";
@@ -37,4 +38,5 @@ document.addEventListener("keydown", (e) => {
   closeFormMenus();
 });
 
+registerChatSearchHotkey();
 void bootSafely();
