@@ -6,6 +6,7 @@ import {
   connectorStatusIsStale,
   createConnectorStatusCache,
   refreshConnectorStatus,
+  usableConnectorProviders,
   type ConnectorStatusRecord,
 } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";
@@ -134,4 +135,16 @@ test("labels: known providers get friendly names; unknown is capitalized", () =>
   assert.equal(connectorLabel("google"), "Google");
   assert.equal(connectorLabel("github"), "GitHub");
   assert.equal(connectorLabel("acme"), "Acme");
+});
+
+test("usable providers include valid manual tokens without requiring an OAuth client", () => {
+  const status: ConnectorStatusRecord = {
+    principalId: "U1",
+    checkedAt: 1,
+    providers: {
+      linear: { connected: true },
+      github: { connected: true, needsReconnect: true },
+    },
+  };
+  assert.deepEqual(usableConnectorProviders(["google"], status), ["google", "linear"]);
 });

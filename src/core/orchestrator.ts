@@ -36,6 +36,7 @@ import {
   configuredConnectorProviders,
   connectorStatusIsStale,
   refreshConnectorStatus,
+  usableConnectorProviders,
 } from "../credentials/connector-status.ts";
 import { renderComputerBlock, renderResidentLoginsBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
@@ -826,11 +827,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : "";
 
       await deps.skillsReady;
-      const configuredProviders = deps.resolveConnectorClient
+      let connectorStatus = null;
+      if (!strictReadOnly && conversation.kind === "dm") {
+        try {
+          connectorStatus = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
+          if (
+            deps.connectorTokens &&
+            deps.connectorStatusCache &&
+            connectorStatusIsStale(connectorStatus, Date.now())
+          ) {
+            connectorStatus = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
+            await deps.connectorStatusCache.put(connectorStatus);
+          }
+        } catch (e) {
+          swallow("orchestrator: connected-app status", e);
+        }
+      }
+      const oauthConfiguredProviders = deps.resolveConnectorClient
         ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
             swallowAs("orchestrator: configured connector providers", []),
           )
         : [];
+      const configuredProviders = usableConnectorProviders(oauthConfiguredProviders, connectorStatus);
       const visibleSkillsForTurn = async (): Promise<SkillResolution[]> =>
         filterConnectorSkills((await deps.skills?.visibleFor(skillScopes)) ?? [], configuredProviders);
       const visibleSkills = await visibleSkillsForTurn();
@@ -1487,18 +1505,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
         if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
-          let status = null;
-          try {
-            status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
-            if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
-              status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
-              await deps.connectorStatusCache.put(status);
-            }
-          } catch (e) {
-            swallow("orchestrator: connected-app status", e);
-          }
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
-          systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
+          systemPrompt += `\n\n${renderConnectedAppsBlock(connectorStatus, configuredProviders, connectionsUrl)}`;
         }
         systemPrompt += memoryBlock;
         if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;

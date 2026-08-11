@@ -106,6 +106,17 @@ export function connectorLabel(name: string): string {
   return PROVIDER_LABELS[name] ?? name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+export function usableConnectorProviders(
+  configuredProviders: readonly string[],
+  status: ConnectorStatusRecord | null,
+): string[] {
+  const usable = new Set(configuredProviders);
+  for (const [provider, entry] of Object.entries(status?.providers ?? {})) {
+    if (entry.connected && !entry.needsReconnect) usable.add(provider);
+  }
+  return [...usable];
+}
+
 export async function configuredConnectorProviders(resolveClient: OAuthClientResolver): Promise<string[]> {
   const configured = await Promise.all(
     Object.keys(PROVIDERS).map(async (provider) => {
