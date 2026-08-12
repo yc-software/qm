@@ -127,7 +127,7 @@ import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
-import type { SkillResolution } from "../skills/skill-store.ts";
+import type { SkillResolution, GrantedSkillRef } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { resolveModel } from "../model/pi-models.ts";
 import {
@@ -762,6 +762,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? { ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}), read: recallScopes }
           : undefined;
       const skillScopes = visibleSkillScopes(resolution, scopeId);
+      const grantedSkills: GrantedSkillRef[] = (
+        await deps.acl
+          .sharedOfKindForAudience(
+            "skill",
+            conversation.audience,
+            scopeId,
+            resolution.orgScopeId,
+            principalEntitledToScope,
+          )
+          .catch(swallowAs("orchestrator: skill grants for audience", []))
+      ).map((g) => ({ id: parseRef(g.ref).id, ownerScopeId: g.ownerScopeId }));
       const recalledSections: string[] = [];
       let recallMs = 0;
       for (const recallScope of recallScopes) {
@@ -835,7 +846,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         : [];
       const visibleSkillsForTurn = async (): Promise<SkillResolution[]> =>
-        filterConnectorSkills((await deps.skills?.visibleFor(skillScopes)) ?? [], configuredProviders);
+        filterConnectorSkills((await deps.skills?.visibleFor(skillScopes, grantedSkills)) ?? [], configuredProviders);
       const visibleSkills = await visibleSkillsForTurn();
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
@@ -1273,7 +1284,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         cutoverModeOf,
         visibleSkills,
         visibleSkillsForTurn,
-        skillScopes,
         skillMaterializer,
         residentAuthConnectors,
         emitGapWork,

@@ -62,6 +62,11 @@ export interface Skill {
   pack?: { packId: string; commit: string; upstreamName: string };
 }
 
+export interface GrantedSkillRef {
+  id: string;
+  ownerScopeId: ScopeId;
+}
+
 export interface SkillResolution {
   skill: Skill | null;
   shadowed: Skill[];
@@ -85,7 +90,7 @@ export interface SkillStore {
   delete(id: string): Promise<void>;
   recordUse(id: string, at?: number): Promise<void>;
   resolve(name: string, orderedScopes: ScopeId[]): Promise<SkillResolution>;
-  visibleFor(orderedScopes: ScopeId[]): Promise<SkillResolution[]>;
+  visibleFor(orderedScopes: ScopeId[], granted?: readonly GrantedSkillRef[]): Promise<SkillResolution[]>;
   promote(id: string, targetScopeId: ScopeId): Promise<Skill>;
   move(id: string, toScopeId: ScopeId): Promise<Skill>;
 }
@@ -222,7 +227,7 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
       return resolveFromIndex(publishedByScopeAndName(await skills.all()), name, orderedScopes);
     },
 
-    async visibleFor(orderedScopes) {
+    async visibleFor(orderedScopes, granted) {
       const all = await skills.all();
       const index = publishedByScopeAndName(all);
       const inScope = new Set(orderedScopes);
@@ -233,9 +238,29 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
             .map((s) => s.manifest.name),
         ),
       ];
-      return names
+      const visible = names
         .map((n) => resolveFromIndex(index, n, orderedScopes))
         .filter((r): r is SkillResolution & { skill: Skill } => r.skill !== null);
+      if (granted?.length) {
+        const byName = new Map(visible.map((r) => [r.skill.manifest.name, r]));
+        const seen = new Set<string>();
+        for (const ref of granted) {
+          if (seen.has(ref.id)) continue;
+          seen.add(ref.id);
+          const s = await skills.get(ref.id);
+          if (!s || s.status !== "published" || s.scopeId !== ref.ownerScopeId || !isSafeSkillName(s.manifest.name))
+            continue;
+          const existing = byName.get(s.manifest.name);
+          if (existing) {
+            if (existing.skill.id !== s.id && !existing.shadowed.some((x) => x.id === s.id)) existing.shadowed.push(s);
+            continue;
+          }
+          const r = { skill: s, shadowed: [] as Skill[] };
+          byName.set(s.manifest.name, r);
+          visible.push(r);
+        }
+      }
+      return visible;
     },
 
     async promote(id, targetScopeId) {

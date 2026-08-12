@@ -48,7 +48,6 @@ export interface TurnSandboxContext {
   cutoverModeOf: (service: string) => DeviceFlowCutoverMode;
   visibleSkills: SkillResolution[];
   visibleSkillsForTurn: () => Promise<SkillResolution[]>;
-  skillScopes: ScopeId[];
   skillMaterializer: ReturnType<typeof createSkillMaterializer>;
   residentAuthConnectors: () => ResidentAuthConnector[];
   emitGapWork: (phase: GapPhase, start: number, end: number) => void;
@@ -80,7 +79,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     cutoverModeOf,
     visibleSkills,
     visibleSkillsForTurn,
-    skillScopes,
     skillMaterializer,
     residentAuthConnectors,
     emitGapWork,
@@ -330,7 +328,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     try {
       const handle = await provision();
       await skillMaterializer.materializeTree(deps.sandbox, handle, r, [], async () => {
-        const latest = (await deps.skills!.visibleFor(skillScopes)).find(
+        const latest = (await visibleSkillsForTurn()).find(
           (candidate) => candidate.skill && safeSkillDirName(candidate.skill.manifest.name) === skillDir,
         );
         if (!latest) return null;
