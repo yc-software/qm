@@ -24,6 +24,7 @@ interface ChatSearchHit {
   author?: string;
   snippet: string;
   createdAt: number;
+  archived?: boolean;
 }
 
 const MIN_QUERY_LEN = 2;
@@ -35,6 +36,7 @@ const searchState = {
   open: false,
   query: "",
   hits: [] as ChatSearchHit[],
+  failed: false,
   loading: false,
   /** Selection over hits (0..hits.length-1) plus the trailing ask-QM row. */
   sel: 0,
@@ -110,6 +112,7 @@ function onQueryInput(e: InputEvent): void {
     inflight?.abort();
     inflight = null;
     searchState.hits = [];
+    searchState.failed = false;
     searchState.loading = false;
     draw();
     return;
@@ -128,9 +131,11 @@ async function runSearch(q: string): Promise<void> {
     const r = await api<{ hits: ChatSearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctl.signal });
     if (seq !== fetchSeq || !searchState.open) return;
     searchState.hits = groupHitsBySession(r.hits ?? []);
+    searchState.failed = false;
   } catch {
     if (seq !== fetchSeq || ctl.signal.aborted) return;
     searchState.hits = [];
+    searchState.failed = true;
   }
   searchState.loading = false;
   clampSel();
@@ -150,7 +155,9 @@ function groupHitsBySession(hits: ChatSearchHit[]): ChatSearchHit[] {
       bySession.set(hit.sessionId, [hit]);
     }
   }
-  return order.flatMap((id) => bySession.get(id)!);
+  const live = order.filter((id) => !bySession.get(id)![0]!.archived);
+  const archived = order.filter((id) => bySession.get(id)![0]!.archived);
+  return [...live, ...archived].flatMap((id) => bySession.get(id)!);
 }
 
 function onPaletteKeydown(e: KeyboardEvent): void {
@@ -199,7 +206,9 @@ function askQm(): void {
   closeChatSearch();
   const conv = mainConversation();
   conv.newChat();
-  void conv.state.agent?.prompt(q);
+  void conv.state.agent?.prompt(
+    `Find my previous session based on the following search query, give me a link when you've identified it: ${q}`,
+  );
 }
 
 function highlight(text: string): TemplateResult {
@@ -226,13 +235,18 @@ function resultRows(): TemplateResult[] {
     if (hit.sessionId !== lastSession) {
       lastSession = hit.sessionId;
       rows.push(
-        html`<div class="chat-search-group"><b>${hitTitle(hit)}</b><span>${recencyGroup(hit.createdAt)}</span></div>`,
+        html`<div class="chat-search-group ${hit.archived ? "archived" : ""}">
+          <b>${hitTitle(hit)}</b
+          >${hit.archived ? html`<em class="chat-search-archived-tag">Archived</em>` : nothing}<span
+            >${recencyGroup(hit.createdAt)}</span
+          >
+        </div>`,
       );
     }
     rows.push(html`
       <button
         type="button"
-        class="chat-search-row ${i === searchState.sel ? "selected" : ""}"
+        class="chat-search-row ${i === searchState.sel ? "selected" : ""} ${hit.archived ? "archived" : ""}"
         @click=${() => void openHit(hit)}
         @pointermove=${() => {
           if (searchState.sel !== i) {
@@ -273,8 +287,8 @@ function askRow(): TemplateResult {
     >
       <span class="chat-search-who ask">+</span>
       <span class="chat-search-text">
-        <span class="chat-search-snippet">Ask QM in a new chat: <b>“${searchState.query.trim()}”</b></span>
-        <span class="chat-search-meta">starts a fresh session with this as the prompt</span>
+        <span class="chat-search-snippet">Ask QM to find it: <b>“${searchState.query.trim()}”</b></span>
+        <span class="chat-search-meta">starts a new chat where QM hunts down the matching session and links it</span>
       </span>
       <span class="chat-search-kbd">${isMac ? "⌘" : "Ctrl"}${icon(CornerDownLeft, 11)}</span>
     </button>
@@ -288,6 +302,10 @@ function paletteTpl(): TemplateResult {
     body = html`<div class="chat-search-empty">Search every chat you can see — messages, not just titles.</div>`;
   } else if (searchState.loading && !searchState.hits.length) {
     body = html`<div class="chat-search-empty">Searching…</div>`;
+  } else if (searchState.failed) {
+    body = html`<div class="chat-search-empty chat-search-failed">
+      Search failed — check the connection and try again.
+    </div>`;
   } else if (!searchState.hits.length) {
     body = html`<div class="chat-search-empty">No messages match “${q}”.</div>`;
   } else {
@@ -300,13 +318,13 @@ function paletteTpl(): TemplateResult {
         if (e.target === e.currentTarget) closeChatSearch();
       }}
     >
-      <div class="chat-search-palette" role="dialog" aria-label="Search chats" @keydown=${onPaletteKeydown}>
+      <div class="chat-search-palette" role="dialog" aria-label="Search your chats" @keydown=${onPaletteKeydown}>
         <div class="chat-search-inputrow">
           ${icon(Search, 16)}
           <input
             class="chat-search-input"
             type="text"
-            placeholder="Search all chats…"
+            placeholder="Search your chats…"
             autocomplete="off"
             spellcheck="false"
             .value=${searchState.query}
