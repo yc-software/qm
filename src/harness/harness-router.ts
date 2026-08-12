@@ -88,7 +88,12 @@ export function createHarnessRouter(
 ): Harness {
   const lastHarness = new Map<string, HarnessId>();
   return {
-    profile: utility.profile,
+    profile: {
+      ...utility.profile,
+      ...([...adapters.values()].every((adapter) => adapter.profile.readOnlyToolProfile === true)
+        ? { readOnlyToolProfile: true as const }
+        : { readOnlyToolProfile: undefined }),
+    },
     models: utility.models,
     tools: utility.tools,
     turns: {

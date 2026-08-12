@@ -54,6 +54,7 @@ import type { GapWork, HarnessLlmRequestRecord } from "../harness/harness.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
 import {
   renderSecurityPolicyPrompt,
+  requiresToolApproval,
   securityScreenPayload,
   UNSCREENED_REASON,
   unscreenedNotice,
@@ -2145,7 +2146,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   },
                 }
               : {}),
-            ...(securityPolicy.toolApprovals === "all" ? { toolApprovalGate: authorizeToolCall } : {}),
+            ...(requiresToolApproval(
+              securityPolicy,
+              strictReadOnly && deps.harness.profile.readOnlyToolProfile === true,
+            )
+              ? { toolApprovalGate: authorizeToolCall }
+              : {}),
             systemPrompt,
             systemCacheBoundary: stableSystemBytes,
             history: continuation?.history ?? history,

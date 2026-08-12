@@ -1131,6 +1131,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       toolTransport: "plugin",
       transcriptFormat: "opencode",
       capabilities: new Set(["abort", "steer", "images", "provider-sessions"]),
+      readOnlyToolProfile: true,
     },
     {
       runTurn: runPrompt,

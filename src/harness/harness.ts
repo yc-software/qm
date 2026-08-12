@@ -158,6 +158,7 @@ export interface HarnessAdapterProfile {
   toolTransport: HarnessToolTransport;
   transcriptFormat: string;
   capabilities: ReadonlySet<HarnessCapability>;
+  readOnlyToolProfile?: true;
 }
 
 export interface HarnessToolPresentation {

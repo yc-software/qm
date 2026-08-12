@@ -77,6 +77,7 @@ export function createMockHarness(): Harness {
       toolTransport: "mock",
       transcriptFormat: "qm",
       capabilities: new Set(),
+      readOnlyToolProfile: true,
     },
     {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {

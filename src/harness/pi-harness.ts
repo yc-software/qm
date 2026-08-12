@@ -1453,6 +1453,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       toolTransport: "in-process",
       transcriptFormat: "pi",
       capabilities: new Set(["abort", "steer", "images", "thinking-level", "fast-mode", "provider-sessions"]),
+      readOnlyToolProfile: true,
     },
     {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {

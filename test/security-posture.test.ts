@@ -13,6 +13,7 @@ import {
   parseSecurityScreenVerdict,
   SECURITY_SCREEN_SYSTEM_PROMPT,
   renderSecurityPolicyPrompt,
+  requiresToolApproval,
   resolveSecurityPolicy,
   securityScreenPayload,
 } from "../src/security/security-posture.ts";
@@ -46,12 +47,20 @@ test("each posture resolves to exactly one mechanism", () => {
   });
 });
 
+test("strict approval gates only turns whose harness enforces the read-only tool profile", () => {
+  const strict = resolveSecurityPolicy("strict");
+  assert.equal(requiresToolApproval(strict, false), true);
+  assert.equal(requiresToolApproval(strict, true), false);
+  assert.equal(requiresToolApproval(resolveSecurityPolicy("auto"), false), false);
+});
+
 test("the posture prompt names the active mechanism", () => {
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("dangerous")), /Dangerous/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("dangerous")), /Predeclared command approvals/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("auto")), /Auto/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")), /Strict/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")), /Every harness tool except the no-effect/);
+  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")), /read-only turn removes effectful tools/);
   assert.match(
     renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")),
     /Direct capability-token HTTP mutations are blocked/,

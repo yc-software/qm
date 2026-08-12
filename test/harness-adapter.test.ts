@@ -5,6 +5,7 @@ import { createOpenCodeHarness } from "../src/harness/opencode-harness.ts";
 import { createCodexHarness } from "../src/harness/codex-harness.ts";
 import { createClaudeHarness } from "../src/harness/claude-harness.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { createHarnessRouter } from "../src/harness/harness-router.ts";
 
 test("harness adapters declare their native control and tool transports", async (t) => {
   const mock = createMockHarness();
@@ -40,6 +41,10 @@ test("harness adapters declare their native control and tool transports", async 
   assert.equal(pi.profile.capabilities.has("fast-mode"), true);
   assert.equal(opencode.profile.capabilities.has("fast-mode"), false);
   assert.equal(opencode.profile.capabilities.has("thinking-level"), false);
+  assert.deepEqual(
+    [mock, pi, opencode, codex, claude].map((harness) => harness.profile.readOnlyToolProfile),
+    [true, true, true, true, true],
+  );
 });
 
 test("tool presentation belongs to the adapter", () => {
@@ -50,6 +55,24 @@ test("tool presentation belongs to the adapter", () => {
   assert.equal(opencode.tools.name("read"), "workspace_read");
   assert.equal(opencode.tools.name("execute"), "workspace_execute");
   assert.equal(opencode.tools.name("write"), "workspace_write");
+});
+
+test("a router claims the read-only profile only when every selectable harness enforces it", () => {
+  const verified = createMockHarness();
+  const verifiedRouter = createHarnessRouter(new Map([["mock", verified]]), verified, () => ({
+    harnessId: "mock",
+    modelId: "mock",
+  }));
+  assert.equal(verifiedRouter.profile.readOnlyToolProfile, true);
+
+  const unverifiedProfile = { ...verified.profile };
+  delete unverifiedProfile.readOnlyToolProfile;
+  const unverified = { ...verified, profile: unverifiedProfile };
+  const unverifiedRouter = createHarnessRouter(new Map([["mock", unverified]]), verified, () => ({
+    harnessId: "mock",
+    modelId: "mock",
+  }));
+  assert.equal(unverifiedRouter.profile.readOnlyToolProfile, undefined);
 });
 
 test("model utilities are independent from turn control", async () => {

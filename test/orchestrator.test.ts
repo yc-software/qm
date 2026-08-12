@@ -1909,6 +1909,11 @@ test("Strict posture gates tool actions behind HiLO and honors a session grant",
   assert.match(prompt.reply ?? "", /Every harness tool except the no-effect/);
   assert.match(prompt.reply ?? "", /Direct capability-token HTTP mutations are blocked/);
 
+  const readOnly = await built.app.turn(dm("!read notes.md", { readOnly: true }));
+  assert.equal(readOnly.status, "ok");
+  assert.match(readOnly.reply ?? "", /tool is unavailable/);
+  assert.equal(readOnly.pendingApprovals, undefined);
+
   const first = await built.app.turn(dm("!write notes.md strict-hello"));
   assert.equal(first.status, "pending_approval", "a plain workspace write pauses under strict");
   const pending = first.pendingApprovals?.[0];

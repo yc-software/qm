@@ -906,6 +906,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       toolTransport: "dynamic",
       transcriptFormat: "responses-api",
       capabilities: new Set(["abort", "steer", "images", "provider-sessions"]),
+      readOnlyToolProfile: true,
     },
     {
       runTurn: runPrompt,

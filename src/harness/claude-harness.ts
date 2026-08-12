@@ -866,6 +866,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       toolTransport: "in-process-mcp",
       transcriptFormat: "claude-agent-sdk",
       capabilities: new Set(["abort", "steer", "images", "thinking-level", "fast-mode"]),
+      readOnlyToolProfile: true,
     },
     {
       runTurn: runPrompt,
