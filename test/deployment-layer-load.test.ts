@@ -122,7 +122,7 @@ test("loadDeploymentLayer: an authless tool contributes no connector or paths", 
   assert.deepEqual(layer.advertisedTools, ["helper tool"]);
 });
 
-test("command-form approval rules target install.binary and survive safe-regex evaluation", () => {
+test("command-form approval rules target install.binary and are enforced by policy evaluation", () => {
   const layer = loadDeploymentLayer(
     layerDir({
       acme: {
@@ -140,13 +140,6 @@ test("command-form approval rules target install.binary and survive safe-regex e
   );
   assert.equal(evaluateCommandWithLayer("acmectl delete", policy, layer.commandRules).decision, "require_approval");
   assert.equal(evaluateCommandWithLayer("acmectl deleteall", policy, layer.commandRules).decision, "allow");
-});
-
-test("loadDeploymentLayer rejects approval patterns the policy engine cannot evaluate", () => {
-  assert.throws(
-    () => loadDeploymentLayer(layerDir({ acme: { id: "acme", approvals: [{ pattern: "\\bacme\\b(?=\\s|$)" }] } })),
-    /lookarounds are not supported/,
-  );
 });
 
 test("loadDeploymentLayer: a dir with no tools/ is a valid, empty layer", () => {

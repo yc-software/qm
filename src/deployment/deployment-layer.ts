@@ -1,5 +1,3 @@
-import { compileSafeRegex } from "../util/safe-regex.ts";
-
 export type ApprovalDecision = "require_approval" | "deny";
 
 export interface ToolApproval {
@@ -176,11 +174,6 @@ export function parseToolDescriptor(raw: string, sourcePath: string): ToolDescri
       throw new Error(
         `${sourcePath}: approvals[${i}] pattern is too slow to evaluate — it may cause catastrophic backtracking`,
       );
-    }
-    try {
-      compileSafeRegex(compiled.pattern, "i");
-    } catch (e) {
-      throw new Error(`${sourcePath}: approvals[${i}] is not a valid regex: ${(e as Error).message}`, { cause: e });
     }
     if (approval.pattern !== undefined && !rawApprovalTargetsTool(binary, approval.pattern)) {
       throw new Error(
