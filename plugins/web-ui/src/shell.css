@@ -1454,6 +1454,65 @@ a.chat-row-open {
   gap: 6px;
   margin-top: 9px;
 }
+.queued-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 9px;
+}
+.queued-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 6px 4px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.queued-tag {
+  flex: none;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  opacity: 0.75;
+}
+.queued-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.queued-steer {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.queued-steer:hover:not(:disabled) {
+  background: var(--secondary);
+}
+.queued-steer:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.queued-steer:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--foreground) 35%, transparent);
+  outline-offset: 2px;
+}
 .file-chip {
   display: inline-flex;
   align-items: center;
@@ -6907,6 +6966,7 @@ h3.ambient-field-label {
 }
 [data-density] .runtime-upgrade,
 [data-density] .attachment-strip,
+[data-density] .queued-strip,
 [data-density] .composer-approval-panel,
 [data-density] .composer-note,
 [data-density] .composer-error {

@@ -9,6 +9,7 @@ import {
   Brain,
   Check,
   ChevronDown,
+  CornerDownRight,
   FileText,
   Paperclip,
   ScrollText,
@@ -20,10 +21,14 @@ import {
 } from "lucide";
 import {
   api,
+  ApiError,
   fetchRuntimeConfig,
+  queueTurn,
   updateRuntimeConfig,
+  withdrawRun,
   type ApprovalDecision,
   type PendingApproval,
+  type QueuedRun,
   type RuntimeConfig,
 } from "./core-bridge";
 import { errMessage, swallow } from "../../chassis/src/errors";
@@ -39,6 +44,7 @@ import {
   getModelOptionsForHarness,
   harnessSupportsEffort,
   harnessSupportsFastMode,
+  harnessSupportsSteer,
   type EffortLevel,
   type ModelOption,
   type ModelOptionValue,
@@ -227,6 +233,24 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   const pastedTextIds = new Set<string>();
 
+  const queuedRuns = new Map<string, QueuedRun[]>();
+
+  function queuedRunsFor(threadRef: string | null): QueuedRun[] {
+    return (threadRef ? queuedRuns.get(threadRef) : undefined) ?? [];
+  }
+
+  function setQueuedRuns(threadRef: string, runs: QueuedRun[]): void {
+    if (runs.length) queuedRuns.set(threadRef, runs);
+    else queuedRuns.delete(threadRef);
+  }
+
+  function forgetQueuedRun(threadRef: string, runId: string): void {
+    setQueuedRuns(
+      threadRef,
+      queuedRunsFor(threadRef).filter((r) => r.runId !== runId),
+    );
+  }
+
   let dragDepth = 0;
   let skillsLoading = false;
   let slashActiveIndex = 0;
@@ -351,7 +375,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const attachingDisabled = inputBlocked;
     let placeholder = "Ask anything";
     if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
-    else if (agent.state.isStreaming) placeholder = "Steer the running task…";
+    else if (agent.state.isStreaming) placeholder = "Queue a message for after this turn…";
     let composerNotice: TemplateResult | typeof nothing = nothing;
     if (composerState.processingFiles) {
       composerNotice = html`<div class="composer-note">Preparing files...</div>`;
@@ -429,6 +453,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               `
             : nothing
         }
+        ${queuedStrip(agent)}
         ${
           approvalPauses.length
             ? composerApprovalPanel(approvalPauses)
@@ -663,17 +688,61 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         ${icon(ArrowUp, 17)}
       </button>`;
     }
-    const canSteer = Boolean(composerState.draft.trim());
-    const steerTitle = composerState.attachments.length
-      ? "Steer the running task (attachments stay for your next message)"
-      : "Steer the running task";
+    const canQueue = Boolean(composerState.draft.trim());
     return html`
       <button class="stop-btn" type="button" title="Stop" aria-label="Stop" @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
-      <button class="send-btn" type="submit" title=${steerTitle} aria-label=${steerTitle} ?disabled=${!canSteer}>
+      <button
+        class="send-btn"
+        type="submit"
+        title="Queue for after this turn"
+        aria-label="Queue for after this turn"
+        ?disabled=${!canQueue}
+      >
         ${icon(ArrowUp, 17)}
       </button>
+    `;
+  }
+
+  function queuedStrip(agent: Agent): TemplateResult | typeof nothing {
+    const queued = queuedRunsFor(ctx.chat.state.threadRef);
+    if (!queued.length) return nothing;
+    const steerable =
+      agent.state.isStreaming && ctx.chat.hasLiveRun() && harnessSupportsSteer(currentModelOption().harnessId);
+    return html`
+      <div class="queued-strip" role="list" aria-label="Queued messages">
+        ${queued.map(
+          (q) => html`
+            <div class="queued-chip" role="listitem">
+              <span class="queued-tag">Queued</span>
+              <span class="queued-text" title=${q.text}>${q.text}</span>
+              <button
+                type="button"
+                class="queued-steer"
+                ?disabled=${!steerable}
+                title=${
+                  steerable
+                    ? "Steer the running task with this instead of waiting"
+                    : "Nothing running can take this — it will go out as its own turn"
+                }
+                @click=${() => void steerQueued(agent, q)}
+              >
+                ${icon(CornerDownRight, 13)}<span>Steer</span>
+              </button>
+              <button
+                type="button"
+                class="chip-x"
+                title="Remove"
+                aria-label="Remove queued message"
+                @click=${() => void removeQueued(agent, q)}
+              >
+                ${icon(X, 13)}
+              </button>
+            </div>
+          `,
+        )}
+      </div>
     `;
   }
 
@@ -1115,66 +1184,87 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     agent.abort();
   }
 
-  async function sendSteer(agent: Agent): Promise<void> {
+  async function queueDraft(agent: Agent): Promise<void> {
+    const threadRef = ctx.chat.state.threadRef;
     const text = composerState.draft.trim();
-    if (!text) return;
-    if (ctx.chat.state.threadRef) bumpSessionActivity(ctx.chat.state.threadRef);
+    if (!text || !threadRef) return;
     clearActiveDraft();
     composerState.draft = "";
     composerState.error = "";
+    ctx.chat.drawActiveChat(agent);
+    clearComposerDom(agent);
+    if (!(await enqueueTurn(agent, threadRef, text))) composerState.draft = text;
+    ctx.chat.drawActiveChat(agent);
+  }
+
+  async function enqueueTurn(agent: Agent, threadRef: string, text: string): Promise<boolean> {
+    try {
+      const queued = await queueTurn(threadRef, text, agent, ctx.chat.currentTurnOptions);
+      setQueuedRuns(threadRef, [...queuedRunsFor(threadRef), queued]);
+      bumpSessionActivity(threadRef);
+      return true;
+    } catch (err) {
+      composerState.error = errMessage(err, "Could not queue the message.");
+      return false;
+    }
+  }
+
+  async function removeQueued(agent: Agent, queued: QueuedRun): Promise<void> {
+    const threadRef = ctx.chat.state.threadRef;
+    if (!threadRef) return;
+    composerState.error = "";
+    try {
+      await withdrawRun(queued.runId);
+    } catch (err) {
+      if (!(err instanceof ApiError && (err.status === 409 || err.status === 404))) {
+        composerState.error = errMessage(err, "Could not remove the queued message.");
+        return ctx.chat.drawActiveChat(agent);
+      }
+    }
+    forgetQueuedRun(threadRef, queued.runId);
+    ctx.chat.drawActiveChat(agent);
+  }
+
+  async function steerQueued(agent: Agent, queued: QueuedRun): Promise<void> {
+    const threadRef = ctx.chat.state.threadRef;
+    if (!threadRef) return;
+    if (!ctx.chat.hasLiveRun()) {
+      composerState.error = "That turn already finished — this message will run as its own turn.";
+      return ctx.chat.drawActiveChat(agent);
+    }
+    composerState.error = "";
+    try {
+      if (!(await withdrawRun(queued.runId))) return ctx.chat.drawActiveChat(agent);
+    } catch (err) {
+      const started = err instanceof ApiError && err.status === 409;
+      const gone = err instanceof ApiError && err.status === 404;
+      if (started) composerState.error = "That message already started — it's the running turn now.";
+      else if (gone) composerState.error = "That message was already removed in another tab.";
+      else composerState.error = errMessage(err, "Could not steer with that message.");
+      if (started || gone) forgetQueuedRun(threadRef, queued.runId);
+      return ctx.chat.drawActiveChat(agent);
+    }
+    forgetQueuedRun(threadRef, queued.runId);
+    bumpSessionActivity(threadRef);
     agent.state.messages.push({
       role: "user",
-      content: text,
+      content: queued.text,
       timestamp: Date.now(),
       steered: true,
     } as unknown as AgentMessage);
     ctx.chat.drawActiveChat(agent);
-    clearComposerDom(agent);
-    if (!ctx.chat.hasLiveRun()) {
-      // The turn is between run states: submitted but /api/turn hasn't returned the
-      // run id yet, or the stream is tearing down. Dropping the message here is a
-      // silent no-op the user reads as a dead composer — hold it and deliver when
-      // the run slot settles (steer the live run, or resend as an ordinary prompt).
-      steerWhenLive(agent, text, 0);
-      return;
-    }
-    await deliverSteer(agent, text);
-  }
 
-  async function deliverSteer(agent: Agent, text: string): Promise<void> {
     try {
-      const outcome = await ctx.chat.signalLiveRun("steer", text);
-      if (!outcome.ok) recoverEndedRunSteer(agent, text, outcome);
+      const outcome = await ctx.chat.signalLiveRun("steer", queued.text);
+      if (!outcome.ok) recoverEndedRunSteer(agent, queued.text, outcome);
     } catch (err) {
       composerState.error = errMessage(err, "Could not steer the running task.");
+      const last = agent.state.messages[agent.state.messages.length - 1] as
+        { role?: string; content?: unknown } | undefined;
+      if (last?.role === "user" && last.content === queued.text) agent.state.messages.pop();
+      if (!(await enqueueTurn(agent, threadRef, queued.text))) composerState.draft = queued.text;
       ctx.chat.drawActiveChat(agent);
     }
-  }
-
-  function steerWhenLive(agent: Agent, text: string, attempt: number): void {
-    if (agent !== ctx.chat.state.agent) return;
-    if (ctx.chat.hasLiveRun()) {
-      void deliverSteer(agent, text);
-      return;
-    }
-    if (!agent.state.isStreaming) {
-      // The run ended without the slot ever going live — recover exactly like a
-      // steer that raced the run's end: resend the text as an ordinary prompt.
-      recoverEndedRunSteer(agent, text, {});
-      return;
-    }
-    if (attempt < 40) {
-      window.setTimeout(() => steerWhenLive(agent, text, attempt + 1), 250);
-      return;
-    }
-    const last = agent.state.messages[agent.state.messages.length - 1] as
-      { role?: string; content?: unknown } | undefined;
-    if (last?.role === "user" && last.content === text) agent.state.messages.pop();
-    // Don't clobber anything typed while the message was held: put the held text
-    // back in front of the newer draft instead of overwriting it.
-    composerState.draft = composerState.draft.trim() ? `${text}\n\n${composerState.draft}` : text;
-    composerState.error = "Could not deliver the message — the running task never settled. It is back in the composer.";
-    ctx.chat.drawActiveChat(agent);
   }
 
   // The run ended before the steer landed (the client believed it was still live).
@@ -1229,7 +1319,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     if (composerState.pasteView) closePasteView(agent);
     if (ctx.chat.state.resolvingApprovals.size > 0) return;
     if (ctx.chat.hasUnresolvedApproval()) return;
-    if (agent.state.isStreaming) return sendSteer(agent);
+    if (agent.state.isStreaming) return queueDraft(agent);
     const text = composerState.draft.trim();
     if (!text && composerState.attachments.length === 0) return;
     if (ctx.chat.state.threadRef) {
@@ -1512,6 +1602,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   return {
     state: composerState,
     composerForm,
+    queuedRunsFor,
+    setQueuedRuns,
     resetComposer,
     focusComposerEnd,
     resizeComposer,

@@ -239,7 +239,11 @@ export interface App {
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
-  activeRunForThread(threadRef: string, viewer?: string): Promise<{ runId: string } | null>;
+  activeRunForThread(
+    threadRef: string,
+    viewer?: string,
+  ): Promise<{ runId: string; queued?: Array<{ runId: string; text: string }> } | null>;
+  withdrawRun(runId: string, viewer?: string): Promise<{ withdrawn: boolean; reason?: string }>;
   signalRun(
     runId: string,
     signal: RunSignal,

@@ -380,6 +380,7 @@ export function createChatSurface(
         if (agent !== chatState.agent) return;
         adoptActiveSessionFromList(agent);
         await refreshTranscriptFromEntries(agent);
+        void followNextQueuedRun(agent, threadRef, normalStreamFn, onWork);
         if (wasUnsaved && chatState.sessionId) void settleNewSessionTitle(agent, threadRef);
       });
     });
@@ -628,6 +629,37 @@ export function createChatSurface(
     };
   }
 
+  async function followNextQueuedRun(
+    agent: Agent,
+    threadRef: string,
+    normalStreamFn: Agent["streamFn"],
+    onWork: (work: WorkBlock) => void,
+  ): Promise<void> {
+    let active: Awaited<ReturnType<typeof activeRunForThread>>;
+    try {
+      active = await activeRunForThread(threadRef);
+    } catch {
+      return;
+    }
+    if (agent !== chatState.agent || threadRef !== chatState.threadRef || agent.state.isStreaming) return;
+    const next = ctx.composer.queuedRunsFor(threadRef).find((r) => r.runId === active.runId);
+    ctx.composer.setQueuedRuns(threadRef, active.queued);
+    if (!active.runId || !active.run) return drawActiveChat(agent);
+    const recorded = (agent.state.messages.at(-1) as { role?: string } | undefined)?.role === "user";
+    if (!recorded && !next) return drawActiveChat(agent);
+    agent.streamFn = makeRunResumeStreamFn(active.runId, active.run, onWork, runSlot);
+    try {
+      await (recorded ? agent.continue() : agent.prompt(next!.text));
+    } catch (err) {
+      if (agent === chatState.agent) ctx.composer.state.error = errMessage(err, "Could not follow the queued message.");
+    } finally {
+      if (agent === chatState.agent) {
+        agent.streamFn = normalStreamFn;
+        await refreshTranscriptFromEntries(agent);
+      }
+    }
+  }
+
   async function resumeTrackedRun(
     agent: Agent,
     threadRef: string,
@@ -641,7 +673,15 @@ export function createChatSurface(
     } catch {
       return false;
     }
-    if (!activeRun || agent !== chatState.agent || appState.currentView !== "chats" || agent.state.isStreaming)
+    if (agent === chatState.agent && threadRef === chatState.threadRef)
+      ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
+    if (
+      !activeRun.runId ||
+      !activeRun.run ||
+      agent !== chatState.agent ||
+      appState.currentView !== "chats" ||
+      agent.state.isStreaming
+    )
       return false;
     // Pull the transcript before attaching so the turn's triggering user message
     // (written by core, not by this tab) is on screen while the run streams.
@@ -2178,6 +2218,7 @@ export function createChatSurface(
     state: chatState,
     hasLiveRun: () => hasLiveRun(runSlot),
     signalLiveRun: (kind, text) => signalLiveRun(runSlot, kind, text),
+    currentTurnOptions,
     newChat,
     teardown: teardownActiveChat,
     resetChatState,

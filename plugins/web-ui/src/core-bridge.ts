@@ -344,8 +344,14 @@ export interface TurnOptions {
 }
 
 export interface ActiveRun {
+  runId: string | null;
+  run: RunPoll | null;
+  queued: QueuedRun[];
+}
+
+export interface QueuedRun {
   runId: string;
-  run: RunPoll;
+  text: string;
 }
 
 export function isContinuable(s: Pick<CoreSession, "threadRef" | "scopeId">, user: string): boolean {
@@ -575,10 +581,32 @@ export function makeCoreStreamFn(
   return fn as unknown as StreamFn;
 }
 
-export async function activeRunForThread(threadRef: string): Promise<ActiveRun | null> {
+export async function activeRunForThread(threadRef: string): Promise<ActiveRun> {
   const q = new URLSearchParams({ threadRef });
-  const r = await api<{ runId?: string | null; run?: RunPoll | null }>(`/api/runs/active?${q.toString()}`);
-  return r.runId && r.run ? { runId: r.runId, run: r.run } : null;
+  const r = await api<{ runId?: string | null; run?: RunPoll | null; queued?: QueuedRun[] }>(
+    `/api/runs/active?${q.toString()}`,
+  );
+  const live = r.runId && r.run ? { runId: r.runId, run: r.run } : { runId: null, run: null };
+  return { ...live, queued: r.queued ?? [] };
+}
+
+export async function queueTurn(
+  threadRef: string,
+  text: string,
+  agent: Agent,
+  getTurnOptions?: () => TurnOptions,
+): Promise<QueuedRun> {
+  const submit = await api<{ runId?: string }>("/api/turn", {
+    method: "POST",
+    body: JSON.stringify(turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions)),
+  });
+  if (!submit.runId) throw new Error("Could not queue the message.");
+  return { runId: submit.runId, text };
+}
+
+export async function withdrawRun(runId: string): Promise<boolean> {
+  const r = await api<{ withdrawn?: boolean }>(runPath(runId, "/withdraw"), { method: "POST" });
+  return r.withdrawn === true;
 }
 
 export function makeRunResumeStreamFn(
@@ -634,6 +662,34 @@ export function makeOpenerStreamFn(
   return fn as unknown as StreamFn;
 }
 
+function turnRequestBody(
+  threadRef: string,
+  text: string,
+  model: Model<Api>,
+  agent: Agent,
+  getTurnOptions?: () => TurnOptions,
+  attachments: CoreAttachment[] = [],
+): Record<string, unknown> {
+  const turnOptions = getTurnOptions?.() ?? {};
+  const thinkingLevel =
+    !turnOptions.harness || harnessSupportsEffort(turnOptions.harness)
+      ? (turnOptions.effortLevel ?? agent.state.thinkingLevel ?? defaultEffortForModel(model))
+      : undefined;
+  const timezone = browserTimezone();
+  return {
+    text,
+    threadRef,
+    ...(turnOptions.harness ? { harness: turnOptions.harness } : {}),
+    model: model.id,
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(typeof turnOptions.fastMode === "boolean" ? { fastMode: turnOptions.fastMode } : {}),
+    ...(timezone ? { timezone } : {}),
+    ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
+    ...(turnOptions.channelName ? { channelName: turnOptions.channelName } : {}),
+    ...(attachments.length ? { attachments } : {}),
+  };
+}
+
 async function drive(
   stream: AssistantMessageEventStream,
   model: Model<Api>,
@@ -650,12 +706,6 @@ async function drive(
   const work: WorkBlock = { status: "thinking", activity: [] };
   (partial as AssistantWork).work = work;
   const notify = (): void => onWork?.(work);
-  const turnOptions = getTurnOptions?.() ?? {};
-  const thinkingLevel =
-    !turnOptions.harness || harnessSupportsEffort(turnOptions.harness)
-      ? (turnOptions.effortLevel ?? agent.state.thinkingLevel ?? defaultEffortForModel(model))
-      : undefined;
-  const timezone = browserTimezone();
   try {
     notify();
     stream.push({ type: "start", partial });
@@ -668,16 +718,7 @@ async function drive(
     const submit = await api<{ status?: string; runId?: string; reply?: string }>("/api/turn", {
       method: "POST",
       body: JSON.stringify({
-        text,
-        threadRef,
-        ...(turnOptions.harness ? { harness: turnOptions.harness } : {}),
-        model: model.id,
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(typeof turnOptions.fastMode === "boolean" ? { fastMode: turnOptions.fastMode } : {}),
-        ...(timezone ? { timezone } : {}),
-        ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
-        ...(turnOptions.channelName ? { channelName: turnOptions.channelName } : {}),
-        ...(attachments.length ? { attachments } : {}),
+        ...turnRequestBody(threadRef, text, model, agent, getTurnOptions, attachments),
         ...(approval ? { approval } : {}),
         ...(opener ? { proactiveOpener: true } : {}),
       }),

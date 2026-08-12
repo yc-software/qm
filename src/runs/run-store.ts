@@ -72,6 +72,10 @@ export interface RunStore {
 
   activeForThread(sessionId: string): Promise<Run | null>;
 
+  inFlightForThread(sessionId: string): Promise<Run[]>;
+
+  withdraw(runId: string): Promise<boolean>;
+
   activeSessionIds(): Promise<string[]>;
 
   list(opts?: { limit?: number }): Promise<Run[]>;

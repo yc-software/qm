@@ -36,6 +36,7 @@ export function createTurnMethods(
   | "pendingApprovalForThread"
   | "getRun"
   | "activeRunForThread"
+  | "withdrawRun"
   | "signalRun"
   | "replayOrphanedRunSignals"
 > {
@@ -486,8 +487,22 @@ export function createTurnMethods(
     },
 
     async activeRunForThread(threadRef, viewer) {
-      const run = await deps.runs.activeForThread(threadRef);
-      return run && (!viewer || (await viewerMayUseRun(run, viewer))) ? { runId: run.id } : null;
+      const inFlight = await deps.runs.inFlightForThread(threadRef);
+      const visible: typeof inFlight = [];
+      for (const run of inFlight) if (!viewer || (await viewerMayUseRun(run, viewer))) visible.push(run);
+      const live = visible[0];
+      if (!live) return null;
+      const queued = visible
+        .slice(1)
+        .map((run) => ({ runId: run.id, text: run.request.displayText ?? run.request.text ?? "" }));
+      return { runId: live.id, ...(queued.length ? { queued } : {}) };
+    },
+
+    async withdrawRun(runId, viewer) {
+      const run = await deps.runs.get(runId);
+      if (!run) return { withdrawn: false, reason: "not_found" };
+      if (viewer && !(await viewerMayUseRun(run, viewer))) return { withdrawn: false, reason: "not_found" };
+      return (await deps.runs.withdraw(runId)) ? { withdrawn: true } : { withdrawn: false, reason: "started" };
     },
 
     async signalRun(runId, signal, viewer) {

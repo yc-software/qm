@@ -212,6 +212,10 @@ export function harnessSupportsFastMode(harnessId: string): boolean {
   return harnessId === "pi" || harnessId === "claude";
 }
 
+export function harnessSupportsSteer(harnessId: string): boolean {
+  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex" || harnessId === "opencode";
+}
+
 export function defaultEffortForModel(model: Model<Api>): EffortLevel {
   const provider = String(model.provider ?? model.api ?? "").toLowerCase();
   return provider.includes("anthropic") ? "low" : "auto";

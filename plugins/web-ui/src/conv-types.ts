@@ -2,7 +2,14 @@ import type { Agent } from "@earendil-works/pi-agent-core";
 import type { TemplateResult } from "lit";
 import type { DensityTier } from "./density";
 import type { Attachment } from "@earendil-works/pi-web-ui";
-import type { ApprovalDecision, CoreSession, PendingApproval, entriesToMessages } from "./core-bridge";
+import type {
+  ApprovalDecision,
+  CoreSession,
+  PendingApproval,
+  QueuedRun,
+  TurnOptions,
+  entriesToMessages,
+} from "./core-bridge";
 import type { EffortLevel, ModelOption } from "./model-options";
 import type { ComposerMenu } from "./composer";
 
@@ -56,6 +63,7 @@ export interface ChatSurface {
   state: ChatState;
   hasLiveRun(): boolean;
   signalLiveRun(kind: "abort" | "steer", text?: string): Promise<import("./core-bridge").SignalOutcome>;
+  currentTurnOptions(): TurnOptions;
   newChat(context?: { scopeId: string; name: string | null }): string;
   teardown(): void;
   resetChatState(): void;
@@ -107,6 +115,8 @@ interface ComposerState {
 export interface ComposerSurface {
   state: ComposerState;
   composerForm(agent: Agent): TemplateResult;
+  queuedRunsFor(threadRef: string | null): QueuedRun[];
+  setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;
   focusComposerEnd(): void;
   resizeComposer(): void;
