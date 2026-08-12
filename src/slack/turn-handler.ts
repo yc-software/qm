@@ -437,6 +437,7 @@ export function createTurnHandler(deps: {
       void nativeAgent.begin();
     }
     const streamingReply = createStreamingReplyFilter();
+    let streamedNativeText = false;
 
     const turn: Omit<CoreTurnBody, "approval"> = {
       actor,
@@ -492,7 +493,7 @@ export function createTurnHandler(deps: {
             ? {
                 onDelta: async (delta: string) => {
                   const visible = streamingReply.push(delta);
-                  if (visible) await nativeAgent?.onDelta(visible);
+                  if (visible && (await nativeAgent?.onDelta(visible))) streamedNativeText = true;
                 },
                 onFirstBlock: (blockText: string) => {
                   if (!nativeAgent?.ownsSurface()) ack.onFirstBlock(cleanAgentReplyForSlack(blockText).text);
@@ -564,7 +565,10 @@ export function createTurnHandler(deps: {
       const tDeliverStart = performance.now();
       let finalizedTaskList = false;
       const finalStreamDelta = streamingReply.flush();
-      if (finalStreamDelta) await nativeAgent?.onDelta(finalStreamDelta);
+      if (finalStreamDelta && (await nativeAgent?.onDelta(finalStreamDelta))) streamedNativeText = true;
+      if (postText && !streamedNativeText && nativeAgent?.ownsSurface()) {
+        await nativeAgent.onDelta(postText);
+      }
       const finalizedNative = (await nativeAgent?.finalize()) ?? false;
       if (result.attachments?.length) {
         let uploadError: unknown;

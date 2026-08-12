@@ -465,6 +465,32 @@ test("a queued DM uses Slack native status, reply streaming, and task updates wi
   }
 });
 
+test("a task-only native stream appends the terminal reply before stopping", async () => {
+  const f = await fixture();
+  try {
+    f.core.queuedRunId = "R-task-only";
+    f.core.streamTasks = [{ id: "lookup", title: "Inspect deployment", status: "in_progress" }];
+    f.core.result = { status: "ok", reply: "The deployment is healthy." };
+
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "check it", ts: "100.10" });
+
+    assert.deepEqual(f.client.streamsStarted[0]?.chunks, [
+      { type: "task_update", id: "lookup", title: "Inspect deployment", status: "in_progress" },
+    ]);
+    assert.deepEqual(f.client.streamsAppended, [
+      {
+        channel: "D1",
+        ts: "stream-1",
+        chunks: [{ type: "markdown_text", text: "The deployment is healthy." }],
+      },
+    ]);
+    assert.deepEqual(f.client.streamsStopped, [{ channel: "D1", ts: "stream-1" }]);
+    assert.equal(f.client.posts.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a human's DM sets the conversation header to the serving model + web surface", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
