@@ -221,6 +221,34 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, scopes, environments });
 }
 
+interface ScopeEnvironmentMetadata {
+  environment?: { id: string; name: string; ownerActorId: string | null };
+  environmentAttachment?: { environmentId: string; environmentName: string | null };
+}
+
+async function scopeEnvironmentMetadata(deps: ApiCtx["deps"], targetScope: string): Promise<ScopeEnvironmentMetadata> {
+  const store = deps.environments;
+  if (!store) return {};
+
+  const [environment, attachment] = await Promise.all([store.get(targetScope), store.getAttachment(targetScope)]);
+  const metadata: ScopeEnvironmentMetadata = {};
+  if (environment?.name) {
+    metadata.environment = {
+      id: environment.id,
+      name: environment.name,
+      ownerActorId: environment.ownerActorId,
+    };
+  }
+  if (attachment) {
+    const attachedEnvironment = await store.get(attachment.environmentId);
+    metadata.environmentAttachment = {
+      environmentId: attachment.environmentId,
+      environmentName: attachedEnvironment?.name ?? null,
+    };
+  }
+  return metadata;
+}
+
 export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
@@ -230,9 +258,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   await deps.config.refreshScope(targetScope);
   audit(deps, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
-  const environment = await deps.environments?.get(targetScope);
-  const attachment = await deps.environments?.getAttachment(targetScope);
-  const attachedEnvironment = attachment ? await deps.environments?.get(attachment.environmentId) : null;
+  const environmentMetadata = await scopeEnvironmentMetadata(deps, targetScope);
   const serviceCredentials = await Promise.all(
     (deps.serviceCreds ? await deps.serviceCreds.listServiceCredentials(targetScope) : []).map(async (c) => {
       const usage = (await deps.credentialUsage?.list({ slug: c.slug, limit: 5000 })) ?? [];
@@ -292,17 +318,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   };
   return sendJson(res, 200, {
     scopeId: targetScope,
-    ...(environment?.name
-      ? { environment: { id: environment.id, name: environment.name, ownerActorId: environment.ownerActorId } }
-      : {}),
-    ...(attachment
-      ? {
-          environmentAttachment: {
-            environmentId: attachment.environmentId,
-            environmentName: attachedEnvironment?.name ?? null,
-          },
-        }
-      : {}),
+    ...environmentMetadata,
     ...values,
     soulVersion: deps.config.soulVersion(targetScope),
     soulHistory: deps.config.soulHistory(targetScope),
