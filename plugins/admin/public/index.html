@@ -2905,6 +2905,30 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .environment-notice {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        margin: 0 0 18px;
+        padding: 14px 16px;
+        border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--border));
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+      }
+      .environment-notice strong,
+      .environment-notice p {
+        display: block;
+        margin: 0;
+      }
+      .environment-notice p {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .environment-notice button {
+        flex: none;
+      }
       .governance-overview {
         margin: 0 0 22px;
         padding: 18px 20px;
@@ -3987,6 +4011,13 @@
                 <span>Scope</span><strong id="governance-scope-label">Organization</strong>
               </div>
             </div>
+            <aside class="environment-notice hidden" id="environment-notice" role="status">
+              <div>
+                <strong id="environment-notice-title"></strong>
+                <p id="environment-notice-detail"></p>
+              </div>
+              <button type="button" id="environment-notice-open">Open environment</button>
+            </aside>
             <section class="governance-overview" id="governance-overview" aria-labelledby="governance-overview-title">
               <div class="governance-overview-head">
                 <h2 id="governance-overview-title">Effective state</h2>
@@ -5717,6 +5748,7 @@
       });
 
       let scopeDir = null;
+      let environmentDir = [];
       let scopeDirNote = "Loading scopes…";
       async function loadScopeDirectory() {
         const r = await api("GET", "/api/scopes");
@@ -5728,6 +5760,7 @@
         }
         viewLoadedAt.history = Date.now();
         scopeDir = r.data.scopes || [];
+        environmentDir = r.data.environments || [];
 
         if (SCOPED.has(view) && !urlToState().session) {
           const memoryEditor = view === "memory" && !(orgWideView() && urlToState().mem !== "edit");
@@ -6244,6 +6277,19 @@
         );
       }
       window.addEventListener("scroll", syncGovernanceSectionNav, { passive: true });
+      function renderEnvironmentNotice(data) {
+        const notice = $("environment-notice");
+        const attachment = data?.environmentAttachment;
+        notice.classList.toggle("hidden", !attachment);
+        if (!attachment) return;
+        const name = attachment.environmentName || shortName(attachment.environmentId);
+        $("environment-notice-title").textContent = "Uses named environment " + name;
+        $("environment-notice-detail").textContent =
+          "Computer files and working memory resolve to this environment. Governance and conversation history remain scoped here.";
+        $("environment-notice-open").textContent = "Open " + name;
+        $("environment-notice-open").onclick = () =>
+          go({ view: "governance", scope: attachment.environmentId, session: null, page: 1 });
+      }
       let governanceReq = 0;
       async function loadScope() {
         const requestedScope = scope;
@@ -6259,6 +6305,7 @@
           );
           return;
         }
+        renderEnvironmentNotice(r.data);
         renderGovernanceOverview(r.data);
         syncGovernanceSectionNav();
         loadedCommandPolicyPresent = r.data.commandPolicy != null;
@@ -11451,6 +11498,21 @@
           actions: [sortControl],
         });
         const activityTime = (s) => (scopeSort === "human" ? s.lastConversationActivity || 0 : s.lastActivity || 0);
+        if (environmentDir.length) {
+          const environments = denseList(
+            environmentDir,
+            (environment) => ({
+              name: environment.name || shortName(environment.id),
+              preview: plural(environment.attachedScopes?.length || 0, "attached scope"),
+              href: stateToUrl({ view: "history", scope: environment.id, historyKind }),
+            }),
+            (environment) => selectScope(environment.id),
+            "No named environments.",
+          );
+          root.appendChild(
+            dataCard("Named environments", "Named computers and working memory that scopes can share.", environments),
+          );
+        }
         const t = denseList(
           activeRows,
           (s) => {

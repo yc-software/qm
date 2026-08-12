@@ -132,10 +132,25 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const crons = await app.listCrons();
   const deployments = await app.listDeployments();
   const skills = await app.listSkills();
+  const environmentRows = await app.listEnvironments();
+  const environments = environmentRows.map(({ environment, attachments }) => ({
+    id: environment.id,
+    name: environment.name,
+    ownerActorId: environment.ownerActorId,
+    attachedScopes: attachments.map((attachment) => attachment.scopeId).sort(),
+  }));
+  const environmentById = new Map(environments.map((environment) => [environment.id, environment]));
+  const attachmentByScope = new Map(
+    environments.flatMap((environment) =>
+      environment.attachedScopes.map((attachedScope) => [attachedScope, environment] as const),
+    ),
+  );
   const owners = [
     ...crons.map((c) => c.ownerScopeId),
     ...deployments.map((d) => d.ownerScopeId),
     ...skills.map((s) => s.scopeId),
+    ...environments.map((environment) => environment.id),
+    ...environments.flatMap((environment) => environment.attachedScopes),
   ];
   const labels = await discoverScopes(app, deps, owners);
   const countBy = (ids: string[]): Map<string, number> => {
@@ -171,18 +186,31 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const cronN = countBy(crons.map((c) => c.ownerScopeId));
   const deployN = countBy(deployments.map((d) => d.ownerScopeId));
   const skillN = countBy(skills.map((s) => s.scopeId));
-  const scopes = [...labels].map(([id, label]) => ({
-    scopeId: id,
-    ...(label ? { label } : {}),
-    sessions: sessionN.get(id) ?? 0,
-    backgroundSessions: backgroundN.get(id) ?? 0,
-    lastActivity: lastActivityBy.get(id) ?? 0,
-    lastConversationActivity: lastConversationBy.get(id) ?? 0,
-    lastMessage: lastMessageBy.get(id) ?? "",
-    crons: cronN.get(id) ?? 0,
-    deployments: deployN.get(id) ?? 0,
-    skills: skillN.get(id) ?? 0,
-  }));
+  const scopes = [...labels].map(([id, label]) => {
+    const environment = environmentById.get(id);
+    const attachment = attachmentByScope.get(id);
+    return {
+      scopeId: id,
+      ...(label ? { label } : {}),
+      ...(environment?.name ? { environmentName: environment.name } : {}),
+      ...(attachment
+        ? {
+            environmentAttachment: {
+              environmentId: attachment.id,
+              environmentName: attachment.name,
+            },
+          }
+        : {}),
+      sessions: sessionN.get(id) ?? 0,
+      backgroundSessions: backgroundN.get(id) ?? 0,
+      lastActivity: lastActivityBy.get(id) ?? 0,
+      lastConversationActivity: lastConversationBy.get(id) ?? 0,
+      lastMessage: lastMessageBy.get(id) ?? "",
+      crons: cronN.get(id) ?? 0,
+      deployments: deployN.get(id) ?? 0,
+      skills: skillN.get(id) ?? 0,
+    };
+  });
   scopes.sort(
     (a, b) =>
       b.lastActivity - a.lastActivity ||
@@ -190,7 +218,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
       b.backgroundSessions - a.backgroundSessions ||
       a.scopeId.localeCompare(b.scopeId),
   );
-  return sendJson(res, 200, { scopeId: scope, scopes });
+  return sendJson(res, 200, { scopeId: scope, scopes, environments });
 }
 
 export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
@@ -202,6 +230,9 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   await deps.config.refreshScope(targetScope);
   audit(deps, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
+  const environment = await deps.environments?.get(targetScope);
+  const attachment = await deps.environments?.getAttachment(targetScope);
+  const attachedEnvironment = attachment ? await deps.environments?.get(attachment.environmentId) : null;
   const serviceCredentials = await Promise.all(
     (deps.serviceCreds ? await deps.serviceCreds.listServiceCredentials(targetScope) : []).map(async (c) => {
       const usage = (await deps.credentialUsage?.list({ slug: c.slug, limit: 5000 })) ?? [];
@@ -261,6 +292,17 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   };
   return sendJson(res, 200, {
     scopeId: targetScope,
+    ...(environment?.name
+      ? { environment: { id: environment.id, name: environment.name, ownerActorId: environment.ownerActorId } }
+      : {}),
+    ...(attachment
+      ? {
+          environmentAttachment: {
+            environmentId: attachment.environmentId,
+            environmentName: attachedEnvironment?.name ?? null,
+          },
+        }
+      : {}),
     ...values,
     soulVersion: deps.config.soulVersion(targetScope),
     soulHistory: deps.config.soulHistory(targetScope),

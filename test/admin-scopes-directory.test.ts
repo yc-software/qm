@@ -16,6 +16,8 @@ function start() {
     admin: built.admin,
     auditLog: built.auditLog,
     sessions: built.sessions,
+    config: built.config,
+    environments: built.environments,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -114,6 +116,37 @@ test("scopes without a session label fall back to the org directory (people's na
       "#quiet",
       "artifact-only owner scopes get the directory fallback too",
     );
+  } finally {
+    await s.close();
+  }
+});
+
+test("the admin scope directory exposes named environments and attached scopes", async () => {
+  const s = start();
+  try {
+    await s.built.app.upsertChannels([
+      { channelId: "A", name: "source" },
+      { channelId: "B", name: "attached" },
+    ]);
+    await s.built.app.createEnvironment({ scopeId: "channel:A", name: "A-permanent", actorId: "U1" });
+    await s.built.app.attachScope({ scopeId: "channel:B", environmentId: "channel:A", actorId: "U1" });
+
+    const directory = await json(await fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN }));
+    const byId = new Map(directory.scopes.map((row: any) => [row.scopeId, row]));
+    assert.deepEqual(directory.environments, [
+      { id: "channel:A", name: "A-permanent", ownerActorId: "U1", attachedScopes: ["channel:B"] },
+    ]);
+    assert.equal((byId.get("channel:A") as any).environmentName, "A-permanent");
+    assert.deepEqual((byId.get("channel:B") as any).environmentAttachment, {
+      environmentId: "channel:A",
+      environmentName: "A-permanent",
+    });
+
+    const attached = await json(await fetch(`${s.base}/v1/admin/scopes/channel:B`, { headers: ALICE_ADMIN }));
+    assert.deepEqual(attached.environmentAttachment, {
+      environmentId: "channel:A",
+      environmentName: "A-permanent",
+    });
   } finally {
     await s.close();
   }
