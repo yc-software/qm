@@ -9,4 +9,4 @@ This PR includes the adapter under [`integrations/inwise`](../integrations/inwis
 - an outbound laptop connector and encrypted self-hosted relay
 - a reproducible QM deployment fixture and [passing bridge test](../integrations/inwise/e2e/TEST_REPORT.md)
 
-Meeting data remains in the user's local Inwise installation. The initial adapter is for personal conversations and does not expose Inwise's write tools.
+Meeting data remains in the user's local Inwise installation. Inwise provides conversational memory and action-ready context management.
