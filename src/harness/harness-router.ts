@@ -3,6 +3,7 @@ import { defaultModelForHarness, isHarnessId, modelSupportedByHarness, type Harn
 import type { ScopeId } from "../types.ts";
 import type { Harness, HarnessTurnInput } from "./harness.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
+import type { ScopeModelPolicy } from "../model/scope-model-policy.ts";
 
 export interface RuntimeChoice {
   harnessId: HarnessId;
@@ -15,6 +16,7 @@ export function resolveRuntimeChoice(
   scope: ScopeId,
   fallback: RuntimeChoice,
   requested?: Partial<RuntimeChoice>,
+  modelPolicy?: ScopeModelPolicy,
 ): RuntimeChoice {
   const approved = config.getApprovedHarnesses() ?? [fallback.harnessId];
   const orgStored = config.getRuntimeSelection(orgScopeId);
@@ -41,12 +43,23 @@ export function resolveRuntimeChoice(
   } else if (scopedLegacy) {
     inherited = { harnessId: fallback.harnessId, modelId: scopedLegacy };
   }
-  const choice =
+  let choice =
     requested?.harnessId || requested?.modelId
       ? { harnessId: requested.harnessId ?? inherited.harnessId, modelId: requested.modelId ?? inherited.modelId }
       : inherited;
+  if (modelPolicy) {
+    const policy = modelPolicy.resolve(scope);
+    if (requested?.modelId && !policy.models.includes(requested.modelId))
+      throw new NonRetryableTurnError(`model ${requested.modelId} is not enabled for ${scope}`);
+    const modelId = requested?.modelId ?? policy.defaultModel;
+    let harnessId = requested?.harnessId ?? inherited.harnessId;
+    if (!requested?.harnessId && !requested?.modelId && !modelSupportedByHarness(modelId, harnessId))
+      harnessId =
+        approved.find((id): id is HarnessId => isHarnessId(id) && modelSupportedByHarness(modelId, id)) ?? harnessId;
+    choice = { harnessId, modelId };
+  }
   if (!approved.includes(choice.harnessId) || !modelSupportedByHarness(choice.modelId, choice.harnessId)) {
-    if (requested?.harnessId || requested?.modelId)
+    if (modelPolicy || requested?.harnessId || requested?.modelId)
       throw new NonRetryableTurnError(`runtime ${choice.harnessId}/${choice.modelId} is not approved`);
     return org;
   }
@@ -59,6 +72,7 @@ export async function resolveRuntimeChoiceDurable(
   scope: ScopeId,
   fallback: RuntimeChoice,
   requested?: Partial<RuntimeChoice>,
+  modelPolicy?: ScopeModelPolicy,
 ): Promise<RuntimeChoice> {
   const approved = (await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId];
   const [orgStored, scopedStored, orgLegacy, scopedLegacy] = await Promise.all([
@@ -78,7 +92,7 @@ export async function resolveRuntimeChoiceDurable(
       return id === scope ? scopedLegacy : null;
     },
   };
-  return resolveRuntimeChoice(view, orgScopeId, scope, fallback, requested);
+  return resolveRuntimeChoice(view, orgScopeId, scope, fallback, requested, modelPolicy);
 }
 
 export function createHarnessRouter(

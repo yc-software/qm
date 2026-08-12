@@ -95,6 +95,7 @@ export interface Config {
   skillsSeedDir: string;
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
+  modelScopeAllowlistsPath?: string;
   layerEnv?: Readonly<Record<string, string | undefined>>;
   snapshotStore: "local" | "s3";
   transferStore: "local" | "s3";
@@ -798,6 +799,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     skillsSeedDir: resolve(env.SKILLS_SEED_DIR ?? "./skills-seed"),
     pluginSkillDirs: csvPaths(env.PLUGIN_SKILLS_DIRS) ?? defaultPluginSkillDirs(),
     ...(env.DEPLOYMENT_LAYER ? { deploymentLayerDir: resolve(env.DEPLOYMENT_LAYER) } : {}),
+    ...(env.MODEL_SCOPE_ALLOWLISTS ? { modelScopeAllowlistsPath: resolve(env.MODEL_SCOPE_ALLOWLISTS) } : {}),
     layerEnv: { ...env },
     memoryRecall: parseMemoryRecallMode(env.MEMORY_RECALL),
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),

@@ -486,6 +486,7 @@ export interface RuntimeConfig {
   upgradeAvailable: boolean;
   fastModeModelIds?: string[];
   interactiveFastMode?: boolean;
+  modelPolicyManaged?: boolean;
 }
 
 export async function fetchRuntimeConfig(scopeId?: string | null): Promise<RuntimeConfig | null> {
@@ -496,6 +497,22 @@ export async function fetchRuntimeConfig(scopeId?: string | null): Promise<Runti
     swallow("web-ui: fetch runtime config", e);
     return null;
   }
+}
+
+export interface ScopeSoul {
+  scopeId: string;
+  soul: string | null;
+  soulVersion: number;
+  orgSoul: string | null;
+  effectiveSoul: string;
+}
+
+export async function fetchScopeSoul(scopeId: string): Promise<ScopeSoul> {
+  return api<ScopeSoul>(`/api/soul?scopeId=${encodeURIComponent(scopeId)}`);
+}
+
+export async function updateScopeSoul(scopeId: string, content: string): Promise<void> {
+  await api("/api/soul", { method: "PUT", body: JSON.stringify({ scopeId, content }) });
 }
 
 export async function updateRuntimeConfig(

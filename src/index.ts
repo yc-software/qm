@@ -33,6 +33,7 @@ const server = createServer(built.app, {
   modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
   providerKeys: providerKeysPresent(config),
   modelCredentials: built.modelCredentials,
+  ...(built.modelScopePolicy ? { modelScopePolicy: built.modelScopePolicy } : {}),
   ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
   harnessId: config.harness,
   connectorTokens: built.connectorTokens,

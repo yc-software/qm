@@ -133,17 +133,38 @@ export function createTurnMethods(
         let configuredRuntime;
         let runtime;
         try {
-          orgRuntime = await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
+          orgRuntime = await resolveRuntimeChoiceDurable(
+            deps.config,
+            org,
+            org,
+            runtimeFallback,
+            undefined,
+            deps.modelScopePolicy,
+          );
           configuredRuntime =
             targetScope === org
               ? orgRuntime
-              : await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback);
+              : await resolveRuntimeChoiceDurable(
+                  deps.config,
+                  org,
+                  targetScope,
+                  runtimeFallback,
+                  undefined,
+                  deps.modelScopePolicy,
+                );
           runtime =
             req.harness || req.model
-              ? await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback, {
-                  ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
-                  ...(req.model ? { modelId: req.model } : {}),
-                })
+              ? await resolveRuntimeChoiceDurable(
+                  deps.config,
+                  org,
+                  targetScope,
+                  runtimeFallback,
+                  {
+                    ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
+                    ...(req.model ? { modelId: req.model } : {}),
+                  },
+                  deps.modelScopePolicy,
+                )
               : configuredRuntime;
         } catch (error) {
           return { status: "refused", reason: errMessage(error) };
@@ -184,9 +205,12 @@ export function createTurnMethods(
             ]),
           ];
         }
+        if (deps.modelScopePolicy) enabledWebuiModels = deps.modelScopePolicy.resolve(targetScope).models;
         const invalidModelOption =
           validateWebTurnModelOptions(req, enabledWebuiModels, providers) ??
-          webTurnRuntimeModelRefusal(runtime.modelId, orgRuntime.modelId, configuredWebuiModels);
+          (deps.modelScopePolicy
+            ? null
+            : webTurnRuntimeModelRefusal(runtime.modelId, orgRuntime.modelId, configuredWebuiModels));
         if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
       }
 

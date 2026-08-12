@@ -1,5 +1,6 @@
 import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
+import type { ScopeModelPolicy } from "../model/scope-model-policy.ts";
 import type { CustomProviderStore } from "../model/custom-provider-store.ts";
 import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
@@ -81,6 +82,7 @@ export interface ServerDeps {
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   modelCredentials?: ModelCredentialStore;
+  modelScopePolicy?: ScopeModelPolicy;
   modelCredentialFetch?: typeof fetch;
   customProviders?: CustomProviderStore;
   refreshCustomProviders?: () => Promise<void>;

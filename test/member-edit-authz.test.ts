@@ -267,6 +267,39 @@ test("SOUL: a durable write failure rejects and restores the live cache", async 
   assert.equal(config.soulVersion(privScope), 1);
 });
 
+test("SOUL: project-page writes require an org admin", async () => {
+  const deps = makeDeps() as unknown as AppDeps;
+  deps.admin = {
+    adminStatusOf: async (actor) => ({
+      isAdmin: actor.id === OWNER,
+      ...(actor.id === OWNER ? { role: "org_admin" as const } : {}),
+    }),
+  } as AppDeps["admin"];
+  const app = createApp(deps);
+  const projectScope = scopeId("group", "web-project-one");
+  const request = async (actorId: string): Promise<number | undefined> => {
+    const out: { status?: number } = {};
+    await postSoul({
+      res: {
+        writeHead(status: number) {
+          out.status = status;
+        },
+        end() {},
+      },
+      app,
+      deps,
+      body: { scopeId: projectScope, content: "project rules", actorId },
+      capability: null,
+      actor: { p: actorId, o: ORG },
+    } as unknown as ApiCtx);
+    return out.status;
+  };
+
+  assert.equal(await request(GROUP_MEMBER), 403);
+  assert.equal(await request(OWNER), 200);
+  assert.equal(deps.config.getSoul(projectScope), "project rules");
+});
+
 test("SOUL: the HTTP route reports durable storage failures as 500", async () => {
   const control = { fail: true };
   const config = createMemoryConfigStore(ORG, { souls: failingPutMap<PersistedSoul>(control) });

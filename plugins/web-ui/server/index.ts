@@ -935,6 +935,30 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return relay(res, r);
     }
 
+    if (method === "GET" && path === "/api/soul") {
+      const scopeId = url.searchParams.get("scopeId");
+      if (!scopeId) return json(res, 400, { error: "bad_request", message: "scopeId required" });
+      const r = await coreFetch("GET", `/v1/soul?scopeId=${encodeURIComponent(scopeId)}`);
+      return relay(res, r);
+    }
+
+    if (method === "PUT" && path === "/api/soul") {
+      let body: Record<string, unknown>;
+      try {
+        body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
+      } catch {
+        return json(res, 400, { error: "bad_request" });
+      }
+      if (typeof body.scopeId !== "string" || typeof body.content !== "string")
+        return json(res, 400, { error: "bad_request", message: "scopeId and content required" });
+      const r = await coreFetch(
+        "POST",
+        "/v1/soul",
+        JSON.stringify({ scopeId: body.scopeId, content: body.content, actorId: user }),
+      );
+      return relay(res, r);
+    }
+
     if (method === "GET" && path === "/api/scope-resources") {
       const scope = url.searchParams.get("scope");
       if (!scope) return json(res, 400, { error: "bad_request", message: "scope required" });

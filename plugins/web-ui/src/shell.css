@@ -6073,6 +6073,50 @@ a.chat-row-open {
 .context-model-status.error {
   color: var(--destructive, #c0392b);
 }
+.context-soul {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.context-soul-input {
+  width: 100%;
+  min-height: 154px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.context-soul-input:focus-visible {
+  border-color: var(--foreground);
+  outline: 2px solid color-mix(in srgb, var(--foreground) 65%, transparent);
+  outline-offset: 2px;
+}
+.context-soul-hint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.context-soul-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.context-soul-status {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.context-soul-status.error {
+  color: var(--destructive, #c0392b);
+}
 .ambient-policy {
   display: flex;
   flex-direction: column;

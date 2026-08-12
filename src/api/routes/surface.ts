@@ -21,6 +21,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-to
 import { pipeToResponse, sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { isProjectGroupRef } from "../../projects/project-store.ts";
 import {
   ARTIFACT_TYPES,
   isArtifactType,
@@ -1008,10 +1009,16 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const catalog = managedKeys?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
-  const allowed = selectableCatalogForHarness(catalog, harnessId).map((model) => model.id);
-  const configuredPicker = webuiModels?.filter((id) => modelSupportedByHarness(id, harnessId)) ?? [];
-  const resolvedBase = modelSupportedByHarness(baseModel ?? undefined, harnessId)
-    ? baseModel!
+  const policy = deps.modelScopePolicy?.resolve(orgScope(deps));
+  const allowed = policy
+    ? policy.models.filter((id) => modelSupportedByHarness(id, harnessId))
+    : selectableCatalogForHarness(catalog, harnessId).map((model) => model.id);
+  const configuredPicker =
+    webuiModels?.filter((id) => modelSupportedByHarness(id, harnessId) && (!policy || policy.models.includes(id))) ??
+    [];
+  const configuredBase = policy?.defaultModel ?? baseModel;
+  const resolvedBase = modelSupportedByHarness(configuredBase ?? undefined, harnessId)
+    ? configuredBase!
     : defaultModelForHarness(harnessId, deps.baseModelDefault);
   const dflt = deps.brandingDefault;
   const pick = (a: unknown, b: unknown): string | undefined => {
@@ -1113,6 +1120,13 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
   ) {
     orgDefault = { harnessId: fallback.harnessId, modelId: orgLegacyModel, revision: 0 };
   }
+  if (ctx.deps.modelScopePolicy) {
+    const modelId = ctx.deps.modelScopePolicy.resolve(org).defaultModel;
+    const harnessId = modelSupportedByHarness(modelId, orgDefault.harnessId)
+      ? orgDefault.harnessId
+      : (approvedHarnesses.find((id) => modelSupportedByHarness(modelId, id)) ?? orgDefault.harnessId);
+    orgDefault = { harnessId, modelId, revision: orgDefault.revision };
+  }
   const stored = scope === org ? orgStored : await config.getRuntimeSelectionDurable(scope);
   const legacyModel = scope === org ? null : await config.getBaseModelOwnDurable(scope);
   let scopeOverride: {
@@ -1142,14 +1156,26 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
   ) {
     scopeOverride = { harnessId: fallback.harnessId, modelId: legacyModel, orgRevision: 0 };
   }
+  if (ctx.deps.modelScopePolicy && scope !== org) {
+    const modelId = ctx.deps.modelScopePolicy.resolve(scope).defaultModel;
+    const harnessId = modelSupportedByHarness(modelId, scopeOverride?.harnessId ?? orgDefault.harnessId)
+      ? (scopeOverride?.harnessId ?? orgDefault.harnessId)
+      : (approvedHarnesses.find((id) => modelSupportedByHarness(modelId, id)) ?? orgDefault.harnessId);
+    scopeOverride =
+      modelId === orgDefault.modelId && harnessId === orgDefault.harnessId
+        ? null
+        : { harnessId, modelId, orgRevision: orgDefault.revision };
+  }
   const effective = scopeOverride ?? orgDefault;
   const selected = [orgDefault, scopeOverride, effective].filter((choice) => choice !== null);
   const allowlist = await config.getWebuiModelsDurable(org);
   const modelsByHarness = Object.fromEntries(
     approvedHarnesses.map((harnessId) => {
-      const ids = allowlist?.length
-        ? allowlist.filter((id) => modelSupportedByHarness(id, harnessId))
-        : selectableCatalogForHarness(catalog, harnessId).map((model) => model.id);
+      const policyModels = ctx.deps.modelScopePolicy?.resolve(scope).models;
+      let ids: string[];
+      if (policyModels) ids = policyModels.filter((id) => modelSupportedByHarness(id, harnessId));
+      else if (allowlist?.length) ids = allowlist.filter((id) => modelSupportedByHarness(id, harnessId));
+      else ids = selectableCatalogForHarness(catalog, harnessId).map((model) => model.id);
       for (const choice of selected) {
         if (
           choice.harnessId === harnessId &&
@@ -1186,6 +1212,7 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
     upgradeAvailable: Boolean(scopeOverride && scopeOverride.orgRevision !== orgDefault.revision),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     interactiveFastMode: await config.getInteractiveFastModeDurable(),
+    modelPolicyManaged: Boolean(ctx.deps.modelScopePolicy),
   };
 }
 
@@ -1212,6 +1239,11 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
+  if (ctx.deps.modelScopePolicy)
+    return sendJson(ctx.res, 403, {
+      error: "model_policy_managed",
+      message: "models are managed by deployment policy",
+    });
   const config = ctx.deps.config;
   if (ctx.body.inherit === true) await config.setRuntimeSelectionLatest(target.scope, null);
   else if (ctx.body.keep === true) {
@@ -1261,15 +1293,32 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
 }
 
-function getSoul(ctx: ApiCtx): void {
-  const { res, app, url, capability } = ctx;
+function isProjectScope(scope: ScopeId): boolean {
+  const parsed = parseScopeId(scope);
+  return parsed.kind === "group" && isProjectGroupRef(parsed.ref);
+}
+
+async function isOrgAdmin(ctx: ApiCtx, actorId: string): Promise<boolean> {
+  if (!ctx.deps.admin) return false;
+  return (await ctx.deps.admin.adminStatusOf({ id: actorId, type: "internal" })).isAdmin;
+}
+
+async function getSoul(ctx: ApiCtx): Promise<void> {
+  const { res, app, url, capability, actor } = ctx;
   const scopeIdVal = capability?.scopeId ?? url.searchParams.get("scopeId");
   if (!scopeIdVal) return sendJson(res, 400, { error: "bad_request", message: "scopeId required" });
+  const viewer = capability?.actorId ?? actor?.p;
+  if (!viewer) return sendJson(res, 401, { error: "unauthorized" });
+  const project = isProjectScope(scopeIdVal);
+  const admin = project && !capability && (await isOrgAdmin(ctx, viewer));
+  if (project && !capability && !admin) return sendJson(res, 403, { error: "admin_required" });
+  if (!capability && !admin && !(await app.belongsToScope(viewer, scopeIdVal)))
+    return sendJson(res, 403, { error: "forbidden" });
   return sendJson(res, 200, app.getSoul(scopeIdVal));
 }
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
+  const { res, app, body, capability, actor } = ctx;
   let scopeIdVal: string;
   let content: string;
   let actorId: string;
@@ -1288,8 +1337,13 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     scopeIdVal = b.scopeId;
     content = b.content;
     actorId = b.actorId;
+    if (actor && actor.p !== actorId) return sendJson(res, 403, { error: "forbidden" });
   }
+  const projectAdmin = isProjectScope(scopeIdVal) && !capability && (await isOrgAdmin(ctx, actorId));
+  if (isProjectScope(scopeIdVal) && !capability && !projectAdmin)
+    return sendJson(res, 403, { error: "admin_required" });
   const allowSharedScope =
+    projectAdmin ||
     Boolean(capability) ||
     (parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId)));
   try {

@@ -25,7 +25,7 @@ isn't tied to any single vendor.
 - **Slack and web.** The same identity and configuration carries between Slack and the
   web app.
 - **Admin control.** Set org-level configuration, a security posture, and which
-  harnesses and models are available.
+  harnesses and models are available, including [deployment-owned model allowlists by scope](./docs/model-scope-allowlists.md).
 - **Web apps.** Spin up custom internal apps and publish them to the right people.
 - **Shared skills.** Skills are scope-owned and shareable by grant, with admin-gated
   promotion to the whole org and skill packs imported from git repositories.

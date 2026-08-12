@@ -161,6 +161,7 @@ import { createModelCredentialStore, type ModelCredentialStore } from "./model/m
 import { setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
+import { loadScopeModelPolicy, type ScopeModelPolicy } from "./model/scope-model-policy.ts";
 import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import type { SessionStore } from "./sessions/session-store.ts";
@@ -321,6 +322,7 @@ export interface BuiltApp {
   secretDrops: SecretDropStore;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
+  modelScopePolicy?: ScopeModelPolicy;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
   acl: AclStore;
@@ -728,6 +730,9 @@ export function buildApp(
     };
   };
   const runtimeOrgScope = scopeId("org", config.orgId);
+  const modelScopePolicy = config.modelScopeAllowlistsPath
+    ? loadScopeModelPolicy(config.modelScopeAllowlistsPath, runtimeOrgScope)
+    : undefined;
   const orgBaseModelId = (): string | undefined =>
     configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
   const adapters = new Map<HarnessId, Harness>([
@@ -780,10 +785,17 @@ export function buildApp(
   };
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) =>
-    resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, input.scopeLabel, fallback, {
-      ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
-      ...(input.model ? { modelId: input.model } : {}),
-    }),
+    resolveRuntimeChoiceDurable(
+      configStore,
+      runtimeOrgScope,
+      input.scopeLabel,
+      fallback,
+      {
+        ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
+        ...(input.model ? { modelId: input.model } : {}),
+      },
+      modelScopePolicy,
+    ),
   );
 
   const leaseTtlMs = config.leaseTtlMs;
@@ -1146,12 +1158,14 @@ export function buildApp(
     runtimeFallback: fallback,
     providerKeys,
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeys),
+    ...(modelScopePolicy ? { modelScopePolicy } : {}),
     runWaitMs: config.runWaitMs,
   });
   const slackCore = createSlackCoreClient({
     app,
     config: configStore,
     runtimeFallback: fallback,
+    ...(modelScopePolicy ? { modelScopePolicy } : {}),
     blobTransfer,
     deliveries,
     metrics,
@@ -1443,6 +1457,7 @@ export function buildApp(
     secretDrops,
     modelGateway,
     modelCredentials,
+    ...(modelScopePolicy ? { modelScopePolicy } : {}),
     customProviders,
     refreshCustomProviders,
     acl,

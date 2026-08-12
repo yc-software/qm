@@ -352,6 +352,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     enumValues: SELECTABLE_BASE_MODELS,
     get: (deps, scope) => deps.config!.getBaseModel(scope),
     apply: async (ctx, _actor, scope) => {
+      if (ctx.deps.modelScopePolicy) return { error: "models are managed by deployment policy", status: 403 };
       const raw = (ctx.body as { modelId?: unknown }).modelId;
       if (raw !== undefined && raw !== null && typeof raw !== "string")
         return { error: "base-model requires { modelId: string } (empty string clears the override)" };
@@ -396,6 +397,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: "runtime",
     get: (deps, scope) => deps.config!.getRuntimeSelection(scope),
     apply: async (ctx, _actor, scope) => {
+      if (ctx.deps.modelScopePolicy) return { error: "models are managed by deployment policy", status: 403 };
       if ((ctx.body as { inherit?: unknown }).inherit === true) {
         await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
         return { ok: true };
@@ -449,7 +451,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     enumValues: SELECTABLE_BASE_MODELS,
     get: (deps, scope) => deps.config!.getWebuiModels(scope),
     apply: generic<string[] | null>(
-      (body, { scope }) => {
+      (body, { scope, deps }) => {
+        if (deps.modelScopePolicy) return { error: "models are managed by deployment policy", status: 403 };
         const bad = orgOnly(scope, "the web UI model picker is org-wide");
         if (bad) return bad;
         const raw = (body as { ids?: unknown }).ids;

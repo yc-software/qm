@@ -108,6 +108,21 @@ export function contextModelSection(scopeId: string): TemplateResult | typeof no
       <span class="context-model-status error" aria-live="polite">${contextModelState.notice}</span>
     </section>`;
   const options = optionsFor(config);
+  if (config.modelPolicyManaged)
+    return html`
+      <section class="context-panel context-model" aria-labelledby="context-model-title">
+        <div class="context-panel-heading">
+          <div>
+            <h2 class="context-panel-title" id="context-model-title">Models</h2>
+            <p class="context-panel-copy">Managed by deployment policy.</p>
+          </div>
+        </div>
+        <p class="context-model-hint">
+          ${options.length} ${options.length === 1 ? "model is" : "models are"} available here. Default:
+          ${labelForRuntime(config, config.effective)}.
+        </p>
+      </section>
+    `;
   const multiHarness = new Set(options.map((o) => o.harnessId)).size > 1;
   const selected = selectedValue(config);
   const stalePin = selected !== INHERIT && !options.some((o) => o.value === selected);
