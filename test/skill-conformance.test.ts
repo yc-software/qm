@@ -21,3 +21,10 @@ test("every seed SKILL.md parses with a name, description, and body", () => {
     assert.ok(m.name && m.description && m.body.trim(), `${path} is missing a required field`);
   }
 });
+
+test("Slack draft OAuth tokens never enter subprocess arguments", () => {
+  const script = readFileSync(join(SEED_DIR, "slack-drafts", "scripts", "slack_drafts.py"), "utf8");
+  assert.doesNotMatch(script, /subprocess|\["curl"/);
+  assert.match(script, /urllib\.request\.Request/);
+  assert.match(script, /"Authorization": f"Bearer \{tok\}"/);
+});
