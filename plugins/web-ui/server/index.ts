@@ -11,6 +11,7 @@ import {
   CAPABILITY_HEADER,
   type HttpMethod,
 } from "../../chassis/src/core-client.ts";
+import { findRoute } from "../../chassis/src/router.ts";
 import {
   json,
   readBody as readBodyCapped,
@@ -465,6 +466,47 @@ async function coreFetchCap(
   return { status: r.status, text: await r.text() };
 }
 
+async function relayCore(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
+  relay(res, await coreFetch(method, pathWithQuery, rawBody));
+}
+
+async function relayCap(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
+  relay(res, await coreFetchCap(method, pathWithQuery, rawBody));
+}
+
+/**
+ * Read and parse a JSON object body, or answer 400 and return null — a null
+ * return always means the response has been sent. Only plain objects come
+ * back (a body of `null`, `false`, or a bare string is a 400, never a falsy
+ * value a caller could mistake for "already answered"). Routes that
+ * historically tolerated an empty body keep that via allowEmpty; strict
+ * routes (allowEmpty=false) refuse it, so e.g. a bare POST cannot read as
+ * "clear the display name".
+ */
+async function readJson<T extends object>(
+  req: IncomingMessage,
+  res: ServerResponse,
+  allowEmpty = true,
+): Promise<T | null> {
+  try {
+    const raw = await readBody(req);
+    if (!raw && !allowEmpty) {
+      json(res, 400, { error: "bad_request" });
+      return null;
+    }
+    const parsed: unknown = JSON.parse(raw || "{}");
+    if (typeof parsed !== "object" || parsed === null) {
+      json(res, 400, { error: "bad_request" });
+      return null;
+    }
+    return parsed as T;
+  } catch (e) {
+    if (e instanceof PayloadTooLargeError) throw e;
+    json(res, 400, { error: "bad_request" });
+    return null;
+  }
+}
+
 async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string, threadRef: string): Promise<void> {
   const r = await coreFetch("POST", `/v1/turns?async=1`, JSON.stringify(turn));
   if (r.status >= 200 && r.status < 300) {
@@ -708,66 +750,23 @@ async function serveVite(req: IncomingMessage, res: ServerResponse, path: string
   return true;
 }
 
-const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
-  const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
-  const path = url.pathname;
-  const method = req.method ?? "GET";
+interface WebCtx {
+  req: IncomingMessage;
+  res: ServerResponse;
+  url: URL;
+  user: string;
+  params: Record<string, string>;
+}
 
-  if (method === "GET" && path === "/healthz") return json(res, 200, { ok: true });
-  if (method === "GET" && path === "/favicon.svg") {
-    return serveEmojiFavicon(res, process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "no-cache");
-  }
+type WebRoute = { handle: (c: WebCtx) => unknown } & (
+  { method: string; path: string } | { match: (method: string, pathname: string) => boolean }
+);
 
-  if (method === "POST" && path === "/signin") {
-    if (!COOKIE_AUTH) return json(res, 404, { error: "not_found" });
-    const body = await readBody(req);
-    const id = (() => {
-      try {
-        return String(JSON.parse(body).user ?? "").trim();
-      } catch {
-        return "";
-      }
-    })();
-    if (!id) return json(res, 400, { error: "bad_request", message: "Enter a principal to sign in as." });
-    if (ALLOW.length > 0 && !ALLOW.includes(id))
-      return json(res, 403, {
-        error: "not_allowed",
-        message: `${id.slice(0, 120)} isn't in this instance's allowed principals. Add it to WEB_UI_PRINCIPALS, or leave that unset to allow any principal.`,
-      });
-    res.writeHead(200, {
-      "set-cookie": sessionCookie(id),
-      "content-type": "application/json",
-    });
-    return res.end(JSON.stringify({ ok: true, user: id }));
-  }
-
-  if (method === "POST" && path === "/signout") {
-    res.writeHead(200, { "set-cookie": "webuiuser=; HttpOnly; Path=/; Max-Age=0", "content-type": "application/json" });
-    return res.end(JSON.stringify({ ok: true }));
-  }
-
-  let oauthCallbackPrefix: string | null = null;
-  if (path.startsWith("/v1/connectors/oauth/")) oauthCallbackPrefix = "/v1/connectors/oauth/";
-  else if (path.startsWith("/connectors/oauth/")) oauthCallbackPrefix = "/connectors/oauth/";
-  if (method === "GET" && oauthCallbackPrefix && path.endsWith("/callback")) {
-    const provider = path.slice(oauthCallbackPrefix.length, -"/callback".length);
-    const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/callback${url.search}`;
-    let ok: boolean;
-    try {
-      const r = await fetch(`${CORE}${corePath}`, { redirect: "manual" });
-      ok = r.status >= 200 && r.status < 300;
-    } catch {
-      ok = false;
-    }
-    const q = `view=keychain&connector=${encodeURIComponent(provider)}&status=${ok ? "connected" : "error"}`;
-    return sendHtml(res, ok ? 200 : 400, callbackHtml(q));
-  }
-
-  if (path === "/me" || path.startsWith("/api/")) {
-    const user = cookieUser(req);
-    if (!user) return unauthorized(res, req);
-
-    if (path === "/me") {
+const apiRoutes: readonly WebRoute[] = [
+  {
+    match: (_method, pathname) => pathname === "/me",
+    handle: async (c) => {
+      const { req, res, user } = c;
       res.setHeader("set-cookie", sessionCookie(user));
       const permissions = await userPermissions();
       return json(res, 200, {
@@ -778,13 +777,21 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         permissions,
       });
-    }
-
-    if (method === "POST" && path === "/api/blobs") {
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/blobs",
+    handle: async (c) => {
+      const { req, res, url } = c;
       return uploadBlobFromRequest(req, res, declaredSha(url));
-    }
-
-    if (method === "POST" && path === "/api/files/upload") {
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/files/upload",
+    handle: async (c) => {
+      const { req, res, url, user } = c;
       return uploadFileFromRequest(
         req,
         res,
@@ -793,37 +800,50 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
         declaredSha(url),
         uploadFileName(url),
       );
-    }
-
-    if (method === "GET" && path === "/api/sessions") {
-      const r = await coreFetch("GET", `/v1/sessions?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/contexts") {
-      const r = await coreFetch("GET", `/v1/contexts?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-
-    const contextPolicy = path.match(/^\/api\/contexts\/([^/]+)\/ambient-policy$/);
-    if (method === "GET" && contextPolicy) {
-      const scope = decodeURIComponent(contextPolicy[1]!);
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/sessions?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/contexts",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/contexts?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/contexts/:scope/ambient-policy",
+    handle: async (c) => {
+      const { res, user } = c;
+      const scope = c.params.scope!;
+      return relayCore(
+        res,
         "GET",
         `/v1/contexts/policy?principalId=${encodeURIComponent(user)}&scope=${encodeURIComponent(scope)}`,
       );
-      return relay(res, r);
-    }
-    if (method === "PUT" && contextPolicy) {
-      const scope = decodeURIComponent(contextPolicy[1]!);
-      let p: { orders?: unknown; bots?: unknown; ambientEnabled?: unknown; baseUpdatedAt?: unknown };
-      try {
-        p = JSON.parse((await readBody(req)) || "{}") as typeof p;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/contexts/:scope/ambient-policy",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const scope = c.params.scope!;
+      const p = await readJson<{ orders?: unknown; bots?: unknown; ambientEnabled?: unknown; baseUpdatedAt?: unknown }>(
+        req,
+        res,
+      );
+      if (!p) return;
+      return relayCore(
+        res,
         "PUT",
         "/v1/contexts/policy",
         JSON.stringify({
@@ -835,314 +855,355 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
           baseUpdatedAt: p.baseUpdatedAt,
         }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path === "/api/projects") {
-      let name = "";
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { name?: unknown };
-        if (typeof p.name === "string") name = p.name.trim().slice(0, 200);
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/projects",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ name?: unknown }>(req, res);
+      if (!p) return;
+      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
       if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      const r = await coreFetch("POST", "/v1/projects", JSON.stringify({ principalId: user, name }));
-      return relay(res, r);
-    }
-
-    const renameProject = path.match(/^\/api\/projects\/([^/]+)$/);
-    if (method === "PATCH" && renameProject) {
-      const id = decodeURIComponent(renameProject[1]!);
-      let name = "";
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { name?: unknown };
-        if (typeof p.name === "string") name = p.name.trim().slice(0, 200);
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
+      return relayCore(res, "POST", "/v1/projects", JSON.stringify({ principalId: user, name }));
+    },
+  },
+  {
+    method: "PATCH",
+    path: "/api/projects/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ name?: unknown }>(req, res);
+      if (!p) return;
+      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
       if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      const r = await coreFetch(
+      return relayCore(
+        res,
         "PATCH",
         `/v1/projects/${encodeURIComponent(id)}`,
         JSON.stringify({ principalId: user, name }),
       );
-      return relay(res, r);
-    }
-
-    const addProjectMember = path.match(/^\/api\/projects\/([^/]+)\/members$/);
-    if (method === "POST" && addProjectMember) {
-      const id = decodeURIComponent(addProjectMember[1]!);
-      let memberId = "";
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { memberId?: unknown };
-        if (typeof p.memberId === "string") memberId = p.memberId.trim();
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/projects/:id/members",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ memberId?: unknown }>(req, res);
+      if (!p) return;
+      const memberId = typeof p.memberId === "string" ? p.memberId.trim() : "";
       if (!memberId) return json(res, 400, { error: "bad_request", message: "memberId required" });
-      const r = await coreFetch(
+      return relayCore(
+        res,
         "POST",
         `/v1/projects/${encodeURIComponent(id)}/members`,
         JSON.stringify({ principalId: user, memberId }),
       );
-      return relay(res, r);
-    }
-
-    const projectSlackChannel = path.match(/^\/api\/projects\/([^/]+)\/slack-channel$/);
-    if (method === "PUT" && projectSlackChannel) {
-      const id = decodeURIComponent(projectSlackChannel[1]!);
-      let channel = "";
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { channel?: unknown };
-        if (typeof p.channel === "string") channel = p.channel.trim().slice(0, 200);
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/projects/:id/slack-channel",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ channel?: unknown }>(req, res);
+      if (!p) return;
+      const channel = typeof p.channel === "string" ? p.channel.trim().slice(0, 200) : "";
       if (!channel) return json(res, 400, { error: "bad_request", message: "channel required" });
-      const r = await coreFetch(
+      return relayCore(
+        res,
         "PUT",
         `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
         JSON.stringify({ principalId: user, channel }),
       );
-      return relay(res, r);
-    }
-    if (method === "DELETE" && projectSlackChannel) {
-      const id = decodeURIComponent(projectSlackChannel[1]!);
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/projects/:id/slack-channel",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
         "DELETE",
         `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
         JSON.stringify({ principalId: user }),
       );
-      return relay(res, r);
-    }
-
-    const removeProjectMember = path.match(/^\/api\/projects\/([^/]+)\/members\/([^/]+)$/);
-    if (method === "DELETE" && removeProjectMember) {
-      const id = decodeURIComponent(removeProjectMember[1]!);
-      const memberId = decodeURIComponent(removeProjectMember[2]!);
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/projects/:id/members/:memberId",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      const memberId = c.params.memberId!;
+      return relayCore(
+        res,
         "DELETE",
         `/v1/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
         JSON.stringify({ principalId: user }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/directory/resolve") {
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/directory/resolve",
+    handle: async (c) => {
+      const { res, url } = c;
       const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
       if (!q) return json(res, 400, { error: "bad_request", message: "q required" });
-      const r = await coreFetch("GET", `/v1/directory/resolve?q=${encodeURIComponent(q)}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/surface-config") {
-      const r = await coreFetch("GET", "/v1/surface-config");
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/ui-state") {
+      return relayCore(res, "GET", `/v1/directory/resolve?q=${encodeURIComponent(q)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/surface-config",
+    handle: async (c) => {
+      const { res } = c;
+      return relayCore(res, "GET", "/v1/surface-config");
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/ui-state",
+    handle: async (c) => {
+      const { res, url, user } = c;
       const key = url.searchParams.get("key") ?? "";
       const qs = new URLSearchParams({ principalId: user, key });
-      const r = await coreFetch("GET", `/v1/ui-state?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "PUT" && path === "/api/ui-state") {
-      let body: Record<string, unknown>;
-      try {
-        body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
-      } catch {
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch("PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/runtime-config") {
+      return relayCore(res, "GET", `/v1/ui-state?${qs.toString()}`);
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/ui-state",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const body = await readJson<Record<string, unknown>>(req, res);
+      if (!body) return;
+      return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/runtime-config",
+    handle: async (c) => {
+      const { res, url, user } = c;
       const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
       const qs = new URLSearchParams({ principalId: user, scopeId });
-      const r = await coreFetch("GET", `/v1/runtime-config?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "PUT" && path === "/api/runtime-config") {
-      let body: Record<string, unknown>;
-      try {
-        body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
-      } catch {
-        return json(res, 400, { error: "bad_request" });
-      }
+      return relayCore(res, "GET", `/v1/runtime-config?${qs.toString()}`);
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/runtime-config",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const body = await readJson<Record<string, unknown>>(req, res);
+      if (!body) return;
       const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
-      const r = await coreFetch("PUT", "/v1/runtime-config", JSON.stringify({ ...body, principalId: user, scopeId }));
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/scope-resources") {
+      return relayCore(res, "PUT", "/v1/runtime-config", JSON.stringify({ ...body, principalId: user, scopeId }));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/scope-resources",
+    handle: async (c) => {
+      const { res, url, user } = c;
       const scope = url.searchParams.get("scope");
       if (!scope) return json(res, 400, { error: "bad_request", message: "scope required" });
       const qs = new URLSearchParams({ principalId: user, scope });
-      const r = await coreFetch("GET", `/v1/scope-resources?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/skills") {
+      return relayCore(res, "GET", `/v1/scope-resources?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/skills",
+    handle: async (c) => {
+      const { res, url, user } = c;
       const qs = new URLSearchParams({ principalId: user });
       if (url.searchParams.get("includeShadowed") === "1") qs.set("includeShadowed", "1");
-      const r = await coreFetch("GET", `/v1/skills?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/skills/")) {
-      const id = decodeURIComponent(path.slice("/api/skills/".length));
-      const r = await coreFetch("GET", `/v1/skills/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path === "/api/skills") {
+      return relayCore(res, "GET", `/v1/skills?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/skills/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(res, "GET", `/v1/skills/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/skills",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ name?: unknown; description?: unknown; body?: unknown; scopeId?: unknown }>(req, res);
+      if (!p) return;
       const draft: { name?: string; description?: string; body?: string; scopeId?: string } = {};
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as {
-          name?: unknown;
-          description?: unknown;
-          body?: unknown;
-          scopeId?: unknown;
-        };
-        if (typeof p.name === "string") draft.name = p.name;
-        if (typeof p.description === "string") draft.description = p.description;
-        if (typeof p.body === "string") draft.body = p.body;
-        if (typeof p.scopeId === "string") draft.scopeId = p.scopeId;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch("POST", "/v1/skills", JSON.stringify({ principalId: user, ...draft }));
-      return relay(res, r);
-    }
-
-    if (method === "PUT" && path.startsWith("/api/skills/")) {
-      const id = decodeURIComponent(path.slice("/api/skills/".length));
+      if (typeof p.name === "string") draft.name = p.name;
+      if (typeof p.description === "string") draft.description = p.description;
+      if (typeof p.body === "string") draft.body = p.body;
+      if (typeof p.scopeId === "string") draft.scopeId = p.scopeId;
+      return relayCore(res, "POST", "/v1/skills", JSON.stringify({ principalId: user, ...draft }));
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/skills/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ description?: unknown; body?: unknown }>(req, res);
+      if (!p) return;
       const patch: { description?: string; body?: string } = {};
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { description?: unknown; body?: unknown };
-        if (typeof p.description === "string") patch.description = p.description;
-        if (typeof p.body === "string") patch.body = p.body;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
+      if (typeof p.description === "string") patch.description = p.description;
+      if (typeof p.body === "string") patch.body = p.body;
+      return relayCore(
+        res,
         "PUT",
         `/v1/skills/${encodeURIComponent(id)}`,
         JSON.stringify({ principalId: user, ...patch }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "DELETE" && path.startsWith("/api/skills/")) {
-      const id = decodeURIComponent(path.slice("/api/skills/".length));
-      const r = await coreFetch(
-        "DELETE",
-        `/v1/skills/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/skills/") && path.endsWith("/restore")) {
-      const id = decodeURIComponent(path.slice("/api/skills/".length, -"/restore".length));
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/skills/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(res, "DELETE", `/v1/skills/${encodeURIComponent(id)}`, JSON.stringify({ principalId: user }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/skills/:id/restore",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
         "POST",
         `/v1/skills/${encodeURIComponent(id)}/restore`,
         JSON.stringify({ principalId: user }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/sessions/") && path.endsWith("/title")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/title".length));
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/title",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
         "POST",
         `/v1/sessions/${encodeURIComponent(id)}/title`,
         JSON.stringify({ principalId: user }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/sessions/") && path.endsWith("/fork")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/fork".length));
-      let upToSeq: number | undefined;
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { upToSeq?: unknown };
-        if (typeof p.upToSeq === "number") upToSeq = p.upToSeq;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/fork",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ upToSeq?: unknown }>(req, res);
+      if (!p) return;
+      const upToSeq = typeof p.upToSeq === "number" ? p.upToSeq : undefined;
+      return relayCore(
+        res,
         "POST",
         `/v1/sessions/${encodeURIComponent(id)}/fork`,
         JSON.stringify({ principalId: user, ...(upToSeq !== undefined ? { upToSeq } : {}) }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/sessions/") && path.endsWith("/approvals")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/approvals".length));
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/approvals",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
         "GET",
         `/v1/sessions/${encodeURIComponent(id)}/approvals?viewer=${encodeURIComponent(user)}`,
       );
-      return relay(res, r);
-    }
-
-    const bgOutput = path.match(/^\/api\/sessions\/([^/]+)\/background\/([^/]+)\/output$/);
-    if (method === "GET" && bgOutput) {
-      const id = decodeURIComponent(bgOutput[1]!);
-      const pid = decodeURIComponent(bgOutput[2]!);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/background/:pid/output",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const id = c.params.id!;
+      const pid = c.params.pid!;
       const sinceCursor = url.searchParams.get("sinceCursor") ?? "0";
-      const r = await coreFetch(
+      return relayCore(
+        res,
         "GET",
         `/v1/sessions/${encodeURIComponent(id)}/background/${encodeURIComponent(pid)}/output?viewer=${encodeURIComponent(user)}&sinceCursor=${encodeURIComponent(sinceCursor)}`,
       );
-      return relay(res, r);
-    }
-    if (method === "GET" && path.startsWith("/api/sessions/") && path.endsWith("/background")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/background".length));
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/background",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
         "GET",
         `/v1/sessions/${encodeURIComponent(id)}/background?viewer=${encodeURIComponent(user)}`,
       );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && /^\/api\/sessions\/[^/]+\/entries\/\d+$/.test(path)) {
-      const [, , , rawId, , seq] = path.split("/");
-      const id = decodeURIComponent(rawId!);
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/entries/:seq",
+    handle: async (c) => {
+      const { res, user } = c;
+      const { id, seq } = c.params as { id: string; seq: string };
+      if (!/^\d+$/.test(seq)) return json(c.res, 404, { error: "not found" });
+      return relayCore(
+        res,
         "GET",
         `/v1/sessions/${encodeURIComponent(id)}/entries/${seq}?viewer=${encodeURIComponent(user)}`,
       );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/sessions/")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const id = c.params.id!;
       const qs = new URLSearchParams({ viewer: user });
       for (const p of ["tailTurns", "sinceSeq", "beforeSeq"] as const) {
         const v = url.searchParams.get(p);
         if (v !== null) qs.set(p, v);
       }
-      const r = await coreFetch("GET", `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/files/") && path.endsWith("/content")) {
-      const id = decodeURIComponent(path.slice("/api/files/".length, -"/content".length));
+      return relayCore(res, "GET", `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/files/:id/content",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
       const corePath = withSourceAuthNonce(
         `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}`,
         CORE_SIGNING_SECRET,
@@ -1169,9 +1230,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
         "x-content-type-options": "nosniff",
       });
       return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
-    }
-
-    if (method === "GET" && path === "/api/files") {
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/files",
+    handle: async (c) => {
+      const { res, url, user } = c;
       const qs = new URLSearchParams({ viewer: user });
       const limit = url.searchParams.get("limit");
       if (limit) qs.set("limit", limit);
@@ -1179,80 +1244,82 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (cursor) qs.set("cursor", cursor);
       const scope = url.searchParams.get("scope");
       if (scope) qs.set("scope", scope);
-      const r = await coreFetch("GET", `/v1/files?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/memory") {
-      const r = await coreFetch("GET", `/v1/memory?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-    if (method === "GET" && path === "/api/memory/history") {
-      const r = await coreFetch("GET", `/v1/memory/history?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-    if (method === "POST" && path === "/api/memory/restore") {
-      let revision = "";
-      let expectedRevision = "";
-      try {
-        const p = JSON.parse(await readBody(req)) as { revision?: unknown; expectedRevision?: unknown };
-        if (typeof p.revision === "string") revision = p.revision;
-        if (typeof p.expectedRevision === "string") expectedRevision = p.expectedRevision;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
+      return relayCore(res, "GET", `/v1/files?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/memory",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/memory?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/memory/history",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/memory/history?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/memory/restore",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ revision?: unknown; expectedRevision?: unknown }>(req, res, false);
+      if (!p) return;
+      const revision = typeof p.revision === "string" ? p.revision : "";
+      const expectedRevision = typeof p.expectedRevision === "string" ? p.expectedRevision : "";
+      return relayCore(
+        res,
         "POST",
         "/v1/memory/restore",
         JSON.stringify({ principalId: user, revision, expectedRevision }),
       );
-      return relay(res, r);
-    }
-    if (method === "PUT" && path === "/api/memory") {
-      let content: string;
-      let revision: string;
-      try {
-        const p = JSON.parse(await readBody(req)) as { content?: unknown; revision?: unknown };
-        if (typeof p.content !== "string")
-          return json(res, 400, { error: "bad_request", message: "content must be a string" });
-        content = p.content;
-        revision =
-          typeof p.revision === "string"
-            ? p.revision
-            : await coreFetch("GET", `/v1/memory?principalId=${encodeURIComponent(user)}`).then((head) => {
-                try {
-                  return String((JSON.parse(head.text) as { revision?: unknown }).revision ?? "");
-                } catch {
-                  return "";
-                }
-              });
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch("PUT", "/v1/memory", JSON.stringify({ principalId: user, content, revision }));
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/sessions/")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length));
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/memory",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ content?: unknown; revision?: unknown }>(req, res, false);
+      if (!p) return;
+      if (typeof p.content !== "string")
+        return json(res, 400, { error: "bad_request", message: "content must be a string" });
+      const content = p.content;
+      const revision =
+        typeof p.revision === "string"
+          ? p.revision
+          : await coreFetch("GET", `/v1/memory?principalId=${encodeURIComponent(user)}`).then((head) => {
+              try {
+                return String((JSON.parse(head.text) as { revision?: unknown }).revision ?? "");
+              } catch {
+                return "";
+              }
+            });
+      return relayCore(res, "PUT", "/v1/memory", JSON.stringify({ principalId: user, content, revision }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ title?: unknown; archived?: unknown; pinned?: unknown; color?: unknown }>(
+        req,
+        res,
+        false,
+      );
+      if (!p) return;
       const patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null } = {};
-      try {
-        const p = JSON.parse(await readBody(req)) as {
-          title?: unknown;
-          archived?: unknown;
-          pinned?: unknown;
-          color?: unknown;
-        };
-        if (p.title === null || typeof p.title === "string") patch.title = p.title as string | null;
-        if (typeof p.archived === "boolean") patch.archived = p.archived;
-        if (typeof p.pinned === "boolean") patch.pinned = p.pinned;
-        if (p.color === null || typeof p.color === "string") patch.color = p.color as string | null;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
+      if (p.title === null || typeof p.title === "string") patch.title = p.title as string | null;
+      if (typeof p.archived === "boolean") patch.archived = p.archived;
+      if (typeof p.pinned === "boolean") patch.pinned = p.pinned;
+      if (p.color === null || typeof p.color === "string") patch.color = p.color as string | null;
       if (
         patch.title === undefined &&
         patch.archived === undefined &&
@@ -1261,96 +1328,117 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       ) {
         return json(res, 400, { error: "bad_request", message: "title, archived, pinned, or color required" });
       }
-      const r = await coreFetch(
+      return relayCore(
+        res,
         "POST",
         `/v1/sessions/${encodeURIComponent(id)}`,
         JSON.stringify({ principalId: user, ...patch }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/connectors") {
-      const r = await coreFetch("GET", `/v1/connectors/oauth/status?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/connectors/") && path.endsWith("/start")) {
-      const provider = path.slice("/api/connectors/".length, -"/start".length);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/connectors",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/connectors/oauth/status?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/connectors/:provider/start",
+    handle: async (c) => {
+      const { res, user } = c;
+      const provider = c.params.provider!;
       const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
       const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo: "/keychain" });
       const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/start?${params.toString()}`;
-      const r = await coreFetch("GET", corePath);
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path === "/api/connectors/revoke") {
-      let provider: string;
-      let host: string;
-      try {
-        const parsed = JSON.parse(await readBody(req)) as { provider?: unknown; host?: unknown };
-        provider = typeof parsed.provider === "string" ? parsed.provider : "";
-        host = typeof parsed.host === "string" ? parsed.host : "";
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
+      return relayCore(res, "GET", corePath);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/connectors/revoke",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ provider?: unknown; host?: unknown }>(req, res, false);
+      if (!p) return;
+      const provider = typeof p.provider === "string" ? p.provider : "";
+      const host = typeof p.host === "string" ? p.host : "";
       if (!provider && !host) return json(res, 400, { error: "bad_request", message: "provider or host required" });
       const rawBody = JSON.stringify({ principalId: user, ...(provider ? { provider } : { host }) });
-      const r = await coreFetch("POST", "/v1/connectors/oauth/revoke", rawBody);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/keychain/credentials") {
-      const r = await coreFetchCap("GET", "/v1/keychain/credentials");
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/keychain/overview") {
-      const r = await coreFetchCap("GET", "/v1/keychain/overview");
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/keychain/grants/") && path.endsWith("/revoke")) {
-      const id = decodeURIComponent(path.slice("/api/keychain/grants/".length, -"/revoke".length));
-      const r = await coreFetchCap("POST", `/v1/keychain/grants/${encodeURIComponent(id)}/revoke`, "{}");
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path === "/api/keychain/drops") {
-      let draft: { service?: string; purpose?: string; envKey?: string };
-      try {
-        const p = JSON.parse(await readBody(req)) as { service?: unknown; purpose?: unknown; envKey?: unknown };
-        draft = {
-          ...(typeof p.service === "string" ? { service: p.service } : {}),
-          ...(typeof p.purpose === "string" ? { purpose: p.purpose } : {}),
-          ...(typeof p.envKey === "string" ? { envKey: p.envKey } : {}),
-        };
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetchCap("POST", "/v1/keychain/drops", JSON.stringify(draft));
-      return relay(res, r);
-    }
-
-    if (method === "DELETE" && path.startsWith("/api/keychain/credentials/")) {
-      const id = decodeURIComponent(path.slice("/api/keychain/credentials/".length));
+      return relayCore(res, "POST", "/v1/connectors/oauth/revoke", rawBody);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/keychain/credentials",
+    handle: async (c) => {
+      const { res } = c;
+      return relayCap(res, "GET", "/v1/keychain/credentials");
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/keychain/overview",
+    handle: async (c) => {
+      const { res } = c;
+      return relayCap(res, "GET", "/v1/keychain/overview");
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/keychain/grants/:id/revoke",
+    handle: async (c) => {
+      const { res } = c;
+      const id = c.params.id!;
+      return relayCap(res, "POST", `/v1/keychain/grants/${encodeURIComponent(id)}/revoke`, "{}");
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/keychain/drops",
+    handle: async (c) => {
+      const { req, res } = c;
+      const p = await readJson<{ service?: unknown; purpose?: unknown; envKey?: unknown }>(req, res, false);
+      if (!p) return;
+      const draft = {
+        ...(typeof p.service === "string" ? { service: p.service } : {}),
+        ...(typeof p.purpose === "string" ? { purpose: p.purpose } : {}),
+        ...(typeof p.envKey === "string" ? { envKey: p.envKey } : {}),
+      };
+      return relayCap(res, "POST", "/v1/keychain/drops", JSON.stringify(draft));
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/keychain/credentials/:id",
+    handle: async (c) => {
+      const { res } = c;
+      const id = c.params.id!;
       if (!id) return json(res, 400, { error: "bad_request", message: "credential id required" });
-      const r = await coreFetchCap("DELETE", `/v1/keychain/credentials/${encodeURIComponent(id)}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/deployments/") && path.endsWith("/owner-url")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/owner-url".length));
+      return relayCap(res, "DELETE", `/v1/keychain/credentials/${encodeURIComponent(id)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/deployments/:id/owner-url",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
       if (!id || id.includes("/")) return json(res, 404, { error: "not_found" });
-      const r = await coreFetch(
+      return relayCore(
+        res,
         "GET",
         `/v1/deployments/${encodeURIComponent(id)}/owner-url?principalId=${encodeURIComponent(user)}`,
       );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/deployments") {
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/deployments",
+    handle: async (c) => {
+      const { res, user } = c;
       const r = await coreFetch("GET", `/v1/deployments?principalId=${encodeURIComponent(user)}`);
       if (r.status !== 200) {
         return relay(res, r);
@@ -1365,10 +1453,14 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, {
         deployments: deployments.map((d) => ({ ...d, webUrl: `/deployments/${encodeURIComponent(String(d.id))}/` })),
       });
-    }
-
-    if (method === "GET" && path.startsWith("/api/deployments/")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/deployments/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
       if (!id || id.includes("/")) return json(res, 404, { error: "not_found" });
       const r = await coreFetch(
         "GET",
@@ -1387,58 +1479,70 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       } catch {
         return json(res, 502, { error: "bad_core_response" });
       }
-    }
-
-    if (method === "POST" && path.startsWith("/api/deployments/") && path.endsWith("/display-name")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/display-name".length));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/display-name",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
       if (!(await gateManageDeployment(res, user, id))) return;
-      let displayName: string;
-      try {
-        displayName = String((JSON.parse(await readBody(req)) as { displayName?: unknown }).displayName ?? "");
-      } catch {
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
+      const p = await readJson<{ displayName?: unknown }>(req, res, false);
+      if (!p) return;
+      const displayName = String(p.displayName ?? "");
+      return relayCore(
+        res,
         "POST",
         `/v1/deployments/${encodeURIComponent(id)}/display-name`,
         JSON.stringify({ displayName }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/deployments/") && path.endsWith("/name")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/name".length));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/name",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
       if (!(await gateManageDeployment(res, user, id))) return;
-      let name: string;
-      try {
-        name = String((JSON.parse(await readBody(req)) as { name?: unknown }).name ?? "");
-      } catch {
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch("POST", `/v1/deployments/${encodeURIComponent(id)}/name`, JSON.stringify({ name }));
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/deployments/") && path.endsWith("/archive")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/archive".length));
+      const p = await readJson<{ name?: unknown }>(req, res, false);
+      if (!p) return;
+      const name = String(p.name ?? "");
+      return relayCore(res, "POST", `/v1/deployments/${encodeURIComponent(id)}/name`, JSON.stringify({ name }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/archive",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
       if (!(await gateManageDeployment(res, user, id))) return;
-      const r = await coreFetch("POST", `/v1/deployments/${encodeURIComponent(id)}/archive`);
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/deployments/") && path.endsWith("/restore")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/restore".length));
+      return relayCore(res, "POST", `/v1/deployments/${encodeURIComponent(id)}/archive`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/restore",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
       if (!(await gateManageDeployment(res, user, id))) return;
-      const r = await coreFetch(
+      return relayCore(
+        res,
         "POST",
         `/v1/deployments/${encodeURIComponent(id)}/restore`,
         JSON.stringify({ principalId: user }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/approvals/")) {
-      const requestId = decodeURIComponent(path.slice("/api/approvals/".length));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/approvals/:requestId",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const requestId = c.params.requestId!;
       if (!requestId || requestId.includes("/")) return json(res, 404, { error: "not_found" });
       let approved = false;
       let scope: "once" | "session" | "always" | undefined;
@@ -1480,9 +1584,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
       const approval = { requestId, approved, ...(scope ? { scope } : {}) };
       return postTurnAndMint(res, { ...record.request, approval }, user, threadRef);
-    }
-
-    if (method === "POST" && path === "/api/turn") {
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/turn",
+    handle: async (c) => {
+      const { req, res, user } = c;
       const ownPrefix = `web:${user}:`;
       let text = "";
       let threadRef = `${ownPrefix}default`;
@@ -1569,9 +1677,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
       };
       return postTurnAndMint(res, turn, user, threadRef);
-    }
-
-    if (method === "GET" && path === "/api/deliveries/events") {
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/deliveries/events",
+    handle: async (c) => {
+      const { req, res, user } = c;
       res.writeHead(200, {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache, no-transform",
@@ -1596,9 +1708,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }
       });
       return;
-    }
-
-    if (method === "GET" && path === "/api/runs/active") {
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/runs/active",
+    handle: async (c) => {
+      const { res, url, user } = c;
       const threadRef = url.searchParams.get("threadRef") ?? "";
       if (!threadRef.startsWith("web:")) return json(res, 404, { error: "not_found" });
       let queued: Array<{ runId: string; text: string }> = [];
@@ -1641,37 +1757,43 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       json(res, 200, { runId: null, run: null, ...(queued.length ? { queued } : {}) });
       return;
-    }
-
-    if (method === "POST" && path.startsWith("/api/runs/") && path.endsWith("/signal")) {
-      const id = decodeURIComponent(path.slice("/api/runs/".length, -"/signal".length));
-      let kind = "";
-      let text: string | undefined;
-      try {
-        const p = JSON.parse(await readBody(req)) as { kind?: unknown; text?: unknown };
-        if (typeof p.kind === "string") kind = p.kind;
-        if (typeof p.text === "string") text = p.text;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/runs/:id/signal",
+    handle: async (c) => {
+      const { req, res } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ kind?: unknown; text?: unknown }>(req, res, false);
+      if (!p) return;
+      const kind = typeof p.kind === "string" ? p.kind : "";
+      const text = typeof p.text === "string" ? p.text : undefined;
+      return relayCore(
+        res,
         "POST",
         `/v1/runs/${encodeURIComponent(id)}/signal`,
         JSON.stringify({ kind, ...(text !== undefined ? { text } : {}) }),
       );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/runs/") && path.endsWith("/withdraw")) {
-      const id = decodeURIComponent(path.slice("/api/runs/".length, -"/withdraw".length));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/runs/:id/withdraw",
+    handle: async (c) => {
+      const { res } = c;
+      const id = c.params.id!;
       const r = await coreFetch("POST", `/v1/runs/${encodeURIComponent(id)}/withdraw`);
       if (r.status >= 200 && r.status < 300) forgetRun(id);
       return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/runs/") && path.endsWith("/events")) {
-      const id = decodeURIComponent(path.slice("/api/runs/".length, -"/events".length));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/runs/:id/events",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
       let closed = false;
       req.on("close", () => {
         closed = true;
@@ -1782,10 +1904,14 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (!closed) res.end();
       return;
-    }
-
-    if (method === "GET" && path.startsWith("/api/runs/")) {
-      const id = decodeURIComponent(path.slice("/api/runs/".length));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/runs/:id",
+    handle: async (c) => {
+      const { res } = c;
+      const id = c.params.id!;
       const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
       try {
         const s = (JSON.parse(r.text) as { status?: string }).status;
@@ -1794,128 +1920,206 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
         void 0;
       }
       return relay(res, r);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/crons",
+    handle: async (c) => {
+      const { res, user } = c;
+      const r = await coreFetch("GET", `/v1/crons?viewer=${encodeURIComponent(user)}`);
+      if (r.status < 200 || r.status >= 300) {
+        return relay(res, r);
+      }
+      let crons: CoreCron[] = [];
+      let visible: CoreCron[] = [];
+      try {
+        const parsed = JSON.parse(r.text) as { crons?: CoreCron[]; visible?: CoreCron[] };
+        crons = parsed.crons ?? [];
+        visible = parsed.visible ?? [];
+      } catch {
+        void 0;
+      }
+      return json(res, 200, { crons, visible });
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/crons/:id/runs",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relay(
+        res,
+        await coreFetch(
+          "GET",
+          `/v1/crons/${encodeURIComponent(id)}/runs?principalId=${encodeURIComponent(user)}&limit=20`,
+        ),
+      );
+    },
+  },
+  {
+    method: "PATCH",
+    path: "/api/crons/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      let patch: { title?: string; task?: string; schedule?: unknown; enabled?: boolean; archived?: boolean } = {};
+      try {
+        const p = JSON.parse(await readBody(req)) as {
+          title?: unknown;
+          task?: unknown;
+          schedule?: unknown;
+          enabled?: unknown;
+          archived?: unknown;
+        };
+        if ("title" in p) {
+          if (typeof p.title !== "string")
+            return json(res, 400, { error: "bad_request", message: "title must be a string" });
+          patch = { ...patch, title: p.title.trim() };
+        }
+        if ("task" in p) {
+          if (typeof p.task !== "string" || !p.task.trim())
+            return json(res, 400, { error: "bad_request", message: "task must be a non-empty string" });
+          patch = { ...patch, task: p.task.trim() };
+        }
+        if ("schedule" in p) patch = { ...patch, schedule: p.schedule };
+        if ("enabled" in p) {
+          if (typeof p.enabled !== "boolean")
+            return json(res, 400, { error: "bad_request", message: "enabled must be a boolean" });
+          patch = { ...patch, enabled: p.enabled };
+        }
+        if ("archived" in p) {
+          if (typeof p.archived !== "boolean")
+            return json(res, 400, { error: "bad_request", message: "archived must be a boolean" });
+          patch = { ...patch, archived: p.archived };
+        }
+      } catch (e) {
+        if (e instanceof PayloadTooLargeError) throw e;
+        return json(res, 400, { error: "bad_request", message: "expected JSON body" });
+      }
+      if (Object.keys(patch).length === 0)
+        return json(res, 400, {
+          error: "bad_request",
+          message: "expected title, task, schedule, enabled, or archived",
+        });
+      if (patch.archived === true) patch = { ...patch, enabled: false };
+      return relayCore(
+        res,
+        "PATCH",
+        `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
+        JSON.stringify(patch),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/crons/:id/disable",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/crons/${encodeURIComponent(id)}/disable?principalId=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/crons/:id/enable",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "PATCH",
+        `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
+        JSON.stringify({ enabled: true, archived: false }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/crons/:id/run",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(res, "POST", `/v1/crons/${encodeURIComponent(id)}/run?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/crons/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(res, "DELETE", `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+];
+
+const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
+  const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+  const path = url.pathname;
+  const method = req.method ?? "GET";
+
+  if (method === "GET" && path === "/healthz") return json(res, 200, { ok: true });
+  if (method === "GET" && path === "/favicon.svg") {
+    return serveEmojiFavicon(res, process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "no-cache");
+  }
+
+  if (method === "POST" && path === "/signin") {
+    if (!COOKIE_AUTH) return json(res, 404, { error: "not_found" });
+    const body = await readBody(req);
+    const id = (() => {
+      try {
+        return String(JSON.parse(body).user ?? "").trim();
+      } catch {
+        return "";
+      }
+    })();
+    if (!id) return json(res, 400, { error: "bad_request", message: "Enter a principal to sign in as." });
+    if (ALLOW.length > 0 && !ALLOW.includes(id))
+      return json(res, 403, {
+        error: "not_allowed",
+        message: `${id.slice(0, 120)} isn't in this instance's allowed principals. Add it to WEB_UI_PRINCIPALS, or leave that unset to allow any principal.`,
+      });
+    res.writeHead(200, {
+      "set-cookie": sessionCookie(id),
+      "content-type": "application/json",
+    });
+    return res.end(JSON.stringify({ ok: true, user: id }));
+  }
+
+  if (method === "POST" && path === "/signout") {
+    res.writeHead(200, { "set-cookie": "webuiuser=; HttpOnly; Path=/; Max-Age=0", "content-type": "application/json" });
+    return res.end(JSON.stringify({ ok: true }));
+  }
+
+  let oauthCallbackPrefix: string | null = null;
+  if (path.startsWith("/v1/connectors/oauth/")) oauthCallbackPrefix = "/v1/connectors/oauth/";
+  else if (path.startsWith("/connectors/oauth/")) oauthCallbackPrefix = "/connectors/oauth/";
+  if (method === "GET" && oauthCallbackPrefix && path.endsWith("/callback")) {
+    const provider = path.slice(oauthCallbackPrefix.length, -"/callback".length);
+    const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/callback${url.search}`;
+    let ok: boolean;
+    try {
+      const r = await fetch(`${CORE}${corePath}`, { redirect: "manual" });
+      ok = r.status >= 200 && r.status < 300;
+    } catch {
+      ok = false;
     }
+    const q = `view=keychain&connector=${encodeURIComponent(provider)}&status=${ok ? "connected" : "error"}`;
+    return sendHtml(res, ok ? 200 : 400, callbackHtml(q));
+  }
 
-    if (path === "/api/crons" || path.startsWith("/api/crons/")) {
-      if (method === "GET" && path === "/api/crons") {
-        const r = await coreFetch("GET", `/v1/crons?viewer=${encodeURIComponent(user)}`);
-        if (r.status < 200 || r.status >= 300) {
-          return relay(res, r);
-        }
-        let crons: CoreCron[] = [];
-        let visible: CoreCron[] = [];
-        try {
-          const parsed = JSON.parse(r.text) as { crons?: CoreCron[]; visible?: CoreCron[] };
-          crons = parsed.crons ?? [];
-          visible = parsed.visible ?? [];
-        } catch {
-          void 0;
-        }
-        return json(res, 200, { crons, visible });
-      }
-
-      if (method === "GET" && path.startsWith("/api/crons/") && path.endsWith("/runs")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length, -"/runs".length));
-        return relay(
-          res,
-          await coreFetch(
-            "GET",
-            `/v1/crons/${encodeURIComponent(id)}/runs?principalId=${encodeURIComponent(user)}&limit=20`,
-          ),
-        );
-      }
-
-      if (method === "PATCH" && path.startsWith("/api/crons/") && !path.slice("/api/crons/".length).includes("/")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length));
-        let patch: { title?: string; task?: string; schedule?: unknown; enabled?: boolean; archived?: boolean } = {};
-        try {
-          const p = JSON.parse(await readBody(req)) as {
-            title?: unknown;
-            task?: unknown;
-            schedule?: unknown;
-            enabled?: unknown;
-            archived?: unknown;
-          };
-          if ("title" in p) {
-            if (typeof p.title !== "string")
-              return json(res, 400, { error: "bad_request", message: "title must be a string" });
-            patch = { ...patch, title: p.title.trim() };
-          }
-          if ("task" in p) {
-            if (typeof p.task !== "string" || !p.task.trim())
-              return json(res, 400, { error: "bad_request", message: "task must be a non-empty string" });
-            patch = { ...patch, task: p.task.trim() };
-          }
-          if ("schedule" in p) patch = { ...patch, schedule: p.schedule };
-          if ("enabled" in p) {
-            if (typeof p.enabled !== "boolean")
-              return json(res, 400, { error: "bad_request", message: "enabled must be a boolean" });
-            patch = { ...patch, enabled: p.enabled };
-          }
-          if ("archived" in p) {
-            if (typeof p.archived !== "boolean")
-              return json(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-            patch = { ...patch, archived: p.archived };
-          }
-        } catch (e) {
-          if (e instanceof PayloadTooLargeError) throw e;
-          return json(res, 400, { error: "bad_request", message: "expected JSON body" });
-        }
-        if (Object.keys(patch).length === 0)
-          return json(res, 400, {
-            error: "bad_request",
-            message: "expected title, task, schedule, enabled, or archived",
-          });
-        if (patch.archived === true) patch = { ...patch, enabled: false };
-        const r = await coreFetch(
-          "PATCH",
-          `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-          JSON.stringify(patch),
-        );
-        return relay(res, r);
-      }
-
-      if (method === "POST" && path.endsWith("/disable")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length, -"/disable".length));
-        const r = await coreFetch(
-          "POST",
-          `/v1/crons/${encodeURIComponent(id)}/disable?principalId=${encodeURIComponent(user)}`,
-        );
-        return relay(res, r);
-      }
-
-      if (method === "POST" && path.endsWith("/enable")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length, -"/enable".length));
-        const r = await coreFetch(
-          "PATCH",
-          `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-          JSON.stringify({ enabled: true, archived: false }),
-        );
-        return relay(res, r);
-      }
-
-      if (method === "POST" && path.endsWith("/run")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length, -"/run".length));
-        const r = await coreFetch(
-          "POST",
-          `/v1/crons/${encodeURIComponent(id)}/run?principalId=${encodeURIComponent(user)}`,
-        );
-        return relay(res, r);
-      }
-
-      if (method === "DELETE" && path.startsWith("/api/crons/") && !path.slice("/api/crons/".length).includes("/")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length));
-        const r = await coreFetch(
-          "DELETE",
-          `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-        );
-        return relay(res, r);
-      }
-
-      return json(res, 404, { error: "not found" });
-    }
-
-    return json(res, 404, { error: "not found" });
+  if (path === "/me" || path.startsWith("/api/")) {
+    const user = cookieUser(req);
+    if (!user) return unauthorized(res, req);
+    const found = findRoute(apiRoutes, method, path);
+    if (!found) return json(res, 404, { error: "not found" });
+    return found.route.handle({ req, res, url, user, params: found.params });
   }
 
   if (method === "GET" && path.startsWith("/deployments/")) {

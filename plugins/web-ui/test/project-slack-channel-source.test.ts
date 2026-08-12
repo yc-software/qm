@@ -31,12 +31,15 @@ test("link and unlink go through the project slack-channel API and refresh the p
 });
 
 test("the web-ui server proxies slack-channel link routes to core with the signed-in principal", () => {
-  assert.match(server, /\/api\\\/projects\\\/\(\[\^/);
-  assert.match(server, /slack-channel\$\//);
-  const proxy = server.match(/const projectSlackChannel[^]*?const removeProjectMember/)?.[0] ?? "";
-  assert.match(proxy, /"PUT",\s*`\/v1\/projects\/\$\{encodeURIComponent\(id\)\}\/slack-channel`/);
-  assert.match(proxy, /"DELETE",\s*`\/v1\/projects\/\$\{encodeURIComponent\(id\)\}\/slack-channel`/);
-  assert.match(proxy, /JSON\.stringify\(\{ principalId: user, channel \}\)/);
+  const routes = [
+    ...server.matchAll(/method: "(PUT|DELETE)",\s+path: "\/api\/projects\/:id\/slack-channel"[^]*?\n {2}\},/g),
+  ];
+  assert.equal(routes.length, 2, "one PUT and one DELETE slack-channel route");
+  const put = routes.find((m) => m[1] === "PUT")?.[0] ?? "";
+  const del = routes.find((m) => m[1] === "DELETE")?.[0] ?? "";
+  assert.match(put, /"PUT",\s*`\/v1\/projects\/\$\{encodeURIComponent\(id\)\}\/slack-channel`/);
+  assert.match(del, /"DELETE",\s*`\/v1\/projects\/\$\{encodeURIComponent\(id\)\}\/slack-channel`/);
+  assert.match(put, /JSON\.stringify\(\{ principalId: user, channel \}\)/);
 });
 
 test("CoreProject carries the linked slack channel", () => {

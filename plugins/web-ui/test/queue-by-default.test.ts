@@ -139,7 +139,7 @@ test("× cancels the queued run in core, and treats a lost race as running rathe
   assert.match(bridge, /export async function withdrawRun\(runId: string\): Promise<boolean>/);
   assert.match(
     server,
-    /path\.endsWith\("\/withdraw"\)[\s\S]{0,320}?\/v1\/runs\/\$\{encodeURIComponent\(id\)\}\/withdraw/,
+    /path: "\/api\/runs\/:id\/withdraw"[\s\S]{0,320}?\/v1\/runs\/\$\{encodeURIComponent\(id\)\}\/withdraw/,
   );
 });
 
