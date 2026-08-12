@@ -1554,6 +1554,18 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/runs/active") {
       const threadRef = url.searchParams.get("threadRef") ?? "";
       if (!threadRef.startsWith("web:")) return json(res, 404, { error: "not_found" });
+      let queued: Array<{ runId: string; text: string }> = [];
+      let durableRunId: string | null = null;
+      const durable = await coreFetch("GET", `/v1/runs?threadRef=${encodeURIComponent(threadRef)}`);
+      if (durable.status >= 200 && durable.status < 300) {
+        try {
+          const parsed = JSON.parse(durable.text) as { runId?: string | null; queued?: typeof queued };
+          durableRunId = parsed.runId ?? null;
+          queued = parsed.queued ?? [];
+        } catch {
+          /* leave the queue empty; the run lookups below still answer */
+        }
+      }
       const tryRun = async (runId: string, ownedByUser = true): Promise<boolean> => {
         const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(runId)}`);
         if (r.status < 200 || r.status >= 300) {
@@ -1572,23 +1584,15 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return false;
         }
         rememberRun(runId, user, threadRef);
-        json(res, 200, { runId, run });
+        const waiting = queued.filter((q) => q.runId !== runId);
+        json(res, 200, { runId, run, ...(waiting.length ? { queued: waiting } : {}) });
         return true;
       };
+      if (durableRunId && (await tryRun(durableRunId, false))) return;
       for (const runId of Array.from(activeRunsByThread.get(threadKey(user, threadRef)) ?? [])) {
         if (await tryRun(runId)) return;
       }
-      const d = await coreFetch("GET", `/v1/runs?threadRef=${encodeURIComponent(threadRef)}`);
-      if (d.status >= 200 && d.status < 300) {
-        let runId: string | null = null;
-        try {
-          runId = (JSON.parse(d.text) as { runId?: string | null }).runId ?? null;
-        } catch {
-          void 0;
-        }
-        if (runId && (await tryRun(runId, false))) return;
-      }
-      json(res, 200, { runId: null, run: null });
+      json(res, 200, { runId: null, run: null, ...(queued.length ? { queued } : {}) });
       return;
     }
 
@@ -1609,6 +1613,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
         `/v1/runs/${encodeURIComponent(id)}/signal`,
         JSON.stringify({ kind, ...(text !== undefined ? { text } : {}) }),
       );
+      return relay(res, r);
+    }
+
+    if (method === "POST" && path.startsWith("/api/runs/") && path.endsWith("/withdraw")) {
+      const id = decodeURIComponent(path.slice("/api/runs/".length, -"/withdraw".length));
+      const r = await coreFetch("POST", `/v1/runs/${encodeURIComponent(id)}/withdraw`);
+      if (r.status >= 200 && r.status < 300) forgetRun(id);
       return relay(res, r);
     }
 

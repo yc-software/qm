@@ -53,6 +53,10 @@ function dm(text: string, channel: string): TurnRequest {
   };
 }
 
+// A web turn. Web is deliberately excluded from core-side mid-turn steering: on web a mid-turn
+// message QUEUES by default — it is submitted as its own turn and waits for the session lock —
+// and steering is a separate, explicit act on the queued row. So a turn that reaches core mid-run
+// must stay a real second run; folding it into the live one would be the bug.
 function web(text: string, threadRef: string): TurnRequest {
   return {
     surface: "web",
@@ -527,6 +531,55 @@ test("web's queued second run waits for the lock: not claimable until the live r
     "the waiting run is claimed once the lock frees",
   );
 });
+
+test("web's queue is durable and readable: core names the live run, then what waits behind it", async () => {
+  const built = freshApp();
+  const threadRef = "web:U1:visible";
+  const first = await built.app.turn(web("summarize the incident", threadRef));
+  await built.runs.claimById(first.runId!, "w1", 30_000);
+  const second = await built.app.turn(web("then the timeline", threadRef));
+  const third = await built.app.turn(web("and who was paged", threadRef));
+
+  const active = await built.app.activeRunForThread(threadRef);
+  assert.equal(active?.runId, first.runId, "the live run is the head, not the newest message");
+  assert.deepEqual(
+    active?.queued,
+    [
+      { runId: second.runId!, text: "then the timeline" },
+      { runId: third.runId!, text: "and who was paged" },
+    ],
+    "the queue comes back in send order, with the text — enough for any surface to render it",
+  );
+
+  // A queued turn is withdrawable right up to the moment a worker takes it, and not after.
+  assert.deepEqual(await built.app.withdrawRun(second.runId!), { withdrawn: true });
+  assert.deepEqual(
+    (await built.app.activeRunForThread(threadRef))?.queued,
+    [{ runId: third.runId!, text: "and who was paged" }],
+    "the withdrawn turn is off the queue and will never run",
+  );
+  assert.deepEqual(
+    await built.app.withdrawRun(first.runId!),
+    { withdrawn: false, reason: "started" },
+    "the running turn is not withdrawable — it can only be steered or stopped",
+  );
+  assert.deepEqual(await built.app.withdrawRun("no-such-run"), { withdrawn: false, reason: "not_found" });
+});
+
+test("a queued web turn runs on its own — the sender's client need never come back", async () => {
+  const built = freshApp();
+  const threadRef = "web:U1:unattended";
+  const first = await built.app.turn(web("the long one", threadRef));
+  const live = await built.runs.claimById(first.runId!, "w1", 30_000);
+  const queued = await built.app.turn(web("the queued one", threadRef));
+
+  await built.runs.complete(live!.id, live!.leaseToken!, { status: "ok", reply: "done" });
+  const next = await built.runs.claim("w2", 30_000);
+  assert.equal(next?.id, queued.runId, "the queued turn is claimed by a worker, with no client involved");
+  assert.equal(next?.request.text, "the queued one");
+});
+
+// ── Orphaned-signal replay: a steer that loses the pickup race is never dropped ────────────────
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 async function until<T>(get: () => Promise<T | undefined>, ms = 3_000): Promise<T> {

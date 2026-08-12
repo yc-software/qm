@@ -1084,6 +1084,73 @@ test("pg run store: one-running-per-session holds under concurrent claims (uniqu
   }
 });
 
+test(
+  "pg run store: same-instant submissions keep send order, and the claim takes the displayed head",
+  { skip },
+  async () => {
+    const { runs, close } = createPostgresRunStore(URL!);
+    try {
+      // created_at is Date.now(), so six quick enqueues tie; seq breaks the tie in insertion
+      // order. The queue read and the claim agree on it, so what a surface shows as next IS next.
+      const created = [];
+      for (let i = 0; i < 6; i++) created.push((await runs.enqueue({ sessionId: "sSeq", request: turn(`m${i}`) })).run);
+      const expected = created.map((r) => r.id);
+      assert.deepEqual(
+        (await runs.inFlightForThread("sSeq")).map((r) => r.id),
+        expected,
+        "the queue reads back in send order even when created_at ties",
+      );
+      const claimed = await runs.claim("wSeq", 60_000);
+      assert.equal(claimed?.id, expected[0], "the worker claims exactly the head the queue displays");
+
+      // Rows that predate the seq column get backfilled in heap order, not send order. seq is a
+      // tie-break BEHIND created_at, so a scrambled backfill can only ever decide between rows
+      // sharing a millisecond — simulate the worst backfill and prove created_at still rules.
+      const pg = (await import("pg")).default;
+      const raw = new pg.Pool({ connectionString: URL });
+      try {
+        const early = (await runs.enqueue({ sessionId: "sBackfill", request: turn("early") })).run;
+        await new Promise((r) => setTimeout(r, 5));
+        const late = (await runs.enqueue({ sessionId: "sBackfill", request: turn("late") })).run;
+        await raw.query("UPDATE runs SET seq = 999999999 WHERE id = $1", [early.id]);
+        assert.deepEqual(
+          (await runs.inFlightForThread("sBackfill")).map((r) => r.id),
+          [early.id, late.id],
+          "created_at outranks a scrambled seq",
+        );
+      } finally {
+        await raw.end();
+      }
+    } finally {
+      await close();
+    }
+  },
+);
+
+test("pg run store: withdraw and claim cannot both win the same queued run", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!);
+  try {
+    const live = (await runs.enqueue({ sessionId: "sWd", request: turn("live") })).run;
+    assert.ok(await runs.claimById(live.id, "w1", 60_000));
+    // Eight withdrawals of one queued run: the DELETE is guarded on status='pending', so exactly
+    // one can report success — the surface never shows a message as both removed and running.
+    const queued = (await runs.enqueue({ sessionId: "sWd", request: turn("queued") })).run;
+    const results = await Promise.all(Array.from({ length: 8 }, () => runs.withdraw(queued.id)));
+    assert.equal(results.filter(Boolean).length, 1, "exactly one withdrawal wins");
+    assert.equal(await runs.get(queued.id), null);
+
+    // And against a claim: whoever loses reports honestly rather than silently dropping the turn.
+    const contested = (await runs.enqueue({ sessionId: "sWd2", request: turn("contested") })).run;
+    const [withdrawn, claimed] = await Promise.all([
+      runs.withdraw(contested.id),
+      runs.claimById(contested.id, "w2", 60_000),
+    ]);
+    assert.notEqual(withdrawn, Boolean(claimed), "the run is either withdrawn or running, never both");
+  } finally {
+    await close();
+  }
+});
+
 test("pg run store indexes newest active run by session", { skip }, async () => {
   const { close } = createPostgresRunStore(URL!);
   const pg = (await import("pg")).default;

@@ -139,6 +139,20 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       );
     },
 
+    async inFlightForThread(sessionId) {
+      return [...runs.values()]
+        .filter((r) => r.sessionId === sessionId && !isTerminal(r.status))
+        .sort((a, b) => a.createdAt - b.createdAt);
+    },
+
+    async withdraw(runId) {
+      const run = runs.get(runId);
+      if (!run || run.status !== "pending") return false;
+      runs.delete(runId);
+      if (run.dedupKey) byKey.delete(run.dedupKey);
+      return true;
+    },
+
     async activeSessionIds() {
       const ids = new Set<string>();
       for (const r of runs.values()) if (!isTerminal(r.status)) ids.add(r.sessionId);

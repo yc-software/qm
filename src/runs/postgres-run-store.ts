@@ -55,6 +55,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       )`,
     `ALTER TABLE runs ADD COLUMN IF NOT EXISTS delivery_state TEXT`,
     `ALTER TABLE runs ADD COLUMN IF NOT EXISTS error_attempts INT NOT NULL DEFAULT 0`,
+    `ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL`,
+    `CREATE INDEX IF NOT EXISTS idx_runs_status_created_seq ON runs(status, created_at, seq)`,
     `CREATE INDEX IF NOT EXISTS idx_runs_status_created ON runs(status, created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_runs_session_active_created
         ON runs(session_id, created_at DESC) WHERE status IN ('pending','running')`,
@@ -147,7 +149,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            WHERE id = (
              SELECT id FROM runs WHERE status='pending'
                AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
-             ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
+             ORDER BY created_at ASC, seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
           [token, now + ttlMs, workerId, now],
         );
@@ -237,6 +239,19 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         [sessionId],
       );
       return rows[0] ? rowToRun(rows[0]) : null;
+    },
+
+    async inFlightForThread(sessionId: string): Promise<Run[]> {
+      const { rows } = await q(
+        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY created_at ASC, seq ASC",
+        [sessionId],
+      );
+      return rows.map(rowToRun);
+    },
+
+    async withdraw(runId: string): Promise<boolean> {
+      const { rowCount } = await q("DELETE FROM runs WHERE id = $1 AND status = 'pending'", [runId]);
+      return (rowCount ?? 0) > 0;
     },
 
     async activeSessionIds(): Promise<string[]> {

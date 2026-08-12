@@ -47,6 +47,70 @@ for (const backend of backends) {
     assert.equal(await runs.activeForThread("sX"), null, "terminal run is not active");
   });
 
+  test(`[${backend.name}] inFlightForThread puts the running turn first and the queue behind it`, async () => {
+    const { runs } = backend.make();
+    assert.deepEqual(await runs.inFlightForThread("sQ"), [], "nothing in flight");
+    const first = (await runs.enqueue({ sessionId: "sQ", request: turn("first") })).run;
+    const second = (await runs.enqueue({ sessionId: "sQ", request: turn("second") })).run;
+    const third = (await runs.enqueue({ sessionId: "sQ", request: turn("third") })).run;
+    const claimed = await runs.claim("w1", 5_000);
+    assert.equal(claimed?.id, first.id, "the oldest run takes the session's one running slot");
+    assert.deepEqual(
+      (await runs.inFlightForThread("sQ")).map((r) => r.id),
+      [first.id, second.id, third.id],
+      "oldest first: the live turn, then what is queued behind it in send order",
+    );
+    assert.deepEqual(await runs.inFlightForThread("other"), [], "scoped to the thread");
+    await runs.complete(first.id, claimed?.leaseToken ?? "", { status: "ok", reply: "done" });
+    assert.deepEqual(
+      (await runs.inFlightForThread("sQ")).map((r) => r.id),
+      [second.id, third.id],
+      "a finished turn leaves the list; the queue keeps its order",
+    );
+  });
+
+  test(`[${backend.name}] same-instant submissions keep send order, and the claim takes the displayed head`, async () => {
+    const { runs } = backend.make();
+    // Six enqueues inside (usually) one millisecond: createdAt ties, so FIFO here is only as
+    // real as the store's tie handling. Send order must survive, and the worker must take
+    // exactly the head the queue displays.
+    const created = [];
+    for (let i = 0; i < 6; i++) created.push((await runs.enqueue({ sessionId: "sT", request: turn(`m${i}`) })).run);
+    const expected = created.map((r) => r.id);
+    assert.deepEqual(
+      (await runs.inFlightForThread("sT")).map((r) => r.id),
+      expected,
+      "the queue reads back in send order even when createdAt ties",
+    );
+    const claimed = await runs.claim("w1", 5_000);
+    assert.equal(claimed?.id, expected[0], "the worker claims exactly the head the queue displays");
+  });
+
+  test(`[${backend.name}] withdraw drops a queued run and refuses one already claimed`, async () => {
+    const { runs } = backend.make();
+    const live = (await runs.enqueue({ sessionId: "sW", request: turn("live") })).run;
+    const queued = (await runs.enqueue({ sessionId: "sW", request: turn("queued") })).run;
+    assert.ok(await runs.claim("w1", 5_000));
+    assert.equal(await runs.withdraw(queued.id), true, "a run that has not started can be withdrawn");
+    assert.equal(await runs.get(queued.id), null, "and it is gone, so no worker can ever claim it");
+    assert.equal(await runs.withdraw(queued.id), false, "withdrawing it twice is not a second removal");
+    assert.equal(await runs.withdraw(live.id), false, "a running turn cannot be un-sent");
+    assert.equal((await runs.get(live.id))?.status, "running", "and is left untouched");
+    assert.deepEqual(
+      (await runs.inFlightForThread("sW")).map((r) => r.id),
+      [live.id],
+    );
+  });
+
+  test(`[${backend.name}] a withdrawn run frees its dedup key`, async () => {
+    const { runs } = backend.make();
+    const first = (await runs.enqueue({ sessionId: "sD", request: turn("once"), dedupKey: "k" })).run;
+    assert.equal(await runs.withdraw(first.id), true);
+    const again = await runs.enqueue({ sessionId: "sD", request: turn("once"), dedupKey: "k" });
+    assert.equal(again.deduped, false, "the key is free again — a withdrawn turn can be re-sent");
+    assert.notEqual(again.run.id, first.id);
+  });
+
   test(`[${backend.name}] activeSessionIds lists distinct in-flight sessions, drops terminal ones`, async () => {
     const { runs } = backend.make();
     assert.deepEqual(await runs.activeSessionIds(), [], "nothing in flight");

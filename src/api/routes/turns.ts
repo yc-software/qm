@@ -98,7 +98,15 @@ async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
   const threadRef = url.searchParams.get("threadRef") ?? "";
   if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
   const active = await app.activeRunForThread(threadRef, actor?.p);
-  return sendJson(res, 200, { runId: active?.runId ?? null });
+  return sendJson(res, 200, { runId: active?.runId ?? null, ...(active?.queued ? { queued: active.queued } : {}) });
+}
+
+async function postRunWithdraw(ctx: ApiCtx): Promise<void> {
+  const { res, app, actor } = ctx;
+  const outcome = await app.withdrawRun(ctx.params.id!, actor?.p);
+  if (outcome.withdrawn) return sendJson(res, 200, outcome);
+  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
+  return sendJson(res, 409, outcome);
 }
 
 async function listDeliveries(ctx: ApiCtx): Promise<void> {
@@ -157,6 +165,7 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/approvals/:id", auth: "source", handle: getApproval },
   { method: "POST", path: "/v1/runs/:id/delivery-state", auth: "source", handle: postRunDeliveryState },
   { method: "POST", path: "/v1/runs/:id/signal", auth: "source", handle: postRunSignal },
+  { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
   { method: "GET", path: "/v1/runs/:id", auth: "source", handle: getRun },
   { method: "GET", path: "/v1/runs", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
