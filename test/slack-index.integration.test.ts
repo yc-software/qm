@@ -267,7 +267,7 @@ class FakeCore implements SlackCoreClient {
   async waitRun(runId: string, hooks: any = {}): Promise<TurnResult | null> {
     this.polled.push(runId);
     if (this.runGate) await this.runGate;
-    for (const delta of this.streamDeltas) hooks.onDelta?.(delta);
+    for (const delta of this.streamDeltas) await hooks.onDelta?.(delta);
     if (this.streamTasks.length) await hooks.onTasks?.(this.streamTasks);
     return this.result;
   }
@@ -484,6 +484,34 @@ test("a task-only native stream appends the terminal reply before stopping", asy
         chunks: [{ type: "markdown_text", text: "The deployment is healthy." }],
       },
     ]);
+    assert.deepEqual(f.client.streamsStopped, [{ channel: "D1", ts: "stream-1" }]);
+    assert.equal(f.client.posts.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("native Slack streaming splits large model deltas at the API chunk limit", async () => {
+  const f = await fixture();
+  try {
+    const reply = "x".repeat(24_001);
+    f.core.queuedRunId = "R-large-delta";
+    f.core.streamDeltas = [reply];
+    f.core.result = { status: "ok", reply };
+
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "write it", ts: "100.11" });
+
+    const texts = [
+      ...f.client.streamsStarted.flatMap((request) => request.chunks),
+      ...f.client.streamsAppended.flatMap((request) => request.chunks),
+    ]
+      .filter((chunk) => chunk.type === "markdown_text")
+      .map((chunk) => chunk.text);
+    assert.deepEqual(
+      texts.map((text) => text.length),
+      [12_000, 12_000, 1],
+    );
+    assert.equal(texts.join(""), reply);
     assert.deepEqual(f.client.streamsStopped, [{ channel: "D1", ts: "stream-1" }]);
     assert.equal(f.client.posts.length, 0);
   } finally {

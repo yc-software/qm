@@ -185,6 +185,7 @@ type NativeAgentChunk =
     };
 
 const NATIVE_STREAM_BUFFER_SIZE = 256;
+const NATIVE_STREAM_CHUNK_SIZE = 12_000;
 
 export interface NativeAgentPresenter {
   begin(): Promise<void>;
@@ -262,11 +263,14 @@ export function createNativeAgentPresenter(deps: {
     });
     return state === "active";
   };
-  const flushPendingText = (): Promise<boolean> => {
-    if (!pendingText) return Promise.resolve(state === "starting" || state === "active");
-    const text = pendingText;
-    pendingText = "";
-    return send([{ type: "markdown_text", text }]);
+  const flushPendingText = async (): Promise<boolean> => {
+    if (!pendingText) return state === "starting" || state === "active";
+    while (pendingText) {
+      const text = pendingText.slice(0, NATIVE_STREAM_CHUNK_SIZE);
+      pendingText = pendingText.slice(NATIVE_STREAM_CHUNK_SIZE);
+      if (!(await send([{ type: "markdown_text", text }]))) return false;
+    }
+    return true;
   };
   return {
     async begin() {
