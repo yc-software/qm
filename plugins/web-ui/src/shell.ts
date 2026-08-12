@@ -549,14 +549,14 @@ export function renderSidebarTop(): void {
           <button
             class="chat-search-open"
             type="button"
-            aria-label="Search chats"
+            aria-label="Search your chats"
             @click=${() => {
               hideTooltip();
               openChatSearch();
             }}
-            @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search chats · ${SEARCH_HOTKEY_LABEL}`)}
+            @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
             @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
-            @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search chats · ${SEARCH_HOTKEY_LABEL}`)}
+            @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
             @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
           >
             ${icon(Search, 13)}

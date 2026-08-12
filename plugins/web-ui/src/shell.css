@@ -7412,3 +7412,23 @@ h3.ambient-field-label {
   font-size: 11px;
   color: var(--muted-foreground);
 }
+.chat-search-group.archived b {
+  color: var(--muted-foreground, #8a8a8a);
+}
+.chat-search-archived-tag {
+  font-style: normal;
+  font-size: 10px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-foreground, #8a8a8a);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chat-search-row.archived {
+  opacity: 0.65;
+}
+.chat-search-failed {
+  color: var(--destructive, #b42318);
+}
