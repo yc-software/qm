@@ -39,6 +39,8 @@
         "files:write",
         "reactions:write",
         "reactions:read",
+        "pins:read",
+        "pins:write",
         "emoji:read"
       ]
     }
@@ -60,7 +62,9 @@
         "reaction_removed"
       ]
     },
-    "interactivity": { "is_enabled": true },
+    "interactivity": {
+      "is_enabled": true
+    },
     "org_deploy_enabled": false,
     "socket_mode_enabled": true,
     "token_rotation_enabled": false

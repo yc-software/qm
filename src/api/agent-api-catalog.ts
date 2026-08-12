@@ -51,6 +51,24 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    match: (m, p) => p === "/v1/channel-header-pin" && (m === "GET" || m === "PUT"),
+    guidance:
+      "The pinned Slack header (a small pinned message naming the model in use) follows an org-wide default (off unless an admin turned it on). Only override it for a channel scope when someone in that channel asks.",
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/channel-header-pin",
+        summary: "read whether this channel scope shows the pinned model header in Slack",
+      },
+      {
+        method: "PUT",
+        path: "/v1/channel-header-pin",
+        summary:
+          "override the pinned Slack header for this channel scope with {on: boolean}; {on: null} reverts to the org default",
+      },
+    ],
+  },
+  {
     match: (m, p) =>
       (p === "/v1/projects" && (m === "GET" || m === "POST")) ||
       (/^\/v1\/projects\/[^/]+$/.test(p) && m === "PATCH") ||

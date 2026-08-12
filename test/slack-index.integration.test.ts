@@ -61,15 +61,28 @@ class FakeSlackClient {
       this.channelsById.set(channel, { ...existing, topic: { value: topic, creator: "UBOT" } });
       return { ok: true };
     },
-    setPurpose: async ({ channel, purpose }: { channel: string; purpose: string }) => {
-      this.purposes.push({ channel, purpose });
-      const existing = this.channelsById.get(channel) ?? { id: channel };
-      this.channelsById.set(channel, { ...existing, purpose: { value: purpose, creator: "UBOT" } });
+  };
+  readonly topics: { channel: string; topic: string }[] = [];
+  readonly pinnedByChannel = new Map<string, { ts: string; user: string; text: string }[]>();
+  readonly pins = {
+    list: async ({ channel }: { channel: string }) => ({
+      items: (this.pinnedByChannel.get(channel) ?? []).map((message) => ({ message })),
+    }),
+    add: async ({ channel, timestamp }: { channel: string; timestamp: string }) => {
+      const lastPost = this.posts.filter((p) => p.channel === channel).at(-1);
+      const pinned = this.pinnedByChannel.get(channel) ?? [];
+      pinned.push({ ts: timestamp, user: "UBOT", text: lastPost?.text ?? "" });
+      this.pinnedByChannel.set(channel, pinned);
+      return { ok: true };
+    },
+    remove: async ({ channel, timestamp }: { channel: string; timestamp: string }) => {
+      this.pinnedByChannel.set(
+        channel,
+        (this.pinnedByChannel.get(channel) ?? []).filter((m) => m.ts !== timestamp),
+      );
       return { ok: true };
     },
   };
-  readonly topics: { channel: string; topic: string }[] = [];
-  readonly purposes: { channel: string; purpose: string }[] = [];
   readonly chat = {
     postMessage: async (body: any) => {
       this.posts.push(body);
@@ -199,6 +212,8 @@ class FakeCore implements SlackCoreClient {
   private runGate: Promise<void> | undefined;
   private releaseRun: (() => void) | undefined;
   readonly modelChangeListeners: Array<(scope: any) => void> = [];
+  readonly headerPinChangeListeners: Array<(scope: any) => void> = [];
+  readonly headerPinScopes = new Set<string>();
 
   async externalSlackParticipants(): Promise<boolean> {
     return this.externalParticipants;
@@ -208,6 +223,12 @@ class FakeCore implements SlackCoreClient {
   }
   onScopeModelChanged(listener: (scope: any) => void): void {
     this.modelChangeListeners.push(listener);
+  }
+  async channelHeaderPinEnabled(scope: any): Promise<boolean> {
+    return this.headerPinScopes.has(String(scope));
+  }
+  onChannelHeaderPinChanged(listener: (scope: any) => void): void {
+    this.headerPinChangeListeners.push(listener);
   }
   async stageBlob(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }> {
     return { blobId: "blob-1", sizeBytes: bytes.byteLength };
@@ -409,8 +430,7 @@ test("a human's DM sets the conversation header to the serving model + web surfa
     assert.deepEqual(f.client.topics, [
       {
         channel: "D1",
-        topic:
-          "Quartermaster is using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
+        topic: "Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
       },
     ]);
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });
@@ -421,39 +441,94 @@ test("a human's DM sets the conversation header to the serving model + web surfa
   }
 });
 
-test("a channel's description names the channel's own default model and project page", async () => {
+test("joining a channel posts the welcome and a pinned header naming the model and project page", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
-    const mention = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> hi", ts: "100.1" };
-    f.client.messagesByChannel.set("C1", [mention]);
-    await f.app.emitEvent("app_mention", mention, "Ev-channel-header");
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(f.client.purposes, [
-      {
-        channel: "C1",
-        purpose:
-          "Quartermaster is using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>",
-      },
-    ]);
+    f.core.headerPinScopes.add("channel:C1");
+    await f.app.emitEvent("member_joined_channel", { user: "UBOT", channel: "C1", event_ts: "100.1" }, "Ev-bot-join");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(
+      f.client.pinnedByChannel.get("C1")?.map((m) => m.text),
+      ["Using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>"],
+    );
     assert.deepEqual(f.client.topics, [], "a channel's topic stays the members' own scratch space");
   } finally {
     await f.stop();
   }
 });
 
-test("a scope's model change rewrites its channel description without waiting for a message", async () => {
+test("joining a channel with the toggle off (the default) posts only the welcome — no pin", async () => {
+  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
+  try {
+    await f.app.emitEvent("member_joined_channel", { user: "UBOT", channel: "C1", event_ts: "100.1" }, "Ev-bot-join");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(f.client.posts.length, 1, "only the welcome message lands");
+    assert.equal(f.client.pinnedByChannel.get("C1"), undefined);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("flipping the toggle on creates the pinned header; flipping it off removes it", async () => {
+  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
+  try {
+    assert.equal(f.core.headerPinChangeListeners.length, 1, "the plugin subscribes to toggle changes");
+    f.core.headerPinScopes.add("channel:C1");
+    for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(
+      f.client.pinnedByChannel.get("C1")?.map((m) => m.text),
+      ["Using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>"],
+      "toggle-on posts and pins the header",
+    );
+    f.core.headerPinScopes.delete("channel:C1");
+    for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(f.client.pinnedByChannel.get("C1"), [], "toggle-off unpins the header");
+    assert.equal(f.client.deletes.length, 1, "and deletes the bot's header message");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a mention in a channel with no pinned header never creates one", async () => {
+  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
+  try {
+    const mention = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> hi", ts: "100.1" };
+    f.client.messagesByChannel.set("C1", [mention]);
+    await f.app.emitEvent("app_mention", mention, "Ev-channel-header");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(f.client.pinnedByChannel.get("C1"), undefined);
+    assert.deepEqual(f.client.updates, []);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a scope's model change rewrites its channel's pinned header without waiting for a message", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
     assert.equal(f.core.modelChangeListeners.length, 1, "the plugin subscribes to core's model changes");
-    for (const listener of f.core.modelChangeListeners) listener("channel:C1");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(f.client.purposes, [
+    f.core.headerPinScopes.add("channel:C1");
+    f.client.pinnedByChannel.set("C1", [
       {
-        channel: "C1",
-        purpose:
-          "Quartermaster is using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>",
+        ts: "50.0",
+        user: "UBOT",
+        text: "Using Claude Sonnet 5 here. <https://claw.example.dev/projects/channel/C1|More settings>",
       },
     ]);
+    for (const listener of f.core.modelChangeListeners) listener("channel:C1");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(
+      f.client.updates.map((u) => ({ channel: u.channel, ts: u.ts, text: u.text })),
+      [
+        {
+          channel: "C1",
+          ts: "50.0",
+          text: "Using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>",
+        },
+      ],
+    );
     for (const listener of f.core.modelChangeListeners) listener("personal:alice@example.com");
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");

@@ -6313,6 +6313,21 @@ a.chat-row-open {
 .context-model-status.error {
   color: var(--destructive, #c0392b);
 }
+.channel-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.channel-header-select {
+  align-self: flex-start;
+  min-width: min(260px, 100%);
+}
+.channel-header-hint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
 .ambient-policy {
   display: flex;
   flex-direction: column;

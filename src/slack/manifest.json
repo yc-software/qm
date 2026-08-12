@@ -39,6 +39,8 @@
         "files:write",
         "reactions:write",
         "reactions:read",
+        "pins:read",
+        "pins:write",
         "emoji:read"
       ]
     }

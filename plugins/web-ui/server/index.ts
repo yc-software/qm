@@ -1013,6 +1013,27 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/channel-header-pin",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
+      const qs = new URLSearchParams({ principalId: user, scopeId });
+      return relayCore(res, "GET", `/v1/channel-header-pin?${qs.toString()}`);
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/channel-header-pin",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const body = await readJson<Record<string, unknown>>(req, res);
+      if (!body) return;
+      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
+      return relayCore(res, "PUT", "/v1/channel-header-pin", JSON.stringify({ ...body, principalId: user, scopeId }));
+    },
+  },
+  {
+    method: "GET",
     path: "/api/scope-resources",
     handle: async (c) => {
       const { res, url, user } = c;

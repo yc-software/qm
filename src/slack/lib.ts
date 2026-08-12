@@ -118,6 +118,8 @@ export {
   channelWelcomeMessage,
   surfaceHeaderText,
   headerUpdate,
+  isSurfaceHeaderMessage,
+  findHeaderPin,
   createSurfaceHeaderEnsurer,
   scopeSurfaceUrl,
   type SurfaceHeaderClient,

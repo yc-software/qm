@@ -434,6 +434,7 @@ export function buildApp(
     egressPolicies: artifactMap<PersistedEgressPolicy>("egress_policies"),
     unfulfilledInsights: artifactMap<PersistedScopedFlag>("unfulfilled_insights_flag"),
     externalSlackParticipants: artifactMap<PersistedScopedFlag>("external_slack_participants_flag"),
+    channelHeaderPin: artifactMap<PersistedScopedFlag>("channel_header_pin_flag"),
     baseModels: artifactMap<PersistedBaseModel>("base_model_configs"),
     approvedHarnesses: artifactMap<PersistedApprovedHarnesses>("approved_harness_configs"),
     orgAmbient: artifactMap<PersistedScopedFlag>("org_ambient_flag"),

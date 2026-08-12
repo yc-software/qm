@@ -27,7 +27,13 @@ export function registerSlackEvents(
     ids: BotIdentity;
     deduper: ReturnType<typeof createDeduper>;
     webUiPublicUrl?: string;
-    ensureHeader?: (client: SurfaceHeaderClient, channel: string, scopeId: string, kind: "dm" | "channel") => void;
+    ensureHeader?: (
+      client: SurfaceHeaderClient,
+      channel: string,
+      scopeId: string,
+      kind: "dm" | "channel",
+      ensureOpts?: { pinNew?: boolean },
+    ) => void;
   },
 ): void {
   const { handler, mirror, directory, ids, deduper } = deps;
@@ -184,7 +190,9 @@ export function registerSlackEvents(
         ...(deps.ensureHeader
           ? {
               ensureHeader: (channel: string) =>
-                deps.ensureHeader!(client as SurfaceHeaderClient, channel, `channel:${channel}`, "channel"),
+                deps.ensureHeader!(client as SurfaceHeaderClient, channel, `channel:${channel}`, "channel", {
+                  pinNew: true,
+                }),
             }
           : {}),
       });

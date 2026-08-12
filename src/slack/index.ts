@@ -1,4 +1,4 @@
-import { swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import bolt from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import { createDeduper, createThreadTracker } from "./lib.ts";
@@ -131,12 +131,43 @@ export async function startSlackPlugin(
   const approvals = createApprovals({ core, bridge, directory, threads });
   const ensureHeader = createSurfaceHeaderEnsurer({
     headerFacts: (scope) => core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0]),
+    channelPinEnabled: (scope) =>
+      core.channelHeaderPinEnabled(scope as Parameters<typeof core.channelHeaderPinEnabled>[0]),
     webUiPublicUrl: cfg.webUiPublicUrl,
     ids,
   });
   core.onScopeModelChanged((scope) => {
     const channel = scope.startsWith("channel:") ? scope.slice("channel:".length) : "";
     if (channel) ensureHeader(app.client as unknown as SurfaceHeaderClient, channel, scope, "channel");
+  });
+  core.onChannelHeaderPinChanged((scope) => {
+    const channel = scope.startsWith("channel:") ? scope.slice("channel:".length) : "";
+    if (channel) {
+      ensureHeader(app.client as unknown as SurfaceHeaderClient, channel, scope, "channel", { pinNew: true });
+      return;
+    }
+    if (!scope.startsWith("org:")) return;
+    // The org-wide default changed: re-ensure every channel the bot is in. The
+    // ensurer re-reads each scope's effective setting, so explicit per-channel
+    // overrides come out unchanged.
+    void (async () => {
+      try {
+        for await (const res of (app.client as any).paginate("conversations.list", {
+          types: "public_channel,private_channel",
+          exclude_archived: true,
+          limit: 1000,
+        }) as AsyncIterable<{ channels?: Array<{ id?: string; is_member?: boolean }> }>) {
+          for (const c of res.channels ?? []) {
+            if (!c?.id || !c.is_member) continue;
+            ensureHeader(app.client as unknown as SurfaceHeaderClient, c.id, `channel:${c.id}`, "channel", {
+              pinNew: true,
+            });
+          }
+        }
+      } catch (err) {
+        console.error("[slack] channel header default sweep failed:", errMessage(err));
+      }
+    })();
   });
   const handler = createTurnHandler({
     bridge,
