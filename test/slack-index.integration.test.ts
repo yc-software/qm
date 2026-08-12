@@ -395,11 +395,12 @@ test("a mid-turn message that STEERS the live run does not post the reply twice"
     f.core.finishRun({ status: "ok", reply: "agent reply" });
     await Promise.all([first, steer]);
 
-    assert.equal(
-      f.client.posts.filter((p) => p.text === "agent reply").length,
-      1,
-      "the shared run's reply is posted once, by the handler that owns it",
-    );
+    const deliveredReplies = [
+      ...f.client.posts.map((post) => post.text),
+      ...f.client.streamsStarted.flatMap((request) => request.chunks.map((chunk: { text?: string }) => chunk.text)),
+      ...f.client.streamsAppended.flatMap((request) => request.chunks.map((chunk: { text?: string }) => chunk.text)),
+    ].filter((text) => text === "agent reply");
+    assert.equal(deliveredReplies.length, 1, "the shared run's reply is delivered once, by the handler that owns it");
   } finally {
     await f.stop();
   }
@@ -429,7 +430,7 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
   }
 });
 
-test("a queued DM uses Slack native status, reply streaming, and task updates without a duplicate post", async () => {
+test("a queued DM keeps model text private until terminal approval and uses native task updates", async () => {
   const f = await fixture();
   try {
     f.core.queuedRunId = "R-stream";
@@ -447,7 +448,7 @@ test("a queued DM uses Slack native status, reply streaming, and task updates wi
       {
         channel: "D1",
         thread_ts: "100.9",
-        chunks: [{ type: "markdown_text", text: "Checking now." }],
+        chunks: [{ type: "task_update", id: "lookup", title: "Inspect deployment", status: "in_progress" }],
         task_display_mode: "timeline",
       },
     ]);
@@ -455,10 +456,34 @@ test("a queued DM uses Slack native status, reply streaming, and task updates wi
       {
         channel: "D1",
         ts: "stream-1",
-        chunks: [{ type: "task_update", id: "lookup", title: "Inspect deployment", status: "in_progress" }],
+        chunks: [{ type: "markdown_text", text: "Checking now." }],
       },
     ]);
     assert.deepEqual(f.client.streamsStopped, [{ channel: "D1", ts: "stream-1" }]);
+    assert.equal(f.client.posts.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a rejected queued turn deletes its provisional native task stream", async () => {
+  const f = await fixture();
+  try {
+    f.core.queuedRunId = "R-silent";
+    f.core.streamDeltas = ["must never be shown"];
+    f.core.streamTasks = [{ id: "lookup", title: "Inspect deployment", status: "in_progress" }];
+    f.core.result = { status: "silent" };
+
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "check it", ts: "100.12" });
+
+    assert.equal(
+      f.client.streamsStarted.some((request) =>
+        request.chunks.some((chunk: { type: string; text?: string }) => chunk.text === "must never be shown"),
+      ),
+      false,
+    );
+    assert.deepEqual(f.client.deletes, [{ channel: "D1", ts: "stream-1" }]);
+    assert.deepEqual(f.client.streamsStopped, []);
     assert.equal(f.client.posts.length, 0);
   } finally {
     await f.stop();

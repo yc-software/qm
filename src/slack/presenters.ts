@@ -333,9 +333,11 @@ export function createNativeAgentPresenter(deps: {
       await chain;
       if (state === "active" && messageTs) {
         try {
-          await deps.stop(messageTs);
+          await deps.remove(messageTs);
+          messageTs = undefined;
           state = "stopped";
         } catch (error) {
+          state = "orphaned";
           deps.onError?.(error);
         }
       }

@@ -61,7 +61,6 @@ import {
   type SlackConversationKind,
   applyAndLogReactions,
   cleanAgentReplyForSlack,
-  createStreamingReplyFilter,
   conversationPlaceLabel,
   slackSurfaceInstructions,
 } from "./messaging.ts";
@@ -436,9 +435,6 @@ export function createTurnHandler(deps: {
       });
       void nativeAgent.begin();
     }
-    const streamingReply = createStreamingReplyFilter();
-    let streamedNativeText = false;
-
     const turn: Omit<CoreTurnBody, "approval"> = {
       actor,
       conversation: {
@@ -489,18 +485,7 @@ export function createTurnHandler(deps: {
           // Folded into a live run: the envelope is durably accepted just the same, but the run
           // stays pinned to its own handler — claiming it here would unpin it on the way out.
           onSteered: () => inc.ackGate?.persisted(),
-          ...(ack
-            ? {
-                onDelta: async (delta: string) => {
-                  const visible = streamingReply.push(delta);
-                  if (visible && (await nativeAgent?.onDelta(visible))) streamedNativeText = true;
-                },
-                onFirstBlock: (blockText: string) => {
-                  if (!nativeAgent?.ownsSurface()) ack.onFirstBlock(cleanAgentReplyForSlack(blockText).text);
-                },
-                onSurfacePosted: () => ack.onSurfacePosted(),
-              }
-            : {}),
+          ...(ack ? { onSurfacePosted: () => ack.onSurfacePosted() } : {}),
           ...(taskList
             ? {
                 onTasks: async (tasks: RunTaskView[]) => {
@@ -564,10 +549,8 @@ export function createTurnHandler(deps: {
       const postText = reply;
       const tDeliverStart = performance.now();
       let finalizedTaskList = false;
-      const finalStreamDelta = streamingReply.flush();
-      if (finalStreamDelta && (await nativeAgent?.onDelta(finalStreamDelta))) streamedNativeText = true;
-      if (postText && !streamedNativeText && nativeAgent?.ownsSurface()) {
-        await nativeAgent.onDelta(postText);
+      if (postText && (queuedRunId || nativeAgent?.ownsSurface())) {
+        await nativeAgent?.onDelta(postText);
       }
       const finalizedNative = (await nativeAgent?.finalize()) ?? false;
       if (result.attachments?.length) {

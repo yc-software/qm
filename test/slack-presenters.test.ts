@@ -251,6 +251,48 @@ test("native agent presenter suppresses fallback when a failed partial stream ca
   assert.equal(await presenter.finalize(), true);
 });
 
+test("native agent presenter deletes a provisional stream when the turn is abandoned", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      return "171.10";
+    },
+    append: async () => {
+      calls.push("append");
+    },
+    stop: async () => {
+      calls.push("stop");
+    },
+    remove: async (ts) => {
+      calls.push(`remove:${ts}`);
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+  });
+
+  await presenter.begin();
+  assert.equal(
+    await presenter.onTasks([{ id: "lookup", title: "Inspect deployment", status: "in_progress" }]),
+    true,
+  );
+  await presenter.settle();
+
+  assert.deepEqual(calls, [
+    "status:Thinking…",
+    "start",
+    "checkpoint",
+    "surface",
+    "remove:171.10",
+    "status:",
+  ]);
+});
+
 test("renderTaskList renders every terminal state", () => {
   assert.equal(
     renderTaskList([
