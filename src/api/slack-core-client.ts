@@ -223,6 +223,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
             if (isTerminal(run.status)) {
               const view = await deps.app.getRun(runId);
               await emitTasks().catch(swallowAs("slack-core-client: terminal task refresh", undefined));
+              await deps.turnStream.drain(runId);
               if (view?.surfacePosted) signalSurface();
               return (view?.result as TurnResult | null | undefined) ?? null;
             }

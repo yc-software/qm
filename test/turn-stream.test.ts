@@ -22,7 +22,7 @@ test("accumulates deltas per run and isolates runs", () => {
   assert.equal(s.snapshot("r2"), "world");
 });
 
-test("subscribers receive public reply deltas in order", () => {
+test("subscribers receive public reply deltas in order", async () => {
   const s = createTurnStream();
   const deltas: string[] = [];
   const unsubscribe = s.subscribe("r1", {
@@ -35,10 +35,11 @@ test("subscribers receive public reply deltas in order", () => {
   s.publish("r2", "private to another run");
   unsubscribe();
   s.publish("r1", "!");
+  await s.drain("r1");
   assert.deepEqual(deltas, ["Hel", "lo"]);
 });
 
-test("a late subscriber receives the buffered prefix before live deltas", () => {
+test("a late subscriber receives the buffered prefix before live deltas", async () => {
   const s = createTurnStream();
   s.publish("r1", "Hel");
   const deltas: string[] = [];
@@ -48,10 +49,33 @@ test("a late subscriber receives the buffered prefix before live deltas", () => 
     },
   });
   s.publish("r1", "lo");
+  await s.drain("r1");
   assert.deepEqual(deltas, ["Hel", "lo"]);
 });
 
-test("a directive split across buffered and live deltas stays private", () => {
+test("drain waits for asynchronous delta listeners and preserves delivery order", async () => {
+  const s = createTurnStream();
+  const deltas: string[] = [];
+  let releaseFirst: (() => void) | undefined;
+  const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve));
+  s.subscribe("r1", {
+    onDelta: async (delta) => {
+      if (delta === "Hel") await firstGate;
+      deltas.push(delta);
+    },
+  });
+
+  s.publish("r1", "Hel");
+  s.publish("r1", "lo");
+  const draining = s.drain("r1");
+  await Promise.resolve();
+  assert.deepEqual(deltas, []);
+  releaseFirst?.();
+  await draining;
+  assert.deepEqual(deltas, ["Hel", "lo"]);
+});
+
+test("a directive split across buffered and live deltas stays private", async () => {
   const s = createTurnStream();
   const filter = createStreamingReplyFilter();
   const publicDeltas: string[] = [];
@@ -62,6 +86,7 @@ test("a directive split across buffered and live deltas stays private", () => {
     },
   });
   s.publish("r1", " <@U2> | private context]] Done.");
+  await s.drain("r1");
   publicDeltas.push(filter.flush());
   assert.equal(publicDeltas.join(""), "Public.  Done.");
 });
