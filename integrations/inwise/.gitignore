@@ -1,0 +1,5 @@
+dist/
+node_modules/
+*.local.json
+!e2e/sandbox/tools/
+!e2e/sandbox/tools/**

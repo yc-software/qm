@@ -1,8 +1,12 @@
 # Inwise OSS meeting layer for QM
 
-We are providing the open source meeting layer to QM.
+We are providing Inwise OSS as a local meeting-memory layer for QM. It lets a personal QM agent search meetings, transcripts, people, upcoming meetings, and action items without requiring Inwise Cloud.
 
-The adapter lets QM use a person's local Inwise meetings without requiring Inwise Cloud. It is read-only and intended for personal conversations.
+This PR includes the adapter under [`integrations/inwise`](../integrations/inwise/README.md):
 
-- [Inwise OSS adapter pull request](https://github.com/Wise-Ai-Org/inwise-opensource/pull/7)
-- [Deployed QM bridge test](https://github.com/Wise-Ai-Org/inwise-opensource/blob/codex/qm-integration/integrations/qm/e2e/TEST_REPORT.md)
+- a read-only `inwise` CLI and QM [`tool.json`](../integrations/inwise/qm/tool.json)
+- a QM meeting-memory [`SKILL.md`](../integrations/inwise/skill/SKILL.md)
+- an outbound laptop connector and encrypted self-hosted relay
+- a reproducible QM deployment fixture and [passing bridge test](../integrations/inwise/e2e/TEST_REPORT.md)
+
+Meeting data remains in the user's local Inwise installation. The initial adapter is for personal conversations and does not expose Inwise's write tools.

@@ -1,0 +1,31 @@
+{
+  "name": "@inwise/qm-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "End-to-end encrypted bridge between Inwise OSS and a QM sandbox",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "inwise": "dist/cli/index.js",
+    "inwise-qm-edge": "dist/edge/index.js",
+    "inwise-qm-relay": "dist/relay/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:sandbox-cli": "npm run build && node scripts/build-sandbox-cli.mjs",
+    "prepare:e2e": "npm run build:sandbox-cli && node scripts/stage-qm-deployment.mjs e2e",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "test:deployed": "npm run prepare:e2e && node scripts/deployed-e2e.mjs",
+    "start:relay": "node dist/relay/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "contract": 1,
+  "orgId": "inwise-qm-e2e",
+  "publicUrl": "http://localhost:8080",
+  "target": "docker",
+  "services": ["core"],
+  "plugins": [],
+  "skills": [],
+  "env": {
+    "core": {
+      "HARNESS": "mock",
+      "SANDBOX_BACKEND": "local",
+      "LOCAL_SANDBOX_IMAGE": "inwise-qm-e2e:local",
+      "PUBLIC_API_URL": "http://host.docker.internal:8080",
+    },
+  },
+  "sandbox": {
+    "app": "inwise-qm-e2e-sandboxes",
+    "env": {
+      "INWISE_QM_RELAY_URL": "http://host.docker.internal:18787",
+    },
+  },
+}
