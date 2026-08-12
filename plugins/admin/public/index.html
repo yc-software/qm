@@ -4339,6 +4339,33 @@
                     ><span class="status" id="st-org-ambient"></span>
                   </div>
                 </section>
+                <section class="card setting-row hidden" id="card-channel-header-pin-default">
+                  <div class="head">
+                    <h2>Channel pinned header</h2>
+                    <p>
+                      Org-wide, default off. When on, the agent posts and pins a small header message (naming the model
+                      in use) in every Slack channel it's in. Channels can still override it either way from their
+                      project page.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <label class="setting-toggle">
+                      <input type="checkbox" id="channel-header-pin-default" />
+                      <span class="setting-switch" aria-hidden="true"></span>
+                      <span class="setting-copy"
+                        ><strong>Pin the header by default</strong
+                        ><small
+                          >Applies to channels without an explicit choice; flipping this updates existing channels
+                          within a moment.</small
+                        ></span
+                      >
+                    </label>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="channel-header-pin-default">Apply</button
+                    ><span class="status" id="st-channel-header-pin-default"></span>
+                  </div>
+                </section>
                 <div class="governance-group" id="governance-intelligence">
                   <h2>Models &amp; browsing</h2>
                   <p>The models, browser runtime, and organization context available on future turns.</p>
@@ -6363,6 +6390,9 @@
         const showInteractiveFastMode = scope.startsWith("org:") && "interactiveFastMode" in r.data;
         $("card-interactive-fast-mode").classList.toggle("hidden", !showInteractiveFastMode);
         if (showInteractiveFastMode) $("interactive-fast-mode").checked = r.data.interactiveFastMode === true;
+        const showHeaderPinDefault = scope.startsWith("org:") && "channelHeaderPinDefault" in r.data;
+        $("card-channel-header-pin-default").classList.toggle("hidden", !showHeaderPinDefault);
+        if (showHeaderPinDefault) $("channel-header-pin-default").checked = !!r.data.channelHeaderPinDefault;
 
         const opts = r.data.baseModelOptions || [];
         const dflt = r.data.baseModelDefault || "";
@@ -7984,6 +8014,7 @@
         "external-slack-participants": () => ({ on: $("external-slack-participants").checked }),
         "org-ambient": () => ({ on: $("org-ambient").checked }),
         "interactive-fast-mode": () => ({ on: $("interactive-fast-mode").checked }),
+        "channel-header-pin-default": () => ({ on: $("channel-header-pin-default").checked }),
         runtime: () => ({ harnessId: $("base-harness").value, modelId: $("base-model").value }),
         "approved-harnesses": () => ({
           ids: Array.from(document.querySelectorAll("#approved-harnesses-list input[type=checkbox]:checked")).map(
@@ -8016,6 +8047,7 @@
         "external-slack-participants": "st-external-slack-participants",
         "org-ambient": "st-org-ambient",
         "interactive-fast-mode": "st-interactive-fast-mode",
+        "channel-header-pin-default": "st-channel-header-pin-default",
         runtime: "st-runtime",
         "approved-harnesses": "st-approved-harnesses",
         "webui-models": "st-webui-models",

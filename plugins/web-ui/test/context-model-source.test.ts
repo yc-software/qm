@@ -18,7 +18,7 @@ test("the panel offers inheriting the org default and names what is serving now"
   assert.match(panel, /!options\.some\(\(o\) => o\.value === selected\)/);
   assert.match(panel, /no longer offered/);
   assert.match(panel, /Saved — new conversations here run on/);
-  assert.match(panel, /The channel description in Slack names this model\./);
+  assert.match(panel, /The pinned Slack header \(when enabled below\) names this model\./);
 });
 
 test("the panel is labelled, focus-keyed, and disabled while saving", () => {

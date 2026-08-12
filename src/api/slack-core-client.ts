@@ -56,7 +56,9 @@ interface DirectoryPush {
 export interface SlackCoreClient {
   externalSlackParticipants(): Promise<boolean>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
+  channelHeaderPinEnabled(scope: ScopeId): Promise<boolean>;
   onScopeModelChanged(listener: (scope: ScopeId) => void): void;
+  onChannelHeaderPinChanged(listener: (scope: ScopeId) => void): void;
   stageBlob(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }>;
   readBlob(blobId: string): Promise<Buffer>;
   readFileArtifact(artifactId: string, viewerId: string): Promise<Buffer>;
@@ -137,8 +139,16 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return { ...(agentLabel ? { agentLabel } : {}), modelName: modelDisplayName(choice.modelId) };
     },
 
+    async channelHeaderPinEnabled(scope) {
+      return deps.config.getChannelHeaderPinDurable(scope);
+    },
+
     onScopeModelChanged(listener) {
       deps.config.onRuntimeSelectionChanged((scope) => listener(scope));
+    },
+
+    onChannelHeaderPinChanged(listener) {
+      deps.config.onChannelHeaderPinChanged((scope) => listener(scope));
     },
 
     async stageBlob(bytes) {

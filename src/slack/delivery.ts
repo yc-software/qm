@@ -77,14 +77,10 @@ export function channelWelcomeMessage(surfaceUrl: string | undefined): string {
   return `Hi! I'm the agent for this channel. Everyone here can see and manage what I'm doing — scheduled jobs, skills, files, and apps — on this channel's shared page: ${surfaceUrl}`;
 }
 
-export function surfaceHeaderText(
-  facts: { agentLabel?: string; modelName?: string },
-  projectUrl: string | undefined,
-): string | undefined {
-  const agent = (facts.agentLabel ?? "").trim();
+export function surfaceHeaderText(facts: { modelName?: string }, projectUrl: string | undefined): string | undefined {
   const model = (facts.modelName ?? "").trim();
   const url = (projectUrl ?? "").trim();
-  const modelText = model ? `${agent ? `${agent} is using` : "Using"} ${model} here.` : "";
+  const modelText = model ? `Using ${model} here.` : "";
   const link = url ? `<${url}|More settings>` : "";
   return [modelText, link].filter(Boolean).join(" ") || undefined;
 }
@@ -107,26 +103,66 @@ export function headerUpdate(
 const SURFACE_HEADER_MAX_TRACKED = 1000;
 
 export interface SurfaceHeaderClient {
+  chat: {
+    postMessage: (args: SlackReplyArgs) => Promise<{ ts?: string }>;
+    update: (args: { channel: string; ts: string; text: string }) => Promise<unknown>;
+    delete: (args: { channel: string; ts: string }) => Promise<unknown>;
+  };
+  pins: {
+    list: (args: { channel: string }) => Promise<{ items?: PinnedItem[] }>;
+    add: (args: { channel: string; timestamp: string }) => Promise<unknown>;
+    remove: (args: { channel: string; timestamp: string }) => Promise<unknown>;
+  };
   conversations: {
     info: (args: { channel: string }) => Promise<{ channel?: ChannelMeta }>;
     setTopic: (args: { channel: string; topic: string }) => Promise<unknown>;
-    setPurpose: (args: { channel: string; purpose: string }) => Promise<unknown>;
   };
 }
 
+export interface PinnedItem {
+  message?: { ts?: string; user?: string; text?: string };
+}
+
+export function isSurfaceHeaderMessage(text: string | undefined): boolean {
+  const t = (text ?? "").trim();
+  if (!t) return false;
+  return /^(Using .+ here\.)?\s*(<[^<>|]+\|More settings>)?$/.test(t);
+}
+
+export function findHeaderPin(
+  items: PinnedItem[] | undefined,
+  botUserId: string,
+): { ts: string; text: string } | undefined {
+  for (const item of items ?? []) {
+    const m = item.message;
+    if (m?.ts && m.user === botUserId && isSurfaceHeaderMessage(m.text)) return { ts: m.ts, text: m.text ?? "" };
+  }
+  return undefined;
+}
+
+const HEADER_PIN_OFF = "<surface-header-off>";
+
 export function createSurfaceHeaderEnsurer(opts: {
   headerFacts(scope: string): Promise<{ agentLabel?: string; modelName: string }>;
+  channelPinEnabled?(scope: string): Promise<boolean>;
   webUiPublicUrl: string | undefined;
   ids: { botUserId: string };
   maxTracked?: number;
-}): (client: SurfaceHeaderClient, channel: string, scopeId: string, kind: "dm" | "channel") => void {
+}): (
+  client: SurfaceHeaderClient,
+  channel: string,
+  scopeId: string,
+  kind: "dm" | "channel",
+  ensureOpts?: { pinNew?: boolean },
+) => void {
   const maxTracked = opts.maxTracked ?? SURFACE_HEADER_MAX_TRACKED;
   const settled = new Map<string, string>();
   const inFlight = new Set<string>();
-  const requeued = new Set<string>();
-  return function ensure(client, channel, scopeId, kind) {
+  const requeued = new Map<string, { pinNew?: boolean }>();
+  return function ensure(client, channel, scopeId, kind, ensureOpts) {
     if (inFlight.has(channel)) {
-      requeued.add(channel);
+      const prior = requeued.get(channel);
+      requeued.set(channel, { pinNew: Boolean(prior?.pinNew) || Boolean(ensureOpts?.pinNew) });
       return;
     }
     inFlight.add(channel);
@@ -136,21 +172,43 @@ export function createSurfaceHeaderEnsurer(opts: {
           await opts.headerFacts(scopeId),
           scopeSurfaceUrl(opts.webUiPublicUrl, scopeId),
         );
-        if (!desired || settled.get(channel) === desired) return;
+        if (!desired) return;
+        const enabled = kind === "dm" || ((await opts.channelPinEnabled?.(scopeId)) ?? false);
+        const goal = enabled ? desired : HEADER_PIN_OFF;
+        if (settled.get(channel) === goal) return;
         const info = (await client.conversations.info({ channel })).channel;
-        if (kind === "channel" && (isExternallyShared(info) || isMpim(info))) return;
-        const existing = kind === "dm" ? info?.topic : info?.purpose;
-        if (headerUpdate(existing, opts.ids.botUserId, desired) === "set") {
-          if (kind === "dm") await client.conversations.setTopic({ channel, topic: desired });
-          else await client.conversations.setPurpose({ channel, purpose: desired });
+        if (kind === "dm") {
+          if (headerUpdate(info?.topic, opts.ids.botUserId, desired) === "set")
+            await client.conversations.setTopic({ channel, topic: desired });
+        } else {
+          if (isExternallyShared(info) || isMpim(info)) return;
+          const pinned = findHeaderPin((await client.pins.list({ channel })).items, opts.ids.botUserId);
+          if (!enabled) {
+            if (pinned) {
+              await client.pins.remove({ channel, timestamp: pinned.ts });
+              await client.chat.delete({ channel, ts: pinned.ts });
+            }
+          } else if (pinned) {
+            if (unwrapSlackLinks(pinned.text) !== unwrapSlackLinks(desired))
+              await client.chat.update({ channel, ts: pinned.ts, text: desired });
+          } else if (ensureOpts?.pinNew) {
+            const posted = await client.chat.postMessage(
+              slackReplyArgs(channel, desired, undefined, { unfurlLinks: false }),
+            );
+            if (posted.ts) await client.pins.add({ channel, timestamp: posted.ts });
+          }
         }
-        settled.set(channel, desired);
+        settled.set(channel, goal);
         capMap(settled, maxTracked);
       } catch (err) {
         console.error("[slack] surface header ensure failed:", errMessage(err));
       } finally {
         inFlight.delete(channel);
-        if (requeued.delete(channel)) ensure(client, channel, scopeId, kind);
+        const again = requeued.get(channel);
+        if (again) {
+          requeued.delete(channel);
+          ensure(client, channel, scopeId, kind, again);
+        }
       }
     })();
   };
@@ -161,7 +219,6 @@ export async function onBotJoinedChannel(opts: {
     chat: { postMessage: (args: SlackReplyArgs) => Promise<unknown> };
     conversations: {
       info: (args: { channel: string }) => Promise<{ channel?: ChannelMeta }>;
-      setPurpose: (args: { channel: string; purpose: string }) => Promise<unknown>;
     };
   };
   channel: string | undefined;

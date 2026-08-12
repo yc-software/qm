@@ -982,6 +982,29 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return relay(res, r);
     }
 
+    if (method === "GET" && path === "/api/channel-header-pin") {
+      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
+      const qs = new URLSearchParams({ principalId: user, scopeId });
+      const r = await coreFetch("GET", `/v1/channel-header-pin?${qs.toString()}`);
+      return relay(res, r);
+    }
+
+    if (method === "PUT" && path === "/api/channel-header-pin") {
+      let body: Record<string, unknown>;
+      try {
+        body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
+      } catch {
+        return json(res, 400, { error: "bad_request" });
+      }
+      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
+      const r = await coreFetch(
+        "PUT",
+        "/v1/channel-header-pin",
+        JSON.stringify({ ...body, principalId: user, scopeId }),
+      );
+      return relay(res, r);
+    }
+
     if (method === "GET" && path === "/api/scope-resources") {
       const scope = url.searchParams.get("scope");
       if (!scope) return json(res, 400, { error: "bad_request", message: "scope required" });

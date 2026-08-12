@@ -310,6 +310,23 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
+    id: "channel-header-pin-default",
+    kind: "boolean",
+    target: "org",
+    label:
+      "Channel pinned-header default: on means the agent posts and pins its header message (naming the model in use) in every Slack channel unless a channel explicitly turns it off.",
+    readKey: "channelHeaderPinDefault",
+    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getChannelHeaderPin(scope) : undefined),
+    apply: generic<boolean>(
+      (body, { scope }) => {
+        const bad = orgOnly(scope, "the channel pinned-header default is org-wide");
+        if (bad) return bad;
+        return boolBody(body);
+      },
+      (deps, scope, on) => deps.config!.setChannelHeaderPinLatest(scope, on),
+    ),
+  },
+  {
     id: "org-ambient",
     kind: "boolean",
     target: "org",
