@@ -221,6 +221,7 @@ export function createSessionMethods(
             ...(hit.author ? { author: hit.author } : {}),
             snippet: searchSnippet(hit.text, terms),
             createdAt: hit.createdAt,
+            ...(session.archived ? { archived: true } : {}),
           },
         ];
       });

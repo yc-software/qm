@@ -225,6 +225,7 @@ export interface SessionSearchHit {
   author?: string;
   snippet: string;
   createdAt: number;
+  archived?: boolean;
 }
 
 export interface App {
