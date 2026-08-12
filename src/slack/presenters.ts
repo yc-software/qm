@@ -323,6 +323,7 @@ export function createNativeAgentPresenter(deps: {
         await clearStatus();
         return true;
       } catch (error) {
+        state = "orphaned";
         deps.onError?.(error);
         await clearStatus();
         return true;

@@ -251,6 +251,44 @@ test("native agent presenter suppresses fallback when a failed partial stream ca
   assert.equal(await presenter.finalize(), true);
 });
 
+test("native agent presenter preserves approved text when stopping its stream fails", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      return "171.11";
+    },
+    append: async () => {},
+    stop: async (ts) => {
+      calls.push(`stop:${ts}`);
+      throw new Error("stop failed");
+    },
+    remove: async (ts) => {
+      calls.push(`remove:${ts}`);
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+    onError: (error) => calls.push(`error:${error instanceof Error ? error.message : String(error)}`),
+  });
+
+  assert.equal(await presenter.onDelta("approved".repeat(40)), true);
+  assert.equal(await presenter.finalize(), true);
+  await presenter.settle();
+
+  assert.deepEqual(calls, [
+    "start",
+    "checkpoint",
+    "surface",
+    "stop:171.11",
+    "error:stop failed",
+  ]);
+});
+
 test("native agent presenter deletes a provisional stream when the turn is abandoned", async () => {
   const calls: string[] = [];
   const presenter = createNativeAgentPresenter({
