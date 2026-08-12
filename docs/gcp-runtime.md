@@ -1,0 +1,27 @@
+# GCP runtime adapter
+
+The GCP runtime uses two provider-native contracts:
+
+- `SANDBOX_BACKEND=gke` provisions `SandboxClaim` resources from a named GKE Agent Sandbox warm pool and routes the existing QM agent-daemon protocol through the upstream sandbox router.
+- `SNAPSHOT_STORE=gcs` and `TRANSFER_STORE=gcs` use Cloud Storage with Application Default Credentials and `GCS_BUCKET`.
+
+The control plane must run with Workload Identity and a namespace-scoped role that can create, get, list, watch, and delete `sandboxclaims.extensions.agents.x-k8s.io`. It does not need permission to create arbitrary Pods, Deployments, Secrets, Roles, or cluster-scoped resources.
+
+Required runtime environment:
+
+| Variable                 | Purpose                                       |
+| ------------------------ | --------------------------------------------- |
+| `SANDBOX_BACKEND=gke`    | Select GKE Agent Sandbox                      |
+| `GKE_SANDBOX_NAMESPACE`  | Namespace containing the warm pool and claims |
+| `GKE_SANDBOX_WARM_POOL`  | Existing `SandboxWarmPool` name               |
+| `GKE_SANDBOX_ROUTER_URL` | Internal sandbox-router URL                   |
+| `SNAPSHOT_STORE=gcs`     | Store file bytes in Cloud Storage             |
+| `TRANSFER_STORE=gcs`     | Store staged transfer blobs in Cloud Storage  |
+| `GCS_BUCKET`             | Dedicated runtime bucket                      |
+| `GCS_PREFIX`             | Optional deployment prefix                    |
+
+The sandbox template owns isolation, persistence, limits, and egress policy. QM claims the template but cannot weaken it. Agent Pods should run non-root under gVisor, omit service-account tokens, drop all capabilities, use bounded resources, and accept ingress only from the sandbox router. The router should accept ingress only from QM core.
+
+The adapter intentionally does not create GKE, Cloud SQL, buckets, IAM, or Secret Manager resources. Those belong to the operator's versioned infrastructure repository. It also does not synchronize Secret Manager into Kubernetes Secret objects.
+
+Set `DEPLOY_PROVIDER=disabled` for the GKE control plane. The GCP adapter covers QM agent computers and durable stores, not QM's separate hosted-app deployment feature. This makes hosted-app requests fail closed instead of falling through to a Docker daemon that does not exist in the cluster.

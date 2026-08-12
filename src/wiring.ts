@@ -70,6 +70,7 @@ import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
+import { createDisabledDeployProvider } from "./deploy/disabled-deploy-provider.ts";
 import type { DeployProvider } from "./deploy/deploy-provider.ts";
 import { createDeployService } from "./deploy/deploy-service.ts";
 import {
@@ -87,11 +88,13 @@ import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/work
 import { createMemoryService, type MemoryService } from "./memory/memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import {
+  createGcsBlobTransferStore,
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
   type BlobTransferStore,
 } from "./persistence/blob-transfer.ts";
 import {
+  createGcsDurableByteStore,
   createLocalDurableByteStore,
   createS3DurableByteStore,
   type DurableByteStore,
@@ -99,6 +102,7 @@ import {
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
+import { createGkeSandbox } from "./sandbox/gke-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
 import {
@@ -537,22 +541,40 @@ export function buildApp(
   const resolution = createResolutionService(config.orgId, configStore, acl);
 
   const workspace = createLocalWorkspaceStore(config.dataDir);
-  const blobTransfer: BlobTransferStore =
-    config.transferStore === "s3" && config.s3Bucket
-      ? createS3BlobTransferStore({
-          bucket: config.s3Bucket,
-          ...(config.s3Region ? { region: config.s3Region } : {}),
-          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-        })
-      : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
-  const fileBytes: DurableByteStore =
-    config.snapshotStore === "s3" && config.s3Bucket
-      ? createS3DurableByteStore({
-          bucket: config.s3Bucket,
-          ...(config.s3Region ? { region: config.s3Region } : {}),
-          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-        })
-      : createLocalDurableByteStore(join(config.dataDir, "docstore"));
+  let blobTransfer: BlobTransferStore;
+  if (config.transferStore === "s3") {
+    if (!config.s3Bucket) throw new Error("TRANSFER_STORE=s3 requires S3_BUCKET");
+    blobTransfer = createS3BlobTransferStore({
+      bucket: config.s3Bucket,
+      ...(config.s3Region ? { region: config.s3Region } : {}),
+      ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+    });
+  } else if (config.transferStore === "gcs") {
+    if (!config.gcsBucket) throw new Error("TRANSFER_STORE=gcs requires GCS_BUCKET");
+    blobTransfer = createGcsBlobTransferStore({
+      bucket: config.gcsBucket,
+      ...(config.gcsPrefix ? { prefix: config.gcsPrefix } : {}),
+    });
+  } else {
+    blobTransfer = createLocalBlobTransferStore(join(config.dataDir, "transfer"));
+  }
+  let fileBytes: DurableByteStore;
+  if (config.snapshotStore === "s3") {
+    if (!config.s3Bucket) throw new Error("SNAPSHOT_STORE=s3 requires S3_BUCKET");
+    fileBytes = createS3DurableByteStore({
+      bucket: config.s3Bucket,
+      ...(config.s3Region ? { region: config.s3Region } : {}),
+      ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+    });
+  } else if (config.snapshotStore === "gcs") {
+    if (!config.gcsBucket) throw new Error("SNAPSHOT_STORE=gcs requires GCS_BUCKET");
+    fileBytes = createGcsDurableByteStore({
+      bucket: config.gcsBucket,
+      ...(config.gcsPrefix ? { prefix: config.gcsPrefix } : {}),
+    });
+  } else {
+    fileBytes = createLocalDurableByteStore(join(config.dataDir, "docstore"));
+  }
   const files: FileArtifactStore = config.databaseUrl
     ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes)
     : createMemoryFileArtifactStore(fileBytes);
@@ -595,10 +617,17 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
+  const buildGke = (): Sandbox =>
+    createGkeSandbox(workspace, {
+      ...config.gkeSandbox,
+      extraTools: deploymentLayer.advertisedTools,
+      onError: sandboxOnError,
+    });
   const buildBackend: Record<Config["sandboxBackend"], () => Sandbox> = {
     local: buildLocal,
     sprites: buildSprites,
     aws: buildAws,
+    gke: buildGke,
   };
   const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
     [config.sandboxBackend]: buildBackend[config.sandboxBackend](),
@@ -814,33 +843,40 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunActivityStore(requireDbUrl("RUN_STORE"))
       : createMemoryRunActivityStore();
+  let deployArchiveBytes: DurableByteStore | undefined;
+  if (config.snapshotStore === "s3" && config.s3Bucket) {
+    deployArchiveBytes = createS3DurableByteStore({
+      bucket: config.s3Bucket,
+      ...(config.s3Region ? { region: config.s3Region } : {}),
+      prefix: `${config.s3Prefix ?? ""}deploy-git/`,
+    });
+  } else if (config.snapshotStore === "gcs" && config.gcsBucket) {
+    deployArchiveBytes = createGcsDurableByteStore({
+      bucket: config.gcsBucket,
+      prefix: `${config.gcsPrefix ?? ""}deploy-git/`,
+    });
+  }
   const deployStore = createDeployStore({
     deployments: artifactMap<Deployment>("deployments"),
     git: {
       repoRoot: config.deployGitDir,
       archiveStore: artifactMap<DeployGitArchive>("deploy_git_repos"),
-      ...(config.snapshotStore === "s3" && config.s3Bucket
-        ? {
-            archiveBytes: createS3DurableByteStore({
-              bucket: config.s3Bucket,
-              ...(config.s3Region ? { region: config.s3Region } : {}),
-              prefix: `${config.s3Prefix ?? ""}deploy-git/`,
-            }),
-          }
-        : {}),
+      ...(deployArchiveBytes ? { archiveBytes: deployArchiveBytes } : {}),
     },
   });
-  const deployProvider: DeployProvider =
-    config.deployProvider === "aws"
-      ? createAwsDeployProvider({
-          ...config.awsDeploy,
-          ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket
-            ? { dataBucket: config.awsSandbox.s3Bucket }
-            : {}),
-          advisoryLock,
-          store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
-        })
-      : createDockerDeployProvider();
+  let deployProvider: DeployProvider;
+  if (config.deployProvider === "aws") {
+    deployProvider = createAwsDeployProvider({
+      ...config.awsDeploy,
+      ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket ? { dataBucket: config.awsSandbox.s3Bucket } : {}),
+      advisoryLock,
+      store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
+    });
+  } else if (config.deployProvider === "disabled") {
+    deployProvider = createDisabledDeployProvider();
+  } else {
+    deployProvider = createDockerDeployProvider();
+  }
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
     console.warn(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",

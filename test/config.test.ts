@@ -43,6 +43,26 @@ test("store kinds default to memory and accept postgres", () => {
   );
 });
 
+test("GCS stores require a bucket and hosted app deployments can be disabled", () => {
+  assert.throws(() => loadConfig({ SNAPSHOT_STORE: "gcs" }), /requires GCS_BUCKET/);
+  assert.throws(() => loadConfig({ TRANSFER_STORE: "gcs" }), /requires GCS_BUCKET/);
+  assert.throws(() => loadConfig({ SNAPSHOT_STORE: "gcx" }), /object store "gcx" is not recognized/);
+  assert.throws(() => loadConfig({ TRANSFER_STORE: "GCS" }), /object store "GCS" is not recognized/);
+  const config = loadConfig({
+    SNAPSHOT_STORE: "gcs",
+    TRANSFER_STORE: "gcs",
+    GCS_BUCKET: "qm-runtime",
+    GCS_PREFIX: "prod/",
+    DEPLOY_PROVIDER: "disabled",
+  });
+  assert.equal(config.snapshotStore, "gcs");
+  assert.equal(config.transferStore, "gcs");
+  assert.equal(config.gcsBucket, "qm-runtime");
+  assert.equal(config.gcsPrefix, "prod/");
+  assert.equal(config.deployProvider, "disabled");
+  assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "gcp" }), /DEPLOY_PROVIDER="gcp" is not recognized/);
+});
+
 test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }), /missing or insecure required core secrets/);
   assert.equal(loadConfig(productionEnv).production, true);
@@ -214,6 +234,21 @@ test("a set-but-unparseable env value refuses to boot instead of silently taking
 
 test("sandbox backend is parsed once before production backend guards", () => {
   assert.equal(loadConfig({ SANDBOX_BACKEND: " aws " }).sandboxBackend, "aws");
+  const gke = loadConfig({
+    SANDBOX_BACKEND: "gke",
+    GKE_SANDBOX_NAMESPACE: "sandboxes",
+    GKE_SANDBOX_WARM_POOL: "pool",
+    GKE_SANDBOX_ROUTER_URL: "http://router:8080",
+    GKE_SANDBOX_ROUTER_TOKEN: "router-token",
+  });
+  assert.equal(gke.sandboxBackend, "gke");
+  assert.deepEqual(gke.gkeSandbox, {
+    namespace: "sandboxes",
+    warmPool: "pool",
+    routerUrl: "http://router:8080",
+    routerToken: "router-token",
+  });
+  assert.throws(() => loadConfig({ ...productionEnv, SANDBOX_BACKEND: "gke" }), /requires GKE_SANDBOX_ROUTER_TOKEN/);
   assert.throws(
     () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: "bogus" }),
     /SANDBOX_BACKEND="bogus" is not recognized/,
@@ -346,6 +381,18 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the secondary must be
   assert.throws(
     () => loadConfig({ SANDBOX_BACKEND: "sprites", SANDBOX_SECONDARY_BACKEND: "sprites", SPRITES_TOKEN: "tok" }),
     /must differ/,
+  );
+});
+
+test("every production GKE backend requires router authentication", () => {
+  assert.throws(
+    () => loadConfig({ ...productionEnv, SANDBOX_SECONDARY_BACKEND: "gke" }),
+    /GKE sandbox backend requires GKE_SANDBOX_ROUTER_TOKEN/,
+  );
+  assert.equal(
+    loadConfig({ ...productionEnv, SANDBOX_SECONDARY_BACKEND: "gke", GKE_SANDBOX_ROUTER_TOKEN: "token" })
+      .sandboxSecondaryBackend,
+    "gke",
   );
 });
 

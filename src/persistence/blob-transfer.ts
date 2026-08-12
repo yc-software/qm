@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { once } from "node:events";
-import { Readable } from "node:stream";
+import { Readable, type Writable } from "node:stream";
 import { join } from "node:path";
 import {
   AbortMultipartUploadCommand,
@@ -17,6 +17,7 @@ import {
   UploadPartCommand,
   type LifecycleRule,
 } from "@aws-sdk/client-s3";
+import { Storage } from "@google-cloud/storage";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, isNoSuchLifecycleConfiguration, s3Client, type S3Send } from "./s3.ts";
@@ -164,6 +165,114 @@ export interface S3BlobTransferOptions {
   region?: string;
   prefix?: string;
   _client?: S3Send;
+}
+
+interface GcsBlobFile {
+  createWriteStream(options?: { resumable?: boolean; metadata?: { metadata?: Record<string, string> } }): Writable;
+  createReadStream(): Readable;
+  getMetadata(): Promise<Array<{ size?: string | number; updated?: string; timeCreated?: string }>>;
+  delete(options?: { ignoreNotFound?: boolean }): Promise<unknown>;
+}
+
+interface GcsBlobBucket {
+  file(name: string): GcsBlobFile;
+  getFiles(options: { prefix: string }): Promise<Array<GcsBlobFile[]>>;
+}
+
+export interface GcsBlobTransferOptions {
+  bucket: string;
+  prefix?: string;
+  _bucket?: GcsBlobBucket;
+}
+
+const isGcsMissing = (error: unknown): boolean => {
+  const code = (error as { code?: number | string } | undefined)?.code;
+  return code === 404 || code === "404";
+};
+
+export function createGcsBlobTransferStore(options: GcsBlobTransferOptions): BlobTransferStore {
+  const bucket = options._bucket ?? (new Storage().bucket(options.bucket) as unknown as GcsBlobBucket);
+  const prefix = `${options.prefix ?? ""}transfer/`;
+
+  return {
+    async put(source, opts) {
+      const blobId = newBlobId();
+      const file = bucket.file(prefix + blobId);
+      const hash = createHash("sha256");
+      const output = file.createWriteStream({ resumable: true });
+      let rejectOutput: ((reason?: unknown) => void) | undefined;
+      const outputError = new Promise<never>((_resolve, reject) => {
+        rejectOutput = reject;
+      });
+      const onOutputError = (error: Error): void => rejectOutput?.(error);
+      output.once("error", onOutputError);
+      let sizeBytes = 0;
+      const chunks = asChunks(source)[Symbol.asyncIterator]();
+      try {
+        while (true) {
+          const next = await Promise.race([chunks.next(), outputError]);
+          if (next.done) break;
+          const chunk = next.value;
+          const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          sizeBytes += data.length;
+          if (opts?.maxBytes != null && sizeBytes > opts.maxBytes) throw new BlobTooLargeError();
+          hash.update(data);
+          if (!output.write(data)) await Promise.race([once(output, "drain"), outputError]);
+        }
+        await Promise.race([new Promise<void>((resolve) => output.end(resolve)), outputError]);
+      } catch (error) {
+        output.destroy();
+        await chunks.return?.().catch(swallowAs("blob-transfer: GCS source cleanup", undefined));
+        await file.delete({ ignoreNotFound: true }).catch(swallowAs("blob-transfer: GCS partial cleanup", undefined));
+        throw error;
+      } finally {
+        output.off("error", onOutputError);
+      }
+      const sha256 = hash.digest("hex");
+      if (opts?.expectedSha256 && opts.expectedSha256 !== sha256) {
+        await file.delete({ ignoreNotFound: true });
+        throw new BlobHashMismatchError();
+      }
+      return { blobId, sizeBytes, sha256 };
+    },
+
+    async open(blobId) {
+      if (!BLOB_ID.test(blobId)) return null;
+      const file = bucket.file(prefix + blobId);
+      let metadata: { size?: string | number };
+      try {
+        [metadata = {}] = await file.getMetadata();
+      } catch (error) {
+        if (isGcsMissing(error)) return null;
+        throw error;
+      }
+      return { sizeBytes: Number(metadata.size ?? 0), stream: file.createReadStream() };
+    },
+
+    async delete(blobId) {
+      if (!BLOB_ID.test(blobId)) return;
+      await bucket.file(prefix + blobId).delete({ ignoreNotFound: true });
+    },
+
+    async sweep(maxAgeMs) {
+      const cutoff = Date.now() - maxAgeMs;
+      const [files = []] = await bucket.getFiles({ prefix });
+      let removed = 0;
+      for (const file of files) {
+        try {
+          const [metadata = {}] = await file.getMetadata();
+          const timestamp = Date.parse(metadata.updated ?? metadata.timeCreated ?? "");
+          if (Number.isFinite(timestamp) && timestamp <= cutoff) {
+            await file.delete({ ignoreNotFound: true });
+            removed++;
+          }
+        } catch (error) {
+          if (!isGcsMissing(error)) swallow("blob-transfer: GCS sweep entry", error);
+        }
+      }
+      return removed;
+    },
+  };
 }
 
 export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobTransferStore {
