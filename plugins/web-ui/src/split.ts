@@ -361,6 +361,23 @@ export function sessionInCanvas(sessionId: string): boolean {
   return splitState.active && paneShowing(sessionId) !== null;
 }
 
+/** Close any pane (and, outside the canvas, the main view) showing this session. */
+export function closeSessionSurfaces(sessionId: string): boolean {
+  if (!sessionId) return false;
+  if (splitState.active && dockApi) {
+    const showing = dockApi.panels.filter((p) => panelParams(p).sessionId === sessionId);
+    if (showing.length) {
+      closePanels(showing);
+      return true;
+    }
+    return false;
+  }
+  const conv = mainConversation();
+  if (conv.state.sessionId !== sessionId) return false;
+  conv.newChat();
+  return true;
+}
+
 export function splitInterceptsOpen(s: CoreSession): boolean {
   if (!splitState.active || appState.currentView !== "chats" || !s.id) return false;
   const target = splitState.focusedId ?? dockApi?.panels[0]?.id ?? "";

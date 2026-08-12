@@ -80,6 +80,7 @@ import {
   beginSessionDrag,
   endSessionDrag,
   notifySessionsChanged,
+  closeSessionSurfaces,
   sessionInCanvas,
   splitInterceptsOpen,
   splitState,
@@ -1068,6 +1069,7 @@ async function commitRename(s: CoreSession): Promise<void> {
 
 function setArchived(s: CoreSession, archived: boolean): void {
   sessionsState.openMenuId = null;
+  if (archived && s.id) closeSessionSurfaces(s.id);
   void persistSessionPatch(s.id, { archived });
 }
 
