@@ -40,3 +40,38 @@ test("fast-mode support is fed from core's runtime config, not a hardcoded clien
   assert.equal(modelSupportsFastMode(null, "claude-haiku-4-5"), false);
   assert.equal(modelSupportsFastMode(null, undefined), false);
 });
+
+test("a custom-provider model keeps its own provider, protocol and endpoint", () => {
+  const openaiStyle = getBaseModel("vendor/some-model", {
+    name: "Some Model",
+    provider: "my-gateway",
+    api: "openai-completions",
+    baseUrl: "https://gateway.example/v1",
+  });
+  assert.equal(openaiStyle.id, "vendor/some-model");
+  assert.equal(openaiStyle.name, "Some Model");
+  assert.equal(openaiStyle.provider, "my-gateway", "the custom provider slug survives, not the template's");
+  assert.equal(openaiStyle.api, "openai-completions");
+  assert.equal(openaiStyle.baseUrl, "https://gateway.example/v1");
+
+  const anthropicStyle = getBaseModel("vendor/claude-ish", {
+    name: "Claude Ish",
+    provider: "my-anthropic-gateway",
+    api: "anthropic-messages",
+    baseUrl: "https://anthropic.example",
+  });
+  assert.equal(anthropicStyle.provider, "my-anthropic-gateway");
+  assert.equal(
+    anthropicStyle.api,
+    "anthropic-messages",
+    "an Anthropic-protocol custom model must not be attributed to an OpenAI-completions transport",
+  );
+  assert.equal(anthropicStyle.baseUrl, "https://anthropic.example");
+  assert.notEqual(anthropicStyle.provider, "openrouter");
+});
+
+test("a catalogued model with no declared protocol defaults to OpenAI-completions", () => {
+  const model = getBaseModel("vendor/unspecified", { name: "Unspecified", provider: "my-gateway" });
+  assert.equal(model.provider, "my-gateway");
+  assert.equal(model.api, "openai-completions");
+});

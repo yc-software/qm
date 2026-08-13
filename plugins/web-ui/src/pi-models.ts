@@ -22,7 +22,19 @@ function builtinModel(id: string): PiModel | undefined {
   return undefined;
 }
 
-export function getBaseModel(id: string, fallback?: { name: string; provider: string }): PiModel {
+export interface CatalogEntry {
+  name: string;
+  provider: string;
+  api?: "openai-completions" | "anthropic-messages";
+  baseUrl?: string;
+}
+
+const PROTOCOL_TEMPLATES: Readonly<Record<NonNullable<CatalogEntry["api"]>, { provider: string; id: string }>> = {
+  "openai-completions": { provider: "openrouter", id: "openrouter/auto" },
+  "anthropic-messages": { provider: "anthropic", id: "claude-opus-4-8" },
+};
+
+export function getBaseModel(id: string, fallback?: CatalogEntry): PiModel {
   const builtin = builtinModel(id);
   if (builtin) return builtin;
   const clone = CLONE_TEMPLATES[id];
@@ -31,14 +43,25 @@ export function getBaseModel(id: string, fallback?: { name: string; provider: st
     if (template) return cloneModel(template, id, clone.name);
   }
   if (fallback) {
-    const template = getModel("openrouter", "openrouter/auto" as Parameters<typeof getModel>[1]) as PiModel | undefined;
-    if (template) return cloneModel(template, id, fallback.name);
+    const protocol = PROTOCOL_TEMPLATES[fallback.api ?? "openai-completions"];
+    const template = getModel(
+      protocol.provider as Parameters<typeof getModel>[0],
+      protocol.id as Parameters<typeof getModel>[1],
+    ) as PiModel | undefined;
+    if (template) return cloneModel(template, id, fallback.name, fallback);
   }
   throw new Error(`Unsupported model: ${id}`);
 }
 
-function cloneModel(model: PiModel, id: string, name: string): PiModel {
-  return { ...structuredClone(model), id, name };
+function cloneModel(model: PiModel, id: string, name: string, identity?: CatalogEntry): PiModel {
+  const clone = { ...structuredClone(model), id, name };
+  if (!identity) return clone;
+  return {
+    ...clone,
+    provider: identity.provider,
+    ...(identity.api ? { api: identity.api } : {}),
+    ...(identity.baseUrl ? { baseUrl: identity.baseUrl } : {}),
+  } as PiModel;
 }
 
 const fastModeByScope = new Map<string, Set<string>>();

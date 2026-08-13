@@ -6,6 +6,9 @@ export interface ModelCatalogEntry {
   name: string;
   /** A built-in provider or the slug of an admin-registered custom provider. */
   provider: string;
+  /** Set for custom-provider models: the wire protocol and endpoint the client must attribute the model to. */
+  api?: "openai-completions" | "anthropic-messages";
+  baseUrl?: string;
 }
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?supported_parameters=tools&sort=most-popular";

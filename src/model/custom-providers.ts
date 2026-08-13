@@ -147,8 +147,20 @@ export function isCustomModelId(id: string): boolean {
   return registry.has(id);
 }
 
-export function customModelCatalog(): Array<{ id: string; name: string; provider: string }> {
-  return [...registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
+export function customModelCatalog(): Array<{
+  id: string;
+  name: string;
+  provider: string;
+  api: CustomRuntimeModel["api"];
+  baseUrl: string;
+}> {
+  return [...registry.values()].map((m) => ({
+    id: m.id,
+    name: m.name,
+    provider: m.provider,
+    api: m.api,
+    baseUrl: m.baseUrl,
+  }));
 }
 
 /**

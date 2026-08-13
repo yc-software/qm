@@ -74,7 +74,15 @@ test("a registered custom model is serviceable regardless of built-in key availa
 
 test("catalog lists custom models; clearing the registry removes them", () => {
   setCustomProviders([GATEWAY]);
-  assert.deepEqual(customModelCatalog(), [{ id: "acme-large", name: "Acme Large", provider: "acme-gateway" }]);
+  assert.deepEqual(customModelCatalog(), [
+    {
+      id: "acme-large",
+      name: "Acme Large",
+      provider: "acme-gateway",
+      api: "openai-completions",
+      baseUrl: "https://llm.acme.internal/v1",
+    },
+  ]);
   setCustomProviders([]);
   assert.equal(isCustomModelId("acme-large"), false);
   assert.equal(resolveModel("acme-large"), undefined);

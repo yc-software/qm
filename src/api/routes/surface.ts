@@ -1165,7 +1165,18 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
   const modelCatalog = Object.fromEntries(
     [...advertisedModelIds].flatMap((id) => {
       const model = catalog.find((candidate) => candidate.id === id);
-      if (model) return [[id, { name: model.name, provider: model.provider }]];
+      if (model)
+        return [
+          [
+            id,
+            {
+              name: model.name,
+              provider: model.provider,
+              ...(model.api ? { api: model.api } : {}),
+              ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
+            },
+          ],
+        ];
       const resolved = resolveModel(id);
       return resolved ? [[id, { name: resolved.name, provider: resolved.provider }]] : [];
     }),
