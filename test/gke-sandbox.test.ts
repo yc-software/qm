@@ -78,6 +78,11 @@ test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", 
   assert.equal(handle.id, "sandbox-abc");
   assert.equal(handle.rootDir, "/home/agent/qm-workspace");
   assert.equal(handle.backend, "gke");
+  const provisionCommand = requests
+    .filter((request) => request.path === "/exec")
+    .map((request) => (JSON.parse(request.body) as { cmd: string }).cmd)
+    .find((command) => command.includes("mkdir -p"));
+  assert.match(provisionCommand ?? "", /mkdir -p '\/home\/agent\/qm-workspace'/);
   assert.ok(created);
   assert.deepEqual(createRequest, {
     group: "extensions.agents.x-k8s.io",
