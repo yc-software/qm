@@ -86,6 +86,7 @@ import {
   splitState,
 } from "./split";
 import { liveTurnThreadRef } from "./working-dot";
+import { applyProjectTheme } from "./theme-presets";
 
 export const sessionsState = {
   list: [] as CoreSession[],
@@ -387,6 +388,7 @@ function startProjectChat(event: Event, scopeId: string, name: string | null): v
   event.stopPropagation();
   closeSidebarOnNarrowView();
   sessionsState.collapsedProjectScopes.delete(scopeId);
+  applyProjectTheme(projectOf(scopeId)?.themePreset, projectOf(scopeId)?.themeMode);
   if (addBlankPane(scopeId)) return;
   addPendingSession(mainConversation().newChat({ scopeId, name }), scopeId, name);
 }
@@ -1184,6 +1186,9 @@ export async function openSession(s: CoreSession, entriesPrefetch?: Promise<Tran
   if (splitInterceptsOpen(s)) return;
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
+  if (!contextsState.loaded) await ensureContexts().catch(() => contextsState.list);
+  const project = projectOf(s.scopeId);
+  applyProjectTheme(project ? project.themePreset : null, project?.themeMode);
   return openSessionInto(mainConversation(), s, entriesPrefetch);
 }
 

@@ -93,6 +93,28 @@ test("project routes bind the signed-in principal and relay canonical scope and 
   });
 
   before = calls.length;
+  const themeResponse = await fetch(`${base}/api/projects/p1/theme`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ themePreset: "ocean", themeMode: "dark", principalId: "mallory" }),
+  });
+  assert.equal(themeResponse.status, 200);
+  assert.deepEqual(calls.slice(before).find((call) => isNoncedCoreCall(call.url, "/v1/projects/p1/theme"))?.body, {
+    principalId: "alice",
+    themePreset: "ocean",
+    themeMode: "dark",
+  });
+
+  before = calls.length;
+  const invalidThemeMode = await fetch(`${base}/api/projects/p1/theme`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ themePreset: "ocean", themeMode: "sepia" }),
+  });
+  assert.equal(invalidThemeMode.status, 400);
+  assert.equal(calls.length, before);
+
+  before = calls.length;
   await fetch(`${base}/api/projects/p1/members/bob`, { method: "DELETE", headers });
   assert.deepEqual(
     calls.slice(before).find((call) => isNoncedCoreCall(call.url, "/v1/projects/p1/members/bob"))?.body,
