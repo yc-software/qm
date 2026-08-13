@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Rocket,
   Search,
+  ShieldCheck,
   type IconNode,
 } from "lucide";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
