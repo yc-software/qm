@@ -30,7 +30,7 @@ import {
 import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, fieldSelect, formatBytes, icon, initials, relTime, toggleFormMenu } from "./ui";
-import { appState, renderSidebarTop, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
+import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { mainConversation } from "./conversations";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
 import { activityOf } from "./session-list";
@@ -1443,7 +1443,5 @@ function startChatIn(c: CoreContext): void {
 }
 
 async function openFromContext(s: CoreSession): Promise<void> {
-  appState.currentView = "chats";
-  renderSidebarTop();
   await openSession(s);
 }

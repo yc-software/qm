@@ -72,7 +72,7 @@ import {
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
-import { appState, closeSidebarOnNarrowView, renderSidebarTop, showMainEmpty } from "./shell";
+import { appState, closeSidebarOnNarrowView, renderSidebarTop, showMainEmpty, syncUrlFromState } from "./shell";
 import { allConversations, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
@@ -81,6 +81,7 @@ import {
   endSessionDrag,
   notifySessionsChanged,
   closeSessionSurfaces,
+  drawCanvas,
   sessionInCanvas,
   splitInterceptsOpen,
   splitState,
@@ -1181,6 +1182,14 @@ export async function refreshSessions(
 }
 
 export async function openSession(s: CoreSession, entriesPrefetch?: Promise<TranscriptPage | null>): Promise<void> {
+  if (appState.currentView !== "chats") {
+    appState.currentView = "chats";
+    appState.viewRenderSeq++;
+    renderSidebarTop();
+    renderList();
+    if (splitState.active) drawCanvas();
+    syncUrlFromState(s.id || null);
+  }
   if (splitInterceptsOpen(s)) return;
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();

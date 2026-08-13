@@ -86,9 +86,11 @@ export const ADMIN_BASE = (() => {
 })();
 export const ADMIN_HOME_URL = `${ADMIN_BASE}/`;
 
-export function syncUrlFromState(): void {
+export function syncUrlFromState(sessionOverride?: string | null): void {
   const chatState = mainConversation().state;
-  const sessionId = splitState.active ? null : (chatState.sessionId ?? chatState.rememberedSessionId);
+  const fromState =
+    sessionOverride !== undefined ? sessionOverride : (chatState.sessionId ?? chatState.rememberedSessionId);
+  const sessionId = splitState.active ? null : fromState;
   const next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
 }
