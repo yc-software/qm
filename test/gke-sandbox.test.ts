@@ -185,3 +185,45 @@ test("GKE sandbox deletes a newly-created claim that never binds", async () => {
   await assert.rejects(sandbox.provision([]), /was not ready within the deadline/);
   assert.match(deleted, /^qm-default-/);
 });
+
+test("GKE sandbox accepts an SDK 404 while deleting an already-removed claim", async () => {
+  let created = false;
+  const client = {
+    async createNamespacedCustomObject() {
+      created = true;
+      return { status: { sandbox: { name: "sandbox-removed" } } };
+    },
+    async getNamespacedCustomObject() {
+      if (!created) {
+        const error = new Error("missing") as Error & { code: number };
+        error.code = 404;
+        throw error;
+      }
+      return { status: { sandbox: { name: "sandbox-removed" } } };
+    },
+    async deleteNamespacedCustomObject() {
+      const error = new Error("already removed") as Error & { code: number };
+      error.code = 404;
+      throw error;
+    },
+  };
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "qm-gke-removed-test-")));
+  const sandbox = createGkeSandbox(workspace, {
+    namespace: "qm-sandboxes",
+    warmPool: "qm-sandbox-pool",
+    routerUrl: "http://sandbox-router:8080",
+    routerToken: "router-test-token",
+    client,
+    fetchImpl: async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/health") return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      if (path === "/exec") {
+        return new Response(JSON.stringify({ stdout: "", stderr: "", code: 0, timedOut: false }), { status: 200 });
+      }
+      return new Response("missing", { status: 404 });
+    },
+  });
+
+  const handle = await sandbox.provision([]);
+  await sandbox.teardown(handle, { destroy: true });
+});
