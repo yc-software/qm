@@ -13,6 +13,7 @@ before(async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS acl_grants CASCADE");
+  await p.query("DROP TABLE IF EXISTS acl_grants_version CASCADE");
   await p.end();
 });
 
@@ -64,6 +65,101 @@ test("pg grant persistence survives across store instances (no per-process cache
   assert.equal(
     (await reader.all()).some((g) => g.ref === "shared-across.md"),
     true,
+  );
+});
+
+test("pg grant persistence: a warm cache sees another instance's writes and revocations", { skip }, async () => {
+  const reader = createPostgresGrantStore(URL!);
+  const writer = createPostgresGrantStore(URL!);
+  await reader.all();
+
+  await writer.put(grant({ ref: "warm-cache.md" }));
+  assert.equal(
+    (await reader.all()).some((g) => g.ref === "warm-cache.md"),
+    true,
+    "a grant written elsewhere is visible on the very next read",
+  );
+
+  await reader.all();
+  await writer.remove(grant({ ref: "warm-cache.md" }));
+  assert.equal(
+    (await reader.all()).some((g) => g.ref === "warm-cache.md"),
+    false,
+    "a revocation elsewhere is visible on the very next read",
+  );
+});
+
+test("pg grant persistence: a warm cache sees writes that bypass the store entirely", { skip }, async () => {
+  const reader = createPostgresGrantStore(URL!);
+  await reader.all();
+
+  const pg = (await import("pg")).default;
+  const p = new pg.Pool({ connectionString: URL });
+  await p.query(
+    "INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by) VALUES ($1, $2, $3, $4, $5)",
+    [owner, "out-of-band.md", carol, "read", "U1"],
+  );
+  await p.end();
+
+  assert.equal(
+    (await reader.all()).some((g) => g.ref === "out-of-band.md"),
+    true,
+    "raw SQL against acl_grants must invalidate warm caches (old instances during blue-green, scripts, manual psql)",
+  );
+});
+
+test("pg grant persistence: the snapshot is served from cache until the version moves", { skip }, async () => {
+  const reader = createPostgresGrantStore(URL!);
+  await reader.put(grant({ ref: "cached.md" }));
+  await reader.all();
+
+  const pg = (await import("pg")).default;
+  const p = new pg.Pool({ connectionString: URL });
+  try {
+    await p.query("ALTER TABLE acl_grants DISABLE TRIGGER acl_grants_bump");
+    await p.query("DELETE FROM acl_grants WHERE path = $1", ["cached.md"]);
+    assert.equal(
+      (await reader.all()).some((g) => g.ref === "cached.md"),
+      true,
+      "an unbumped delete is invisible — proof reads are served from the snapshot",
+    );
+  } finally {
+    await p.query("ALTER TABLE acl_grants ENABLE TRIGGER acl_grants_bump");
+  }
+  await p.query("UPDATE acl_grants_version SET v = v + 1");
+  assert.equal(
+    (await reader.all()).some((g) => g.ref === "cached.md"),
+    false,
+    "the next version bump refreshes the snapshot",
+  );
+  await p.end();
+});
+
+test("pg grant persistence: a conditional replacement invalidates warm caches", { skip }, async () => {
+  const reader = createPostgresGrantStore(URL!);
+  const writer = createPostgresGrantStore(URL!);
+  const before = grant({ ref: "cas-invalidate.md" });
+  await writer.put(before);
+  await reader.all();
+
+  const after = grant({ ref: "cas-invalidate.md", granteeScopeId: scopeId("personal", "U3") });
+  assert.equal(await writer.replaceForResourceIfCurrent(owner, "cas-invalidate.md", [before], [after]), true);
+  assert.equal(
+    (await reader.all()).some((g) => g.ref === "cas-invalidate.md" && g.granteeScopeId === after.granteeScopeId),
+    true,
+    "the replacement is visible on the very next read",
+  );
+});
+
+test("pg grant persistence: cached reads return independent arrays", { skip }, async () => {
+  const store = createPostgresGrantStore(URL!);
+  await store.put(grant({ ref: "aliasing.md" }));
+  const first = await store.all();
+  first.length = 0;
+  assert.equal(
+    (await store.all()).some((g) => g.ref === "aliasing.md"),
+    true,
+    "mutating one caller's result must not corrupt the cache",
   );
 });
 
