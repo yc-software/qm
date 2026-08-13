@@ -1063,7 +1063,7 @@ export function createChatSurface(
                 </div>`
               : nothing
           }
-${glanceTier || ctx.pane ? nothing : sessionTopbar()}
+          ${glanceTier || ctx.pane ? nothing : sessionTopbar()}
           ${
             glanceTier
               ? paneGlance(agent, messages, glanceTier)
@@ -1157,7 +1157,7 @@ ${glanceTier || ctx.pane ? nothing : sessionTopbar()}
           title,
           crumb,
         });
-if (scope && tool !== "memory") contextsState.selected = scope;
+        if (scope && tool !== "memory") contextsState.selected = scope;
         switchView(tool === "apps" ? "deploys" : tool);
       },
     });
