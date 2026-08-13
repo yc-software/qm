@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { CustomObjectsApi, KubeConfig } from "@kubernetes/client-node";
+import {
+  CustomObjectsApi,
+  KubeConfig,
+  type CustomObjectsApiCreateNamespacedCustomObjectRequest,
+  type CustomObjectsApiDeleteNamespacedCustomObjectRequest,
+  type CustomObjectsApiGetNamespacedCustomObjectRequest,
+} from "@kubernetes/client-node";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { ephemeralCredLinkPaths, ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
@@ -38,27 +44,9 @@ interface ClaimBody {
 }
 
 interface CustomObjectsClient {
-  createNamespacedCustomObject(
-    group: string,
-    version: string,
-    namespace: string,
-    plural: string,
-    body: unknown,
-  ): Promise<unknown>;
-  deleteNamespacedCustomObject(
-    group: string,
-    version: string,
-    namespace: string,
-    plural: string,
-    name: string,
-  ): Promise<unknown>;
-  getNamespacedCustomObject(
-    group: string,
-    version: string,
-    namespace: string,
-    plural: string,
-    name: string,
-  ): Promise<unknown>;
+  createNamespacedCustomObject(input: CustomObjectsApiCreateNamespacedCustomObjectRequest): Promise<unknown>;
+  deleteNamespacedCustomObject(input: CustomObjectsApiDeleteNamespacedCustomObjectRequest): Promise<unknown>;
+  getNamespacedCustomObject(input: CustomObjectsApiGetNamespacedCustomObjectRequest): Promise<unknown>;
 }
 
 export interface GkeSandboxOptions {
@@ -122,7 +110,7 @@ export function createGkeSandbox(workspace: WorkspaceStore, opts: GkeSandboxOpti
 
   async function getClaim(name: string): Promise<unknown | null> {
     try {
-      return await api.getNamespacedCustomObject(GROUP, VERSION, namespace, PLURAL, name);
+      return await api.getNamespacedCustomObject({ group: GROUP, version: VERSION, namespace, plural: PLURAL, name });
     } catch (error) {
       if (statusCodeOf(error) === 404) return null;
       throw error;
@@ -135,22 +123,28 @@ export function createGkeSandbox(workspace: WorkspaceStore, opts: GkeSandboxOpti
       let value = await getClaim(claim);
       const coldStart = value === null;
       if (value === null) {
-        value = await api.createNamespacedCustomObject(GROUP, VERSION, namespace, PLURAL, {
-          apiVersion: `${GROUP}/${VERSION}`,
-          kind: "SandboxClaim",
-          metadata: {
-            name: claim,
-            namespace,
-            labels: {
-              "app.kubernetes.io/managed-by": "qm",
-              "simplelend.io/scope-hash": shortHash(scope),
-            },
-          },
-          spec: {
-            warmPoolRef: { name: opts.warmPool },
-            additionalPodMetadata: {
+        value = await api.createNamespacedCustomObject({
+          group: GROUP,
+          version: VERSION,
+          namespace,
+          plural: PLURAL,
+          body: {
+            apiVersion: `${GROUP}/${VERSION}`,
+            kind: "SandboxClaim",
+            metadata: {
+              name: claim,
+              namespace,
               labels: {
-                "sandbox.users.io/qm-claim": claim,
+                "app.kubernetes.io/managed-by": "qm",
+                "simplelend.io/scope-hash": shortHash(scope),
+              },
+            },
+            spec: {
+              warmPoolRef: { name: opts.warmPool },
+              additionalPodMetadata: {
+                labels: {
+                  "sandbox.users.io/qm-claim": claim,
+                },
               },
             },
           },
@@ -184,7 +178,7 @@ export function createGkeSandbox(workspace: WorkspaceStore, opts: GkeSandboxOpti
         }
         if (coldStart) {
           await api
-            .deleteNamespacedCustomObject(GROUP, VERSION, namespace, PLURAL, claim)
+            .deleteNamespacedCustomObject({ group: GROUP, version: VERSION, namespace, plural: PLURAL, name: claim })
             .catch(swallowAs("gke-sandbox: claim cleanup after provisioning failure", undefined));
         }
         throw error;
@@ -400,7 +394,13 @@ export function createGkeSandbox(workspace: WorkspaceStore, opts: GkeSandboxOpti
       const claim = claimBySandbox.get(handle.id);
       if (!claim) return;
       try {
-        await api.deleteNamespacedCustomObject(GROUP, VERSION, namespace, PLURAL, claim);
+        await api.deleteNamespacedCustomObject({
+          group: GROUP,
+          version: VERSION,
+          namespace,
+          plural: PLURAL,
+          name: claim,
+        });
       } catch (error) {
         if (statusCodeOf(error) !== 404) {
           opts.onError?.({

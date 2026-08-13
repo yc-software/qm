@@ -3,42 +3,37 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type {
+  CustomObjectsApiCreateNamespacedCustomObjectRequest,
+  CustomObjectsApiDeleteNamespacedCustomObjectRequest,
+  CustomObjectsApiGetNamespacedCustomObjectRequest,
+} from "@kubernetes/client-node";
 import { createGkeSandbox } from "../src/sandbox/gke-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 
 test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", async () => {
   let created: Record<string, unknown> | undefined;
-  let createdVersion = "";
-  let deleted = "";
+  let createRequest: CustomObjectsApiCreateNamespacedCustomObjectRequest | undefined;
+  let getRequest: CustomObjectsApiGetNamespacedCustomObjectRequest | undefined;
+  let deleteRequest: CustomObjectsApiDeleteNamespacedCustomObjectRequest | undefined;
   const requests: Array<{ path: string; headers: Headers; body: string }> = [];
   const client = {
-    async createNamespacedCustomObject(
-      _group: string,
-      version: string,
-      _namespace: string,
-      _plural: string,
-      body: unknown,
-    ) {
-      createdVersion = version;
-      created = body as Record<string, unknown>;
-      return { body: { status: { sandbox: { Name: "sandbox-abc" } } } };
+    async createNamespacedCustomObject(input: CustomObjectsApiCreateNamespacedCustomObjectRequest) {
+      createRequest = input;
+      created = input.body as Record<string, unknown>;
+      return { status: { sandbox: { Name: "sandbox-abc" } } };
     },
-    async getNamespacedCustomObject() {
+    async getNamespacedCustomObject(input: CustomObjectsApiGetNamespacedCustomObjectRequest) {
+      getRequest = input;
       if (!created) {
         const error = new Error("missing") as Error & { statusCode: number };
         error.statusCode = 404;
         throw error;
       }
-      return { body: { status: { sandbox: { Name: "sandbox-abc" } } } };
+      return { status: { sandbox: { Name: "sandbox-abc" } } };
     },
-    async deleteNamespacedCustomObject(
-      _group: string,
-      _version: string,
-      _namespace: string,
-      _plural: string,
-      name: string,
-    ) {
-      deleted = name;
+    async deleteNamespacedCustomObject(input: CustomObjectsApiDeleteNamespacedCustomObjectRequest) {
+      deleteRequest = input;
       return {};
     },
   };
@@ -84,7 +79,20 @@ test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", 
   assert.equal(handle.rootDir, "/home/agent/workspace");
   assert.equal(handle.backend, "gke");
   assert.ok(created);
-  assert.equal(createdVersion, "v1alpha1");
+  assert.deepEqual(createRequest, {
+    group: "extensions.agents.x-k8s.io",
+    version: "v1alpha1",
+    namespace: "qm-sandboxes",
+    plural: "sandboxclaims",
+    body: created,
+  });
+  assert.deepEqual(getRequest, {
+    group: "extensions.agents.x-k8s.io",
+    version: "v1alpha1",
+    namespace: "qm-sandboxes",
+    plural: "sandboxclaims",
+    name: (created.metadata as { name: string }).name,
+  });
   assert.equal(created.apiVersion, "extensions.agents.x-k8s.io/v1alpha1");
   assert.equal((created.spec as { warmPoolRef: { name: string } }).warmPoolRef.name, "qm-sandbox-pool");
 
@@ -97,7 +105,13 @@ test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", 
   assert.ok(requests.every((request) => request.headers.get("authorization") === "Bearer router-test-token"));
 
   await sandbox.teardown(handle, { destroy: true });
-  assert.match(deleted, /^qm-default-/);
+  assert.deepEqual(deleteRequest, {
+    group: "extensions.agents.x-k8s.io",
+    version: "v1alpha1",
+    namespace: "qm-sandboxes",
+    plural: "sandboxclaims",
+    name: (created.metadata as { name: string }).name,
+  });
 });
 
 test("GKE sandbox deletes a newly-created claim when daemon readiness fails", async () => {
@@ -116,14 +130,8 @@ test("GKE sandbox deletes a newly-created claim when daemon readiness fails", as
       }
       return { body: { status: { sandbox: { name: "sandbox-broken" } } } };
     },
-    async deleteNamespacedCustomObject(
-      _group: string,
-      _version: string,
-      _namespace: string,
-      _plural: string,
-      name: string,
-    ) {
-      deleted = name;
+    async deleteNamespacedCustomObject(input: { name: string }) {
+      deleted = input.name;
       return {};
     },
   };
@@ -158,14 +166,8 @@ test("GKE sandbox deletes a newly-created claim that never binds", async () => {
       }
       return { body: { status: {} } };
     },
-    async deleteNamespacedCustomObject(
-      _group: string,
-      _version: string,
-      _namespace: string,
-      _plural: string,
-      name: string,
-    ) {
-      deleted = name;
+    async deleteNamespacedCustomObject(input: { name: string }) {
+      deleted = input.name;
       return {};
     },
   };
