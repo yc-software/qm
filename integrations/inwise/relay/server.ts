@@ -1,107 +1,27 @@
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { EncryptedEnvelope, RelayRequest } from "../common/protocol.js";
-import { PairingStore } from "./store.js";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { EncryptedEnvelope } from "../common/protocol.js";
+import { MemoryRelayStore, StoreError, type PairingAdmission, type RelayStore, type RequestState } from "./store.js";
 
-interface RelayOptions {
-  stateFile?: string;
+export interface RelayOptions {
+  store?: RelayStore;
   publicUrl?: string;
   requestTimeoutMs?: number;
+  requestLeaseMs?: number;
   pairingTtlMs?: number;
-}
-
-interface PendingResponse {
-  resolve: (envelope: EncryptedEnvelope) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-}
-
-class Broker {
-  private readonly queues = new Map<string, RelayRequest[]>();
-  private readonly waiters = new Map<
-    string,
-    Array<(request?: RelayRequest) => void>
-  >();
-  private readonly responses = new Map<string, PendingResponse>();
-
-  dispatch(
-    deviceId: string,
-    request: RelayRequest,
-    timeoutMs: number,
-  ): Promise<EncryptedEnvelope> {
-    if (this.responses.has(request.requestId)) {
-      return Promise.reject(new Error("Duplicate request id"));
-    }
-    const response = new Promise<EncryptedEnvelope>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.responses.delete(request.requestId);
-        this.removeQueued(deviceId, request.requestId);
-        reject(
-          new Error("Inwise Desktop is offline or did not respond in time"),
-        );
-      }, timeoutMs);
-      this.responses.set(request.requestId, { resolve, reject, timer });
-    });
-    const waiter = this.waiters.get(deviceId)?.shift();
-    if (waiter) waiter(request);
-    else
-      this.queues.set(deviceId, [
-        ...(this.queues.get(deviceId) ?? []),
-        request,
-      ]);
-    return response;
-  }
-
-  poll(deviceId: string, waitMs: number): Promise<RelayRequest | undefined> {
-    const queue = this.queues.get(deviceId);
-    const next = queue?.shift();
-    if (next) return Promise.resolve(next);
-    return new Promise((resolve) => {
-      const wrapped = (request?: RelayRequest): void => {
-        clearTimeout(timer);
-        resolve(request);
-      };
-      const timer = setTimeout(() => {
-        const waiters = this.waiters.get(deviceId) ?? [];
-        this.waiters.set(
-          deviceId,
-          waiters.filter((item) => item !== wrapped),
-        );
-        resolve(undefined);
-      }, waitMs);
-      this.waiters.set(deviceId, [
-        ...(this.waiters.get(deviceId) ?? []),
-        wrapped,
-      ]);
-    });
-  }
-
-  respond(requestId: string, envelope: EncryptedEnvelope): boolean {
-    const pending = this.responses.get(requestId);
-    if (!pending) return false;
-    clearTimeout(pending.timer);
-    this.responses.delete(requestId);
-    pending.resolve(envelope);
-    return true;
-  }
-
-  private removeQueued(deviceId: string, requestId: string): void {
-    const queue = this.queues.get(deviceId) ?? [];
-    this.queues.set(
-      deviceId,
-      queue.filter((item) => item.requestId !== requestId),
-    );
-  }
+  pairingRateLimit?: number;
+  pairingRateWindowMs?: number;
+  maxPendingPairingsPerSource?: number;
+  maxPendingPairingsGlobal?: number;
+  maxPairingsPerSource?: number;
+  maxPairingsGlobal?: number;
+  cleanupIntervalMs?: number;
 }
 
 class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly retryAfterMs?: number,
   ) {
     super(message);
   }
@@ -109,14 +29,11 @@ class ApiError extends Error {
 
 function bearer(request: IncomingMessage): string {
   const value = request.headers.authorization;
-  if (!value?.startsWith("Bearer "))
-    throw new ApiError(401, "Missing bearer token");
+  if (!value?.startsWith("Bearer ")) throw new ApiError(401, "Missing bearer token");
   return value.slice("Bearer ".length);
 }
 
-async function readJson(
-  request: IncomingMessage,
-): Promise<Record<string, unknown>> {
+async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -126,19 +43,19 @@ async function readJson(
     chunks.push(buffer);
   }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<
-      string,
-      unknown
-    >;
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
   } catch {
     throw new ApiError(400, "Request body must be valid JSON");
   }
 }
 
-function send(response: ServerResponse, status: number, body?: unknown): void {
+function send(response: ServerResponse, status: number, body?: unknown, retryAfterMs?: number): void {
   response.statusCode = status;
   response.setHeader("cache-control", "no-store");
   response.setHeader("x-content-type-options", "nosniff");
+  if (retryAfterMs !== undefined) {
+    response.setHeader("retry-after", String(Math.max(1, Math.ceil(retryAfterMs / 1_000))));
+  }
   if (body === undefined) {
     response.end();
     return;
@@ -169,14 +86,55 @@ function envelopeField(body: Record<string, unknown>): EncryptedEnvelope {
   return value as EncryptedEnvelope;
 }
 
-export function createRelayServer(options: RelayOptions = {}): Server {
-  const store = new PairingStore(options.stateFile);
-  const broker = new Broker();
-  const requestTimeoutMs = options.requestTimeoutMs ?? 45_000;
-  const pairingTtlMs = options.pairingTtlMs ?? 10 * 60_000;
+function sourceKey(request: IncomingMessage): string {
+  return request.socket.remoteAddress ?? "unknown";
+}
 
-  return createServer(async (request, response) => {
+function stateBody(requestId: string, state: RequestState): unknown {
+  return {
+    requestId,
+    status: state.status,
+    expiresAt: state.expiresAt,
+    ...(state.status === "responded" ? { envelope: state.envelope } : {}),
+  };
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export function createRelayServer(options: RelayOptions = {}): Server {
+  const store = options.store ?? new MemoryRelayStore();
+  const requestTimeoutMs = options.requestTimeoutMs ?? 45_000;
+  const requestLeaseMs = options.requestLeaseMs ?? requestTimeoutMs;
+  const pairingTtlMs = options.pairingTtlMs ?? 10 * 60_000;
+  const cleanupIntervalMs = options.cleanupIntervalMs ?? 60_000;
+  const admissionDefaults: Omit<PairingAdmission, "sourceKey"> = {
+    maxPerWindow: options.pairingRateLimit ?? 10,
+    windowMs: options.pairingRateWindowMs ?? 60_000,
+    maxPendingPerSource: options.maxPendingPairingsPerSource ?? 5,
+    maxPendingGlobal: options.maxPendingPairingsGlobal ?? 1_000,
+    maxTotalPerSource: options.maxPairingsPerSource ?? 100,
+    maxTotalGlobal: options.maxPairingsGlobal ?? 10_000,
+  };
+  let initialized: Promise<void> | undefined;
+  let cleanupTimer: NodeJS.Timeout | undefined;
+
+  const ensureInitialized = async (): Promise<void> => {
+    initialized ??= store.initialize().then(() => {
+      cleanupTimer = setInterval(() => {
+        void store.cleanup().catch((error) => {
+          console.error("Inwise relay cleanup failed", error);
+        });
+      }, cleanupIntervalMs);
+      cleanupTimer.unref();
+    });
+    await initialized;
+  };
+
+  const server = createServer(async (request, response) => {
     try {
+      await ensureInitialized();
       const method = request.method ?? "GET";
       const url = new URL(request.url ?? "/", "http://relay.invalid");
       const segments = url.pathname.split("/").filter(Boolean);
@@ -188,10 +146,10 @@ export function createRelayServer(options: RelayOptions = {}): Server {
 
       if (method === "POST" && url.pathname === "/v1/pairings") {
         const body = await readJson(request);
-        const created = store.create(
-          stringField(body, "cliPublicKey"),
-          pairingTtlMs,
-        );
+        const created = await store.createPairing(stringField(body, "cliPublicKey"), pairingTtlMs, {
+          ...admissionDefaults,
+          sourceKey: sourceKey(request),
+        });
         send(response, 201, {
           ...created,
           ...(options.publicUrl
@@ -205,7 +163,7 @@ export function createRelayServer(options: RelayOptions = {}): Server {
 
       if (method === "POST" && url.pathname === "/v1/pairings/claim") {
         const body = await readJson(request);
-        const claimed = store.claim(
+        const claimed = await store.claimPairing(
           stringField(body, "code").toUpperCase(),
           stringField(body, "edgePublicKey"),
           stringField(body, "deviceName"),
@@ -214,13 +172,9 @@ export function createRelayServer(options: RelayOptions = {}): Server {
         return;
       }
 
-      if (
-        segments[0] === "v1" &&
-        segments[1] === "pairings" &&
-        segments.length === 3
-      ) {
+      if (segments[0] === "v1" && segments[1] === "pairings" && segments.length === 3) {
         if (method !== "GET") throw new ApiError(405, "Method not allowed");
-        const record = store.authenticateCli(segments[2], bearer(request));
+        const record = await store.authenticateCli(segments[2], bearer(request));
         if (!record) throw new ApiError(401, "Invalid pairing credentials");
         send(
           response,
@@ -236,42 +190,44 @@ export function createRelayServer(options: RelayOptions = {}): Server {
         return;
       }
 
-      if (
-        segments[0] === "v1" &&
-        segments[1] === "pairings" &&
-        segments[3] === "requests" &&
-        segments.length === 4
-      ) {
+      if (segments[0] === "v1" && segments[1] === "pairings" && segments[3] === "requests" && segments.length === 4) {
         if (method !== "POST") throw new ApiError(405, "Method not allowed");
-        const record = store.authenticateCli(segments[2], bearer(request));
+        const record = await store.authenticateCli(segments[2], bearer(request));
         if (!record) throw new ApiError(401, "Invalid pairing credentials");
-        if (!record.deviceId)
-          throw new ApiError(409, "Inwise has not been paired yet");
+        if (!record.deviceId) throw new ApiError(409, "Inwise has not been paired yet");
         const body = await readJson(request);
         const requestId = stringField(body, "requestId");
-        const result = await broker.dispatch(
+        const state = await store.enqueueRequest(
           record.deviceId,
           { pairingId: record.id, requestId, envelope: envelopeField(body) },
           requestTimeoutMs,
         );
-        send(response, 200, { requestId, envelope: result });
+        send(response, state.status === "responded" ? 200 : 202, stateBody(requestId, state));
         return;
       }
 
-      if (
-        segments[0] === "v1" &&
-        segments[1] === "devices" &&
-        segments[3] === "requests" &&
-        segments.length === 4
-      ) {
+      if (segments[0] === "v1" && segments[1] === "pairings" && segments[3] === "requests" && segments.length === 5) {
         if (method !== "GET") throw new ApiError(405, "Method not allowed");
-        const record = store.authenticateEdge(segments[2], bearer(request));
+        const record = await store.authenticateCli(segments[2], bearer(request));
+        if (!record) throw new ApiError(401, "Invalid pairing credentials");
+        const state = await store.getRequest(record.id, segments[4]);
+        if (!state) throw new ApiError(404, "Request not found");
+        if (state.status === "expired") throw new ApiError(504, "Inwise Desktop is offline or did not respond in time");
+        send(response, 200, stateBody(segments[4], state));
+        return;
+      }
+
+      if (segments[0] === "v1" && segments[1] === "devices" && segments[3] === "requests" && segments.length === 4) {
+        if (method !== "GET") throw new ApiError(405, "Method not allowed");
+        const record = await store.authenticateEdge(segments[2], bearer(request));
         if (!record) throw new ApiError(401, "Invalid device credentials");
-        const waitSeconds = Math.min(
-          30,
-          Math.max(1, Number(url.searchParams.get("wait") ?? 25)),
-        );
-        const next = await broker.poll(segments[2], waitSeconds * 1_000);
+        const waitSeconds = Math.min(30, Math.max(0, Number(url.searchParams.get("wait") ?? 25)));
+        const deadline = Date.now() + waitSeconds * 1_000;
+        let next = await store.leaseRequest(segments[2], requestLeaseMs);
+        while (!next && Date.now() < deadline) {
+          await delay(Math.min(250, deadline - Date.now()));
+          next = await store.leaseRequest(segments[2], requestLeaseMs);
+        }
         send(response, next ? 200 : 204, next);
         return;
       }
@@ -284,10 +240,10 @@ export function createRelayServer(options: RelayOptions = {}): Server {
         segments.length === 6
       ) {
         if (method !== "POST") throw new ApiError(405, "Method not allowed");
-        const record = store.authenticateEdge(segments[2], bearer(request));
+        const record = await store.authenticateEdge(segments[2], bearer(request));
         if (!record) throw new ApiError(401, "Invalid device credentials");
         const body = await readJson(request);
-        if (!broker.respond(segments[4], envelopeField(body))) {
+        if (!(await store.respond(segments[2], segments[4], envelopeField(body)))) {
           throw new ApiError(404, "Request is no longer pending");
         }
         send(response, 204);
@@ -296,14 +252,18 @@ export function createRelayServer(options: RelayOptions = {}): Server {
 
       throw new ApiError(404, "Not found");
     } catch (error) {
-      if (error instanceof ApiError) {
-        send(response, error.status, { error: error.message });
+      if (error instanceof ApiError || error instanceof StoreError) {
+        send(response, error.status, { error: error.message }, error.retryAfterMs);
       } else {
-        const message =
-          error instanceof Error ? error.message : "Unexpected relay error";
-        const status = message.includes("offline") ? 504 : 400;
-        send(response, status, { error: message });
+        const message = error instanceof Error ? error.message : "Unexpected relay error";
+        send(response, 500, { error: message });
       }
     }
   });
+
+  server.on("close", () => {
+    if (cleanupTimer) clearInterval(cleanupTimer);
+    void store.close();
+  });
+  return server;
 }

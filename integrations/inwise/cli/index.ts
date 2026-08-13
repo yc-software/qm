@@ -1,11 +1,6 @@
 #!/usr/bin/env node
-import {
-  derivePairingKey,
-  generateEncodedKeyPair,
-  pairingVerificationCode,
-} from "../common/crypto.js";
+import { derivePairingKey, generateEncodedKeyPair, pairingVerificationCode } from "../common/crypto.js";
 import { fetchJson, joinUrl } from "../common/http.js";
-import type { PairingFile } from "../common/protocol.js";
 import { callInwise, refreshPairing } from "./commands.js";
 import { loadCliConfig, saveCliConfig } from "./config.js";
 
@@ -17,19 +12,13 @@ interface CreatedPairing {
   pairCommand?: string;
 }
 
-function option(
-  args: string[],
-  name: string,
-  fallback?: string,
-): string | undefined {
+function option(args: string[], name: string, fallback?: string): string | undefined {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : fallback;
 }
 
 function options(args: string[], name: string): string[] {
-  return args.flatMap((value, index) =>
-    value === name && args[index + 1] ? [args[index + 1]!] : [],
-  );
+  return args.flatMap((value, index) => (value === name && args[index + 1] ? [args[index + 1]!] : []));
 }
 
 function positional(args: string[]): string[] {
@@ -50,9 +39,7 @@ function numberOption(args: string[], name: string): number | undefined {
 }
 
 function compact(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, item]) => item !== undefined),
-  );
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
 function usage(): never {
@@ -77,19 +64,13 @@ function usage(): never {
 async function auth(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
   if (subcommand === "login") {
-    const relayUrl = (
-      option(rest, "--relay") ?? process.env.INWISE_QM_RELAY_URL
-    )?.replace(/\/$/, "");
-    if (!relayUrl)
-      throw new Error("Pass --relay URL or set INWISE_QM_RELAY_URL");
+    const relayUrl = (option(rest, "--relay") ?? process.env.INWISE_QM_RELAY_URL)?.replace(/\/$/, "");
+    if (!relayUrl) throw new Error("Pass --relay URL or set INWISE_QM_RELAY_URL");
     const keys = generateEncodedKeyPair();
-    const created = await fetchJson<CreatedPairing>(
-      joinUrl(relayUrl, "/v1/pairings"),
-      {
-        method: "POST",
-        body: JSON.stringify({ cliPublicKey: keys.publicKey }),
-      },
-    );
+    const created = await fetchJson<CreatedPairing>(joinUrl(relayUrl, "/v1/pairings"), {
+      method: "POST",
+      body: JSON.stringify({ cliPublicKey: keys.publicKey }),
+    });
     saveCliConfig({
       pairingId: created.pairingId,
       relayUrl,
@@ -118,11 +99,7 @@ async function auth(args: string[]): Promise<void> {
             deviceName: config.deviceName,
             verificationCode: config.edgePublicKey
               ? pairingVerificationCode(
-                  derivePairingKey(
-                    config.cliPrivateKey,
-                    config.edgePublicKey,
-                    config.pairingId,
-                  ),
+                  derivePairingKey(config.cliPrivateKey, config.edgePublicKey, config.pairingId),
                   config.pairingId,
                 )
               : undefined,
@@ -139,20 +116,13 @@ async function auth(args: string[]): Promise<void> {
     if (!rawCode) throw new Error("Pass the verification code shown by the Inwise laptop");
     const supplied = rawCode.trim().toUpperCase();
     const config = await refreshPairing(loadCliConfig());
-    if (!config.edgePublicKey)
-      throw new Error("Pairing is waiting for approval on the Inwise laptop");
+    if (!config.edgePublicKey) throw new Error("Pairing is waiting for approval on the Inwise laptop");
     const expected = pairingVerificationCode(
-      derivePairingKey(
-        config.cliPrivateKey,
-        config.edgePublicKey,
-        config.pairingId,
-      ),
+      derivePairingKey(config.cliPrivateKey, config.edgePublicKey, config.pairingId),
       config.pairingId,
     );
     if (supplied !== expected)
-      throw new Error(
-        "Verification codes do not match. Stop and restart pairing; the relay may not be trustworthy.",
-      );
+      throw new Error("Verification codes do not match. Stop and restart pairing; the relay may not be trustworthy.");
     saveCliConfig({
       ...config,
       confirmedAt: new Date().toISOString(),
@@ -163,10 +133,7 @@ async function auth(args: string[]): Promise<void> {
   usage();
 }
 
-async function call(
-  tool: string,
-  args: Record<string, unknown>,
-): Promise<void> {
+async function call(tool: string, args: Record<string, unknown>): Promise<void> {
   let config = loadCliConfig();
   if (!config.edgePublicKey) {
     config = await refreshPairing(config);
@@ -183,10 +150,7 @@ async function main(): Promise<void> {
   if (command === "transcript") {
     const [meetingId] = positional(args);
     if (!meetingId) usage();
-    return call(
-      "get_transcript",
-      compact({ meetingId, offset: numberOption(args, "--offset") }),
-    );
+    return call("get_transcript", compact({ meetingId, offset: numberOption(args, "--offset") }));
   }
   if (command === "upcoming") {
     return call(
@@ -200,18 +164,13 @@ async function main(): Promise<void> {
   if (command === "meetings") {
     const [subcommand, value] = positional(args);
     if (subcommand === "search" && value)
-      return call(
-        "search_meetings",
-        compact({ query: value, limit: numberOption(args, "--limit") }),
-      );
-    if (subcommand === "get" && value)
-      return call("get_meeting", { meetingId: value });
+      return call("search_meetings", compact({ query: value, limit: numberOption(args, "--limit") }));
+    if (subcommand === "get" && value) return call("get_meeting", { meetingId: value });
     usage();
   }
   if (command === "actions") {
     const [subcommand, value] = positional(args);
-    if (subcommand === "get" && value)
-      return call("get_action_item", { actionItemId: value });
+    if (subcommand === "get" && value) return call("get_action_item", { actionItemId: value });
     if (subcommand === "list")
       return call(
         "list_action_items",
@@ -225,8 +184,7 @@ async function main(): Promise<void> {
   }
   if (command === "people") {
     const [subcommand, value] = positional(args);
-    if (subcommand === "get" && value)
-      return call("get_person", { personId: value });
+    if (subcommand === "get" && value) return call("get_person", { personId: value });
     if (subcommand === "list")
       return call(
         "list_people",
@@ -253,8 +211,7 @@ async function main(): Promise<void> {
     if (!tool) usage();
     const raw = option(args, "--json", "{}")!;
     const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      throw new Error("--json must be a JSON object");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("--json must be a JSON object");
     return call(tool, parsed as Record<string, unknown>);
   }
   usage();

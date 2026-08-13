@@ -12,7 +12,7 @@ inwise CLI  -- HTTPS -->   opaque request router  <-- HTTPS --  edge connector
                                                                     127.0.0.1 only
 ```
 
-The CLI and laptop exchange X25519 public keys during a short-lived pairing. The user confirms a short authentication code calculated independently at both endpoints before the CLI permits a tool call. Meeting requests and responses are encrypted with AES-256-GCM before they reach the relay. After code confirmation, the relay cannot silently substitute its own keys or decrypt the payloads. The relay persists routing credentials as SHA-256 hashes and never receives the endpoint private keys. It does see timing, device labels, pairing IDs, and ciphertext sizes.
+The CLI and laptop exchange X25519 public keys during a short-lived pairing. The user confirms a short authentication code calculated independently at both endpoints before the CLI permits a tool call. Meeting requests and responses are encrypted with AES-256-GCM before they reach the relay. After code confirmation, the relay cannot silently substitute its own keys or decrypt the payloads. The relay persists routing credentials as SHA-256 hashes and encrypted request envelopes in PostgreSQL; it never receives endpoint private keys or plaintext meeting data. It does see timing, device labels, pairing IDs, and ciphertext sizes.
 
 ## User experience
 
@@ -77,14 +77,17 @@ INWISE_QM_CONFIG=./qm-credentials.local.json node dist/cli/index.js meetings sea
 
 ## Relay deployment
 
-The relay is a single Node process. Configure:
+The relay is stateless at the process layer and may run multiple replicas against the same PostgreSQL database. Configure:
 
 - `PORT` — listener port, default `8787`.
 - `INWISE_QM_PUBLIC_URL` — externally reachable HTTPS origin used in pairing instructions.
-- `INWISE_QM_STATE_FILE` — persistent pairing store, default `./data/qm-relay.json`.
+- `INWISE_QM_DATABASE_URL` (or `DATABASE_URL`) — required PostgreSQL connection string for pairing credentials, shared admission limits, and request lifecycle state.
 - `INWISE_QM_REQUEST_TIMEOUT_MS` — request timeout, default 45 seconds.
+- `INWISE_QM_REQUEST_LEASE_MS` — edge work lease, default 30 seconds. Abandoned leases can be reclaimed by another edge poller.
 
-Terminate TLS at a trusted reverse proxy and restrict request body sizes there as well. Back up the state file as a secret. Run exactly one relay process in this version: pending requests are held in memory, so horizontal scaling needs a shared broker.
+Terminate TLS at a trusted reverse proxy and restrict request body sizes there as well. Back up the database as a secret. Pairing creation is limited in the shared store to 10 attempts per source address per minute, five live pending pairings per source, 1,000 live pending pairings globally, 100 total pairings per source, and 10,000 total pairings globally. These hard caps also cover pairings an attacker immediately claims. Expired unclaimed pairings are removed transactionally before admission and by periodic cleanup.
+
+Request submission is idempotent by `requestId`: the relay durably accepts an encrypted request with HTTP 202, the CLI polls for its result, and any relay replica can lease or answer it. Leases expire so queued/in-flight work survives relay restarts and abandoned workers. Expired requests and retained responses are cleaned from PostgreSQL.
 
 ## Add to a QM deployment directory
 
@@ -104,8 +107,7 @@ This implementation proves the core OSS path: local-only Inwise MCP, outbound la
 Before calling it production-ready, add:
 
 - Inwise Desktop settings UI, OS service auto-start, and a visible per-request activity indicator.
-- Device list, revoke, credential rotation, relay key/rate limits, and abuse monitoring.
-- A durable shared broker for multi-replica relay deployments.
+- Device list, revoke, credential rotation, and abuse monitoring.
 - A model-driven agent-turn test using an operator-owned QM Fly sandbox app and provider credentials.
 - A QM-enforced personal-scope identity binding instead of relying only on deployment policy and skill instructions.
 - Security review and threat-model documentation for metadata exposure, compromised sandboxes, and compromised laptops.

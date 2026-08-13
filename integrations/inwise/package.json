@@ -21,10 +21,12 @@
     "start:relay": "node dist/relay/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.20.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.2"
   }

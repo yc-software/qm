@@ -7,11 +7,7 @@ export class HttpError extends Error {
   }
 }
 
-export async function fetchJson<T>(
-  url: string,
-  init: RequestInit = {},
-  timeoutMs = 30_000,
-): Promise<T> {
+export async function fetchJson<T>(url: string, init: RequestInit = {}, timeoutMs = 30_000): Promise<T> {
   const response = await fetch(url, {
     ...init,
     headers: {
@@ -27,7 +23,9 @@ export async function fetchJson<T>(
     try {
       const parsed = JSON.parse(body) as { error?: string };
       message = parsed.error ?? body;
-    } catch {}
+    } catch {
+      // Preserve the relay's non-JSON error body.
+    }
     throw new HttpError(message || response.statusText, response.status);
   }
   if (response.status === 204) return undefined as T;
