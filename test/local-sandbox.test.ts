@@ -255,6 +255,100 @@ test("each container runs on its own network; destroy removes it", async () => {
   await sb.teardown(hb);
 });
 
+test("a containerized core reaches the sandbox by container name over the sandbox's own network", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const seen: string[] = [];
+  const sb = makeSandbox(fake, {
+    coreContainer: "qm-acme-core",
+    fetchImpl: (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      seen.push(url);
+      return fetch(url.replace(/^http:\/\/[^/]+/, `http://127.0.0.1:${daemonPort}`), init);
+    },
+  });
+  const scope = scopeId("personal", "U30");
+  const h = await sb.provision(rw(scope));
+  const net = localNetworkName(h.id);
+
+  assert.equal(
+    seen.every((u) => u.startsWith(`http://${h.id}:8080`)),
+    true,
+    `expected every daemon call on the container name, got ${JSON.stringify(seen.slice(0, 3))}`,
+  );
+  assert.equal(fake.networkMembers.get(net)?.has("qm-acme-core"), true, "core should join the sandbox network");
+
+  const r = await sb.run(h, "echo wired");
+  assert.equal(r.stdout.trim(), "wired");
+  await sb.teardown(h);
+});
+
+test("a recreated core rejoins the network of a sandbox it is reusing warm", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const mk = () =>
+    makeSandbox(fake, {
+      coreContainer: "qm-acme-core",
+      fetchImpl: (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input instanceof Request ? input.url : input);
+        return fetch(url.replace(/^http:\/\/[^/]+/, `http://127.0.0.1:${daemonPort}`), init);
+      },
+    });
+  const scope = scopeId("personal", "U33");
+  const first = mk();
+  const h = await first.provision(rw(scope));
+  const net = localNetworkName(h.id);
+  await first.teardown(h, { keepWarm: true });
+
+  fake.networkMembers.get(net)!.delete("qm-acme-core");
+
+  const second = mk();
+  const h2 = await second.provision(rw(scope));
+  assert.equal(h2.id, h.id, "the warm container is reused");
+  assert.equal(
+    fake.networkMembers.get(net)?.has("qm-acme-core"),
+    true,
+    "a core recreated by `qm up` must rejoin the network of every sandbox it reuses",
+  );
+  await second.teardown(h2, { destroy: true });
+});
+
+test("destroy disconnects the containerized core before removing the sandbox network", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake, {
+    coreContainer: "qm-acme-core",
+    fetchImpl: (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      return fetch(url.replace(/^http:\/\/[^/]+/, `http://127.0.0.1:${daemonPort}`), init);
+    },
+  });
+  const scope = scopeId("personal", "U31");
+  const h = await sb.provision(rw(scope));
+  const net = localNetworkName(h.id);
+  assert.equal(fake.networkMembers.get(net)?.has("qm-acme-core"), true);
+
+  await sb.teardown(h, { destroy: true });
+  assert.equal(fake.networks.has(net), false, "network must be removed, which requires disconnecting core first");
+});
+
+test("without a containerized core the published host port is still used", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const seen: string[] = [];
+  const sb = makeSandbox(fake, {
+    fetchImpl: (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      seen.push(url);
+      return fetch(url, init);
+    },
+  });
+  const scope = scopeId("personal", "U32");
+  const h = await sb.provision(rw(scope));
+  assert.equal(
+    seen.every((u) => u.startsWith(`http://127.0.0.1:${daemonPort}`)),
+    true,
+  );
+  assert.equal(fake.networkMembers.get(localNetworkName(h.id))?.size ?? 0, 0);
+  await sb.teardown(h);
+});
+
 test("concurrent teardown and provision for one scope serialize (no stop of a fresh user)", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);

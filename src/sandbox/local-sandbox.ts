@@ -48,6 +48,7 @@ export interface LocalSandboxOptions {
   repoRoot?: string;
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
+  coreContainer?: string;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
@@ -94,6 +95,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   const fetchImpl = opts.fetchImpl ?? fetch;
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const homeDir = opts.homeDir ?? HOME_DIR;
+  const coreContainer = opts.coreContainer?.trim() || undefined;
   const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
 
@@ -165,9 +167,9 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<{ status: number; text: string }> {
-    const port = await resolvePort(name);
+    const origin = coreContainer ? `http://${name}:${AGENT_PORT}` : `http://127.0.0.1:${await resolvePort(name)}`;
     const signals = [AbortSignal.timeout(timeoutMs ?? 30_000), ...(signal ? [signal] : [])];
-    const res = await fetchImpl(`http://127.0.0.1:${port}${path}`, {
+    const res = await fetchImpl(`${origin}${path}`, {
       method: body === undefined ? "GET" : "POST",
       ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
       signal: AbortSignal.any(signals),
@@ -233,7 +235,22 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         throw new Error(`docker network create ${net} failed: ${r.stderr.trim()}`);
       }
     }
+    if (coreContainer) {
+      const r = await dexec(["network", "connect", net, coreContainer]);
+      if (r.code !== 0 && !/already exists|already connected/i.test(r.stderr)) {
+        throw new Error(`docker network connect ${net} ${coreContainer} failed: ${r.stderr.trim()}`);
+      }
+    }
     return net;
+  }
+
+  async function removeNetwork(name: string): Promise<void> {
+    const net = localNetworkName(name);
+    if (coreContainer)
+      await dexec(["network", "disconnect", net, coreContainer]).catch(
+        swallowAs("local-sandbox: network disconnect", undefined),
+      );
+    await dexec(["network", "rm", net]).catch(swallowAs("local-sandbox: network rm", undefined));
   }
 
   async function runContainer(name: string, scope: string | undefined, withVolume: boolean): Promise<void> {
@@ -273,6 +290,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       scopeByContainer.set(name, scope);
       const state = await containerState(name);
       if (state && state.imageId === imageId) {
+        if (coreContainer) await ensureNetwork(name);
         if (!state.running) await startContainer(name);
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
@@ -297,6 +315,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       scratchByKey.set(key, name);
       const state = await containerState(name);
       if (state) {
+        if (coreContainer) await ensureNetwork(name);
         if (!state.running) await startContainer(name);
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
@@ -456,9 +475,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
           for (const [k, name] of scratchByKey) if (name === handle.id) scratchByKey.delete(k);
           if (tdOpts?.destroy) await dexec(["rm", "-f", handle.id]);
           else await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: scratch rm", undefined));
-          await dexec(["network", "rm", localNetworkName(handle.id)]).catch(
-            swallowAs("local-sandbox: scratch network rm", undefined),
-          );
+          await removeNetwork(handle.id);
           portByName.delete(handle.id);
           return;
         }
@@ -467,9 +484,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
         if (tdOpts?.destroy) {
           await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: destroy rm", undefined));
-          await dexec(["network", "rm", localNetworkName(handle.id)]).catch(
-            swallowAs("local-sandbox: destroy network rm", undefined),
-          );
+          await removeNetwork(handle.id);
           const scope = scopeByContainer.get(handle.id);
           if (scope)
             await dexec(["volume", "rm", localVolumeName(scope)]).catch(

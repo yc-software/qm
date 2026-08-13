@@ -150,6 +150,10 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     assert.ok(!argv.includes("config-placeholder"), "non-secret config env cannot shadow or expose secret values");
     assert.ok(argv.includes("--env-file"), "secrets travel via --env-file");
     assert.ok(argv.includes("FLY_SANDBOX_APP_NAME=sekrit-sandboxes"), "non-secret env still flows as -e");
+    assert.ok(
+      argv.includes("LOCAL_SANDBOX_CORE_CONTAINER=qm-sekrit-core"),
+      "core learns its own container name so the local sandbox is reachable over the docker network",
+    );
     assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
     assert.ok(argv.includes("LINEAR_REGION=us"), "undeclared plugin env still flows as -e");
     assert.ok(argv.includes("SECURITY_SCREEN_BACKEND=proxy"));
