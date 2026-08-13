@@ -44,6 +44,7 @@ export function createSessionMethods(
   | "updateSession"
   | "regenerateTitle"
   | "spawnSession"
+  | "discardSession"
   | "forkSession"
   | "grant"
   | "revokeGrant"
@@ -516,6 +517,22 @@ export function createSessionMethods(
       }
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
       return create();
+    },
+
+    async discardSession(sessionId, principalId) {
+      const session = await deps.sessions.get(sessionId);
+      if (!session) return false;
+      const mine = await deps.sessions.listByParticipant(principalId);
+      if (!mine.some((s) => s.id === sessionId)) return false;
+      if (!(await deps.sessions.deleteSessionIfEmpty(sessionId))) return false;
+      deps.auditLog.record({
+        at: Date.now(),
+        principalId,
+        action: "session.discard",
+        resource: sessionId,
+        scopeLabel: session.scopeId,
+      });
+      return true;
     },
 
     async grant(g) {

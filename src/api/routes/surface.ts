@@ -103,18 +103,27 @@ async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
   });
   if (!out) return sendJson(res, 404, { error: "not_found", message: "cannot start a session in this scope" });
   const session = out.session;
+  const sessionScope = parseScopeId(session.scopeId);
   const turn = await app.turn({
     surface: session.surface ?? "web",
     actor: { externalId: capability.actorId },
     conversation: {
       kind: session.type,
       threadRef: session.threadRef,
+      ...(sessionScope.kind === "channel" || sessionScope.kind === "group" ? { channelRef: sessionScope.ref } : {}),
       ...(session.channelName ? { channelName: session.channelName } : {}),
     },
     text: b.text,
     spawned: true,
     async: true,
   });
+  if (turn.status === "refused") {
+    await app.discardSession(session.id, capability.actorId);
+    return sendJson(res, 409, {
+      error: "seed_turn_refused",
+      message: (turn as { reason?: string }).reason ?? "the first message was refused",
+    });
+  }
   const runId = (turn as { runId?: string }).runId;
   return sendJson(res, 202, { session, turn: { status: turn.status, ...(runId ? { runId } : {}) } });
 }

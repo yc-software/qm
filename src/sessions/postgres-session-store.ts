@@ -262,8 +262,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          OR ${lastActivityExpr("s")} > (EXTRACT(EPOCH FROM now()) * 1000)::bigint - 172800000`,
   ]);
 
+  const lockSession = (client: PoolClient, sessionId: string) =>
+    client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
+
   const withLease = async <T>(lease: Lease, invalidMsg: string, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pool(), async (client) => {
+      await lockSession(client, lease.sessionId);
       const held = await client.query("SELECT token FROM session_leases WHERE session_id = $1 FOR UPDATE", [
         lease.sessionId,
       ]);
@@ -371,27 +375,31 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async acquireLease(sessionId, holder): Promise<LeaseAttempt> {
       const token = randomUUID();
       const t = now();
-      const rows = await q(
-        `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
-           VALUES ($1,$2,$3,$5,$4)
-         ON CONFLICT (session_id) DO UPDATE
-           SET token = $2, expires_at = $3, holder = $5, acquired_at = $4
-           WHERE session_leases.expires_at <= $4
-         RETURNING token`,
-        [sessionId, token, t + leaseTtlMs, t, holder ?? null],
-      );
-      if (rows[0]) return { lease: { sessionId, token } };
-      const held = await q("SELECT expires_at, holder, acquired_at FROM session_leases WHERE session_id = $1", [
-        sessionId,
-      ]);
-      const row = held[0];
-      if (!row) return { lease: null };
-      return {
-        lease: null,
-        ...(row.holder != null ? { heldBy: row.holder as LeaseHolder } : {}),
-        ...(row.acquired_at != null ? { heldSince: Number(row.acquired_at) } : {}),
-        heldUntil: Number(row.expires_at),
-      };
+      return withPgTransaction(await pool(), async (client) => {
+        await lockSession(client, sessionId);
+        const granted = await client.query(
+          `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
+             SELECT $1, $2, $3, $5, $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
+           ON CONFLICT (session_id) DO UPDATE
+             SET token = $2, expires_at = $3, holder = $5, acquired_at = $4
+             WHERE session_leases.expires_at <= $4
+           RETURNING token`,
+          [sessionId, token, t + leaseTtlMs, t, holder ?? null],
+        );
+        if (granted.rows[0]) return { lease: { sessionId, token } };
+        const held = await client.query(
+          "SELECT expires_at, holder, acquired_at FROM session_leases WHERE session_id = $1",
+          [sessionId],
+        );
+        const row = held.rows[0];
+        if (!row) return { lease: null };
+        return {
+          lease: null,
+          ...(row.holder != null ? { heldBy: row.holder as LeaseHolder } : {}),
+          ...(row.acquired_at != null ? { heldSince: Number(row.acquired_at) } : {}),
+          heldUntil: Number(row.expires_at),
+        };
+      });
     },
 
     async releaseLease(lease): Promise<void> {
@@ -600,12 +608,32 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async deleteSession(sessionId): Promise<void> {
       await withPgTransaction(await pool(), async (client) => {
+        await lockSession(client, sessionId);
         await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_entries WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_tape WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM sessions WHERE id = $1", [sessionId]);
+      });
+    },
+
+    async deleteSessionIfEmpty(sessionId): Promise<boolean> {
+      return withPgTransaction(await pool(), async (client) => {
+        await lockSession(client, sessionId);
+        const gone = await client.query(
+          `DELETE FROM sessions
+            WHERE id = $1
+              AND NOT EXISTS (SELECT 1 FROM session_entries WHERE session_id = $1)
+              AND NOT EXISTS (SELECT 1 FROM session_leases WHERE session_id = $1 AND expires_at > $2)`,
+          [sessionId, now()],
+        );
+        if (gone.rowCount === 0) return false;
+        await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
+        await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
+        await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
+        await client.query("DELETE FROM session_tape WHERE session_id = $1", [sessionId]);
+        return true;
       });
     },
 

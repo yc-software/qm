@@ -587,7 +587,10 @@ for (const [name, make] of backends) {
       true,
       "other sessions untouched",
     );
-    assert.notEqual((await store.acquireLease(s.id)).lease, null, "lease row cleared (re-acquirable)");
+    assert.equal((await store.acquireLease(s.id)).lease, null, "no lease is granted on a deleted session");
+    const reborn = await store.getOrCreateByThread("t1", "dm", scope);
+    assert.notEqual(reborn.id, s.id, "the thread gets a fresh session");
+    assert.notEqual((await store.acquireLease(reborn.id)).lease, null, "the fresh session is leasable");
   });
 
   test(`${name}: listByParticipant sets lastActivityAt to the most recent user message`, async () => {
@@ -833,4 +836,35 @@ test("cronIdOf and sessionOrigin agree on which threadRefs are crons", () => {
   assert.equal(cronIdOf("agent:main:cron:abc"), "abc");
   assert.equal(cronIdOf("cron:abc:slot"), "abc");
   assert.equal(cronIdOf("dm:D1"), null);
+});
+
+test("deleteSessionIfEmpty refuses while a lease is held and after entries land", async () => {
+  const nowRef = { v: 10_000_000_000 };
+  const store = createMemorySessionStore({ now: () => nowRef.v, leaseTtlMs: 50 });
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("web:U1:seed", "dm", scope);
+  const { lease } = await store.acquireLease(s.id);
+  assert.ok(lease);
+  assert.equal(await store.deleteSessionIfEmpty(s.id), false, "a held lease blocks the discard");
+  await store.append(lease, { type: "user", payload: { text: "seed" }, scopeLabel: scope });
+  await store.releaseLease(lease);
+  assert.equal(await store.deleteSessionIfEmpty(s.id), false, "entries block the discard");
+  const empty = await store.getOrCreateByThread("web:U1:seed2", "dm", scope);
+  const second = await store.acquireLease(empty.id);
+  assert.ok(second.lease);
+  await store.releaseLease(second.lease);
+  assert.equal(await store.deleteSessionIfEmpty(empty.id), true, "a released empty session is discarded");
+  assert.equal(await store.get(empty.id), null);
+  assert.equal((await store.acquireLease(empty.id)).lease, null, "no lease is granted on a discarded session");
+
+  const abandoned = await store.getOrCreateByThread("web:U1:seed3", "dm", scope);
+  const stale = await store.acquireLease(abandoned.id);
+  assert.ok(stale.lease);
+  nowRef.v += 60;
+  assert.equal(await store.deleteSessionIfEmpty(abandoned.id), true, "an expired lease does not block the discard");
+  await assert.rejects(
+    store.append(stale.lease, { type: "user", payload: {}, scopeLabel: scope }),
+    /valid session lease/,
+    "the stale holder cannot append after the discard",
+  );
 });

@@ -287,7 +287,10 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", {
   const keptRow = (await s.listByParticipant("DEL1")).find((x) => x.id === keep.id);
   assert.ok(keptRow, "other sessions untouched");
   assert.equal(keptRow!.hasEntries, false, "an entry-less session reads back hasEntries=false");
-  assert.notEqual((await s.acquireLease(a.id)).lease, null, "lease row cleared (re-acquirable)");
+  assert.equal((await s.acquireLease(a.id)).lease, null, "no lease is granted on a deleted session");
+  const reborn = await s.getOrCreateByThread("del-t1", "dm", scope);
+  assert.notEqual(reborn.id, a.id, "the thread gets a fresh session");
+  assert.notEqual((await s.acquireLease(reborn.id)).lease, null, "the fresh session is leasable");
 });
 
 test("pg scopeSessionSummaries: counts via aggregate, not per-transcript reads", { skip }, async () => {
@@ -1179,4 +1182,105 @@ test("pg participant view: pin/color are per-participant, survive re-add, and cl
   const cleared = (await s.listByParticipant("U1")).find((x) => x.id === sess.id)!;
   assert.ok(!cleared.pinned);
   assert.equal(cleared.color ?? null, null, "null clears the color");
+});
+
+test(
+  "pg deleteSessionIfEmpty: an expired lease forfeits, and the stale holder cannot orphan entries",
+  { skip },
+  async () => {
+    const s = createPostgresSessionStore(URL!, { leaseTtlMs: 40 });
+    const scope = scopeId("personal", "USTALE");
+    const sess = await s.getOrCreateByThread("web:USTALE:seed", "dm", scope);
+    const att = await s.acquireLease(sess.id);
+    assert.ok(att.lease);
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(await s.deleteSessionIfEmpty(sess.id), true, "an expired lease does not block the discard");
+    assert.equal(await s.get(sess.id), null);
+    await assert.rejects(
+      s.append(att.lease!, { type: "user", payload: {}, scopeLabel: scope }),
+      /valid session lease/,
+      "the stale holder cannot append after the discard",
+    );
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    const leftovers = await raw.query(
+      "SELECT (SELECT COUNT(*) FROM session_entries WHERE session_id = $1) AS e, (SELECT COUNT(*) FROM session_leases WHERE session_id = $1) AS l",
+      [sess.id],
+    );
+    await raw.end();
+    assert.equal(Number(leftovers.rows[0].e), 0, "no orphaned entries after the stale append is refused");
+    assert.equal(Number(leftovers.rows[0].l), 0, "no orphaned lease row survives");
+  },
+);
+
+test("pg deleteSession: racing a fresh lease acquisition never orphans entries", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "UHARD");
+  for (let i = 0; i < 15; i++) {
+    const sess = await s.getOrCreateByThread(`web:UHARD:${i}`, "dm", scope);
+    const [attempt] = await Promise.all([s.acquireLease(sess.id), s.deleteSession(sess.id)]);
+    assert.equal(await s.get(sess.id), null, "the session is gone either way");
+    if (attempt.lease) {
+      await assert.rejects(
+        s.append(attempt.lease, { type: "user", payload: {}, scopeLabel: scope }),
+        /valid session lease/,
+        "a lease granted before the delete cannot orphan entries",
+      );
+    }
+  }
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const leftovers = await raw.query(
+    "SELECT COUNT(*) AS n FROM session_leases l WHERE NOT EXISTS (SELECT 1 FROM sessions ss WHERE ss.id = l.session_id)",
+  );
+  await raw.end();
+  assert.equal(Number(leftovers.rows[0].n), 0, "no lease row survives its session");
+});
+
+test("pg deleteSessionIfEmpty: racing a fresh lease acquisition never orphans the lease", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "URACE");
+  for (let i = 0; i < 15; i++) {
+    const sess = await s.getOrCreateByThread(`web:URACE:${i}`, "dm", scope);
+    const [attempt, discarded] = await Promise.all([s.acquireLease(sess.id), s.deleteSessionIfEmpty(sess.id)]);
+    if (discarded) {
+      assert.equal(attempt.lease, null, "a discarded session never grants a lease");
+      assert.equal(await s.get(sess.id), null);
+    } else {
+      assert.ok(attempt.lease, "when the discard is refused the lease was granted");
+      assert.ok(await s.get(sess.id), "the session survives when the lease won");
+      await s.releaseLease(attempt.lease!);
+      assert.equal(await s.deleteSessionIfEmpty(sess.id), true);
+    }
+  }
+});
+
+test("pg deleteSessionIfEmpty: a held lease or landed entries refuse the discard atomically", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "UDISC");
+  const sess = await s.getOrCreateByThread("web:UDISC:seed", "dm", scope);
+  const att = await s.acquireLease(sess.id);
+  assert.ok(att.lease);
+  assert.equal(await s.deleteSessionIfEmpty(sess.id), false, "a held lease blocks the discard");
+  await s.append(att.lease, { type: "user", payload: { text: "seed" }, scopeLabel: scope });
+  await s.releaseLease(att.lease);
+  assert.equal(await s.deleteSessionIfEmpty(sess.id), false, "entries block the discard");
+  assert.ok(await s.get(sess.id), "the refused discard leaves the session intact");
+
+  const empty = await s.getOrCreateByThread("web:UDISC:seed2", "dm", scope);
+  const att2 = await s.acquireLease(empty.id);
+  assert.ok(att2.lease);
+  await s.releaseLease(att2.lease);
+  assert.equal(await s.deleteSessionIfEmpty(empty.id), true, "a released empty session is discarded");
+  assert.equal(await s.get(empty.id), null);
+
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const orphans = await raw.query(
+    "SELECT (SELECT COUNT(*) FROM session_entries WHERE session_id = $1) AS e, (SELECT COUNT(*) FROM session_leases WHERE session_id = $1) AS l",
+    [empty.id],
+  );
+  await raw.end();
+  assert.equal(Number(orphans.rows[0].e), 0, "no orphaned entries survive the discard");
+  assert.equal(Number(orphans.rows[0].l), 0, "no orphaned lease survives the discard");
 });

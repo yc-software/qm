@@ -107,6 +107,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async acquireLease(sessionId, holder): Promise<LeaseAttempt> {
+      if (!sessions.has(sessionId)) return { lease: null };
       const held = leases.get(sessionId);
       if (held && now() < held.expiresAt)
         return {
@@ -141,6 +142,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       llmRequests.delete(sessionId);
       windows.delete(sessionId);
       leases.delete(sessionId);
+    },
+
+    async deleteSessionIfEmpty(sessionId) {
+      if (!sessions.has(sessionId)) return false;
+      if ((entries.get(sessionId)?.length ?? 0) > 0) return false;
+      const held = leases.get(sessionId);
+      if (held && now() < held.expiresAt) return false;
+      await this.deleteSession(sessionId);
+      return true;
     },
 
     async forceReleaseLease(sessionId) {

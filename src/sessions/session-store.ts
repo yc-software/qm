@@ -440,6 +440,7 @@ export interface SessionStore {
   listByParticipant(principalId: string): Promise<Session[]>;
 
   deleteSession(sessionId: string): Promise<void>;
+  deleteSessionIfEmpty(sessionId: string): Promise<boolean>;
 
   updateParticipantView(sessionId: string, principalId: string, patch: ParticipantViewPatch): Promise<void>;
 
