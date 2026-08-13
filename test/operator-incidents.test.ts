@@ -71,6 +71,10 @@ test("declared inability detection catches blocked work without treating a healt
   assert.equal(replyDeclaresInability("The task is blocked by a missing OAuth grant."), true);
   assert.equal(replyDeclaresInability("Can't find it — no test file was shared with me."), true);
   assert.equal(replyDeclaresInability("So I can't actually attempt the read with this tool set."), true);
+  assert.equal(
+    replyDeclaresInability("The read tool isn't in my kit for this turn — can't actually attempt it."),
+    true,
+  );
   assert.equal(replyDeclaresInability("I can't see any problem with the completed report."), false);
   assert.equal(replyDeclaresInability("Completed. I can send the report after approval."), false);
 });
