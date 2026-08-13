@@ -5,6 +5,9 @@ import { closeFormMenus } from "./ui";
 import { allConversations } from "./conversations";
 import { closeOpenSessionMenu, renderList, sessionsState } from "./sessions";
 import { closeDeployMenu } from "./deploys";
+import { installI18n } from "./i18n.ts";
+
+installI18n();
 
 function closeComposerMenus(keepOpenWithin: Element | null): boolean {
   let changed = false;

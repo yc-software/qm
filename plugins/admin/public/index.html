@@ -3752,11 +3752,14 @@
   </head>
   <body>
     <header>
-      <div class="brand"><span id="brand-product">Agent</span>&nbsp;Admin <span id="org-tag"></span></div>
+      <div class="brand">
+        <span id="brand-product">Agent</span>&nbsp;Admin <span id="org-tag" data-i18n-skip></span>
+      </div>
       <div class="header-controls" id="header-controls" aria-label="Page controls"></div>
       <div class="who hidden" id="who">
-        <a class="header-button" href="/" id="dashboard-link">Dashboard</a><span class="pill" id="who-name"></span
-        ><button class="link" id="signout">Sign out</button>
+        <button class="header-button" id="locale-toggle" type="button" data-i18n-skip>中文</button
+        ><a class="header-button" href="/" id="dashboard-link">Dashboard</a
+        ><span class="pill" id="who-name" data-i18n-skip></span><button class="link" id="signout">Sign out</button>
       </div>
     </header>
 
@@ -3809,7 +3812,9 @@
         </p>
         <div class="card">
           <div class="body">
-            <p class="notebox">Signed in as <b id="na-sub"></b> · <span id="na-org"></span></p>
+            <p class="notebox">
+              Signed in as <b id="na-sub" data-i18n-skip></b> · <span id="na-org" data-i18n-skip></span>
+            </p>
             <p class="hint">
               Admin rights come from your organization's admin grants. If you need access, ask an existing admin to
               grant it.
@@ -4821,6 +4826,821 @@
 
     <script>
       const $ = (id) => document.getElementById(id);
+      const ADMIN_LOCALE_KEY = "qm:locale";
+      const ADMIN_ZH = {
+        Admin: "管理",
+        "Admin navigation": "管理导航",
+        "Admin content": "管理内容",
+        Dashboard: "主界面",
+        "Sign out": "退出登录",
+        "Page controls": "页面控件",
+        "Checking your access…": "正在检查你的访问权限…",
+        "Loading scopes…": "正在加载范围…",
+        "Sign in through the portal": "通过门户登录",
+        "This admin surface is reached through the portal. Sign in there to continue.":
+          "管理端需要通过门户访问。请在门户登录后继续。",
+        "Sign in through the portal to continue.": "请通过门户登录后继续。",
+        "Admin is temporarily unavailable": "管理端暂时不可用",
+        "We couldn't verify your admin access right now — the backend didn't answer. This is usually temporary.":
+          "目前无法验证你的管理权限——后端未响应。通常这只是临时问题。",
+        "Trying again resolves most cases. If this keeps happening, the core service may be down.":
+          "重试通常可以解决。如果问题持续，核心服务可能已停止。",
+        "Try again": "重试",
+        "You don't have admin access": "你没有管理权限",
+        "The Admin area is limited to governance admins. Your account is signed in and verified — it just isn't granted admin rights.":
+          "管理区仅限治理管理员使用。你的账户已登录并通过验证，但尚未获授管理权限。",
+        "Signed in as": "当前登录身份",
+        "Admin rights come from your organization's admin grants. If you need access, ask an existing admin to grant it.":
+          "管理权限由组织管理员授予。如需访问，请联系现有管理员。",
+        "Back to your surfaces": "返回你的界面",
+        "Temporary setup guide": "临时设置指南",
+        Onboarding: "初始设置",
+        "Get this QM instance ready for real conversations. Secrets are validated, encrypted in durable storage, and never displayed again.":
+          "将此 QM 实例准备好用于真实对话。密钥会被验证、加密并持久化存储，且不会再次显示。",
+        "Not ready": "尚未就绪",
+        "1. Model provider": "1. 模型提供商",
+        "Add the key QM will use for its base model.": "添加 QM 基础模型所需的密钥。",
+        Optional: "可选",
+        "2. Slack app": "2. Slack 应用",
+        "Create the QM app, install it, then add its bot and Socket Mode tokens.":
+          "创建并安装 QM 应用，然后添加机器人和 Socket Mode 令牌。",
+        "Create QM Slack app ↗": "创建 QM Slack 应用 ↗",
+        "Enter Slack tokens": "输入 Slack 令牌",
+        "3. OAuth apps": "3. OAuth 应用",
+        "Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.":
+          "添加 Google、GitHub、Notion 或其他 OAuth 客户端，以启用相应连接器。",
+        "Configure OAuth apps": "配置 OAuth 应用",
+        "Base model": "基础模型",
+        "Choose a supported provider and model. Saving validates the key, stores it write-only, and makes the selected model the organization default.":
+          "选择支持的提供商和模型。保存时会验证密钥、以只写方式存储，并将所选模型设为组织默认值。",
+        Provider: "提供商",
+        "API key": "API 密钥",
+        "Validate and save": "验证并保存",
+        "Disable this provider": "禁用此提供商",
+        "Custom providers": "自定义提供商",
+        Protocol: "协议",
+        Endpoint: "端点",
+        Models: "模型",
+        Key: "密钥",
+        "No custom providers registered.": "尚未注册自定义提供商。",
+        "Provider id (slug)": "提供商 ID（标识）",
+        "Display name": "显示名称",
+        "OpenAI-compatible": "OpenAI 兼容",
+        "Anthropic-compatible": "Anthropic 兼容",
+        "Base URL": "基础 URL",
+        "Models (one per line: id | name | context | maxTokens)": "模型（每行一个：ID | 名称 | 上下文 | 最大令牌数）",
+        "Validate key against the endpoint (untick for gateways without a models listing)":
+          "向端点验证密钥（无模型列表的网关请取消勾选）",
+        "Save provider": "保存提供商",
+        "Control plane": "控制平面",
+        Governance: "治理",
+        "Set the organization’s operating boundaries and review what agents can effectively do before changing them.":
+          "设置组织的运行边界，并在更改前检查智能体实际可执行的操作。",
+        Scope: "范围",
+        Organization: "组织",
+        "Effective state": "当前生效状态",
+        "Resolved for this scope now": "已按当前范围解析",
+        Autonomy: "自主性",
+        Loading: "正在加载",
+        "Security posture": "安全策略",
+        Network: "网络",
+        "Outbound enforcement": "出站策略执行",
+        "Slack audience": "Slack 受众",
+        "External participants": "外部参与者",
+        "Human activity": "人员活动",
+        "All activity": "所有活动",
+        "Sort:": "排序：",
+        Intelligence: "智能",
+        "Data boundaries": "数据边界",
+        "Models & browsing": "模型和浏览",
+        Credentials: "凭据",
+        "How agents reason, act, and respond without supervision.": "智能体在无人监督时如何思考、行动和响应。",
+        Posture: "策略",
+        "Dangerous — no content scans; nothing pauses between tool calls": "危险——不扫描内容；工具调用之间不暂停",
+        "Auto — screen external content with proxy or model": "自动——使用代理或模型筛查外部内容",
+        "Strict — approve tool actions; direct mutations blocked": "严格——审批工具操作；阻止直接修改",
+        Apply: "应用",
+        "Approval grant options": "审批授权选项",
+        'Offer "Allow session" (grant lasts for the conversation)': "提供“允许本会话”（授权持续至对话结束）",
+        'Offer "Allow always" (standing grant across turns)': "提供“始终允许”（跨轮次持续授权）",
+        "Command policy": "命令策略",
+        "Patterns matched against each executed command. First match wins.":
+          "对每个执行的命令匹配规则，首个匹配项生效。",
+        Mode: "模式",
+        "denylist — gate dangerous commands": "拒绝列表——拦截危险命令",
+        "allowlist — only listed commands run": "允许列表——仅运行列出的命令",
+        Priority: "优先级",
+        Pattern: "模式",
+        Effect: "效果",
+        Reason: "原因",
+        Order: "顺序",
+        "No command rules yet.": "尚无命令规则。",
+        "+ Add rule": "+ 添加规则",
+        "Test a command": "测试命令",
+        Simulate: "模拟",
+        "Enter a sample command to test the scope policy. Deployment rules may further restrict execution.":
+          "输入示例命令来测试范围策略。部署规则可能进一步限制执行。",
+        Save: "保存",
+        "SOUL editor": "SOUL 编辑器",
+        "Write the standing instructions composed into every system prompt for this scope. Saving creates a durable revision; restoring an older revision creates a new one.":
+          "编写将被组合到此范围每个系统提示中的常驻指令。保存会创建持久修订版；恢复旧修订版会创建新修订版。",
+        "Standing instructions": "常驻指令",
+        "Saved revision": "已保存修订版",
+        "No saved instructions": "尚无已保存指令",
+        "Current draft": "当前草稿",
+        "No draft changes": "草稿无更改",
+        "Ambient policy": "环境策略",
+        "never wakes the judge,": "从不唤醒裁定器，",
+        "batches its posts (judged at most once per the given hours),": "批量处理其帖子（在指定小时内最多判定一次），",
+        "marks its posts as triggers to act on,": "将其帖子标记为行动触发器，",
+        "reads it like a person.": "像人一样阅读。",
+        ignore: "忽略",
+        rollup: "汇总",
+        action: "执行",
+        user: "用户",
+        "Ambient behavior": "环境行为",
+        Default: "默认",
+        "Default (by channel size)": "默认（按频道人数）",
+        On: "开启",
+        Off: "关闭",
+        "Standing order": "常驻规则",
+        "Bot (author name)": "机器人（作者名）",
+        Handling: "处理方式",
+        "Rollup hours": "汇总小时数",
+        "No bots in the ledger yet.": "记录中尚无机器人。",
+        "+ Add bot": "+ 添加机器人",
+        Egress: "出站管理",
+        "What can leave a scope, which audiences can see it, and how deployment authority is carried.":
+          "管理哪些内容可以离开当前范围、哪些受众可见，以及如何传递部署权限。",
+        "Outbound host controls for this scope. Enforcement depends on the active sandbox backend; this page reports that capability instead of implying every saved rule is live.":
+          "此范围的出站主机控制。执行能力取决于当前沙箱后端；此页会如实报告该能力，不会暗示所有已保存规则均已生效。",
+        "Policy is draft only": "策略仅为草案",
+        "The current sandbox backend does not enforce outbound host policy. Agents still have open outbound access.":
+          "当前沙箱后端不执行出站主机策略。智能体仍可自由访问外部网络。",
+        Backend: "后端",
+        Enforcement: "执行状态",
+        "Effective policy": "生效策略",
+        Denylist: "拒绝列表",
+        "hosts the agent may never reach — exact host or any subdomain, one per line.":
+          "智能体不得访问的主机——精确主机或任意子域，每行一个。",
+        Allowlist: "允许列表",
+        "when present, only these outbound hosts may be reached. Empty = otherwise open.":
+          "设置后仅可访问这些出站主机。留空表示其他主机均开放。",
+        "Save draft": "保存草稿",
+        "External Slack participants": "Slack 外部参与者",
+        "Allow mixed Slack rooms": "允许混合 Slack 聊天室",
+        "Internal members can use the agent where guests or Connect members are present.":
+          "内部成员可在含访客或 Connect 成员的聊天室中使用智能体。",
+        "Org-wide, default on. When off, the agent never acts on overheard messages in any channel, regardless of per-channel settings — it only responds to direct @mentions.":
+          "组织级设置，默认开启。关闭后，无论各频道如何设置，智能体都不会对旁听到的消息采取行动，只响应直接 @提及。",
+        "Allow ambient behavior": "允许环境行为",
+        "Channels choose per-channel; without a choice, ambient defaults off in channels with more than 8 members.":
+          "可按频道选择；未设置时，成员超过 8 人的频道默认关闭环境行为。",
+        "The models, browser runtime, and organization context available on future turns.":
+          "未来轮次可用的模型、浏览器运行时和组织上下文。",
+        "Fast mode for interactive turns": "交互轮次快速模式",
+        "Org-wide, default off. When on, human turns run in fast mode on fast-capable models unless the turn asks otherwise. Requires fast-mode quota with the provider.":
+          "组织级设置，默认关闭。开启后，人工轮次会在支持快速模式的模型上以快速模式运行，除非该轮次另有要求。需要提供商的快速模式配额。",
+        "Default interactive turns to fast mode": "交互轮次默认使用快速模式",
+        "A turn that picks its own fast-mode setting (for example the web UI toggle) still wins.":
+          "轮次自身选择的快速模式设置（例如 Web UI 开关）仍优先生效。",
+        "Default harness and model": "默认调度器和模型",
+        "The runtime inherited by scopes without an override. Takes effect from the next turn.":
+          "未设置覆盖值的范围所继承的运行时，从下一轮开始生效。",
+        Harness: "调度器",
+        Model: "模型",
+        "Approved harnesses": "已批准的调度器",
+        "Harnesses people may choose in the web UI or ask the agent to use.":
+          "用户可在 Web UI 中选择或请求智能体使用的调度器。",
+        "Allowed models": "允许的模型",
+        Branding: "品牌",
+        "Accent color": "强调色",
+        "Brand mark (1–2 chars)": "品牌标记（1–2 个字符）",
+        "Assistant label": "助手名称",
+        "People directory": "人员目录",
+        "Public page or URL where the agent can look up a person's current role or title (e.g. https://www.example.com/people). Used when getting to know someone. Leave blank to disable.":
+          "智能体可查询人员当前角色或职务的公开页面或 URL（例如 https://www.example.com/people）。了解某人时使用，留空即禁用。",
+        "Directory URL": "目录 URL",
+        "Browse model": "浏览模型",
+        "Browse step limit": "浏览步数限制",
+        "Max browser steps a single browse task may take, org-wide. Each step is one action (click, type, navigate) by the browser agent. Leave blank for the default of 50.":
+          "单个浏览任务可执行的最大浏览步数（组织级）。每步是浏览器智能体的一个操作（点击、输入、导航）。留空默认为 50。",
+        "Max steps": "最大步数",
+        "Turn time limit": "轮次时间限制",
+        "Maximum wall-clock time for a turn, org-wide. Use 60–86400 seconds, 0 for no limit, or leave blank to use the deployment default.":
+          "单个轮次的最大实际运行时间（组织级）。可填 60–86400 秒，0 表示不限制，留空则使用部署默认值。",
+        Seconds: "秒",
+        "Shared service credentials": "共享服务凭据",
+        "Shared server-side authority available to agents in this organization.":
+          "此组织内智能体可用的共享服务端权限。",
+        "No credentials configured.": "尚未配置凭据。",
+        "Add a credential": "添加凭据",
+        New: "新建",
+        "Blank secret": "密钥为空",
+        "New credentials require a secret.": "新凭据必须填写密钥。",
+        "Blank method": "方法为空",
+        "Uses the broker default: GET only.": "使用代理默认值：仅 GET。",
+        "Blank paths": "路径为空",
+        "Allows every path on the selected host.": "允许所选主机上的所有路径。",
+        Slug: "标识",
+        "lowercase identifier": "小写标识符",
+        Delivery: "交付方式",
+        "how the secret is used": "密钥的使用方式",
+        "Broker — core stamps it onto proxied HTTP calls; the secret never leaves core":
+          "代理——核心服务将其加入代理 HTTP 调用；密钥不会离开核心服务",
+        "Sandbox env — injected into all-internal conversations under an env var (e.g. a browser-provider key for the browse skill)":
+          "沙箱环境——以环境变量注入所有内部对话（例如浏览技能的浏览器提供商密钥）",
+        "Env var": "环境变量",
+        "UPPER_SNAKE_CASE; the skill reads this": "使用 UPPER_SNAKE_CASE；技能会读取此变量",
+        "Destination host": "目标主机",
+        "bare hostname only": "仅填写主机名",
+        Secret: "密钥",
+        "The secret is write-only. It cannot be viewed after saving.": "密钥仅可写入，保存后无法查看。",
+        "Authentication header": "认证请求头",
+        "blank = Authorization": "留空 = Authorization",
+        "Value prefix": "值前缀",
+        "blank = Bearer": "留空 = Bearer",
+        "Allowed HTTP methods": "允许的 HTTP 方法",
+        "comma-separated; blank = GET": "逗号分隔；留空 = GET",
+        "Allowed path prefixes": "允许的路径前缀",
+        "one per line; blank = any path": "每行一个；留空 = 任意路径",
+        "Credential is enabled": "启用此凭据",
+        "Principals with access": "可访问的主体",
+        "Access: every all-internal conversation. Env delivery is not gated by grants — rooms with externals get nothing, everyone else gets the env var.":
+          "访问范围：所有纯内部对话。环境变量交付不受授权限制——含外部成员的聊天室不会获得，其他对话均可获得该环境变量。",
+        "Everyone in this organization": "组织内所有人",
+        "Only selected people or teams": "仅所选人员或团队",
+        "Effective capability": "实际能力",
+        State: "状态",
+        Enabled: "已启用",
+        "Disabled — never injected": "已禁用——绝不注入",
+        "Disabled — broker requests refused": "已禁用——拒绝凭据代理请求",
+        Host: "主机",
+        "Not set": "未设置",
+        "Sandbox env": "沙箱环境变量",
+        "Env var not set": "未设置环境变量",
+        "and its subdomains": "及其子域名",
+        Auth: "认证",
+        header: "请求头",
+        prefix: "前缀",
+        "Authorization header · no prefix": "Authorization 请求头 · 无前缀",
+        Methods: "方法",
+        Paths: "路径",
+        "Any path": "任意路径",
+        "Any path on this host": "此主机上的任意路径",
+        Access: "访问权限",
+        "Every all-internal conversation — grants don't gate env delivery": "所有纯内部对话——授权不会限制环境变量交付",
+        "No principal selected": "未选择主体",
+        "Required before first save": "首次保存前必填",
+        "Will replace the stored secret": "将替换已存储密钥",
+        "Stored secret retained": "保留已存储密钥",
+        "Save credential": "保存凭据",
+        "Clear form": "清空表单",
+        "Connector OAuth clients": "连接器 OAuth 客户端",
+        "No connectors configured.": "尚未配置连接器。",
+        "Add a connector": "添加连接器",
+        Connector: "连接器",
+        Actions: "操作",
+        by: "由",
+        client: "客户端",
+        configured: "已配置",
+        "Configured by deployment secrets": "由部署密钥配置",
+        "Connected to": "已连接到",
+        "Connected using deployment environment secrets. Saving here replaces them with admin-managed encrypted tokens.":
+          "已使用部署环境密钥连接。在此保存会将其替换为管理员管理的加密令牌。",
+        "The deployment contains only one Slack token. Save a matching pair here to repair it.":
+          "部署中只有一个 Slack 令牌。请在此保存匹配的一对令牌以修复配置。",
+        "a Slack workspace": "一个 Slack 工作区",
+        "saved by": "保存者",
+        "Disabled by an administrator.": "已被管理员禁用。",
+        "Secret set": "已设置密钥",
+        "Secret missing": "缺少密钥",
+        "Hide context": "隐藏上下文",
+        "Show context": "显示上下文",
+        "View context sent to the model": "查看发送给模型的上下文",
+        "Collapse entry": "折叠条目",
+        "Expand entry": "展开条目",
+        "Collapse model context": "折叠模型上下文",
+        "Expand model context": "展开模型上下文",
+        Today: "今天",
+        "Scopes are selected in the provider.": "权限范围由提供商选择。",
+        "Create an OAuth 2.0 Client ID (type: Web application).": "创建 OAuth 2.0 客户端 ID（类型：Web 应用）。",
+        "Add the redirect URI shown below to 'Authorized redirect URIs' on YOUR client.":
+          "将下方显示的重定向 URI 添加到你的客户端“已获授权的重定向 URI”中。",
+        "Enable the Gmail, Calendar, Drive, Sheets, Docs, Slides, and Tasks APIs for the project.":
+          "为项目启用 Gmail、Calendar、Drive、Sheets、Docs、Slides 和 Tasks API。",
+        "Choose admin-consent (domain-wide) vs per-user consent on the OAuth consent screen.":
+          "在 OAuth 同意屏幕中选择管理员同意（全域）或逐用户同意。",
+        "Paste the Client ID + Client secret below; we validate by dry-running the consent URL.":
+          "在下方粘贴客户端 ID 和客户端密钥；系统会通过试运行同意 URL 进行验证。",
+        "Create a Slack app (from scratch) in your workspace.": "在工作区中从头创建 Slack 应用。",
+        "Under OAuth & Permissions, add the redirect URL shown below.": "在 OAuth 与权限中添加下方显示的重定向 URL。",
+        "Add the requested USER token scopes under 'User Token Scopes'.":
+          "在“用户令牌权限范围”下添加所需的用户令牌权限范围。",
+        "Install the app to the workspace.": "将应用安装到工作区。",
+        "Paste the Client ID + Client secret below.": "在下方粘贴客户端 ID 和客户端密钥。",
+        "Create a public OAuth integration.": "创建公开 OAuth 集成。",
+        "Add the redirect URI shown below to the integration's redirect URIs.":
+          "将下方显示的重定向 URI 添加到集成的重定向 URI 中。",
+        "Configure the capabilities the integration needs.": "配置集成所需的能力。",
+        "Paste the Client ID (OAuth client ID) + the OAuth client secret below.":
+          "在下方粘贴客户端 ID（OAuth 客户端 ID）和 OAuth 客户端密钥。",
+        "Create an OAuth application.": "创建 OAuth 应用。",
+        "Add the redirect URI shown below as a callback URL.": "将下方显示的重定向 URI 添加为回调 URL。",
+        "Select the read/write scopes.": "选择读写权限范围。",
+        "Create an app: Scoped access, Full Dropbox access.": "创建应用：选择 Scoped access 和 Full Dropbox access。",
+        "On the app's OAuth 2 section, add the redirect URI shown below.":
+          "在应用的 OAuth 2 区域添加下方显示的重定向 URI。",
+        "On the Permissions tab, enable account_info.read, files.metadata.read, files.content.read, files.content.write, sharing.read, sharing.write — then Submit.":
+          "在权限页启用 account_info.read、files.metadata.read、files.content.read、files.content.write、sharing.read、sharing.write，然后提交。",
+        "Paste the App key (Client ID) + App secret (Client secret) below.":
+          "在下方粘贴应用密钥（客户端 ID）和应用密钥值（客户端密钥）。",
+        "Register a new OAuth App (or a GitHub App for installation tokens).":
+          "注册新的 OAuth 应用（或用于安装令牌的 GitHub 应用）。",
+        "Set the Authorization callback URL to the redirect URI shown below.":
+          "将授权回调 URL 设置为下方显示的重定向 URI。",
+        "Select the repo/org scopes the agent needs.": "选择智能体所需的仓库和组织权限范围。",
+        "Set up User authentication: OAuth 2.0, type Confidential client, App permissions Read and write.":
+          "设置用户身份验证：OAuth 2.0、Confidential client 类型、应用权限为读写。",
+        "Add the Callback URI shown below to the app's Callback URLs.": "将下方显示的回调 URI 添加到应用的回调 URL。",
+        "Under Keys and tokens, generate the OAuth 2.0 Client ID and Client Secret.":
+          "在密钥和令牌中生成 OAuth 2.0 客户端 ID 与客户端密钥。",
+        "Client ID": "客户端 ID",
+        "Client secret": "客户端密钥",
+        "Secret values are write-only and will not be displayed after saving.": "密钥仅可写入，保存后不会显示。",
+        "Save connector": "保存连接器",
+        "Slack bot": "Slack 机器人",
+        "Add Slack after the web deployment is working. Tokens are validated with Slack, encrypted in durable storage, and never displayed again.":
+          "Web 部署正常后再添加 Slack。令牌会通过 Slack 验证、加密并持久化存储，且不会再次显示。",
+        "Create QM Slack app from manifest ↗": "从清单创建 QM Slack 应用 ↗",
+        "Not configured.": "尚未配置。",
+        "Bot User OAuth Token": "机器人用户 OAuth 令牌",
+        "App-Level Token": "应用级令牌",
+        "Use an app-level token with": "使用包含以下权限的应用级令牌",
+        ". Saving activates or reloads the Slack surface within a few seconds.":
+          "。保存后将在数秒内激活或重新加载 Slack 界面。",
+        Remove: "移除",
+        "Review change": "检查更改",
+        "Confirm governance change": "确认治理更改",
+        Cancel: "取消",
+        "Confirm change": "确认更改",
+        "Maximum length reached": "已达到最大长度",
+        "Draft valid": "草稿有效",
+        "Instructions will be cleared": "将清空指令",
+        "Version history": "版本历史",
+        "History begins with the next saved revision.": "保存下一个修订版后将开始记录历史。",
+        Current: "当前",
+        Restore: "恢复",
+        Edit: "编辑",
+        Delete: "删除",
+        Editing: "编辑中",
+        "Save changes": "保存更改",
+        "Cancel edit": "取消编辑",
+        "Delete credential": "删除凭据",
+        "Override here": "在此覆盖",
+        "Delete connector": "删除连接器",
+        "Remove this command policy rule": "删除此命令策略规则",
+        "Remove this bot from the ledger": "从记录中移除此机器人",
+        "Enter a sample command first.": "请先输入示例命令。",
+        "Evaluating with the server’s command scanner…": "正在使用服务器命令扫描器评估…",
+        "No samples.": "暂无样本。",
+        "Edit destination": "编辑目标",
+        "Clear destination": "清除目标",
+        Type: "类型",
+        Target: "目标",
+        "Audience scope": "受众范围",
+        "On behalf of": "代表",
+        "Save destination": "保存目标",
+        "Edit cron destination": "编辑定时任务目标",
+        "Target is required.": "目标为必填项。",
+        "No crons match.": "没有匹配的定时任务。",
+        "Show more": "显示更多",
+        "Show less": "收起",
+        "No deployments match.": "没有匹配的部署。",
+        "No skills match.": "没有匹配的技能。",
+        "Trust tier": "信任等级",
+        Advanced: "高级",
+        Register: "注册",
+        "A repo URL is required.": "仓库 URL 为必填项。",
+        "Registering…": "正在注册…",
+        "no scopes selected": "未选择范围",
+        "+ Add scope ▾": "+ 添加范围 ▾",
+        "Filter scopes…": "筛选范围…",
+        "No scopes match.": "没有匹配的范围。",
+        "Select / deselect all importable skills": "选择或取消选择全部可导入技能",
+        "Pick at least one scope to add skills to.": "请至少选择一个要添加技能的范围。",
+        "Select at least one skill.": "请至少选择一个技能。",
+        "Importing…": "正在导入…",
+        "Import selected": "导入所选",
+        "Select all": "全选",
+        Clear: "清除",
+        "Already imported into the selected scope(s):": "已导入到所选范围：",
+        "Imported into": "已导入到",
+        "— importing adds it to the other selected scope(s).": "— 导入会将其添加到其他所选范围。",
+        "Import failed": "导入失败",
+        added: "已添加",
+        across: "分布于",
+        all: "全部",
+        eligible: "符合条件",
+        imported: "已导入",
+        excluded: "已排除",
+        "personal-scoped": "个人范围",
+        private: "私有",
+        collision: "名称冲突",
+        "binary files": "二进制文件",
+        malformed: "格式错误",
+        "Show every skill.": "显示所有技能。",
+        "Eligible and not yet in the selected scope(s) — importing adds it there.":
+          "符合条件且尚未加入所选范围——导入会将其添加到该范围。",
+        "Already imported into the selected scope(s) — Sync refreshes them; un-index to remove.":
+          "已导入所选范围——同步可刷新；取消索引可移除。",
+        "Held back: declares a personal/owner scope, so it isn't imported as a shared pack skill.":
+          "未导入：声明了个人或所有者范围，因此不能作为共享技能包技能导入。",
+        "Held back: marked owner-only / agent-only.": "未导入：标记为仅所有者或仅智能体可用。",
+        "Held back: the name matches an existing platform or seed skill.": "未导入：名称与现有平台技能或种子技能冲突。",
+        "Held back: contains binary files (import is text-only).": "未导入：包含二进制文件（仅支持文本导入）。",
+        "Held back: missing or unreadable SKILL.md frontmatter.": "未导入：SKILL.md 前置元数据缺失或无法读取。",
+        "Click to show only these.": "点击仅显示此类项目。",
+        "No skills found in this pack.": "此技能包中未找到技能。",
+        No: "没有",
+        "skills.": "技能。",
+        "shared pack file": "共享技能包文件",
+        "shared pack files": "共享技能包文件",
+        "(contained under a pack-owned directory)": "（位于技能包自有目录下）",
+        "Add to scopes:": "添加到范围：",
+        Close: "关闭",
+        "No memory stored for this scope yet. Anything you write here, the agent will remember.":
+          "此范围尚无记忆。你在这里写入的内容会被智能体记住。",
+        "Keychain is not configured for this deployment.": "此部署尚未配置密钥链。",
+        Grant: "授权",
+        "Open web UI as ↗": "以此身份打开 Web UI ↗",
+        Copied: "已复制",
+        "Copy failed": "复制失败",
+        "Shadow delivery": "影子交付",
+        "Slack delivery": "Slack 交付",
+        "Delivery event": "交付事件",
+        delivery: "交付",
+        background: "后台任务",
+        "no conversations": "无对话",
+        "Click to collapse tool text": "点击收起工具文本",
+        "Click to expand tool text": "点击展开工具文本",
+        "Policy is invalid.": "策略无效。",
+        "Simulation failed.": "模拟失败。",
+        "Organization rule": "组织规则",
+        "This scope’s rule": "此范围的规则",
+        matches: "匹配",
+        "No scope-policy rule matches": "没有匹配的范围策略规则",
+        "A deployment’s rules may still restrict this command.": "部署规则仍可能限制此命令。",
+        "last sync:": "上次同步：",
+        new: "新增",
+        updated: "已更新",
+        skipped: "已跳过",
+        removed: "已移除",
+        of: "共",
+        "available (eligible) in this pack": "此包中可用（符合条件）",
+        error: "错误",
+        "sync failed": "同步失败",
+        "update available": "有可用更新",
+        "up to date": "已是最新",
+        "not imported": "尚未导入",
+        "syncing…": "正在同步…",
+        "Upstream advanced past the imported commit — Sync now (or turn on Auto-sync) to apply.":
+          "上游已超过导入的提交——立即同步（或开启自动同步）以应用更新。",
+        "logged in this scope": "记录于此范围",
+        "Most recent errors": "最近的错误",
+        "← Prev": "← 上一页",
+        "Next →": "下一页 →",
+        "contains invalid host": "包含无效主机",
+        "Enter a hostname or IP only—no scheme, path, port, or wildcard.":
+          "请只输入主机名或 IP，不要包含协议、路径、端口或通配符。",
+        "contains duplicate host": "包含重复主机",
+        "appears in both lists. Remove it from one list before saving.":
+          "同时出现在两个列表中。请先从其中一个列表移除，再保存。",
+        "Invalid egress policy.": "出站策略无效。",
+        "not sent": "未发送",
+        "Loading…": "正在加载…",
+        "Current status:": "当前状态：",
+        "Saving…": "正在保存…",
+        "Network error — try again.": "网络错误——请重试。",
+        "Manage in Governance →": "前往治理管理 →",
+        "No context was captured for this turn.": "此轮次未捕获上下文。",
+        agent: "智能体",
+        bot: "机器人",
+        "↳ thread": "↳ 线程",
+        "(edited)": "（已编辑）",
+        "(deleted in Slack)": "（已在 Slack 中删除）",
+        "Loading Slack mirror...": "正在加载 Slack 镜像…",
+        "Loading messages...": "正在加载消息…",
+        "Raw feed ↗": "原始数据流 ↗",
+        "Load earlier messages": "加载更早消息",
+        "Loading judgments…": "正在加载判定…",
+        "Load earlier judgments": "加载更早判定",
+        "Judge context": "判定上下文",
+        "Loading ack-emoji picks…": "正在加载确认表情选择…",
+        "Load earlier picks": "加载更早选择",
+        "Open in Slack ↗": "在 Slack 中打开 ↗",
+        Message: "消息",
+        "Candidate slate": "候选列表",
+        "No entries.": "暂无条目。",
+        "View cron": "查看定时任务",
+        "Toggle full tool card": "展开或收起完整工具卡片",
+        "captured context": "已捕获上下文",
+        "Loading earlier messages…": "正在加载更早消息…",
+        "Stored payload was truncated.": "存储的载荷已截断。",
+        "sent to model": "已发送给模型",
+        "No files match.": "没有匹配的文件。",
+        "No files match — only the newest 2,000 are searched.": "没有匹配的文件——仅搜索最新的 2,000 个文件。",
+        "Only the newest 2,000 files are indexed — a scope with only older files won't appear.":
+          "仅索引最新的 2,000 个文件——只有较旧文件的范围不会显示。",
+        "Large image — click to preview full size": "大图——点击查看完整尺寸",
+        "Sent to model": "已发送给模型",
+        Transport: "传输",
+        "model + headers": "模型 + 请求头",
+        "System prompt": "系统提示词",
+        "verbatim · cache split shown": "原文 · 已显示缓存分界",
+        verbatim: "原文",
+        Messages: "消息",
+        "Tool schemas": "工具架构",
+        tools: "工具",
+        "Request params": "请求参数",
+        "request context": "请求上下文",
+        cache: "缓存",
+        "stable-prefix miss": "稳定前缀未命中",
+        model: "模型",
+        exec: "执行",
+        "Raw JSON": "原始 JSON",
+        "(empty)": "（空）",
+        "unattributed context": "未归属上下文",
+        turn: "轮次",
+        "Failed to load context": "无法加载上下文",
+        Slack: "Slack",
+        Judgment: "判定",
+        Conversation: "对话",
+        "Org-wide": "组织范围",
+        "No saved revision": "尚无已保存修订版",
+        "Save policy": "保存策略",
+        "unsupported · remove before saving": "不支持 · 保存前请移除",
+        unresolved: "未解析",
+        "No connectors configured. Add one below to make it linkable in the web UI.":
+          "尚未配置连接器。请在下方添加，以便在 Web UI 中连接。",
+        "Resetting…": "正在重置…",
+        "Config store not available.": "配置存储不可用。",
+        "Reset — onboarding will run on this person's next DM.": "已重置——此人下次私信时将重新运行引导。",
+        "Reset (re-run on next DM)": "重置（下次私信时重新运行）",
+        "Mark completed": "标记为已完成",
+        "Mark dismissed": "标记为已忽略",
+        "Delete this person's personal DM sessions — transcripts included — and clear their onboarding? This is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.":
+          "删除此人的个人私信会话（包括对话记录）并清除其引导状态？\n\n此操作不可撤销，但不会影响其频道历史。此人下次访问 Web 时将先看到新用户欢迎信息，然后进入引导流程。",
+        "@mention — routed past the judge": "@提及——已绕过判定器直接路由",
+        "@mention — routed past the judge.": "@提及——已绕过判定器直接路由。",
+        "(not recorded)": "（未记录）",
+        "Failed to load transcript": "无法加载对话记录",
+        Failed: "失败",
+        "Failed to load": "加载失败",
+        "Failed to load scopes.": "无法加载范围。",
+        "Failed to load fires": "无法加载触发记录",
+        "Failed to load mirror": "无法加载镜像",
+        "Failed to load user": "无法加载用户",
+        "Search failed": "搜索失败",
+        "Could not update destination.": "无法更新目标。",
+        "Couldn't browse": "无法浏览",
+        "Couldn't open file": "无法打开文件",
+        "directory lookup failed": "目录查询失败",
+        "Only an org admin can list scopes.": "只有组织管理员可以列出范围。",
+        "Only an org admin can read the Slack mirror.": "只有组织管理员可以读取 Slack 镜像。",
+        "Only an org admin can read ambient judgments.": "只有组织管理员可以读取环境判定。",
+        "Only an org admin can read ack-emoji picks.": "只有组织管理员可以读取确认表情选择。",
+        "You don't administer this scope.": "你不是此范围的管理员。",
+        "You don't have admin access.": "你没有管理员权限。",
+        "Stayed silent.": "保持静默。",
+        "Slack mirror": "Slack 镜像",
+        "Open in Slack": "在 Slack 中打开",
+        "Routed past the judge (formal @mention) — no prompt was rendered.":
+          "已绕过判定器（正式 @提及）——未生成提示词。",
+        "(prompt not recorded)": "（未记录提示词）",
+        "asked by": "提问者",
+        "Saved.": "已保存。",
+        completed: "已完成",
+        dismissed: "已忽略",
+        pending: "待处理",
+        "not started": "未开始",
+        Upload: "上传",
+        "Coming back soon": "即将恢复",
+        Ready: "就绪",
+        "Needs a key": "需要密钥",
+        Connected: "已连接",
+        "Write-only API key": "只写 API 密钥",
+        "•••• set — enter a replacement": "•••• 已设置——输入新值以替换",
+        "Injected into all-internal conversations; rooms with externals get nothing":
+          "注入所有纯内部对话；含外部成员的聊天室不会获得",
+        "Never served by the credential broker": "绝不会由凭据代理提供",
+        regex: "正则表达式",
+        optional: "可选",
+        "e.g. GitHub": "例如 GitHub",
+        "Reset to brand-new (delete this person's DMs) →": "重置为全新状态（删除此人的私信）→",
+        "Recorded for observability — never sent to the human (shadow-mode rollout)":
+          "仅用于可观测性记录——从未发送给用户（影子模式发布）",
+        All: "全部",
+        shadow: "影子",
+        delivered: "已交付",
+        "Open the raw mirrored JSON rows for this container in a new tab": "在新标签页中打开此容器的原始镜像 JSON 行",
+        "Jump to this moment in Slack to scroll up for more context": "跳转到 Slack 中的此时刻以向上查看更多上下文",
+        "principal id (e.g. U07ABCD)": "主体 ID（例如 U07ABCD）",
+        "principal id or name (e.g. dana@example.com)": "主体 ID 或名称（例如 dana@example.com）",
+        "Stored secret retained when blank": "留空时保留已存储密钥",
+        "Write-only secret": "只写密钥",
+        "Stored secret is set. Leave blank to keep it; enter a new value to replace it.":
+          "已设置存储密钥。留空可保留，输入新值可替换。",
+        "No stored secret yet. Enter one to make this credential usable.": "尚无存储密钥。请输入密钥以启用此凭据。",
+        "Keeps the stored secret unchanged.": "保持已存储密钥不变。",
+        "A secret is required before saving.": "保存前必须填写密钥。",
+        "Organization-wide access selected": "已选择组织范围访问",
+        "Principal IDs, comma-separated": "主体 ID，以逗号分隔",
+        "•••• set (re-enter to replace)": "•••• 已设置（重新输入以替换）",
+        "Saving requires the client secret — re-enter it to keep this connector working.":
+          "保存时需要客户端密钥——请重新输入，以保持此连接器正常工作。",
+        "No matches in the mirror.": "镜像中没有匹配项。",
+        "Nothing mirrored for this channel yet.": "此频道尚无镜像内容。",
+        "No judgments recorded for this filter yet.": "此筛选条件下尚无判定记录。",
+        "Nothing mirrored for this window.": "此时间窗口内无镜像内容。",
+        "No ack-emoji picks recorded for this filter yet.": "此筛选条件下尚无确认表情选择记录。",
+        "(candidate slate not recorded)": "（未记录候选列表）",
+        Artifacts: "资源",
+        System: "系统",
+        Insights: "洞察",
+        Connectors: "连接器",
+        Users: "用户",
+        User: "用户",
+        Keychain: "密钥链",
+        Metrics: "指标",
+        Sessions: "会话",
+        Files: "文件",
+        Memory: "记忆",
+        Live: "实时",
+        Audit: "审计",
+        Skills: "技能",
+        Crons: "定时任务",
+        Deployments: "部署",
+        Retention: "保留策略",
+        Judgments: "判定",
+        "Ack emoji": "确认表情",
+      };
+      const normalizeAdminLocale = (value) => {
+        const normalized = String(value || "").toLowerCase();
+        if (normalized === "en" || normalized.startsWith("en-")) return "en";
+        if (normalized === "zh" || normalized.startsWith("zh-")) return "zh-CN";
+        return null;
+      };
+      const storedAdminLocale = (() => {
+        try {
+          return localStorage.getItem(ADMIN_LOCALE_KEY);
+        } catch {
+          return null;
+        }
+      })();
+      const adminLocale =
+        normalizeAdminLocale(storedAdminLocale) ||
+        (navigator.languages || []).map(normalizeAdminLocale).find(Boolean) ||
+        "en";
+      const adminLocaleCode = () => (adminLocale === "zh-CN" ? "zh-CN" : "en-US");
+      const adminTranslatePattern = (value) => {
+        let match = value.match(/^([\d,.]+[kKmM]?) background$/);
+        if (match) return `${match[1]} 个后台任务`;
+        match = value.match(/^([\d,.]+[kKmM]?) active scopes?$/);
+        if (match) return `${match[1]} 个活动范围`;
+        match = value.match(/^([\d,.]+[kKmM]?) known scopes? without conversations$/);
+        if (match) return `${match[1]} 个尚无对话的已知范围`;
+        match = value.match(/^([\d,.]+[kKmM]?) conversations?$/);
+        if (match) return `${match[1]} 个对话`;
+        match = value.match(/^([\d,.]+[kKmM]?) skills?$/);
+        if (match) return `${match[1]} 个技能`;
+        match = value.match(/^([\d,.]+[kKmM]?) scopes?$/);
+        if (match) return `${match[1]} 个范围`;
+        match = value.match(/^([\d,.]+[kKmM]?) messages?$/);
+        if (match) return `${match[1]} 条消息`;
+        match = value.match(/^([\d,.]+[kKmM]?) tools?$/);
+        if (match) return `${match[1]} 个工具`;
+        match = value.match(/^([\d,.]+[kKmM]?) fields?$/);
+        if (match) return `${match[1]} 个字段`;
+        match = value.match(/^([\d,.]+[kKmM]?) steps?$/);
+        if (match) return `${match[1]} 个步骤`;
+        match = value.match(/^([\d,.]+[kKmM]?) errors?$/);
+        if (match) return `${match[1]} 个错误`;
+        match = value.match(/^([\d,.]+[kKmM]?) turns?$/);
+        if (match) return `${match[1]} 个轮次`;
+        match = value.match(/^([\d,.]+[kKmM]?) delivered$/);
+        if (match) return `已交付 ${match[1]} 次`;
+        match = value.match(/^([\d,.]+[kKmM]?) tokens?$/);
+        if (match) return `${match[1]} 个令牌`;
+        match = value.match(/^([\d,.]+[kKmM]?) fires?$/);
+        if (match) return `${match[1]} 次触发`;
+        match = value.match(/^([\d,.]+[kKmM]?) notebooks?$/);
+        if (match) return `${match[1]} 个笔记本`;
+        match = value.match(/^([\d,.]+[kKmM]?) principals?$/);
+        if (match) return `${match[1]} 个主体`;
+        match = value.match(/^([\d,.]+[kKmM]?) successful uses?$/);
+        if (match) return `${match[1]} 次成功使用`;
+        match = value.match(/^([\d,.]+[kKmM]?) configured$/);
+        if (match) return `已配置 ${match[1]} 个`;
+        match = value.match(/^([\d,.]+[kKmM]?) mirrored · ([\d,.]+[kKmM]?) members$/);
+        if (match) return `${match[1]} 条已镜像 · ${match[2]} 位成员`;
+        match = value.match(/^Signed in as (.+)$/);
+        if (match) return `当前登录身份：${match[1]}`;
+        match = value.match(/^Today (.+)$/);
+        if (match) return `今天 ${match[1]}`;
+        match = value.match(/^Yesterday (.+)$/);
+        if (match) return `昨天 ${match[1]}`;
+        match = value.match(/^Version (.+)$/);
+        if (match) return `版本 ${match[1]}`;
+        match = value.match(/^Saved version (.+)$/);
+        if (match) return `已保存版本 ${match[1]}`;
+        match = value.match(/^Open origin session (.+)$/);
+        if (match) return `打开来源会话 ${match[1]}`;
+        match = value.match(/^Editing (.+)$/);
+        if (match) return `正在编辑 ${match[1]}`;
+        match = value.match(/^Loading (.+)(?:\.\.\.|…)?$/);
+        if (match) return `正在加载${match[1]}…`;
+        match = value.match(/^Fetching (.+)…$/);
+        if (match) return `正在获取 ${match[1]}…`;
+        match = value.match(/^Request ([\d,.]+)$/);
+        if (match) return `请求 ${match[1]}`;
+        match = value.match(/^(Hide|Show) context · ([\d,.]+) requests?$/);
+        if (match) return `${match[1] === "Hide" ? "隐藏" : "显示"}上下文 · ${match[2]} 个请求`;
+        match = value.match(/^View context sent to the model · ([\d,.]+) requests?$/);
+        if (match) return `查看发送给模型的上下文 · ${match[1]} 个请求`;
+        match = value.match(/^Open (.+) ↗$/);
+        if (match) return `打开 ${match[1]} ↗`;
+        match = value.match(/^Callback URL: (.+)$/);
+        if (match) return `回调 URL：${match[1]}`;
+        match = value.match(/^Scopes: (.+)$/);
+        if (match) return `权限范围：${match[1]}`;
+        match = value.match(/^No (.+) samples in this scope yet\.$/);
+        if (match) return `此范围尚无${match[1]}样本。`;
+        match = value.match(/^Cron (.+) isn't in this scope\.$/);
+        if (match) return `定时任务 ${match[1]} 不在此范围内。`;
+        match = value.match(/^Already imported into the selected scope\(s\): (.+)$/);
+        if (match) return `已导入所选范围：${match[1]}`;
+        match = value.match(/^Reply in the thread rooted at (.+)$/);
+        if (match) return `在以 ${match[1]} 为根的线程中回复`;
+        match = value.match(/^Jump to this message in the mirrored Slack channel (.+)$/);
+        if (match) return `跳转到 Slack 镜像频道 ${match[1]} 中的此消息`;
+        match = value.match(/^…and ([\d,.]+) more$/);
+        if (match) return `…以及另外 ${match[1]} 项`;
+        return null;
+      };
+      const adminTr = (source) => {
+        if (adminLocale === "en") return source;
+        const leading = String(source).match(/^\s*/)?.[0] || "";
+        const trailing = String(source).match(/\s*$/)?.[0] || "";
+        const value = String(source).trim().replace(/\s+/g, " ");
+        if (!value) return source;
+        const translated = ADMIN_ZH[value] || adminTranslatePattern(value);
+        return translated == null ? source : `${leading}${translated}${trailing}`;
+      };
+      const ADMIN_I18N_SKIP =
+        "script,style,code,pre,[data-i18n-skip],.mono,.viewer,.file-name,.credential-secret,.dense-name,.dense-preview,.history-conversation,.scope-name,.pack-name,.credential-title,.message-body,.prompt-body,.judg-pane-title,#brand-product";
+      const adminI18nSkipped = (node) => {
+        const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+        return Boolean(element?.closest(ADMIN_I18N_SKIP));
+      };
+      const translateAdminAttributes = (element) => {
+        if (adminI18nSkipped(element)) return;
+        for (const attribute of ["title", "aria-label", "placeholder"]) {
+          const current = element.getAttribute(attribute);
+          if (current == null) continue;
+          const translated = adminTr(current);
+          if (translated !== current) element.setAttribute(attribute, translated);
+        }
+      };
+      const translateAdminNode = (node) => {
+        if (adminI18nSkipped(node)) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+          const translated = adminTr(node.nodeValue || "");
+          if (translated !== node.nodeValue) node.nodeValue = translated;
+          return;
+        }
+        if (!(node instanceof Element)) return;
+        translateAdminAttributes(node);
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) translateAdminNode(walker.currentNode);
+        for (const element of node.querySelectorAll("[title], [aria-label], [placeholder]")) {
+          translateAdminAttributes(element);
+        }
+      };
+      document.documentElement.lang = adminLocale;
+      const localeToggle = $("locale-toggle");
+      localeToggle.textContent = adminLocale === "en" ? "中文" : "EN";
+      localeToggle.title = adminLocale === "en" ? "Switch to Chinese" : "切换到英文";
+      localeToggle.setAttribute("aria-label", localeToggle.title);
+      localeToggle.onclick = () => {
+        try {
+          localStorage.setItem(ADMIN_LOCALE_KEY, adminLocale === "en" ? "zh-CN" : "en");
+        } catch {}
+        location.reload();
+      };
+      if (adminLocale === "zh-CN") {
+        translateAdminNode(document.body);
+      }
       const EFFECTS = ["allow", "deny", "require_approval"];
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
@@ -4886,7 +5706,7 @@
         document.querySelector('meta[name="brand-self-label"]')?.getAttribute("content") || "Agent";
       // The header's product name and the tab title follow the org's assistant label.
       document.getElementById("brand-product").textContent = brandSelfLabel();
-      document.title = `${brandSelfLabel()} Admin`;
+      document.title = `${brandSelfLabel()} ${adminTr("Admin")}`;
       let page = 1;
 
       const FOCUS_STALE_MS = 60000;
@@ -4939,28 +5759,30 @@
         const b = document.createElement("button");
         b.type = "button";
         b.className = "link";
-        b.textContent = "Open web UI as this person ↗";
-        b.title = "View the assistant web UI as " + target + " (audited)";
+        b.textContent = adminTr("Open web UI as this person ↗");
+        b.title = adminTr("View the assistant web UI as " + target + " (audited)");
         b.onclick = () => openWebUiAs(target);
         return b;
       }
-      const fmtTime = (ts) => new Date(ts).toLocaleString();
+      const fmtTime = (ts) => new Date(ts).toLocaleString(adminLocaleCode());
       const sameLocalDate = (a, b) =>
         a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-      const fmtClock = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const fmtClock = (d) => d.toLocaleTimeString(adminLocaleCode(), { hour: "numeric", minute: "2-digit" });
       function relTime(ts) {
         if (!ts) return "—";
         const d = new Date(ts);
         const now = new Date();
         const mins = Math.floor((now.getTime() - d.getTime()) / 60000);
-        if (mins >= 0 && mins < 1) return "now";
-        if (mins >= 0 && mins < 60) return mins + (mins === 1 ? " min" : " mins");
-        if (sameLocalDate(d, now)) return "Today " + fmtClock(d);
+        if (mins >= 0 && mins < 1) return adminLocale === "zh-CN" ? "刚刚" : "now";
+        if (mins >= 0 && mins < 60) {
+          return adminLocale === "zh-CN" ? mins + " 分钟前" : mins + (mins === 1 ? " min" : " mins");
+        }
+        if (sameLocalDate(d, now)) return (adminLocale === "zh-CN" ? "今天 " : "Today ") + fmtClock(d);
         const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-        if (sameLocalDate(d, yesterday)) return "Yesterday " + fmtClock(d);
+        if (sameLocalDate(d, yesterday)) return (adminLocale === "zh-CN" ? "昨天 " : "Yesterday ") + fmtClock(d);
         return (
           d.toLocaleDateString(
-            [],
+            adminLocaleCode(),
             d.getFullYear() === now.getFullYear()
               ? { month: "short", day: "numeric" }
               : { month: "short", day: "numeric", year: "numeric" },
@@ -4984,18 +5806,19 @@
       };
       const fmtPct = (n) => ((n || 0) * 100).toFixed(1) + "%";
       const statusTimers = new Map();
-      function setStatus(id, msg, kind, sticky = false) {
+      function setStatus(id, msg, kind, sticky = false, translate = true) {
         const el = $(id);
         if (!el) return;
         if (statusTimers.has(id)) {
           clearTimeout(statusTimers.get(id));
           statusTimers.delete(id);
         }
-        el.textContent = msg;
+        const renderedMsg = translate ? adminTr(msg) : msg;
+        el.textContent = renderedMsg;
         el.className = "status " + (kind || "");
         if (msg && !sticky) {
           const timer = setTimeout(() => {
-            if (el.textContent === msg) {
+            if (el.textContent === renderedMsg) {
               el.textContent = "";
               el.className = "status";
             }
@@ -5003,6 +5826,9 @@
           }, 4000);
           statusTimers.set(id, timer);
         }
+      }
+      function setApiStatus(id, serverMessage, fallback, kind, sticky = false) {
+        setStatus(id, serverMessage || fallback, kind, sticky, !serverMessage);
       }
       let governanceReviewResolve = null;
       function finishGovernanceReview(confirmed) {
@@ -5015,20 +5841,20 @@
       function reviewGovernanceChange({ title, subtitle, facts, warning, confirmLabel, danger = false }) {
         if (governanceReviewResolve) finishGovernanceReview(false);
         const dialog = $("governance-review");
-        $("governance-review-title").textContent = title;
-        $("governance-review-subtitle").textContent = subtitle;
+        $("governance-review-title").textContent = adminTr(title);
+        $("governance-review-subtitle").textContent = adminTr(subtitle);
         const list = $("governance-review-facts");
         list.textContent = "";
         facts.forEach(([key, value]) => {
           const term = document.createElement("dt");
-          term.textContent = key;
+          term.textContent = adminTr(key);
           const detail = document.createElement("dd");
           detail.textContent = value;
           list.append(term, detail);
         });
-        $("governance-review-warning").textContent = warning;
+        $("governance-review-warning").textContent = adminTr(warning);
         const confirm = $("governance-review-confirm");
-        confirm.textContent = confirmLabel || "";
+        confirm.textContent = adminTr(confirmLabel || "");
         confirm.classList.toggle("hidden", !confirmLabel);
         confirm.classList.toggle("danger", danger);
         dialog.showModal();
@@ -5068,7 +5894,7 @@
       function badge(text, kind) {
         const s = document.createElement("span");
         s.className = "badge" + (kind ? " " + kind : "");
-        s.textContent = text;
+        s.textContent = adminTr(text);
         return s;
       }
       function badgeList(items) {
@@ -5122,8 +5948,8 @@
       function sessionCountsLabel(sessions, background) {
         const parts = [];
         if (sessions) parts.push(plural(sessions, "conversation"));
-        if (background) parts.push(Number(background).toLocaleString() + " background");
-        return parts.join(" · ") || "no conversations";
+        if (background) parts.push(adminTr(Number(background).toLocaleString(adminLocaleCode()) + " background"));
+        return parts.join(" · ") || adminTr("no conversations");
       }
       function linkedStacked(href, primary, secondary) {
         const d = stacked(primary, secondary);
@@ -5154,9 +5980,9 @@
           const b = document.createElement("button");
           b.type = "button";
           b.className = "rowbtn" + (cell.action.danger ? " danger" : "");
-          b.textContent = cell.action.label;
+          b.textContent = adminTr(cell.action.label);
           b.disabled = !!cell.action.disabled;
-          if (cell.action.title) b.title = cell.action.title;
+          if (cell.action.title) b.title = adminTr(cell.action.title);
           b.onclick = cell.action.run;
           td.appendChild(b);
         } else {
@@ -5248,7 +6074,7 @@
         status.className = "status muted";
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = "Upload";
+        button.textContent = adminTr("Upload");
         const input = document.createElement("input");
         input.type = "file";
         input.multiple = true;
@@ -5333,7 +6159,7 @@
         if (!rows.length) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = emptyMsg;
+          p.textContent = adminTr(emptyMsg);
           return p;
         }
         const t = document.createElement("table");
@@ -5342,7 +6168,7 @@
         headers.forEach((h) => {
           const th = document.createElement("th");
           if (h && h.nodeType) th.appendChild(h);
-          else th.textContent = h;
+          else th.textContent = adminTr(h);
           htr.appendChild(th);
         });
         thead.appendChild(htr);
@@ -5366,11 +6192,11 @@
         const head = document.createElement("div");
         head.className = "head";
         const h = document.createElement("h2");
-        h.textContent = title;
+        h.textContent = adminTr(title);
         head.appendChild(h);
         if (desc) {
           const p = document.createElement("p");
-          p.textContent = desc;
+          p.textContent = adminTr(desc);
           head.appendChild(p);
         }
         const body = document.createElement("div");
@@ -5395,7 +6221,7 @@
           $(id).classList.toggle("hidden", id !== which);
         }
         $("loading-view").setAttribute("aria-busy", which === "loading-view" ? "true" : "false");
-        if (label) $("live").textContent = label;
+        if (label) $("live").textContent = adminTr(label);
       }
       async function refresh() {
         showView("loading-view");
@@ -5464,7 +6290,7 @@
           if (s.label) {
             const h = document.createElement("div");
             h.className = "tab-section";
-            h.textContent = s.label;
+            h.textContent = adminTr(s.label);
             nav.appendChild(h);
           }
           s.views.forEach((v) => {
@@ -5472,11 +6298,11 @@
             b.className = "tab" + (s.label ? "" : " tab-top") + (v === view ? " active" : "");
             b.type = "button";
             if (ICONS[v]) b.innerHTML = ICONS[v];
-            b.appendChild(document.createTextNode(VIEW_TITLE[v] || v[0].toUpperCase() + v.slice(1)));
+            b.appendChild(document.createTextNode(adminTr(VIEW_TITLE[v] || v[0].toUpperCase() + v.slice(1))));
             if (v === view) b.setAttribute("aria-current", "page");
             if (DISABLED_VIEWS.has(v)) {
               b.disabled = true;
-              b.title = "Coming back soon";
+              b.title = adminTr("Coming back soon");
             } else b.onclick = () => setView(v);
 
             if (v === "judgments" && view === "ackemoji") {
@@ -5717,12 +6543,14 @@
       });
 
       let scopeDir = null;
-      let scopeDirNote = "Loading scopes…";
+      let scopeDirNote = adminTr("Loading scopes…");
       async function loadScopeDirectory() {
         const r = await api("GET", "/api/scopes");
         if (!r.ok) {
           scopeDirNote =
-            r.status === 403 ? "Only an org admin can list scopes." : r.data?.message || "Failed to load scopes.";
+            r.status === 403
+              ? adminTr("Only an org admin can list scopes.")
+              : r.data?.message || adminTr("Failed to load scopes.");
           if (historyIsIndex()) renderScopeIndex();
           return;
         }
@@ -5791,20 +6619,20 @@
           const b = document.createElement("button");
           b.type = "button";
           b.className = "back";
-          b.textContent = opts.back.label;
+          b.textContent = adminTr(opts.back.label);
           b.onclick = opts.back.onClick;
           bar.appendChild(b);
         }
         if (opts.title) {
           const h = document.createElement("h1");
           h.className = "shell-title";
-          h.textContent = opts.title;
+          h.textContent = opts.titleI18n ? adminTr(opts.title) : opts.title;
           bar.appendChild(h);
         }
         if (opts.context) {
           const c = opts.contextGo ? navLink(opts.context, opts.contextGo) : document.createElement("span");
           c.classList.add("shell-context");
-          if (!opts.contextGo) c.textContent = opts.context;
+          if (!opts.contextGo) c.textContent = opts.contextI18n ? adminTr(opts.context) : opts.context;
           bar.appendChild(c);
         }
         if (opts.tabs && opts.tabs.length) {
@@ -5814,7 +6642,9 @@
             const b = document.createElement("button");
             b.type = "button";
             b.className = "shell-tab" + (tab.active ? " active" : "");
-            b.textContent = tab.count != null ? tab.label + " " + Number(tab.count).toLocaleString() : tab.label;
+            b.textContent = adminTr(
+              tab.count != null ? tab.label + " " + Number(tab.count).toLocaleString(adminLocaleCode()) : tab.label,
+            );
             b.onclick = tab.onClick;
             wrap.appendChild(b);
           });
@@ -5834,7 +6664,7 @@
           w.className = "shell-search";
           const i = document.createElement("input");
           i.type = "search";
-          i.placeholder = opts.search.placeholder || "Search…";
+          i.placeholder = adminTr(opts.search.placeholder || "Search…");
           i.spellcheck = false;
           i.setAttribute("autocapitalize", "none");
           i.oninput = () => opts.search.onInput(i.value);
@@ -5859,7 +6689,7 @@
           };
           const prefix = document.createElement("span");
           prefix.className = "header-check-prefix";
-          prefix.textContent = "Show ";
+          prefix.textContent = adminTr("Show ");
           wrap.append(input, prefix, document.createTextNode(label));
           return wrap;
         };
@@ -5906,7 +6736,7 @@
             ...extras,
           });
         } else {
-          pageShell({ title, ...extras });
+          pageShell({ title, titleI18n: true, ...extras });
         }
       }
 
@@ -5914,7 +6744,7 @@
         if (!items.length) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = emptyMsg;
+          p.textContent = adminTr(emptyMsg);
           return p;
         }
         const list = document.createElement("div");
@@ -6064,26 +6894,26 @@
       let serviceCredDirectory = [];
       function updateSoulWorkbench() {
         const draft = $("soul").value;
-        $("soul-saved").textContent = soulSaved || "No saved instructions";
+        $("soul-saved").textContent = soulSaved || adminTr("No saved instructions");
         $("soul-draft").textContent =
-          draft === soulSaved ? "No draft changes" : draft || "Instructions will be cleared";
+          draft === soulSaved ? adminTr("No draft changes") : draft || adminTr("Instructions will be cleared");
         $("soul-size").textContent =
-          draft.length.toLocaleString() +
+          draft.length.toLocaleString(adminLocaleCode()) +
           " characters · about " +
-          Math.ceil(draft.length / 4).toLocaleString() +
+          Math.ceil(draft.length / 4).toLocaleString(adminLocaleCode()) +
           " tokens";
-        $("soul-validation").textContent = draft.length >= 100000 ? "Maximum length reached" : "Draft valid";
+        $("soul-validation").textContent = adminTr(draft.length >= 100000 ? "Maximum length reached" : "Draft valid");
       }
       function renderSoulHistory() {
         const root = $("soul-history");
         root.textContent = "";
         const heading = document.createElement("h3");
-        heading.textContent = "Version history";
+        heading.textContent = adminTr("Version history");
         root.appendChild(heading);
         if (!soulHistory.length) {
           const empty = document.createElement("p");
           empty.className = "hint";
-          empty.textContent = "History begins with the next saved revision.";
+          empty.textContent = adminTr("History begins with the next saved revision.");
           root.appendChild(empty);
           return;
         }
@@ -6091,7 +6921,7 @@
           const row = document.createElement("div");
           row.className = "soul-revision";
           const meta = document.createElement("p");
-          meta.textContent = "Version " + revision.version;
+          meta.textContent = adminTr("Version " + revision.version);
           const detail = document.createElement("small");
           detail.textContent =
             (revision.updatedBy || "Author unavailable") +
@@ -6100,7 +6930,7 @@
           meta.appendChild(detail);
           const restore = document.createElement("button");
           restore.type = "button";
-          restore.textContent = revision.version === soulVersion ? "Current" : "Restore";
+          restore.textContent = adminTr(revision.version === soulVersion ? "Current" : "Restore");
           restore.disabled = revision.version === soulVersion;
           restore.onclick = async () => {
             const immutable = { ...revision };
@@ -6129,11 +6959,12 @@
             if (!r.ok) {
               restore.disabled = false;
               if (r.status === 409) await refreshSoulConflict();
-              return setStatus(
+              return setApiStatus(
                 "st-soul",
+                r.status === 409 ? null : r.data?.message,
                 r.status === 409
                   ? "SOUL changed; latest revision loaded and your draft was preserved."
-                  : r.data?.message || "Restore failed.",
+                  : "Restore failed.",
                 "err",
                 true,
               );
@@ -6209,7 +7040,7 @@
             " supports domain policy, but the control plane cannot mint a reachable proxy token. Agents still have open outbound access.";
         }
         capability.querySelector("span").textContent = enforcementSummary;
-        sectionButton("egress").textContent = enforcement.active ? "Save policy" : "Save draft";
+        sectionButton("egress").textContent = adminTr(enforcement.active ? "Save policy" : "Save draft");
         if ("externalSlackParticipants" in data) {
           const external = !!data.externalSlackParticipants;
           setGovernanceStatus(
@@ -6252,9 +7083,10 @@
         const r = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
         if (requestId !== governanceReq || requestedScope !== scope) return;
         if (!r.ok) {
-          setStatus(
+          setApiStatus(
             "st-policy",
-            r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.",
+            r.status === 403 ? null : r.data?.message,
+            r.status === 403 ? "You don't administer this scope." : "Failed to load.",
             "err",
           );
           return;
@@ -6277,7 +7109,7 @@
         soulSaved = r.data.soul || "";
         soulHistory = r.data.soulHistory || [];
         $("soul").value = soulSaved;
-        $("soul-ver").textContent = soulVersion ? "Saved version " + soulVersion : "No saved revision";
+        $("soul-ver").textContent = adminTr(soulVersion ? "Saved version " + soulVersion : "No saved revision");
         updateSoulWorkbench();
         renderSoulHistory();
         $("card-ambient-policy").classList.toggle("hidden", !("ambientPolicy" in r.data));
@@ -6305,7 +7137,7 @@
         }
         $("egress-effective").textContent = effectiveEgressLabel;
         const egressSave = sectionButton("egress");
-        if (egressSave) egressSave.textContent = enforcement.active ? "Save policy" : "Save draft";
+        if (egressSave) egressSave.textContent = adminTr(enforcement.active ? "Save policy" : "Save draft");
 
         const showExternalSlack = scope.startsWith("org:") && "externalSlackParticipants" in r.data;
         $("card-external-slack").classList.toggle("hidden", !showExternalSlack);
@@ -6523,7 +7355,7 @@
         soulSaved = fresh.data.soul || "";
         soulHistory = fresh.data.soulHistory || [];
         $("soul").value = draft;
-        $("soul-ver").textContent = soulVersion ? "Saved version " + soulVersion : "No saved revision";
+        $("soul-ver").textContent = adminTr(soulVersion ? "Saved version " + soulVersion : "No saved revision");
         updateSoulWorkbench();
         renderSoulHistory();
         sectionSnapshots.set("soul", JSON.stringify({ content: soulSaved, expectedVersion: soulVersion }));
@@ -6561,7 +7393,7 @@
         root.textContent = "";
         if (!list.length) {
           root.className = "hint";
-          root.textContent = "No credentials configured.";
+          root.textContent = adminTr("No credentials configured.");
           return;
         }
         root.className = "";
@@ -6604,13 +7436,13 @@
           actions.className = "credential-actions";
           const edit = document.createElement("button");
           edit.type = "button";
-          edit.textContent = "Edit";
+          edit.textContent = adminTr("Edit");
           edit.onclick = () => loadScForm(c);
           const del = document.createElement("button");
           del.type = "button";
           del.className = "rowbtn danger";
-          del.textContent = "Delete";
-          del.title = "Delete credential";
+          del.textContent = adminTr("Delete");
+          del.title = adminTr("Delete credential");
           del.setAttribute("aria-label", "Delete " + (c.name || c.slug));
           del.onclick = () => deleteSc(c);
           actions.appendChild(edit);
@@ -6623,11 +7455,11 @@
       function loadScForm(c) {
         scEditing = c.slug;
         scEditVersion = c.updatedAt;
-        $("sc-form-title").textContent = "Editing " + c.slug;
-        $("sc-form-mode").textContent = "Editing";
+        $("sc-form-title").textContent = adminTr("Editing " + c.slug);
+        $("sc-form-mode").textContent = adminTr("Editing");
         $("sc-form-mode").className = "badge info";
-        $("sc-save").textContent = "Save changes";
-        $("sc-reset").textContent = "Cancel edit";
+        $("sc-save").textContent = adminTr("Save changes");
+        $("sc-reset").textContent = adminTr("Cancel edit");
         $("sc-slug").value = c.slug;
         $("sc-slug").disabled = true;
         $("sc-name").value = c.name;
@@ -6636,13 +7468,15 @@
         $("sc-envkey").value = c.envKey || "";
         syncScDelivery();
         $("sc-secret").value = "";
-        $("sc-secret").placeholder = c.hasSecret ? "Stored secret retained when blank" : "Write-only secret";
-        $("sc-secret-hint").textContent = c.hasSecret
-          ? "Stored secret is set. Leave blank to keep it; enter a new value to replace it."
-          : "No stored secret yet. Enter one to make this credential usable.";
-        $("sc-secret-semantics").textContent = c.hasSecret
-          ? "Keeps the stored secret unchanged."
-          : "A secret is required before saving.";
+        $("sc-secret").placeholder = adminTr(c.hasSecret ? "Stored secret retained when blank" : "Write-only secret");
+        $("sc-secret-hint").textContent = adminTr(
+          c.hasSecret
+            ? "Stored secret is set. Leave blank to keep it; enter a new value to replace it."
+            : "No stored secret yet. Enter one to make this credential usable.",
+        );
+        $("sc-secret-semantics").textContent = adminTr(
+          c.hasSecret ? "Keeps the stored secret unchanged." : "A secret is required before saving.",
+        );
         $("sc-header").value = (c.injection && c.injection.header) || "";
         $("sc-scheme").value = (c.injection && c.injection.scheme) || "";
         $("sc-methods").value = (c.allowedMethods || []).join(", ");
@@ -6663,11 +7497,11 @@
       function resetScForm() {
         scEditing = null;
         scEditVersion = null;
-        $("sc-form-title").textContent = "Add a credential";
-        $("sc-form-mode").textContent = "New";
+        $("sc-form-title").textContent = adminTr("Add a credential");
+        $("sc-form-mode").textContent = adminTr("New");
         $("sc-form-mode").className = "badge muted";
-        $("sc-save").textContent = "Save credential";
-        $("sc-reset").textContent = "Clear form";
+        $("sc-save").textContent = adminTr("Save credential");
+        $("sc-reset").textContent = adminTr("Clear form");
         $("sc-slug").value = "";
         $("sc-slug").disabled = false;
         $("sc-name").value = "";
@@ -6676,9 +7510,9 @@
         $("sc-envkey").value = "";
         syncScDelivery();
         $("sc-secret").value = "";
-        $("sc-secret").placeholder = "(write-only)";
-        $("sc-secret-hint").textContent = "The secret is write-only. It cannot be viewed after saving.";
-        $("sc-secret-semantics").textContent = "New credentials require a secret.";
+        $("sc-secret").placeholder = adminTr("(write-only)");
+        $("sc-secret-hint").textContent = adminTr("The secret is write-only. It cannot be viewed after saving.");
+        $("sc-secret-semantics").textContent = adminTr("New credentials require a secret.");
         $("sc-header").value = "";
         $("sc-scheme").value = "";
         $("sc-methods").value = "";
@@ -6703,7 +7537,9 @@
       function syncScPeople() {
         const orgWide = $("sc-share-org").checked;
         $("sc-people").disabled = orgWide;
-        $("sc-people").placeholder = orgWide ? "Organization-wide access selected" : "Principal IDs, comma-separated";
+        $("sc-people").placeholder = adminTr(
+          orgWide ? "Organization-wide access selected" : "Principal IDs, comma-separated",
+        );
         renderServiceCredentialCapability();
       }
       function serviceCredentialGrantees() {
@@ -6730,7 +7566,7 @@
               });
       }
       function serviceCredentialPrincipalLabel(grantee) {
-        if (grantee.startsWith("org:")) return "Everyone in this organization";
+        if (grantee.startsWith("org:")) return adminTr("Everyone in this organization");
         const id = grantee.startsWith("personal:") ? grantee.slice("personal:".length) : grantee;
         const member = serviceCredDirectory.find(
           (candidate) => candidate.principalId === id || candidate.slackId === id,
@@ -6750,34 +7586,46 @@
         const grantees = serviceCredentialGrantees();
         const header = $("sc-header").value.trim() || "Authorization";
         const envDelivery = $("sc-delivery").value === "env";
-        $("sc-cap-state").textContent = $("sc-enabled").checked
-          ? "Enabled"
-          : envDelivery
-            ? "Disabled — never injected"
-            : "Disabled — broker requests refused";
+        $("sc-cap-state").textContent = adminTr(
+          $("sc-enabled").checked
+            ? "Enabled"
+            : envDelivery
+              ? "Disabled — never injected"
+              : "Disabled — broker requests refused",
+        );
         if (envDelivery) {
           $("sc-cap-host").textContent = $("sc-envkey").value.trim()
-            ? "Sandbox env $" + $("sc-envkey").value.trim()
-            : "Env var not set";
-          $("sc-cap-auth").textContent = "Injected into all-internal conversations; rooms with externals get nothing";
+            ? adminTr("Sandbox env") + " $" + $("sc-envkey").value.trim()
+            : adminTr("Env var not set");
+          $("sc-cap-auth").textContent = adminTr(
+            "Injected into all-internal conversations; rooms with externals get nothing",
+          );
           $("sc-cap-methods").textContent = "—";
-          $("sc-cap-paths").textContent = "Never served by the credential broker";
+          $("sc-cap-paths").textContent = adminTr("Never served by the credential broker");
         } else {
           $("sc-cap-host").textContent = $("sc-host").value.trim()
-            ? $("sc-host").value.trim() + " and its subdomains"
-            : "Not set";
-          $("sc-cap-auth").textContent = header + " header · prefix “" + ($("sc-scheme").value || "Bearer") + "”";
+            ? $("sc-host").value.trim() + " " + adminTr("and its subdomains")
+            : adminTr("Not set");
+          $("sc-cap-auth").textContent =
+            header +
+            " " +
+            adminTr("header") +
+            " · " +
+            adminTr("prefix") +
+            " “" +
+            ($("sc-scheme").value || "Bearer") +
+            "”";
           $("sc-cap-methods").textContent = (methods.length ? methods : ["GET"]).join(", ");
-          $("sc-cap-paths").textContent = paths.length ? paths.join(", ") : "Any path on this host";
+          $("sc-cap-paths").textContent = paths.length ? paths.join(", ") : adminTr("Any path on this host");
         }
         $("sc-cap-principals").textContent = envDelivery
-          ? "Every all-internal conversation — grants don't gate env delivery"
-          : grantees.map(serviceCredentialPrincipalLabel).join(", ") || "No principal selected";
+          ? adminTr("Every all-internal conversation — grants don't gate env delivery")
+          : grantees.map(serviceCredentialPrincipalLabel).join(", ") || adminTr("No principal selected");
         const editing = serviceCredList.find((c) => c.slug === scEditing);
         let secretStatus = "Required before first save";
         if ($("sc-secret").value) secretStatus = "Will replace the stored secret";
         else if (editing?.hasSecret) secretStatus = "Stored secret retained";
-        $("sc-cap-secret").textContent = secretStatus;
+        $("sc-cap-secret").textContent = adminTr(secretStatus);
         const chips = $("sc-people-chips");
         chips.textContent = "";
         if (!$("sc-share-org").checked)
@@ -6788,11 +7636,11 @@
             chip.textContent = label;
             if (/^(channel|group):/.test(grantee)) {
               const unsupported = document.createElement("small");
-              unsupported.textContent = "unsupported · remove before saving";
+              unsupported.textContent = adminTr("unsupported · remove before saving");
               chip.appendChild(unsupported);
             } else if (label === grantee) {
               const unresolved = document.createElement("small");
-              unresolved.textContent = "unresolved";
+              unresolved.textContent = adminTr("unresolved");
               chip.appendChild(unresolved);
             }
             chips.appendChild(chip);
@@ -6906,13 +7754,15 @@
           setStatus("st-service-credentials", "Deleted", "ok");
         } else {
           const conflictState = r.status === 409 ? await refreshServiceCredentialConflict() : false;
-          let message = r.data?.message || "Delete failed.";
+          let serverMessage = r.data?.message || "";
+          let message = serverMessage || "Delete failed.";
           if (r.status === 409) {
+            serverMessage = "";
             message = conflictState
               ? "Credential changed; the latest state is shown. Review it before deleting."
               : "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.";
           }
-          setStatus("st-service-credentials", message, "err");
+          setStatus("st-service-credentials", message, "err", false, !serverMessage);
         }
       }
       $("sc-reset").onclick = resetScForm;
@@ -6957,10 +7807,13 @@
             return;
           }
           updateScFormDirty();
-          let message = r.data?.message || "Save failed.";
+          let serverMessage = r.data?.message || "";
+          let message = serverMessage || "Save failed.";
           if (r.status === 403) {
+            serverMessage = "";
             message = "Not authorized for this scope.";
           } else if (r.status === 409) {
+            serverMessage = "";
             if (conflictState === "missing") {
               message =
                 "This credential was deleted elsewhere. Your draft is preserved, but it remains an edit and cannot recreate the credential. Cancel the edit before creating a new credential.";
@@ -6971,7 +7824,7 @@
                 "Credential changed, but the latest revision could not be loaded. Your draft is preserved; refresh the page before retrying.";
             }
           }
-          setStatus("st-service-credentials", message, "err");
+          setStatus("st-service-credentials", message, "err", false, !serverMessage);
         }
       };
 
@@ -6979,7 +7832,7 @@
       let onboardingModelStatuses = [];
       function onboardingBadge(id, text, ready, optional = false) {
         const el = $(id);
-        el.textContent = text;
+        el.textContent = adminTr(text);
         el.className = "badge " + (ready ? "ok" : optional ? "muted" : "warn");
       }
       const MODEL_PROVIDER_LABELS = {
@@ -7008,7 +7861,9 @@
           const option = document.createElement("option");
           option.value = status.provider;
           const label = MODEL_PROVIDER_LABELS[status.provider] || connectorName(status.provider);
-          option.textContent = status.configured ? label + " — key configured" : label;
+          option.textContent = status.configured
+            ? label + (adminLocale === "zh-CN" ? " — 已配置密钥" : " — key configured")
+            : label;
           select.appendChild(option);
         });
         if (preferred && [...select.options].some((option) => option.value === preferred)) select.value = preferred;
@@ -7026,9 +7881,9 @@
         if (preferred && [...select.options].some((option) => option.value === preferred)) select.value = preferred;
         const status = onboardingModelStatuses.find((item) => item.provider === provider);
         $("onboarding-model-delete").disabled = !status || status.source === "absent";
-        $("onboarding-model-key").placeholder = status?.configured
-          ? "•••• set — enter a replacement"
-          : "Write-only API key";
+        $("onboarding-model-key").placeholder = adminTr(
+          status?.configured ? "•••• set — enter a replacement" : "Write-only API key",
+        );
       }
       async function loadOnboarding() {
         const [models, slack, catalog, config] = await Promise.all([
@@ -7056,13 +7911,25 @@
           Boolean(baseStatus?.configured),
         );
         $("onboarding-model-summary").textContent = !baseModel
-          ? "No base model is configured yet — pick a provider and model below."
+          ? adminLocale === "zh-CN"
+            ? "尚未配置基础模型——请在下方选择提供商和模型。"
+            : "No base model is configured yet — pick a provider and model below."
           : baseStatus?.configured
-            ? baseModel + " · " + (baseStatus.source === "admin" ? "admin-managed key" : "deployment key")
-            : baseModel +
-              " cannot run until its " +
-              (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
-              " key is configured.";
+            ? baseModel +
+              " · " +
+              (adminLocale === "zh-CN"
+                ? baseStatus.source === "admin"
+                  ? "管理端密钥"
+                  : "部署密钥"
+                : baseStatus.source === "admin"
+                  ? "admin-managed key"
+                  : "deployment key")
+            : adminLocale === "zh-CN"
+              ? `${baseModel} 需要先配置 ${MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)} 密钥。`
+              : baseModel +
+                " cannot run until its " +
+                (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
+                " key is configured.";
         renderOnboardingProviderOptions(baseProvider);
         renderOnboardingModelOptions(baseModel);
 
@@ -7073,8 +7940,10 @@
           true,
         );
         $("onboarding-slack-summary").textContent = slack.data.configured
-          ? "Connected to " + (slack.data.teamName || slack.data.teamId || "a Slack workspace") + "."
-          : "Create the QM app, install it, then add its bot and Socket Mode tokens.";
+          ? adminLocale === "zh-CN"
+            ? `已连接到 ${slack.data.teamName || slack.data.teamId || "Slack 工作区"}。`
+            : "Connected to " + (slack.data.teamName || slack.data.teamId || "a Slack workspace") + "."
+          : adminTr("Create the QM app, install it, then add its bot and Socket Mode tokens.");
         if (slack.data.createUrl) $("onboarding-slack-create").href = slack.data.createUrl;
 
         const configured = (catalog.data.catalog || []).filter((item) => item.configured);
@@ -7085,8 +7954,9 @@
           true,
         );
         $("onboarding-oauth-summary").textContent = configured.length
-          ? configured.map((item) => connectorName(item.provider)).join(", ") + " available in the web UI."
-          : "Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.";
+          ? configured.map((item) => connectorName(item.provider)).join(", ") +
+            (adminLocale === "zh-CN" ? " 已可在 Web UI 中使用。" : " available in the web UI.")
+          : adminTr("Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.");
         viewLoadedAt.onboarding = Date.now();
       }
       $("onboarding-model-provider").onchange = () => renderOnboardingModelOptions();
@@ -7103,7 +7973,7 @@
         const saved = await api("PUT", "/api/model-providers/" + encodeURIComponent(provider), { apiKey });
         if (!saved.ok) {
           $("onboarding-model-save").disabled = false;
-          setStatus("st-onboarding-model", saved.data?.message || "The provider rejected this key.", "err", true);
+          setApiStatus("st-onboarding-model", saved.data?.message, "The provider rejected this key.", "err", true);
           return;
         }
         const selected = await api("PUT", "/api/scopes/" + encodeURIComponent(orgScope()) + "/base-model", { modelId });
@@ -7128,7 +7998,7 @@
           return;
         const removed = await api("DELETE", "/api/model-providers/" + encodeURIComponent(provider));
         if (!removed.ok) {
-          setStatus("st-onboarding-model", removed.data?.message || "Could not disable this provider.", "err");
+          setApiStatus("st-onboarding-model", removed.data?.message, "Could not disable this provider.", "err");
           return;
         }
         await loadOnboarding();
@@ -7173,7 +8043,7 @@
           });
           const actions = document.createElement("td");
           const edit = document.createElement("button");
-          edit.textContent = "Edit";
+          edit.textContent = adminTr("Edit");
           edit.onclick = () => {
             $("custom-provider-id").value = provider.id;
             $("custom-provider-name").value = provider.name;
@@ -7188,12 +8058,12 @@
           };
           const remove = document.createElement("button");
           remove.className = "danger";
-          remove.textContent = "Remove";
+          remove.textContent = adminTr("Remove");
           remove.onclick = async () => {
             if (!confirm("Remove " + provider.name + "? Its models leave every model picker.")) return;
             const removed = await api("DELETE", "/api/custom-providers/" + encodeURIComponent(provider.id));
             if (!removed.ok) {
-              setStatus("st-custom-provider", removed.data?.message || "Could not remove this provider.", "err");
+              setApiStatus("st-custom-provider", removed.data?.message, "Could not remove this provider.", "err");
               return;
             }
             await loadCustomProviders();
@@ -7228,7 +8098,7 @@
         const saved = await api("PUT", "/api/custom-providers/" + encodeURIComponent(id), body);
         $("custom-provider-save").disabled = false;
         if (!saved.ok) {
-          setStatus("st-custom-provider", saved.data?.message || "Could not save this provider.", "err", true);
+          setApiStatus("st-custom-provider", saved.data?.message, "Could not save this provider.", "err", true);
           return;
         }
         $("custom-provider-key").value = "";
@@ -7261,14 +8131,15 @@
           api("GET", "/api/scopes/" + encodeURIComponent(orgScope())),
         ]);
         if (!catalog.ok) {
-          setStatus("st-connectors", catalog.data?.message || "Failed to load connector setup.", "err");
+          setApiStatus("st-connectors", catalog.data?.message, "Failed to load connector setup.", "err");
           return;
         }
         connectorCatalog = catalog.data.catalog || [];
         if (!r.ok) {
-          setStatus(
+          setApiStatus(
             "st-connectors",
-            r.status === 403 ? "Only an org admin can manage connectors." : r.data?.message || "Failed to load.",
+            r.status === 403 ? null : r.data?.message,
+            r.status === 403 ? "Only an org admin can manage connectors." : "Failed to load.",
             "err",
           );
           return;
@@ -7292,7 +8163,7 @@
         const displayed = [...list, ...inherited];
         if (!displayed.length) {
           root.className = "hint";
-          root.textContent = "No connectors configured. Add one below to make it linkable in the web UI.";
+          root.textContent = adminTr("No connectors configured. Add one below to make it linkable in the web UI.");
           return;
         }
         root.className = "";
@@ -7310,10 +8181,11 @@
           const meta = document.createElement("div");
           meta.className = "hint";
           meta.textContent = c.inherited
-            ? "Configured by deployment secrets"
-            : "client " +
+            ? adminTr("Configured by deployment secrets")
+            : adminTr("client") +
+              " " +
               (c.clientId || "—") +
-              (c.updatedBy ? " · by " + c.updatedBy : "") +
+              (c.updatedBy ? " · " + adminTr("by") + " " + c.updatedBy : "") +
               (c.updatedAt ? " · " + fmtTime(c.updatedAt) : "");
           const badges = document.createElement("div");
           badges.className = "credential-badges";
@@ -7333,7 +8205,7 @@
           if (c.inherited) {
             const override = document.createElement("button");
             override.type = "button";
-            override.textContent = "Override here";
+            override.textContent = adminTr("Override here");
             override.onclick = () => {
               resetConnForm();
               $("conn-provider").value = c.provider;
@@ -7344,14 +8216,14 @@
           } else {
             const edit = document.createElement("button");
             edit.type = "button";
-            edit.textContent = "Edit";
+            edit.textContent = adminTr("Edit");
             edit.onclick = () => loadConnForm(c);
             const del = document.createElement("button");
             del.type = "button";
             del.className = "rowbtn danger";
-            del.textContent = "Delete";
-            del.title = "Delete connector";
-            del.setAttribute("aria-label", "Delete " + connectorName(c.provider));
+            del.textContent = adminTr("Delete");
+            del.title = adminTr("Delete connector");
+            del.setAttribute("aria-label", adminTr("Delete") + " " + connectorName(c.provider));
             del.onclick = () => deleteConn(c.provider);
             actions.appendChild(edit);
             actions.appendChild(del);
@@ -7369,7 +8241,7 @@
           const configured = c.configured;
           const o = document.createElement("option");
           o.value = c.provider;
-          o.textContent = connectorName(c.provider) + (configured ? " — configured" : "");
+          o.textContent = connectorName(c.provider) + (configured ? " — " + adminTr("configured") : "");
           sel.appendChild(o);
         });
         if (cur && connectorCatalog.some((c) => c.provider === cur)) sel.value = cur;
@@ -7385,55 +8257,58 @@
         open.href = connector.setupGuide.url;
         open.target = "_blank";
         open.rel = "noopener noreferrer";
-        open.textContent = "Open " + connector.setupGuide.console + " ↗";
+        open.textContent = adminTr("Open " + connector.setupGuide.console + " ↗");
         const callback = document.createElement("div");
-        callback.textContent = "Callback URL: " + callbackUrl;
+        callback.textContent = adminTr("Callback URL: " + callbackUrl);
         const scopes = document.createElement("div");
-        scopes.textContent = connector.scopes.length
-          ? "Scopes: " + connector.scopes.join(", ")
-          : "Scopes are selected in the provider.";
+        scopes.textContent = adminTr(
+          connector.scopes.length ? "Scopes: " + connector.scopes.join(", ") : "Scopes are selected in the provider.",
+        );
         const steps = document.createElement("ol");
         connector.setupGuide.steps.forEach((text) => {
           const item = document.createElement("li");
-          item.textContent = text;
+          item.textContent = adminTr(text);
           steps.appendChild(item);
         });
         root.append(open, callback, scopes, steps);
       }
       function loadConnForm(c) {
         connEditing = c.provider;
-        $("conn-form-title").textContent = "Editing " + connectorName(c.provider);
-        $("conn-form-mode").textContent = "Editing";
+        $("conn-form-title").textContent = adminTr("Editing " + connectorName(c.provider));
+        $("conn-form-mode").textContent = adminTr("Editing");
         $("conn-form-mode").className = "badge info";
-        $("conn-save").textContent = "Save changes";
-        $("conn-reset").textContent = "Cancel edit";
+        $("conn-save").textContent = adminTr("Save changes");
+        $("conn-reset").textContent = adminTr("Cancel edit");
         populateConnProviders();
         $("conn-provider").value = c.provider;
         $("conn-provider").disabled = true;
         $("conn-client-id").value = c.clientId || "";
         $("conn-client-secret").value = "";
-        $("conn-client-secret").placeholder = c.hasSecret ? "•••• set (re-enter to replace)" : "(write-only)";
-        $("conn-secret-hint").textContent =
-          "Saving requires the client secret — re-enter it to keep this connector working.";
+        $("conn-client-secret").placeholder = adminTr(c.hasSecret ? "•••• set (re-enter to replace)" : "(write-only)");
+        $("conn-secret-hint").textContent = adminTr(
+          "Saving requires the client secret — re-enter it to keep this connector working.",
+        );
         $("conn-enabled").checked = c.enabled !== false;
         renderConnList(connList);
         $("card-connectors").scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
       function resetConnForm() {
         connEditing = null;
-        $("conn-form-title").textContent = "Add a connector";
-        $("conn-form-mode").textContent = "New";
+        $("conn-form-title").textContent = adminTr("Add a connector");
+        $("conn-form-mode").textContent = adminTr("New");
         $("conn-form-mode").className = "badge muted";
-        $("conn-save").textContent = "Save connector";
-        $("conn-reset").textContent = "Clear form";
+        $("conn-save").textContent = adminTr("Save connector");
+        $("conn-reset").textContent = adminTr("Clear form");
         populateConnProviders();
         $("conn-provider").disabled = false;
         if ($("conn-provider").options.length) $("conn-provider").selectedIndex = 0;
         renderConnGuide();
         $("conn-client-id").value = "";
         $("conn-client-secret").value = "";
-        $("conn-client-secret").placeholder = "(write-only)";
-        $("conn-secret-hint").textContent = "Secret values are write-only and will not be displayed after saving.";
+        $("conn-client-secret").placeholder = adminTr("(write-only)");
+        $("conn-secret-hint").textContent = adminTr(
+          "Secret values are write-only and will not be displayed after saving.",
+        );
         $("conn-enabled").checked = true;
         if (connList.length) renderConnList(connList);
       }
@@ -7441,22 +8316,25 @@
       async function loadSlackInstallation() {
         const r = await api("GET", "/api/slack-installation");
         if (!r.ok) {
-          setStatus("st-slack-installation", r.data?.message || "Failed to load Slack status.", "err");
+          setApiStatus("st-slack-installation", r.data?.message, "Failed to load Slack status.", "err");
           return;
         }
         if (r.data.createUrl) $("slack-installation-create").href = r.data.createUrl;
         $("slack-installation-state").textContent =
           r.data.source === "environment"
-            ? "Connected using deployment environment secrets. Saving here replaces them with admin-managed encrypted tokens."
+            ? adminTr(
+                "Connected using deployment environment secrets. Saving here replaces them with admin-managed encrypted tokens.",
+              )
             : r.data.source === "invalid_environment"
-              ? "The deployment contains only one Slack token. Save a matching pair here to repair it."
+              ? adminTr("The deployment contains only one Slack token. Save a matching pair here to repair it.")
               : r.data.configured
-                ? "Connected to " +
-                  (r.data.teamName || r.data.teamId || "a Slack workspace") +
-                  (r.data.updatedBy ? " · saved by " + r.data.updatedBy : "")
+                ? adminTr("Connected to") +
+                  " " +
+                  (r.data.teamName || r.data.teamId || adminTr("a Slack workspace")) +
+                  (r.data.updatedBy ? " · " + adminTr("saved by") + " " + r.data.updatedBy : "")
                 : r.data.managed
-                  ? "Disabled by an administrator."
-                  : "Not configured.";
+                  ? adminTr("Disabled by an administrator.")
+                  : adminTr("Not configured.");
         $("slack-installation-delete").disabled = !r.data.configured;
       }
       $("slack-installation-save").onclick = async () => {
@@ -7471,7 +8349,7 @@
         const r = await api("PUT", "/api/slack-installation", { botToken, appToken });
         $("slack-installation-save").disabled = false;
         if (!r.ok) {
-          setStatus("st-slack-installation", r.data?.message || "Slack validation failed.", "err");
+          setApiStatus("st-slack-installation", r.data?.message, "Slack validation failed.", "err");
           return;
         }
         $("slack-bot-token").value = "";
@@ -7483,7 +8361,7 @@
         if (!confirm("Remove the Slack bot connection? Slack chat will stop until new tokens are saved.")) return;
         const r = await api("DELETE", "/api/slack-installation");
         if (!r.ok) {
-          setStatus("st-slack-installation", r.data?.message || "Remove failed.", "err");
+          setApiStatus("st-slack-installation", r.data?.message, "Remove failed.", "err");
           return;
         }
         await loadSlackInstallation();
@@ -7507,7 +8385,7 @@
           resetConnForm();
           await loadConnectors();
           setStatus("st-connectors", "Deleted", "ok");
-        } else setStatus("st-connectors", r.data?.message || "Delete failed.", "err");
+        } else setApiStatus("st-connectors", r.data?.message, "Delete failed.", "err");
       }
       $("conn-save").onclick = async () => {
         const provider = $("conn-provider").value;
@@ -7539,9 +8417,10 @@
           await loadConnectors();
           setStatus("st-connectors", "Saved", "ok");
         } else
-          setStatus(
+          setApiStatus(
             "st-connectors",
-            r.status === 403 ? "Only an org admin can manage connectors." : r.data?.message || "Save failed.",
+            r.status === 403 ? null : r.data?.message,
+            r.status === 403 ? "Only an org admin can manage connectors." : "Save failed.",
             "err",
           );
       };
@@ -7603,7 +8482,7 @@
         const pat = document.createElement("input");
         pat.type = "text";
         pat.value = rule?.pattern || "";
-        pat.placeholder = "regex";
+        pat.placeholder = adminTr("regex");
         pat.spellcheck = false;
         pat.setAttribute("aria-label", "Command pattern");
         pat.addEventListener("input", () => {
@@ -7624,7 +8503,7 @@
         const rsn = document.createElement("input");
         rsn.type = "text";
         rsn.value = rule?.reason || "";
-        rsn.placeholder = "optional";
+        rsn.placeholder = adminTr("optional");
         const priority = document.createElement("span");
         priority.className = "rule-priority mono";
         const order = document.createElement("div");
@@ -7652,7 +8531,7 @@
         del.type = "button";
         del.className = "rowbtn danger";
         del.textContent = "×";
-        del.title = "Remove this command policy rule";
+        del.title = adminTr("Remove this command policy rule");
         del.setAttribute("aria-label", "Remove command policy rule");
         del.onclick = () => {
           tr.remove();
@@ -7689,7 +8568,7 @@
         const nm = document.createElement("input");
         nm.type = "text";
         nm.value = name || "";
-        nm.placeholder = "e.g. GitHub";
+        nm.placeholder = adminTr("e.g. GitHub");
         nm.spellcheck = false;
         const sel = document.createElement("select");
         BOT_MODES.forEach((m) => {
@@ -7713,8 +8592,8 @@
         const del = document.createElement("button");
         del.type = "button";
         del.className = "rowbtn danger";
-        del.textContent = "Remove";
-        del.title = "Remove this bot from the ledger";
+        del.textContent = adminTr("Remove");
+        del.title = adminTr("Remove this bot from the ledger");
         del.setAttribute("aria-label", "Remove bot ledger entry");
         del.onclick = () => {
           tr.remove();
@@ -7787,7 +8666,7 @@
         const result = $("policy-result");
         if (!command.trim()) {
           result.dataset.tone = "";
-          result.textContent = "Enter a sample command first.";
+          result.textContent = adminTr("Enter a sample command first.");
           return;
         }
         let policy;
@@ -7795,12 +8674,12 @@
           policy = collectPolicy();
         } catch (err) {
           result.dataset.tone = "danger";
-          result.textContent = err instanceof Error ? err.message : "Policy is invalid.";
+          result.textContent = adminTr(err instanceof Error ? err.message : "Policy is invalid.");
           return;
         }
         $("policy-simulate").disabled = true;
         result.dataset.tone = "";
-        result.textContent = "Evaluating with the server’s command scanner…";
+        result.textContent = adminTr("Evaluating with the server’s command scanner…");
         const simulateBody = { command };
         if (loadedCommandPolicyPresent || $("card-command-policy").classList.contains("dirty"))
           simulateBody.policy = policy;
@@ -7812,7 +8691,7 @@
         $("policy-simulate").disabled = false;
         if (!response.ok) {
           result.dataset.tone = "danger";
-          result.textContent = response.data?.message || "Simulation failed.";
+          result.textContent = response.data?.message || adminTr("Simulation failed.");
           return;
         }
         const decision = response.data.decision;
@@ -7822,24 +8701,27 @@
         result.dataset.tone = tone;
         let ruleLabel = null;
         if (response.data.ruleSource === "organization") {
-          ruleLabel = "Organization rule " + (response.data.ruleIndex + 1);
+          ruleLabel = adminTr("Organization rule") + " " + (response.data.ruleIndex + 1);
         } else if (response.data.ruleSource === "scope") {
-          ruleLabel = "This scope’s rule " + (response.data.ruleIndex + 1);
+          ruleLabel = adminTr("This scope’s rule") + " " + (response.data.ruleIndex + 1);
         }
         const deploymentCaveat =
           decision === "allow" && response.data.ruleSource == null && response.data.deploymentRulesEvaluated === false
-            ? " · A deployment’s rules may still restrict this command."
+            ? " · " + adminTr("A deployment’s rules may still restrict this command.")
             : "";
+        const decisionLabel = adminTr(EFFECT_LABELS[decision] || decision);
         result.textContent = ruleLabel
           ? ruleLabel +
-            " matches" +
+            " " +
+            adminTr("matches") +
             (response.data.matched ? " “" + response.data.matched + "”" : "") +
             " → " +
-            (EFFECT_LABELS[decision] || decision) +
+            decisionLabel +
             (response.data.reason ? " · " + response.data.reason : "") +
             deploymentCaveat
-          : "No scope-policy rule matches → " +
-            (EFFECT_LABELS[decision] || decision) +
+          : adminTr("No scope-policy rule matches") +
+            " → " +
+            decisionLabel +
             (response.data.reason ? " · " + response.data.reason : "") +
             deploymentCaveat;
       }
@@ -7888,13 +8770,17 @@
                 !/^[a-z0-9:[\]._-]+$/.test(host)
               ) {
                 throw new Error(
-                  label +
-                    ' contains invalid host "' +
+                  adminTr(label) +
+                    " " +
+                    adminTr("contains invalid host") +
+                    ' "' +
                     host +
-                    '". Enter a hostname or IP only—no scheme, path, port, or wildcard.',
+                    '". ' +
+                    adminTr("Enter a hostname or IP only—no scheme, path, port, or wildcard."),
                 );
               }
-              if (seen.has(host)) throw new Error(label + ' contains duplicate host "' + host + '".');
+              if (seen.has(host))
+                throw new Error(adminTr(label) + " " + adminTr("contains duplicate host") + ' "' + host + '".');
               seen.add(host);
               return host;
             });
@@ -7903,7 +8789,13 @@
         const deniedHosts = parse("egress-deny", "Denylist");
         const overlap = allowedHosts.find((host) => deniedHosts.includes(host));
         if (overlap)
-          throw new Error('Host "' + overlap + '" appears in both lists. Remove it from one list before saving.');
+          throw new Error(
+            adminTr("Host") +
+              ' "' +
+              overlap +
+              '" ' +
+              adminTr("appears in both lists. Remove it from one list before saving."),
+          );
         return { allowedHosts, deniedHosts };
       }
       function populateEgress(policy) {
@@ -7918,7 +8810,7 @@
           collectEgress();
         } catch (err) {
           const row = document.createElement("div");
-          row.textContent = err instanceof Error ? err.message : "Invalid egress policy.";
+          row.textContent = err instanceof Error ? err.message : adminTr("Invalid egress policy.");
           root.appendChild(row);
         }
       }
@@ -8122,13 +9014,16 @@
           } else {
             if (key === "soul" && r.status === 409) await refreshSoulConflict();
             updateSectionDirty(key);
-            let message = r.data?.message || "Save failed.";
+            let serverMessage = r.data?.message || "";
+            let message = serverMessage || "Save failed.";
             if (key === "soul" && r.status === 409) {
+              serverMessage = "";
               message = "SOUL changed; latest revision loaded and your draft was preserved.";
             } else if (r.status === 403) {
+              serverMessage = "";
               message = "Not authorized for this scope.";
             }
-            setStatus(SAVE_ST[key], message, "err");
+            setStatus(SAVE_ST[key], message, "err", false, !serverMessage);
           }
         };
       });
@@ -8200,7 +9095,7 @@
           root.textContent = "";
           const loading = document.createElement("div");
           loading.className = "loadingline";
-          loading.textContent = "Loading " + (VIEW_TITLE[view] || view).toLowerCase() + "...";
+          loading.textContent = adminTr("Loading " + (VIEW_TITLE[view] || view).toLowerCase() + "...");
           root.appendChild(loading);
         }
         const r = await api("GET", path);
@@ -8211,7 +9106,9 @@
           const p = document.createElement("p");
           p.className = "empty";
           p.textContent =
-            r.status === 403 ? "You don't administer this scope." : r.data?.message || `Failed to load (${r.status}).`;
+            r.status === 403
+              ? adminTr("You don't administer this scope.")
+              : r.data?.message || `${adminTr("Failed to load")} (${r.status}).`;
           root.appendChild(p);
           return;
         }
@@ -8317,7 +9214,7 @@
               { text: fmtMs(p.p50), cls: "num" },
               { text: fmtMs(p.p95), cls: "num" },
               { text: fmtMs(p.p99), cls: "num" },
-              { text: p.count ? Number(p.count).toLocaleString() : "—", cls: "num" },
+              { text: p.count ? Number(p.count).toLocaleString(adminLocaleCode()) : "—", cls: "num" },
               nodeCell(sparkline(p.daily), "num"),
             ],
             (p) => go({ view: "metrics", scope, session: null, phase: p.phase }),
@@ -8416,7 +9313,7 @@
         if (!rows.length) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = "No samples.";
+          p.textContent = adminTr("No samples.");
           return p;
         }
         const max = Math.max(...rows.map((b) => b.count), 1);
@@ -8436,7 +9333,7 @@
           track.appendChild(bar);
           const n = document.createElement("span");
           n.className = "dist-count";
-          n.textContent = b.count ? Number(b.count).toLocaleString() : "";
+          n.textContent = b.count ? Number(b.count).toLocaleString(adminLocaleCode()) : "";
           row.append(label, track, n);
           wrap.appendChild(row);
         });
@@ -8448,17 +9345,19 @@
           back: { label: "← Metrics", onClick: () => go({ view: "metrics", scope, session: null }) },
           title: phaseLabel(phaseKey),
           context: phaseDesc(phaseKey),
+          titleI18n: true,
+          contextI18n: true,
         });
         if (!p || !p.count) {
           const e = document.createElement("p");
           e.className = "empty";
-          e.textContent = "No " + phaseLabel(phaseKey).toLowerCase() + " samples in this scope yet.";
+          e.textContent = adminTr("No " + phaseLabel(phaseKey).toLowerCase() + " samples in this scope yet.");
           root.appendChild(e);
           return;
         }
         root.appendChild(
           statline([
-            Number(p.count).toLocaleString() + " turns",
+            Number(p.count).toLocaleString(adminLocaleCode()) + " turns",
             fmtMs(p.p50) + " p50",
             fmtMs(p.p95) + " p95",
             fmtMs(p.p99) + " p99",
@@ -8470,7 +9369,7 @@
           .reverse()
           .map((r) => [
             { text: r.day, cls: "mono" },
-            { text: Number(r.count).toLocaleString(), cls: "num" },
+            { text: Number(r.count).toLocaleString(adminLocaleCode()), cls: "num" },
             { text: fmtMs(r.p50), cls: "num" },
             { text: fmtMs(r.p95), cls: "num" },
             { text: fmtMs(r.p99), cls: "num" },
@@ -8589,7 +9488,7 @@
         if (errs.length > max) {
           const more = document.createElement("div");
           more.className = "subline";
-          more.textContent = "…and " + (errs.length - max) + " more";
+          more.textContent = adminTr("…and " + (errs.length - max) + " more");
           box.appendChild(more);
         }
         return box;
@@ -8662,7 +9561,7 @@
         }
       }
       function plural(n, one, many = one + "s") {
-        return `${Number(n || 0).toLocaleString()} ${Number(n || 0) === 1 ? one : many}`;
+        return adminTr(`${Number(n || 0).toLocaleString(adminLocaleCode())} ${Number(n || 0) === 1 ? one : many}`);
       }
       function historyCategory(kind) {
         return kind === "cron" || kind === "background" ? "background" : kind;
@@ -8786,7 +9685,7 @@
         const path = "/api/crons/" + encodeURIComponent(id) + "/destination?scope=" + encodeURIComponent(scope);
         const r = await api("PUT", path, { destination });
         if (!r.ok) {
-          alert(r.data?.message || "Could not update destination.");
+          alert(r.data?.message || adminTr("Could not update destination."));
           return false;
         }
         dataCache.clear();
@@ -8798,7 +9697,7 @@
         const edit = document.createElement("button");
         edit.type = "button";
         edit.className = "rowbtn";
-        edit.textContent = "Edit destination";
+        edit.textContent = adminTr("Edit destination");
         edit.onclick = () => {
           cronDestinationEditId = c.id;
           renderCurrentData();
@@ -8807,7 +9706,7 @@
         const clear = document.createElement("button");
         clear.type = "button";
         clear.className = "rowbtn danger";
-        clear.textContent = "Clear destination";
+        clear.textContent = adminTr("Clear destination");
         clear.disabled = !c.destination;
         clear.onclick = async () => {
           if (!(await saveCronDestination(c.id, null))) return;
@@ -8824,7 +9723,7 @@
         form.style.gridTemplateColumns = "repeat(auto-fit, minmax(160px, 1fr))";
         form.style.gap = "10px";
         const typeWrap = document.createElement("label");
-        typeWrap.textContent = "Type";
+        typeWrap.textContent = adminTr("Type");
         const type = document.createElement("select");
         for (const value of ["slack", "principal"]) {
           const opt = document.createElement("option");
@@ -8835,19 +9734,19 @@
         type.value = c.destination?.type === "principal" ? "principal" : "slack";
         typeWrap.appendChild(type);
         const targetWrap = document.createElement("label");
-        targetWrap.textContent = "Target";
+        targetWrap.textContent = adminTr("Target");
         const target = document.createElement("input");
         target.type = "text";
         target.value = c.destination?.target || "";
         targetWrap.appendChild(target);
         const scopeWrap = document.createElement("label");
-        scopeWrap.textContent = "Audience scope";
+        scopeWrap.textContent = adminTr("Audience scope");
         const audienceScopeId = document.createElement("input");
         audienceScopeId.type = "text";
         audienceScopeId.value = c.destination?.audienceScopeId || "";
         scopeWrap.appendChild(audienceScopeId);
         const oboWrap = document.createElement("label");
-        oboWrap.textContent = "On behalf of";
+        oboWrap.textContent = adminTr("On behalf of");
         const onBehalfOf = document.createElement("input");
         onBehalfOf.type = "text";
         onBehalfOf.value = c.destination?.onBehalfOf || "";
@@ -8866,7 +9765,7 @@
         const save = document.createElement("button");
         save.type = "button";
         save.className = "primary";
-        save.textContent = "Save destination";
+        save.textContent = adminTr("Save destination");
         save.onclick = async () => {
           const nextTarget = target.value.trim();
           if (!nextTarget) {
@@ -8886,14 +9785,14 @@
         };
         const cancel = document.createElement("button");
         cancel.type = "button";
-        cancel.textContent = "Cancel";
+        cancel.textContent = adminTr("Cancel");
         cancel.onclick = () => {
           cronDestinationEditId = null;
           renderCurrentData();
         };
         foot.append(save, cancel);
         body.appendChild(foot);
-        return dataCard("Edit cron destination", c.title || c.action || c.message || c.id, body);
+        return dataCard(adminTr("Edit cron destination"), c.title || c.action || c.message || c.id, body);
       }
       const cronStatusText = (c) => {
         if (c.archived) return "archived";
@@ -8953,7 +9852,7 @@
         }
         const noMatch = document.createElement("p");
         noMatch.className = "empty hidden";
-        noMatch.textContent = "No crons match.";
+        noMatch.textContent = adminTr("No crons match.");
         const listWrap = document.createElement("div");
         listWrap.append(list, noMatch);
         wireScopeSearch({
@@ -9009,10 +9908,10 @@
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "prompt-toggle";
-        toggle.textContent = "Show more";
+        toggle.textContent = adminTr("Show more");
         toggle.onclick = () => {
           const clamped = body.classList.toggle("clamped");
-          toggle.textContent = clamped ? "Show more" : "Show less";
+          toggle.textContent = adminTr(clamped ? "Show more" : "Show less");
         };
         wrap.appendChild(toggle);
 
@@ -9034,7 +9933,7 @@
         if (!c) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = "Cron " + shortId(cronId) + " isn't in this scope.";
+          p.textContent = adminTr("Cron " + shortId(cronId) + " isn't in this scope.");
           root.appendChild(p);
           return;
         }
@@ -9089,7 +9988,7 @@
           container.appendChild(
             Object.assign(document.createElement("p"), {
               className: "empty",
-              textContent: r.data?.message || `Failed to load fires (${r.status}).`,
+              textContent: r.data?.message || `${adminTr("Failed to load fires")} (${r.status}).`,
             }),
           );
           return;
@@ -9122,7 +10021,7 @@
           const more = document.createElement("button");
           more.type = "button";
           more.className = "prompt-toggle";
-          more.textContent = "All " + plural(total, "fire") + " →";
+          more.textContent = adminTr("All") + " " + plural(total, "fire") + " →";
           more.onclick = () =>
             go({ view: "history", scope, session: null, page: 1, historyKind: "cron", cron: cronId });
           container.appendChild(more);
@@ -9176,7 +10075,7 @@
         }
         const noMatch = document.createElement("p");
         noMatch.className = "empty hidden";
-        noMatch.textContent = "No deployments match.";
+        noMatch.textContent = adminTr("No deployments match.");
         const listWrap = document.createElement("div");
         listWrap.append(t, noMatch);
         wireScopeSearch({
@@ -9266,7 +10165,7 @@
         const rm = document.createElement("button");
         rm.type = "button";
         rm.className = "rowbtn danger";
-        rm.textContent = "Remove";
+        rm.textContent = adminTr("Remove");
         rm.onclick = async (e) => {
           e.stopPropagation();
           const name = (records[0] && (records[0].name || records[0].id)) || "this skill";
@@ -9350,7 +10249,7 @@
         );
         const noMatch = document.createElement("p");
         noMatch.className = "empty hidden";
-        noMatch.textContent = "No skills match.";
+        noMatch.textContent = adminTr("No skills match.");
         const tableWrap = document.createElement("div");
         tableWrap.append(t, noMatch);
         wireScopeSearch({
@@ -9385,7 +10284,7 @@
         holder.textContent = "";
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Loading " + (rep.name || rep.id) + "…";
+        loading.textContent = adminTr("Loading " + (rep.name || rep.id) + "…");
         holder.appendChild(loading);
 
         const r = await api(
@@ -9396,7 +10295,9 @@
         if (!r.ok || !r.data) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = r.status === 403 ? "You don't administer this skill's scope." : "Couldn't load this skill.";
+          p.textContent = adminTr(
+            r.status === 403 ? "You don't administer this skill's scope." : "Couldn't load this skill.",
+          );
           holder.appendChild(p);
           return;
         }
@@ -9478,7 +10379,7 @@
         const rm = document.createElement("button");
         rm.type = "button";
         rm.className = "rowbtn danger";
-        rm.textContent = "Remove";
+        rm.textContent = adminTr("Remove");
         rm.onclick = async () => {
           if (
             !confirm(
@@ -9498,7 +10399,7 @@
             dataCache.clear();
             renderData();
           } else {
-            alert(r.data?.message || "Failed (" + r.status + ").");
+            alert(r.data?.message || `${adminTr("Failed")} (${r.status}).`);
           }
         };
         return rm;
@@ -9526,7 +10427,7 @@
         btn.type = "button";
         btn.className = "rowbtn";
         btn.textContent = "⋯";
-        btn.setAttribute("aria-label", "Actions");
+        btn.setAttribute("aria-label", adminTr("Actions"));
         btn.setAttribute("aria-haspopup", "menu");
         btn.setAttribute("aria-expanded", "false");
         const menu = document.createElement("div");
@@ -9535,9 +10436,9 @@
         for (const it of items) {
           const b = document.createElement("button");
           b.type = "button";
-          b.textContent = it.label;
+          b.textContent = adminTr(it.label);
           if (it.danger) b.className = "danger";
-          if (it.title) b.title = it.title;
+          if (it.title) b.title = adminTr(it.title);
           b.onclick = (e) => {
             e.stopPropagation();
             closeOvMenus();
@@ -9567,9 +10468,9 @@
         const mkInput = (ph, title) => {
           const i = document.createElement("input");
           i.type = "text";
-          i.placeholder = ph;
-          if (title) i.title = title;
-          i.setAttribute("aria-label", ph);
+          i.placeholder = adminTr(ph);
+          if (title) i.title = adminTr(title);
+          i.setAttribute("aria-label", adminTr(ph));
           i.spellcheck = false;
           return i;
         };
@@ -9588,11 +10489,11 @@
           "Private-repo deploy-token credential slug. Blank = your connected GitHub account.",
         );
         const tier = document.createElement("select");
-        tier.title = "Trust tier";
+        tier.title = adminTr("Trust tier");
         for (const t of ["third-party", "internal"]) {
           const o = document.createElement("option");
           o.value = t;
-          o.textContent = "trust: " + t;
+          o.textContent = (adminLocale === "zh-CN" ? "信任：" : "trust: ") + t;
           tier.appendChild(o);
         }
         adv.append(ref, excl, slug, tier);
@@ -9605,7 +10506,7 @@
           Boolean(ref.value.trim() || excl.value.trim() || slug.value.trim() || tier.value !== "third-party");
         const paintAdvToggle = () => {
           const open = !adv.classList.contains("hidden");
-          advToggle.textContent = "Advanced" + (!open && advHasValues() ? " •" : "");
+          advToggle.textContent = adminTr("Advanced") + (!open && advHasValues() ? " •" : "");
           advToggle.classList.toggle("open", open);
           advToggle.setAttribute("aria-expanded", String(open));
         };
@@ -9620,16 +10521,16 @@
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "primary";
-        btn.textContent = "Register";
+        btn.textContent = adminTr("Register");
         btn.onclick = async () => {
           if (!url.value.trim()) {
             status.className = "status err";
-            status.textContent = "A repo URL is required.";
+            status.textContent = adminTr("A repo URL is required.");
             return;
           }
           btn.disabled = true;
           status.className = "status";
-          status.textContent = "Registering…";
+          status.textContent = adminTr("Registering…");
           const body = { url: url.value.trim() };
           if (ref.value.trim()) body.ref = ref.value.trim();
           const ex = excl.value
@@ -9643,7 +10544,7 @@
           btn.disabled = false;
           if (!r.ok) {
             status.className = "status err";
-            status.textContent = r.data?.message || "Failed (" + r.status + ").";
+            status.textContent = r.data?.message || `${adminTr("Failed")} (${r.status}).`;
             return;
           }
           dataCache.clear();
@@ -9656,14 +10557,20 @@
           const li = s.lastImport;
           const c = (li && li.counts) || {};
           const delta = li
-            ? "last sync: " +
+            ? adminTr("last sync:") +
+              " " +
               (c.imported || 0) +
-              " new · " +
+              " " +
+              adminTr("new") +
+              " · " +
               (c.updated || 0) +
-              " updated · " +
+              " " +
+              adminTr("updated") +
+              " · " +
               (c.skipped || 0) +
-              " skipped" +
-              (c.archived ? " · " + c.archived + " removed" : "")
+              " " +
+              adminTr("skipped") +
+              (c.archived ? " · " + c.archived + " " + adminTr("removed") : "")
             : "";
           const packNode = document.createElement("span");
           packNode.className = "pack-name";
@@ -9678,10 +10585,17 @@
           }
           packNode.title = s.url + (delta ? "\n" + delta : "");
           const skillsNode = document.createElement("span");
-          skillsNode.textContent = s.available != null ? (s.importedCount || 0) + " of " + s.available : "—";
+          skillsNode.textContent =
+            s.available != null ? (s.importedCount || 0) + " " + adminTr("of") + " " + s.available : "—";
           if (s.available != null)
             skillsNode.title =
-              (s.importedCount || 0) + " imported · " + s.available + " available (eligible) in this pack";
+              (s.importedCount || 0) +
+              " " +
+              adminTr("imported") +
+              " · " +
+              s.available +
+              " " +
+              adminTr("available (eligible) in this pack");
           const st = document.createElement("span");
           st.className = "status";
           const setStatusText = (text, cls, title) => {
@@ -9690,14 +10604,14 @@
             if (title) st.title = title;
           };
           if (li && li.status === "error")
-            setStatusText("error — " + (li.error || "sync failed"), "err", li.error || "");
+            setStatusText(adminTr("error") + " — " + (li.error || adminTr("sync failed")), "err", li.error || "");
           else if (s.updateAvailable)
             setStatusText(
-              "update available",
+              adminTr("update available"),
               "dirty",
-              "Upstream advanced past the imported commit — Sync now (or turn on Auto-sync) to apply.",
+              adminTr("Upstream advanced past the imported commit — Sync now (or turn on Auto-sync) to apply."),
             );
-          else setStatusText(li ? "up to date" : "not imported", "muted", delta);
+          else setStatusText(adminTr(li ? "up to date" : "not imported"), "muted", delta);
           const isTracked = s.syncMode === "tracked";
           let busy = false;
           const menu = overflowMenu([
@@ -9709,11 +10623,15 @@
               onClick: async () => {
                 if (busy) return;
                 busy = true;
-                setStatusText("syncing…", "saving");
+                setStatusText(adminTr("syncing…"), "saving");
                 const r = await api("POST", "/api/skill-packs/" + encodeURIComponent(s.id) + "/sync", {});
                 busy = false;
                 if (!r.ok) {
-                  setStatusText("sync failed — " + (r.data?.message || r.status), "err", r.data?.message || "");
+                  setStatusText(
+                    adminTr("sync failed") + " — " + (r.data?.message || r.status),
+                    "err",
+                    r.data?.message || "",
+                  );
                   return;
                 }
                 const d = r.data || {};
@@ -9722,8 +10640,13 @@
                   a = (d.archived || []).length;
                 setStatusText(
                   n || u || a
-                    ? "✓ " + n + " new" + (u ? " · " + u + " updated" : "") + (a ? " · " + a + " removed" : "")
-                    : "✓ up to date",
+                    ? "✓ " +
+                        n +
+                        " " +
+                        adminTr("new") +
+                        (u ? " · " + u + " " + adminTr("updated") : "") +
+                        (a ? " · " + a + " " + adminTr("removed") : "")
+                    : "✓ " + adminTr("up to date"),
                   "ok",
                 );
                 setTimeout(() => {
@@ -9745,7 +10668,7 @@
                 });
                 busy = false;
                 if (!r.ok) {
-                  alert(r.data?.message || "Failed (" + r.status + ").");
+                  alert(r.data?.message || `${adminTr("Failed")} (${r.status}).`);
                   return;
                 }
                 dataCache.clear();
@@ -9800,7 +10723,7 @@
           if (!selected.size) {
             const none = document.createElement("span");
             none.style.cssText = "font-size:12px; color:var(--muted);";
-            none.textContent = "no scopes selected";
+            none.textContent = adminTr("no scopes selected");
             chips.appendChild(none);
             return;
           }
@@ -9833,7 +10756,7 @@
         const addBtn = document.createElement("button");
         addBtn.type = "button";
         addBtn.className = "rowbtn";
-        addBtn.textContent = "+ Add scope ▾";
+        addBtn.textContent = adminTr("+ Add scope ▾");
         addBtn.setAttribute("aria-haspopup", "listbox");
         addBtn.setAttribute("aria-expanded", "false");
 
@@ -9844,7 +10767,7 @@
         filterWrap.className = "scope-filter";
         const filter = document.createElement("input");
         filter.type = "text";
-        filter.placeholder = "Filter scopes…";
+        filter.placeholder = adminTr("Filter scopes…");
         filter.spellcheck = false;
         filter.setAttribute("autocapitalize", "none");
         filter.style.cssText =
@@ -9858,7 +10781,7 @@
         const mkLink = (text, fn) => {
           const b = document.createElement("button");
           b.type = "button";
-          b.textContent = text;
+          b.textContent = adminTr(text);
           b.style.cssText =
             "border:none; background:transparent; cursor:pointer; color:var(--text); font:inherit; font-size:12px; text-decoration:underline; text-underline-offset:2px; padding:0;";
           b.onclick = fn;
@@ -9888,7 +10811,7 @@
           if (!shown.length) {
             const p = document.createElement("div");
             p.className = "scope-note";
-            p.textContent = "No scopes match.";
+            p.textContent = adminTr("No scopes match.");
             list.appendChild(p);
             return;
           }
@@ -9957,14 +10880,14 @@
         holder.textContent = "";
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Fetching " + s.url + "…";
+        loading.textContent = adminTr("Fetching " + s.url + "…");
         holder.appendChild(loading);
         const r = await api("GET", "/api/skill-packs/" + encodeURIComponent(s.id) + "/catalog");
         holder.textContent = "";
         if (!r.ok || !r.data) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = r.data?.message || "Couldn't browse (" + r.status + ").";
+          p.textContent = r.data?.message || `${adminTr("Couldn't browse")} (${r.status}).`;
           holder.appendChild(p);
           return;
         }
@@ -9997,7 +10920,7 @@
 
         const headCb = document.createElement("input");
         headCb.type = "checkbox";
-        headCb.title = "Select / deselect all importable skills";
+        headCb.title = adminTr("Select / deselect all importable skills");
         const syncHead = () => {
           const n = checks.length,
             sel = checks.filter((cb) => cb.checked).length;
@@ -10053,24 +10976,27 @@
             help: "Held back: missing or unreadable SKILL.md frontmatter.",
           },
         };
-        const reasonLabel = (key) => (REASON[key] ? REASON[key].label : key || "excluded");
+        const reasonLabel = (key) => adminTr(REASON[key] ? REASON[key].label : key || "excluded");
         const rowBadge = (c) => {
           if (importedInAll(c)) {
             const b = badge("imported", "info");
-            b.title = "Already imported into the selected scope(s): " + (c.importedScopes || []).join(", ");
+            b.title =
+              adminTr("Already imported into the selected scope(s):") + " " + (c.importedScopes || []).join(", ");
             return b;
           }
           if (c.eligible) {
             const b = badge("eligible", "ok");
             if (importedInSome(c))
               b.title =
-                "Imported into " +
+                adminTr("Imported into") +
+                " " +
                 (c.importedScopes || []).join(", ") +
-                " — importing adds it to the other selected scope(s).";
+                " " +
+                adminTr("— importing adds it to the other selected scope(s).");
             return b;
           }
           const b = badge(reasonLabel(c.excludeReason), "warn");
-          if (REASON[c.excludeReason]) b.title = REASON[c.excludeReason].help;
+          if (REASON[c.excludeReason]) b.title = adminTr(REASON[c.excludeReason].help);
           return b;
         };
 
@@ -10080,19 +11006,19 @@
           const names = checks.filter((b) => b.checked).map((b) => b.dataset.name);
           if (!scopes.length) {
             status.className = "status err";
-            status.textContent = "Pick at least one scope to add skills to.";
+            status.textContent = adminTr("Pick at least one scope to add skills to.");
             return;
           }
           if (!names.length) {
             status.className = "status err";
-            status.textContent = "Select at least one skill.";
+            status.textContent = adminTr("Select at least one skill.");
             return;
           }
           importButtons.forEach((b) => {
             b.disabled = true;
           });
           status.className = "status";
-          status.textContent = "Importing…";
+          status.textContent = adminTr("Importing…");
           const allEligible = checks.length === names.length;
           const r2 = await api("POST", "/api/skill-packs/" + encodeURIComponent(s.id) + "/import", {
             selected: allEligible ? "all" : names,
@@ -10103,18 +11029,17 @@
           });
           if (!r2.ok) {
             status.className = "status err";
-            status.textContent = r2.data?.message || "Import failed (" + r2.status + ").";
+            status.textContent = r2.data?.message || adminTr("Import failed") + " (" + r2.status + ").";
             return;
           }
           const added = r2.data.imported?.length ?? 0;
           status.className = "status ok";
           status.textContent =
             "✓ " +
-            added +
-            " skill" +
-            (added === 1 ? "" : "s") +
-            " added" +
-            (scopes.length > 1 ? " across " + scopes.length + " scopes" : "");
+            plural(added, "skill") +
+            " " +
+            adminTr("added") +
+            (scopes.length > 1 ? " " + adminTr("across") + " " + plural(scopes.length, "scope") : "");
           dataCache.clear();
           setTimeout(() => renderData(), 1500);
         };
@@ -10124,7 +11049,7 @@
           const btn = document.createElement("button");
           btn.type = "button";
           btn.className = "primary";
-          btn.textContent = "Import selected";
+          btn.textContent = adminTr("Import selected");
           btn.onclick = () => doImport(status);
           importButtons.push(btn);
 
@@ -10163,14 +11088,15 @@
           for (const key of PILL_ORDER) {
             if (!pillShown(key)) continue;
             const meta = REASON[key] || { label: key, tone: "muted", help: "" };
-            const b = badge(pillCount(key) + " " + meta.label, meta.tone);
+            const b = badge(pillCount(key) + " " + adminTr(meta.label), meta.tone);
             b.style.cursor = "pointer";
             if (activeFilter === key) {
               b.style.background = "var(--text)";
               b.style.color = "#fff";
               b.style.borderColor = "var(--text)";
             }
-            b.title = (meta.help ? meta.help + " " : "") + (key === "all" ? "" : "Click to show only these.");
+            b.title =
+              (meta.help ? adminTr(meta.help) + " " : "") + (key === "all" ? "" : adminTr("Click to show only these."));
             b.onclick = () => {
               activeFilter = key;
               recompute();
@@ -10191,7 +11117,9 @@
             table(
               [headCb, "Skill", ""],
               rows,
-              activeFilter === "all" ? "No skills found in this pack." : "No " + reasonLabel(activeFilter) + " skills.",
+              activeFilter === "all"
+                ? adminTr("No skills found in this pack.")
+                : adminTr("No") + " " + reasonLabel(activeFilter) + " " + adminTr("skills."),
             ),
           );
         };
@@ -10223,7 +11151,7 @@
         const scopeRow = document.createElement("div");
         scopeRow.style.cssText = "display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:2px 0 4px;";
         const scopeLab = document.createElement("span");
-        scopeLab.textContent = "Add to scopes:";
+        scopeLab.textContent = adminTr("Add to scopes:");
         scopeLab.style.cssText = "font-size:12px; opacity:0.7;";
         scopeRow.append(scopeLab, buildScopeMultiSelect(scopeChoices, selectedScopes, recompute));
         box.appendChild(scopeRow);
@@ -10234,9 +11162,10 @@
           const summary = document.createElement("summary");
           summary.textContent =
             bundlePaths.length +
-            " shared pack file" +
-            (bundlePaths.length === 1 ? "" : "s") +
-            " (contained under a pack-owned directory)";
+            " " +
+            adminTr(bundlePaths.length === 1 ? "shared pack file" : "shared pack files") +
+            " " +
+            adminTr("(contained under a pack-owned directory)");
           const pre = document.createElement("pre");
           pre.textContent = bundlePaths.join("\n");
           pre.style.cssText =
@@ -10269,7 +11198,7 @@
         const close = document.createElement("button");
         close.type = "button";
         close.textContent = "✕";
-        close.title = "Close";
+        close.title = adminTr("Close");
         close.setAttribute("aria-label", "Close browse");
         close.style.cssText =
           "position:absolute;top:10px;right:12px;border:none;background:transparent;cursor:pointer;font-size:18px;line-height:1;color:var(--text);opacity:0.55;padding:4px;";
@@ -10293,6 +11222,7 @@
           pageShell({
             back: { label: "← Memory", onClick: () => go({ view: "memory", scope: "org:" + orgId, session: null }) },
             title: orgWideView() ? "Org-wide" : shortName(scope),
+            titleI18n: orgWideView(),
           });
         }
         const server = d.content || "";
@@ -10304,12 +11234,14 @@
         ta.style.minHeight = "340px";
         ta.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, monospace";
         ta.style.fontSize = "12px";
-        ta.placeholder = "No memory stored for this scope yet. Anything you write here, the agent will remember.";
+        ta.placeholder = adminTr(
+          "No memory stored for this scope yet. Anything you write here, the agent will remember.",
+        );
         const foot = document.createElement("div");
         foot.className = "foot";
         const save = document.createElement("button");
         save.className = "primary";
-        save.textContent = "Save";
+        save.textContent = adminTr("Save");
         const st = document.createElement("span");
         st.className = "status";
         st.id = "st-memory";
@@ -10330,9 +11262,10 @@
             memDraftScope = null;
             setStatus("st-memory", "Saved ✓", "ok");
           } else
-            setStatus(
+            setApiStatus(
               "st-memory",
-              r.status === 403 ? "You don't administer this scope." : r.data?.message || "Save failed.",
+              r.status === 403 ? null : r.data?.message,
+              r.status === 403 ? "You don't administer this scope." : "Save failed.",
               "err",
             );
         };
@@ -10357,6 +11290,7 @@
           );
         pageShell({
           title: VIEW_TITLE.memory,
+          titleI18n: true,
           count: written.length ? plural(written.length, "notebook") : "",
           context: written.length && !hasTimestamps ? "sorted by size (this backend keeps no edit history)" : "",
         });
@@ -10505,9 +11439,10 @@
         );
         if (r.ok) renderData();
         else
-          setStatus(
+          setApiStatus(
             "st-users",
-            r.status === 403 ? "Only an org admin may revoke." : r.data?.message || "Revoke failed.",
+            r.status === 403 ? null : r.data?.message,
+            r.status === 403 ? "Only an org admin may revoke." : "Revoke failed.",
             "err",
           );
       }
@@ -10532,7 +11467,7 @@
         if (d.enabled === false) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = "Keychain is not configured for this deployment.";
+          p.textContent = adminTr("Keychain is not configured for this deployment.");
           root.appendChild(
             dataCard(
               "Keychain unavailable",
@@ -10734,13 +11669,13 @@
         };
         const pInput = document.createElement("input");
         pInput.type = "text";
-        pInput.placeholder = "principal id (e.g. U07ABCD)";
+        pInput.placeholder = adminTr("principal id (e.g. U07ABCD)");
         pInput.spellcheck = false;
         pInput.autocapitalize = "none";
         const grantBtn = document.createElement("button");
         grantBtn.className = "primary";
         grantBtn.type = "button";
-        grantBtn.textContent = "Grant";
+        grantBtn.textContent = adminTr("Grant");
         grantBtn.onclick = async () => {
           const principalId = pInput.value.trim();
           if (!principalId) return setStatus("st-users", "Principal id required.", "err");
@@ -10749,9 +11684,10 @@
             pInput.value = "";
             renderData();
           } else
-            setStatus(
+            setApiStatus(
               "st-users",
-              r.status === 403 ? "Only an org admin may grant." : r.data?.message || "Grant failed.",
+              r.status === 403 ? null : r.data?.message,
+              r.status === 403 ? "Only an org admin may grant." : "Grant failed.",
               "err",
             );
         };
@@ -10768,7 +11704,7 @@
         impForm.className = "grant-form";
         const impInput = document.createElement("input");
         impInput.type = "text";
-        impInput.placeholder = "principal id or name (e.g. dana@example.com)";
+        impInput.placeholder = adminTr("principal id or name (e.g. dana@example.com)");
         impInput.spellcheck = false;
         impInput.autocapitalize = "none";
         impInput.setAttribute("list", "imp-suggest");
@@ -10777,13 +11713,13 @@
         const impBtn = document.createElement("button");
         impBtn.className = "primary";
         impBtn.type = "button";
-        impBtn.textContent = "Open web UI as ↗";
+        impBtn.textContent = adminTr("Open web UI as ↗");
         let impTimer = null,
           impSeq = 0;
 
         const dirMembers = async (q) => {
           const r = await api("GET", "/api/directory?q=" + encodeURIComponent(q));
-          if (!r.ok) throw new Error(r.data?.message || "directory lookup failed (" + r.status + ")");
+          if (!r.ok) throw new Error(r.data?.message || `${adminTr("directory lookup failed")} (${r.status})`);
           return r.data?.members || [];
         };
         impInput.addEventListener("input", () => {
@@ -11235,7 +12171,7 @@
         btn.onclick = async (ev) => {
           ev.stopPropagation();
           const ok = await copyText(getText());
-          btn.textContent = ok ? "Copied" : "Copy failed";
+          btn.textContent = adminTr(ok ? "Copied" : "Copy failed");
           if (ok) btn.classList.add("copied");
           setTimeout(() => {
             btn.textContent = label;
@@ -11282,7 +12218,7 @@
           const syncExpanded = () => {
             const expanded = block.classList.contains("expanded");
             card.setAttribute("aria-expanded", String(expanded));
-            card.title = expanded ? "Click to collapse tool text" : "Click to expand tool text";
+            card.title = adminTr(expanded ? "Click to collapse tool text" : "Click to expand tool text");
             if (truncated) card.textContent = expanded ? primaryText : preview;
           };
           card.tabIndex = 0;
@@ -11308,25 +12244,25 @@
           drow.className = "who";
           const dlabel = document.createElement("span");
           dlabel.className = "entry-label important";
-          dlabel.textContent = delivery.shadow ? "Shadow delivery" : "Slack delivery";
+          dlabel.textContent = adminTr(delivery.shadow ? "Shadow delivery" : "Slack delivery");
           drow.appendChild(dlabel);
           if (delivery.shadow) {
             const sb = document.createElement("span");
             sb.className = "entry-label";
-            sb.title = "Recorded for observability — never sent to the human (shadow-mode rollout)";
-            sb.textContent = "not sent";
+            sb.title = adminTr("Recorded for observability — never sent to the human (shadow-mode rollout)");
+            sb.textContent = adminTr("not sent");
             drow.appendChild(sb);
           }
           drow.appendChild(badge(delivery.destination?.type === "principal" ? "Slack DM" : "Slack", "info"));
           const mirror = slackMirrorRef(delivery);
           if (mirror) {
             const ml = navLink("View in Slack mirror ↗", { view: "slack", container: mirror.container, ts: mirror.ts });
-            ml.title = "Jump to this message in the mirrored Slack channel " + mirror.container;
+            ml.title = adminTr("Jump to this message in the mirrored Slack channel " + mirror.container);
             drow.appendChild(ml);
           }
           const dwhen = document.createElement("span");
           dwhen.className = "when";
-          dwhen.textContent = `${delivery.shadow ? "shadow" : "delivered"} · ${fmtTime(delivery.createdAt)}`;
+          dwhen.textContent = `${adminTr(delivery.shadow ? "shadow" : "delivered")} · ${fmtTime(delivery.createdAt)}`;
           drow.appendChild(dwhen);
           const pre = document.createElement("pre");
           const from = delivery.destination?.onBehalfOf ? `from ${delivery.destination.onBehalfOf}\n` : "";
@@ -11400,7 +12336,7 @@
         const root = $("view-data");
         root.textContent = "";
         if (!scopeDir) {
-          pageShell({ title: VIEW_TITLE.history });
+          pageShell({ title: VIEW_TITLE.history, titleI18n: true });
           const loading = document.createElement("div");
           loading.className = "loadingline";
           loading.textContent = scopeDirNote;
@@ -11424,14 +12360,14 @@
         sortControl.className = "shell-sort";
         const sortLabel = document.createElement("span");
         sortLabel.className = "shell-sort-label";
-        sortLabel.textContent = "Sort:";
+        sortLabel.textContent = adminTr("Sort:");
         const seg = document.createElement("div");
         seg.className = "segmented";
         const sortOpt = (value, label) => {
           const b = document.createElement("button");
           b.type = "button";
           b.className = "seg" + (scopeSort === value ? " active" : "");
-          b.textContent = label;
+          b.textContent = adminTr(label);
           b.onclick = () => {
             if (scopeSort !== value) {
               scopeSort = value;
@@ -11445,8 +12381,9 @@
         sortControl.append(sortLabel, seg);
         pageShell({
           title: VIEW_TITLE.history,
+          titleI18n: true,
           count: activeRows.length
-            ? activeRows.length + (activeRows.length === 1 ? " active scope" : " active scopes")
+            ? adminTr(activeRows.length + (activeRows.length === 1 ? " active scope" : " active scopes"))
             : "",
           actions: [sortControl],
         });
@@ -11475,7 +12412,9 @@
           const quiet = document.createElement("details");
           quiet.className = "history-quiet";
           const summary = document.createElement("summary");
-          summary.textContent = `${quietRows.length} known scope${quietRows.length === 1 ? "" : "s"} without conversations`;
+          summary.textContent = adminTr(
+            `${quietRows.length} known scope${quietRows.length === 1 ? "" : "s"} without conversations`,
+          );
           const chips = document.createElement("div");
           chips.className = "history-empty-scopes";
           quietRows.forEach((s) => {
@@ -11571,7 +12510,7 @@
                 document.createTextNode(
                   plural(c.sessions || 0, "fire") +
                     (typeof c.deliveredRuns === "number"
-                      ? ` \u00b7 ${Number(c.deliveredRuns).toLocaleString()} delivered`
+                      ? ` \u00b7 ${Number(c.deliveredRuns).toLocaleString(adminLocaleCode())} delivered`
                       : "") +
                     " \u00b7 first fired " +
                     fmtHistoryCreated(c.createdAt, c.lastActivity),
@@ -11640,7 +12579,7 @@
             note.className = "statline";
             const toggle = document.createElement("a");
             toggle.href = "#";
-            toggle.textContent = plural(total, "error") + " logged in this scope";
+            toggle.textContent = plural(total, "error") + " " + adminTr("logged in this scope");
             note.appendChild(toggle);
             errNote.appendChild(note);
             let box = null;
@@ -11651,7 +12590,7 @@
                 box = null;
                 return;
               }
-              box = errorStripBox(errs, "Most recent errors", 20, (e) => {
+              box = errorStripBox(errs, adminTr("Most recent errors"), 20, (e) => {
                 if (!e.sessionId) return null;
                 const st = { view: "history", scope, session: e.sessionId, historyKind };
                 return { href: stateToUrl(st), go: () => go(st) };
@@ -11678,8 +12617,8 @@
         };
         const info = document.createElement("span");
         info.className = "pageinfo";
-        info.textContent = `${offset + 1}–${Math.min(offset + limit, total)} of ${total}`;
-        wrap.append(btn("← Prev", cur - 1, cur <= 1), info, btn("Next →", cur + 1, cur >= pages));
+        info.textContent = `${offset + 1}–${Math.min(offset + limit, total)} ${adminTr("of")} ${total}`;
+        wrap.append(btn(adminTr("← Prev"), cur - 1, cur <= 1), info, btn(adminTr("Next →"), cur + 1, cur >= pages));
         return wrap;
       }
 
@@ -11689,12 +12628,14 @@
         pageShell({ back: { label: "← Users", onClick: () => history.back() }, title: principalId || "User" });
         const detail = document.createElement("div");
         detail.className = "detail";
-        detail.textContent = "Loading…";
+        detail.textContent = adminTr("Loading…");
         root.appendChild(detail);
         const r = await api("GET", "/api/users/" + encodeURIComponent(principalId));
         if (!r.ok) {
           detail.textContent =
-            r.status === 403 ? "You don't have admin access." : r.data?.message || `Failed to load user (${r.status}).`;
+            r.status === 403
+              ? adminTr("You don't have admin access.")
+              : r.data?.message || `${adminTr("Failed to load user")} (${r.status}).`;
           return;
         }
         detail.textContent = "";
@@ -11825,7 +12766,7 @@
           cfgWrap.appendChild(
             Object.assign(document.createElement("p"), {
               className: "empty",
-              textContent: "Config store not available.",
+              textContent: adminTr("Config store not available."),
             }),
           );
         else {
@@ -11865,23 +12806,25 @@
         const obHint = document.createElement("p");
         obHint.className = "hint";
         function paintOb(status) {
-          obStatusRow.textContent = "Current status: ";
+          obStatusRow.textContent = adminTr("Current status: ");
           obStatusRow.appendChild(badge(OB_LABEL[status] || status, OB_KIND[status] || "muted"));
         }
         async function applyOb(status) {
           obButtons.forEach((b) => (b.disabled = true));
-          obHint.textContent = "Saving…";
+          obHint.textContent = adminTr("Saving…");
           try {
             const r = await api("PUT", "/api/users/" + encodeURIComponent(principalId) + "/onboarding", { status });
             if (!r.ok) {
-              obHint.textContent = r.data?.message || "Failed (" + r.status + ").";
+              obHint.textContent = r.data?.message || `${adminTr("Failed")} (${r.status}).`;
               return;
             }
             paintOb(r.data?.status || status);
             obHint.textContent =
-              status === "not_started" ? "Reset — onboarding will run on this person's next DM." : "Saved.";
+              status === "not_started"
+                ? adminTr("Reset — onboarding will run on this person's next DM.")
+                : adminTr("Saved.");
           } catch {
-            obHint.textContent = "Network error — try again.";
+            obHint.textContent = adminTr("Network error — try again.");
           } finally {
             obButtons.forEach((b) => (b.disabled = false));
           }
@@ -11890,7 +12833,7 @@
           const b = document.createElement("button");
           b.type = "button";
           if (primary) b.className = "primary";
-          b.textContent = label;
+          b.textContent = adminTr(label);
           b.onclick = () => applyOb(status);
           return b;
         };
@@ -11905,29 +12848,31 @@
         const resetBtn = document.createElement("button");
         resetBtn.type = "button";
         resetBtn.className = "danger-link";
-        resetBtn.textContent = "Reset to brand-new (delete this person's DMs) →";
+        resetBtn.textContent = adminTr("Reset to brand-new (delete this person's DMs) →");
         const resetHint = document.createElement("p");
         resetHint.className = "hint";
         resetBtn.onclick = async () => {
           if (
             !confirm(
-              "Delete this person's personal DM sessions — transcripts included — and clear their onboarding?\n\nThis is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.",
+              adminTr(
+                "Delete this person's personal DM sessions — transcripts included — and clear their onboarding?\n\nThis is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.",
+              ),
             )
           )
             return;
           resetBtn.disabled = true;
           obButtons.forEach((b) => (b.disabled = true));
-          resetHint.textContent = "Resetting…";
+          resetHint.textContent = adminTr("Resetting…");
           try {
             const r = await api("POST", "/api/users/" + encodeURIComponent(principalId) + "/reset");
             if (!r.ok) {
-              resetHint.textContent = r.data?.message || "Failed (" + r.status + ").";
+              resetHint.textContent = r.data?.message || `${adminTr("Failed")} (${r.status}).`;
               return;
             }
 
             showUserDetail(principalId);
           } catch {
-            resetHint.textContent = "Network error — try again.";
+            resetHint.textContent = adminTr("Network error — try again.");
           } finally {
             resetBtn.disabled = false;
             obButtons.forEach((b) => (b.disabled = false));
@@ -11949,7 +12894,7 @@
         const manage = document.createElement("button");
         manage.type = "button";
         manage.className = "link";
-        manage.textContent = "Manage in Governance →";
+        manage.textContent = adminTr("Manage in Governance →");
         manage.onclick = () => go({ view: "governance", scope: d.scopeId || "personal:" + principalId, session: null });
         cfgCard.querySelector(".body").appendChild(manage);
         detail.appendChild(cfgCard);
@@ -11958,10 +12903,14 @@
       async function showContextPage(sessionId, turnSeq) {
         const root = $("view-data");
         root.textContent = "";
-        pageShell({ back: { label: "← Back to transcript", onClick: () => history.back() }, title: "Sent to model" });
+        pageShell({
+          back: { label: "← Back to transcript", onClick: () => history.back() },
+          title: "Sent to model",
+          titleI18n: true,
+        });
         const detail = document.createElement("div");
         detail.className = "detail";
-        detail.textContent = "Loading…";
+        detail.textContent = adminTr("Loading…");
         root.appendChild(detail);
 
         const lr = await api(
@@ -11974,23 +12923,26 @@
             encodeURIComponent(scope),
         );
         if (!lr.ok) {
-          detail.textContent = lr.data?.message || `Failed to load context (${lr.status}).`;
+          detail.textContent = lr.data?.message || `${adminTr("Failed to load context")} (${lr.status}).`;
           return;
         }
         const reqs = (lr.data.requests || []).slice().sort((a, b) => (a.step || 0) - (b.step || 0));
-        const turnLabel = turnSeq === "orphan" ? "unattributed context" : `turn #${turnSeq}`;
+        const turnLabel = turnSeq === "orphan" ? adminTr("unattributed context") : `${adminTr("turn")} #${turnSeq}`;
         detail.textContent = "";
         const head = document.createElement("div");
         head.className = "context-page-head";
         const title = document.createElement("h2");
         title.textContent =
-          reqs.length > 1 ? `Sent to model · ${turnLabel} · ${reqs.length} steps` : `Sent to model · ${turnLabel}`;
+          adminTr("Sent to model") +
+          " · " +
+          turnLabel +
+          (reqs.length > 1 ? " · " + adminTr(`${reqs.length} steps`) : "");
         head.appendChild(title);
         if (!reqs.length) {
           detail.appendChild(head);
           const p = document.createElement("p");
           p.className = "context-empty";
-          p.textContent = "No context was captured for this turn.";
+          p.textContent = adminTr("No context was captured for this turn.");
           detail.appendChild(p);
           return;
         }
@@ -12345,7 +13297,10 @@
         if (cont) {
           const g = document.createElement("span");
           g.className = "sm-guttertime";
-          g.textContent = new Date(m.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+          g.textContent = new Date(m.createdAt).toLocaleTimeString(adminLocaleCode(), {
+            hour: "numeric",
+            minute: "2-digit",
+          });
           gutter.appendChild(g);
         } else {
           gutter.appendChild(slackAvatar(m));
@@ -12362,19 +13317,19 @@
           if (m.self) {
             const t = document.createElement("span");
             t.className = "sm-tag sm-tag-agent";
-            t.textContent = "agent";
+            t.textContent = adminTr("agent");
             head.appendChild(t);
           } else if (m.bot) {
             const t = document.createElement("span");
             t.className = "sm-tag";
-            t.textContent = "bot";
+            t.textContent = adminTr("bot");
             head.appendChild(t);
           }
           if (m.sub && m.sub !== m.ts) {
             const t = document.createElement("span");
             t.className = "sm-tag";
-            t.textContent = "↳ thread";
-            t.title = "Reply in the thread rooted at " + m.sub;
+            t.textContent = adminTr("↳ thread");
+            t.title = adminTr("Reply in the thread rooted at " + m.sub);
             head.appendChild(t);
           }
           if (opts.containerLabel) {
@@ -12396,14 +13351,14 @@
         if (m.editedAt) {
           const e = document.createElement("span");
           e.className = "sm-flag";
-          e.textContent = "(edited)";
+          e.textContent = adminTr("(edited)");
           e.title = fmtTime(m.editedAt);
           text.appendChild(e);
         }
         if (m.deleted) {
           const e = document.createElement("span");
           e.className = "sm-flag";
-          e.textContent = "(deleted in Slack)";
+          e.textContent = adminTr("(deleted in Slack)");
           text.appendChild(e);
         }
         body.appendChild(text);
@@ -12425,9 +13380,10 @@
           (container ? "&container=" + encodeURIComponent(container) : "");
         const r = await api("GET", path);
         if (reqId !== slackReq || view !== "slack") return;
-        if (!r.ok) return void root.appendChild(emptyPara(r.data?.message || `Search failed (${r.status}).`));
+        if (!r.ok)
+          return void root.appendChild(emptyPara(r.data?.message || `${adminTr("Search failed")} (${r.status}).`));
         const messages = r.data.messages || [];
-        if (!messages.length) return void root.appendChild(emptyPara("No matches in the mirror."));
+        if (!messages.length) return void root.appendChild(emptyPara(adminTr("No matches in the mirror.")));
         const list = document.createElement("div");
         list.className = "sm-stream";
         for (const m of messages) {
@@ -12445,10 +13401,10 @@
         const root = $("view-data");
         root.textContent = "";
         if (!st.container) {
-          pageShell({ title: "Slack", search: slackSearchBox(null) });
+          pageShell({ title: "Slack", titleI18n: true, search: slackSearchBox(null) });
           const loading = document.createElement("div");
           loading.className = "loadingline";
-          loading.textContent = "Loading Slack mirror...";
+          loading.textContent = adminTr("Loading Slack mirror...");
           root.appendChild(loading);
           const r = await loadSlackContainers();
           if (view !== "slack" || urlToState().container) return;
@@ -12457,13 +13413,13 @@
             return void root.appendChild(
               emptyPara(
                 r.status === 403
-                  ? "Only an org admin can read the Slack mirror."
-                  : r.data?.message || `Failed to load (${r.status}).`,
+                  ? adminTr("Only an org admin can read the Slack mirror.")
+                  : r.data?.message || `${adminTr("Failed to load")} (${r.status}).`,
               ),
             );
           viewLoadedAt.slack = Date.now();
           const containers = slackContainers || [];
-          pageShell({ title: "Slack", count: containers.length, search: slackSearchBox(null) });
+          pageShell({ title: "Slack", titleI18n: true, count: containers.length, search: slackSearchBox(null) });
           root.appendChild(
             denseList(
               containers,
@@ -12472,7 +13428,7 @@
                 return {
                   icon: meta.icon,
                   name: meta.name,
-                  preview: `${Number(c.messageCount).toLocaleString()} mirrored · ${(c.members || []).length} members`,
+                  preview: `${Number(c.messageCount).toLocaleString(adminLocaleCode())} mirrored · ${(c.members || []).length} members`,
                   time: relTime(c.updatedAt),
                   href: stateToUrl({ view: "slack", container: c.container }),
                 };
@@ -12499,7 +13455,7 @@
         });
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Loading messages...";
+        loading.textContent = adminTr("Loading messages...");
         root.appendChild(loading);
         const fetchPage = (before) =>
           api(
@@ -12513,7 +13469,7 @@
         let r = await fetchPage(null);
         if (!r.ok) {
           root.textContent = "";
-          return void root.appendChild(emptyPara(r.data?.message || `Failed to load (${r.status}).`));
+          return void root.appendChild(emptyPara(r.data?.message || `${adminTr("Failed to load")} (${r.status}).`));
         }
         let messages = r.data.messages || [];
         let hasMore = !!r.data.hasMore;
@@ -12532,8 +13488,8 @@
         rawLink.href = "/api/slack-mirror/messages?container=" + encodeURIComponent(container);
         rawLink.target = "_blank";
         rawLink.rel = "noopener";
-        rawLink.textContent = "Raw feed ↗";
-        rawLink.title = "Open the raw mirrored JSON rows for this container in a new tab";
+        rawLink.textContent = adminTr("Raw feed ↗");
+        rawLink.title = adminTr("Open the raw mirrored JSON rows for this container in a new tab");
         rawFeed.appendChild(rawLink);
         root.appendChild(rawFeed);
         const stream = document.createElement("div");
@@ -12544,8 +13500,12 @@
           sep.className = "sm-day";
           sep.textContent =
             dayOf(m) === new Date().toDateString()
-              ? "Today"
-              : new Date(m.createdAt).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+              ? adminTr("Today")
+              : new Date(m.createdAt).toLocaleDateString(adminLocaleCode(), {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                });
           return sep;
         };
 
@@ -12566,14 +13526,15 @@
         };
         const renderInto = (msgs) => {
           stream.textContent = "";
-          if (!msgs.length) return void stream.appendChild(emptyPara("Nothing mirrored for this channel yet."));
+          if (!msgs.length)
+            return void stream.appendChild(emptyPara(adminTr("Nothing mirrored for this channel yet.")));
           buildRows(msgs, stream);
         };
         if (hasMore) {
           const older = document.createElement("button");
           older.type = "button";
           older.className = "load-earlier more";
-          older.textContent = "Load earlier messages";
+          older.textContent = adminTr("Load earlier messages");
           older.onclick = async () => {
             older.disabled = true;
             const prev = await fetchPage(messages[0]?.ts);
@@ -12656,6 +13617,7 @@
         const shell = (extra) =>
           pageShell({
             title: "Judgments",
+            titleI18n: true,
             ...(st.container
               ? {
                   back: { label: "← Judgments", onClick: () => backTo({}) },
@@ -12669,7 +13631,7 @@
         shell({});
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Loading judgments…";
+        loading.textContent = adminTr("Loading judgments…");
         root.appendChild(loading);
         const path =
           "/api/ambient-judgments?decision=" +
@@ -12682,8 +13644,8 @@
           return void root.appendChild(
             emptyPara(
               r.status === 403
-                ? "Only an org admin can read ambient judgments."
-                : r.data?.message || `Failed to load (${r.status}).`,
+                ? adminTr("Only an org admin can read ambient judgments.")
+                : r.data?.message || `${adminTr("Failed to load")} (${r.status}).`,
             ),
           );
         const counts = r.data.counts || { act: 0, ignore: 0, fastlane: 0 };
@@ -12702,7 +13664,8 @@
           })),
         });
         let judgments = r.data.judgments || [];
-        if (!judgments.length) return void root.appendChild(emptyPara("No judgments recorded for this filter yet."));
+        if (!judgments.length)
+          return void root.appendChild(emptyPara(adminTr("No judgments recorded for this filter yet.")));
         const open = (j) =>
           go({ view: "judgments", container: st.container, decision: st.decision, jid: String(j.id) });
         const rowOf = (j) => {
@@ -12711,7 +13674,7 @@
           prev.appendChild(judgmentBadge(j.decision));
           const txt = document.createElement("span");
           txt.className = "pill";
-          txt.textContent = j.reason || (j.decision === "fastlane" ? "@mention — routed past the judge" : "—");
+          txt.textContent = j.reason || (j.decision === "fastlane" ? adminTr("@mention — routed past the judge") : "—");
           prev.appendChild(txt);
           if (j.latencyMs != null) {
             const l = document.createElement("span");
@@ -12737,7 +13700,7 @@
           const more = document.createElement("button");
           more.type = "button";
           more.className = "load-earlier more";
-          more.textContent = "Load earlier judgments";
+          more.textContent = adminTr("Load earlier judgments");
           more.onclick = async () => {
             more.disabled = true;
             const last = judgments[judgments.length - 1];
@@ -12760,7 +13723,7 @@
         const wrap = document.createElement("div");
         const title = document.createElement("div");
         title.className = "judg-pane-title";
-        title.appendChild(document.createTextNode("Slack mirror"));
+        title.appendChild(document.createTextNode(adminTr("Slack mirror")));
         const href = judgmentSlackHref(workspaceUrl, j.container, j.tsFrom);
         if (href) {
           const a = document.createElement("a");
@@ -12768,8 +13731,8 @@
           a.target = "_blank";
           a.rel = "noopener";
           a.className = "judg-extlink";
-          a.setAttribute("aria-label", "Open in Slack");
-          a.title = "Jump to this moment in Slack to scroll up for more context";
+          a.setAttribute("aria-label", adminTr("Open in Slack"));
+          a.title = adminTr("Jump to this moment in Slack to scroll up for more context");
           a.innerHTML =
             '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3.5H3.5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3"/><path d="M9.5 2.5h4v4"/><path d="M7 9 13.5 2.5"/></svg>';
           title.appendChild(a);
@@ -12791,12 +13754,15 @@
           );
           if (view !== "judgments" || urlToState().jid !== String(j.id)) return;
           box.textContent = "";
-          if (!r.ok) return void box.appendChild(emptyPara(r.data?.message || `Failed to load mirror (${r.status}).`));
+          if (!r.ok)
+            return void box.appendChild(
+              emptyPara(r.data?.message || `${adminTr("Failed to load mirror")} (${r.status}).`),
+            );
           const from = j.tsFrom,
             to = j.tsTo;
 
           const messages = (r.data.messages || []).filter((m) => !to || m.ts <= to);
-          if (!messages.length) return void box.appendChild(emptyPara("Nothing mirrored for this window."));
+          if (!messages.length) return void box.appendChild(emptyPara(adminTr("Nothing mirrored for this window.")));
           const stream = document.createElement("div");
           stream.className = "sm-stream";
           for (const m of messages) {
@@ -12813,16 +13779,18 @@
         const wrap = document.createElement("div");
         const title = document.createElement("div");
         title.className = "judg-pane-title";
-        title.textContent = "Judge context";
+        title.textContent = adminTr("Judge context");
         wrap.appendChild(title);
         const box = document.createElement("div");
         box.className = "judg-prompt";
         const pre = document.createElement("pre");
         pre.textContent =
           j.prompt ||
-          (j.decision === "fastlane"
-            ? "Routed past the judge (formal @mention) — no prompt was rendered."
-            : "(prompt not recorded)");
+          adminTr(
+            j.decision === "fastlane"
+              ? "Routed past the judge (formal @mention) — no prompt was rendered."
+              : "(prompt not recorded)",
+          );
         box.appendChild(pre);
         wrap.appendChild(box);
         return wrap;
@@ -12834,20 +13802,22 @@
           label: "← Judgments",
           onClick: () => go({ view: "judgments", container: st.container, decision: st.decision, jid: null }),
         };
-        pageShell({ back, title: "Judgment" });
+        pageShell({ back, title: "Judgment", titleI18n: true });
         const detail = document.createElement("div");
         detail.className = "detail judg-detail";
-        detail.textContent = "Loading…";
+        detail.textContent = adminTr("Loading…");
         root.appendChild(detail);
         const r = await api("GET", "/api/ambient-judgments?id=" + encodeURIComponent(st.jid));
         if (view !== "judgments" || urlToState().jid !== st.jid) return;
         detail.textContent = "";
-        if (!r.ok) return void detail.appendChild(emptyPara(r.data?.message || `Failed to load (${r.status}).`));
+        if (!r.ok)
+          return void detail.appendChild(emptyPara(r.data?.message || `${adminTr("Failed to load")} (${r.status}).`));
         const j = r.data.judgment;
         const scopeGo = slackContainerScope(j.container);
         pageShell({
           back,
           title: "Judgment",
+          titleI18n: true,
           context: slackContainerLabel(j.container),
           contextGo: { view: "slack", container: j.container, ts: j.tsFrom },
           actions: scopeGo ? [navLink("Governance →", { view: "governance", scope: scopeGo, session: null })] : [],
@@ -12862,7 +13832,7 @@
         const head = document.createElement("div");
         head.className = "badges";
         head.appendChild(judgmentBadge(j.decision));
-        if (j.askedBy) head.appendChild(badge("asked by " + j.askedBy, "accent"));
+        if (j.askedBy) head.appendChild(badge(`${adminTr("asked by")} ${j.askedBy}`, "accent"));
         const meta = document.createElement("span");
         meta.className = "shell-context";
         meta.textContent = [j.model, j.latencyMs != null ? j.latencyMs + "ms" : null, fmtTime(j.createdAt)]
@@ -12872,8 +13842,8 @@
         dec.appendChild(head);
         const p = document.createElement("p");
         let reason = "—";
-        if (j.decision === "ignore") reason = "Stayed silent.";
-        else if (j.decision === "fastlane") reason = "@mention — routed past the judge.";
+        if (j.decision === "ignore") reason = adminTr("Stayed silent.");
+        else if (j.decision === "fastlane") reason = adminTr("@mention — routed past the judge.");
         p.textContent = j.reason || reason;
         dec.appendChild(p);
         detail.appendChild(dec);
@@ -12917,6 +13887,7 @@
         const shell = (extra) =>
           pageShell({
             title: "Ack emoji",
+            titleI18n: true,
             ...(st.container
               ? {
                   back: {
@@ -12937,7 +13908,7 @@
         shell({});
         const loading = document.createElement("div");
         loading.className = "loadingline";
-        loading.textContent = "Loading ack-emoji picks…";
+        loading.textContent = adminTr("Loading ack-emoji picks…");
         root.appendChild(loading);
         const path =
           "/api/ack-emoji-picks?" +
@@ -12950,8 +13921,8 @@
           return void root.appendChild(
             emptyPara(
               r.status === 403
-                ? "Only an org admin can read ack-emoji picks."
-                : r.data?.message || `Failed to load (${r.status}).`,
+                ? adminTr("Only an org admin can read ack-emoji picks.")
+                : r.data?.message || `${adminTr("Failed to load")} (${r.status}).`,
             ),
           );
         const counts = r.data.counts || { picked: 0, declined: 0 };
@@ -12964,7 +13935,8 @@
           })),
         });
         let picks = r.data.picks || [];
-        if (!picks.length) return void root.appendChild(emptyPara("No ack-emoji picks recorded for this filter yet."));
+        if (!picks.length)
+          return void root.appendChild(emptyPara(adminTr("No ack-emoji picks recorded for this filter yet.")));
         const open = (p) => go({ view: "ackemoji", container: st.container, decision: st.decision, jid: String(p.id) });
         const rowOf = (p) => {
           const prev = document.createElement("span");
@@ -12998,7 +13970,7 @@
           const more = document.createElement("button");
           more.type = "button";
           more.className = "load-earlier more";
-          more.textContent = "Load earlier picks";
+          more.textContent = adminTr("Load earlier picks");
           more.onclick = async () => {
             more.disabled = true;
             const last = picks[picks.length - 1];
@@ -13019,20 +13991,22 @@
           label: "← Ack emoji",
           onClick: () => go({ view: "ackemoji", container: st.container, decision: st.decision, jid: null }),
         };
-        pageShell({ back, title: "Ack emoji" });
+        pageShell({ back, title: "Ack emoji", titleI18n: true });
         const detail = document.createElement("div");
         detail.className = "detail judg-detail";
-        detail.textContent = "Loading…";
+        detail.textContent = adminTr("Loading…");
         root.appendChild(detail);
         const r = await api("GET", "/api/ack-emoji-picks?id=" + encodeURIComponent(st.jid));
         if (view !== "ackemoji" || urlToState().jid !== st.jid) return;
         detail.textContent = "";
-        if (!r.ok) return void detail.appendChild(emptyPara(r.data?.message || `Failed to load (${r.status}).`));
+        if (!r.ok)
+          return void detail.appendChild(emptyPara(r.data?.message || `${adminTr("Failed to load")} (${r.status}).`));
         const p = r.data.pick;
         const href = judgmentSlackHref(r.data.workspaceUrl, p.channel, p.ts);
         pageShell({
           back,
           title: "Ack emoji",
+          titleI18n: true,
           context: slackContainerLabel(p.channel),
           contextGo: { view: "slack", container: p.channel, ts: p.ts },
         });
@@ -13053,24 +14027,24 @@
           a.target = "_blank";
           a.rel = "noopener";
           a.className = "judg-extlink";
-          a.textContent = "Open in Slack ↗";
+          a.textContent = adminTr("Open in Slack ↗");
           head.appendChild(a);
         }
         dec.appendChild(head);
         const msgTitle = document.createElement("div");
         msgTitle.className = "judg-pane-title";
-        msgTitle.textContent = "Message";
+        msgTitle.textContent = adminTr("Message");
         detail.appendChild(dec);
         detail.appendChild(msgTitle);
         const msg = document.createElement("div");
         msg.className = "judg-prompt";
         const mpre = document.createElement("pre");
-        mpre.textContent = p.message || "(not recorded)";
+        mpre.textContent = p.message || adminTr("(not recorded)");
         msg.appendChild(mpre);
         detail.appendChild(msg);
         const candTitle = document.createElement("div");
         candTitle.className = "judg-pane-title";
-        candTitle.textContent = "Candidate slate";
+        candTitle.textContent = adminTr("Candidate slate");
         detail.appendChild(candTitle);
         const cand = document.createElement("div");
         cand.className = "badges";
@@ -13079,7 +14053,7 @@
           if (name === p.picked) tag.classList.add("accent");
           cand.appendChild(tag);
         }
-        if (!(p.candidates || "").trim()) cand.appendChild(emptyPara("(candidate slate not recorded)"));
+        if (!(p.candidates || "").trim()) cand.appendChild(emptyPara(adminTr("(candidate slate not recorded)")));
         detail.appendChild(cand);
       }
       async function showTranscript(sessionId, limit, expand) {
@@ -13090,12 +14064,13 @@
         pageShell({
           back: { label: "← Conversations", onClick: () => history.back() },
           title: "Conversation",
+          titleI18n: true,
           context: shortName(scope),
         });
         renderTranscriptHeaderControls(() => applyTranscriptControls());
         const detail = document.createElement("div");
         detail.className = "detail";
-        detail.textContent = "Loading…";
+        detail.textContent = adminTr("Loading…");
         root.appendChild(detail);
 
         const llmPromise = api(
@@ -13112,7 +14087,7 @@
             reqLimit,
         );
         if (!r.ok) {
-          detail.textContent = r.data?.message || `Failed to load transcript (${r.status}).`;
+          detail.textContent = r.data?.message || `${adminTr("Failed to load transcript")} (${r.status}).`;
           return;
         }
         detail.textContent = "";
@@ -13160,7 +14135,7 @@
         if (!entries.length && !deliveryEvents.length) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = "No entries.";
+          p.textContent = adminTr("No entries.");
           detail.appendChild(p);
           return;
         }
@@ -13304,7 +14279,7 @@
           const link = document.createElement("button");
           link.type = "button";
           link.className = "link";
-          link.textContent = "View cron";
+          link.textContent = adminTr("View cron");
           link.onclick = () =>
             go({
               view: "crons",
@@ -13322,7 +14297,9 @@
             link.type = "button";
             link.className = "origin-link";
             link.textContent = label;
-            link.title = `Open origin session ${shortId(event.sourceSession.id)} · ${provenance?.fireKey || event.idempotencyKey || ""}`;
+            link.title = adminTr(
+              `Open origin session ${shortId(event.sourceSession.id)} · ${provenance?.fireKey || event.idempotencyKey || ""}`,
+            );
             link.onclick = () => go({ view: "history", scope, session: event.sourceSession.id });
             return link;
           }
@@ -13336,7 +14313,7 @@
           const link = document.createElement("button");
           link.type = "button";
           link.className = "link";
-          link.textContent = "View cron";
+          link.textContent = adminTr("View cron");
           const cron = event.origin.cron || null;
           link.onclick = () =>
             go({ view: "crons", scope: cron?.ownerScopeId || scope, session: null, cron: event.origin.cronId });
@@ -13352,8 +14329,10 @@
             const open = !panel.classList.contains("collapsed");
             btn.classList.toggle("active", open);
             btn.setAttribute("aria-expanded", String(open));
-            btn.setAttribute("aria-label", (open ? "Hide" : "Show") + " context");
-            btn.title = `${open ? "Hide" : "Show"} context · ${requests.length} request${requests.length === 1 ? "" : "s"}`;
+            btn.setAttribute("aria-label", adminTr((open ? "Hide" : "Show") + " context"));
+            btn.title = adminTr(
+              `${open ? "Hide" : "Show"} context · ${requests.length} request${requests.length === 1 ? "" : "s"}`,
+            );
           };
           btn.onclick = () => {
             panel.classList.toggle("collapsed");
@@ -13369,8 +14348,8 @@
           btn.className = "context-icon";
           btn.innerHTML =
             '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5c-2.1 0-3.7 1.3-3.7 3.1 0 .2 0 .4.1.6A3.6 3.6 0 0 0 6 11.5c0 1 .4 2 1.1 2.6-.1.3-.1.5-.1.8 0 2 1.8 3.6 4 3.6h1.9c2.2 0 4-1.6 4-3.6 0-.3 0-.6-.1-.8.7-.7 1.1-1.6 1.1-2.6 0-1.5-.9-2.8-2.3-3.3 0-.2.1-.4.1-.6 0-1.8-1.6-3.1-3.7-3.1Z"/><path d="M9.2 9.2c.9.1 1.6.6 2 1.4"/><path d="M14.8 9.2c-.9.1-1.6.6-2 1.4"/><path d="M12 10.7v7.8"/></svg>';
-          btn.setAttribute("aria-label", "View context sent to the model");
-          btn.title = `View context sent to the model · ${count} request${count === 1 ? "" : "s"}`;
+          btn.setAttribute("aria-label", adminTr("View context sent to the model"));
+          btn.title = adminTr(`View context sent to the model · ${count} request${count === 1 ? "" : "s"}`);
           btn.onclick = (ev) => {
             ev.stopPropagation();
             go({ view: "history", scope, session: sessionId, turn: turnSeq });
@@ -13475,7 +14454,7 @@
           };
           row.tabIndex = 0;
           row.setAttribute("role", "button");
-          row.title = "Toggle full tool card";
+          row.title = adminTr("Toggle full tool card");
           row.onclick = (ev) => {
             if (ev.target.closest(".copy")) return;
             block.classList.toggle("open");
@@ -13503,7 +14482,7 @@
             who.className = "who";
             const role = document.createElement("span");
             role.className = "role";
-            role.textContent = "captured context";
+            role.textContent = adminTr("captured context");
             who.append(contextNavButton("orphan", unit.reqs.length), role);
             block.appendChild(who);
             return { node: block, meta: null };
@@ -13521,20 +14500,20 @@
             let deliveryLabel = "Delivery event";
             if (event.shadow) deliveryLabel = "Shadow delivery";
             else if (slackDelivery) deliveryLabel = "Slack delivery";
-            label.textContent = deliveryLabel;
+            label.textContent = adminTr(deliveryLabel);
             const when = document.createElement("span");
             when.className = "when";
             let deliveryState = "delivery";
             if (event.shadow) deliveryState = "shadow";
             else if (slackDelivery) deliveryState = "delivered";
-            when.textContent = `${deliveryState} · ${fmtTime(event.createdAt)}`;
+            when.textContent = `${adminTr(deliveryState)} · ${fmtTime(event.createdAt)}`;
             const text = event.text || "";
             who.append(label);
             if (event.shadow) {
               const sb = document.createElement("span");
               sb.className = "entry-label";
-              sb.title = "Recorded for observability — never sent to the human (shadow-mode rollout)";
-              sb.textContent = "not sent";
+              sb.title = adminTr("Recorded for observability — never sent to the human (shadow-mode rollout)");
+              sb.textContent = adminTr("not sent");
               who.append(sb);
             }
             if (slackDelivery)
@@ -13550,7 +14529,7 @@
                 container: mirror.container,
                 ts: mirror.ts,
               });
-              ml.title = "Jump to this message in the mirrored Slack channel " + mirror.container;
+              ml.title = adminTr("Jump to this message in the mirrored Slack channel " + mirror.container);
               who.appendChild(ml);
             }
             let contextPanel = null;
@@ -13621,8 +14600,8 @@
               const open = !block.classList.contains("collapsed");
               tog.textContent = open ? "▾" : "▸";
               tog.setAttribute("aria-expanded", String(open));
-              tog.setAttribute("aria-label", open ? "Collapse entry" : "Expand entry");
-              tog.title = open ? "Collapse entry" : "Expand entry";
+              tog.setAttribute("aria-label", adminTr(open ? "Collapse entry" : "Expand entry"));
+              tog.title = adminTr(open ? "Collapse entry" : "Expand entry");
             };
             syncDisclosure = sync;
             tog.onclick = () => {
@@ -13676,7 +14655,7 @@
         const sentinel = document.createElement("div");
         sentinel.className = "load-earlier";
         sentinel.setAttribute("aria-hidden", "true");
-        sentinel.textContent = "Loading earlier messages…";
+        sentinel.textContent = adminTr("Loading earlier messages…");
         stream.appendChild(sentinel);
         let firstRendered = units.length;
 
@@ -13688,7 +14667,7 @@
           }
           sentinel.classList.add("more");
           sentinel.removeAttribute("aria-hidden");
-          sentinel.textContent = "Load earlier messages";
+          sentinel.textContent = adminTr("Load earlier messages");
           sentinel.setAttribute("role", "button");
           sentinel.tabIndex = 0;
           const load = () => showTranscript(sessionId, reqLimit * 4, true);
@@ -13723,7 +14702,7 @@
         function pauseFilteredReveal() {
           sentinel.classList.add("more");
           sentinel.removeAttribute("aria-hidden");
-          sentinel.textContent = "Load earlier messages";
+          sentinel.textContent = adminTr("Load earlier messages");
           sentinel.setAttribute("role", "button");
           sentinel.tabIndex = 0;
           sentinel.onclick = revealEarlier;
@@ -13741,7 +14720,7 @@
           sentinel.setAttribute("aria-hidden", "true");
           sentinel.removeAttribute("role");
           sentinel.removeAttribute("tabindex");
-          sentinel.textContent = "Loading earlier messages…";
+          sentinel.textContent = adminTr("Loading earlier messages…");
           sentinel.onclick = null;
           sentinel.onkeydown = null;
           const from = snapStart(Math.max(0, firstRendered - RENDER_WINDOW));
@@ -13791,11 +14770,11 @@
         return n ? Math.max(1, Math.round(n / 4)) : 0;
       }
       function fmtTokens(n) {
-        if (!n) return "0 tokens";
-        if (n < 20) return "< 20 tokens";
-        if (n < 1000) return n.toLocaleString() + " tokens";
-        if (n < 1000000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k tokens";
-        return (n / 1000000).toFixed(1) + "m tokens";
+        if (!n) return adminTr("0 tokens");
+        if (n < 20) return adminLocale === "zh-CN" ? "< 20 个令牌" : "< 20 tokens";
+        if (n < 1000) return adminTr(n.toLocaleString(adminLocaleCode()) + " tokens");
+        if (n < 1000000) return adminTr((n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k tokens");
+        return adminTr((n / 1000000).toFixed(1) + "m tokens");
       }
 
       function blockText(o) {
@@ -13875,29 +14854,36 @@
         }
         const sys = systemToText(req.system);
         const sections = [
-          { key: "transport", label: "Transport", note: "model + headers", text: transportText(transport) },
+          {
+            key: "transport",
+            label: adminTr("Transport"),
+            note: adminTr("model + headers"),
+            text: transportText(transport),
+          },
           {
             key: "system",
-            label: "System prompt",
-            note: sys.cacheSplit ? "verbatim · cache split shown" : "verbatim",
+            label: adminTr("System prompt"),
+            note: adminTr(sys.cacheSplit ? "verbatim · cache split shown" : "verbatim"),
             text: sys.text,
           },
           {
             key: "messages",
-            label: "Messages",
-            note: messages.length + " message" + (messages.length === 1 ? "" : "s"),
+            label: adminTr("Messages"),
+            note: adminTr(messages.length + " message" + (messages.length === 1 ? "" : "s")),
             text: messages.map(messageEntryText).join("\n\n"),
           },
           {
             key: "tools",
-            label: "Tool schemas",
-            note: Array.isArray(req.tools) ? req.tools.length + " tool" + (req.tools.length === 1 ? "" : "s") : "tools",
+            label: adminTr("Tool schemas"),
+            note: adminTr(
+              Array.isArray(req.tools) ? req.tools.length + " tool" + (req.tools.length === 1 ? "" : "s") : "tools",
+            ),
             text: req.tools == null ? "" : stringify(req.tools),
           },
           {
             key: "params",
-            label: "Request params",
-            note: Object.keys(params).length + " field" + (Object.keys(params).length === 1 ? "" : "s"),
+            label: adminTr("Request params"),
+            note: adminTr(Object.keys(params).length + " field" + (Object.keys(params).length === 1 ? "" : "s")),
             text: Object.keys(params).length ? stringify(params) : "",
           },
         ].filter((s) => s.text);
@@ -13916,7 +14902,7 @@
         const meta = document.createElement("span");
         meta.textContent = fmtTokens(section.tokens) + (section.note ? " · " + section.note : "");
         const pre = document.createElement("pre");
-        pre.textContent = section.text || "(empty)";
+        pre.textContent = section.text || adminTr("(empty)");
         head.append(title, meta);
         wrap.append(head, pre);
         return wrap;
@@ -13936,7 +14922,7 @@
         const stack = document.createElement("div");
         stack.className = "context-stack";
         stack.setAttribute("role", "group");
-        stack.setAttribute("aria-label", label);
+        stack.setAttribute("aria-label", adminTr(label));
         const buttons = [];
         sections.forEach((s) => {
           const segment = document.createElement("button");
@@ -14014,8 +15000,8 @@
         if (!u) return [];
         const ratio = cacheHitRatio(u);
         const miss = isStablePrefixMiss(u);
-        const out = [metaChip("cache " + (ratio === null ? "—" : fmtPct(ratio)), miss ? "danger" : "")];
-        if (miss) out.push(metaChip("stable-prefix miss", "danger"));
+        const out = [metaChip(adminTr("cache") + " " + (ratio === null ? "—" : fmtPct(ratio)), miss ? "danger" : "")];
+        if (miss) out.push(metaChip(adminTr("stable-prefix miss"), "danger"));
         return out;
       }
 
@@ -14030,7 +15016,7 @@
         const wrap = document.createDocumentFragment();
         const lbl = document.createElement("span");
         lbl.className = "seg-label";
-        lbl.textContent = label + " ";
+        lbl.textContent = adminTr(label) + " ";
         wrap.append(lbl, span);
         return wrap;
       }
@@ -14066,7 +15052,7 @@
         a.href = "#";
         a.target = "_blank";
         a.rel = "noopener";
-        a.textContent = label;
+        a.textContent = adminTr(label);
 
         let url = null;
         a.addEventListener("click", () => {
@@ -14087,7 +15073,7 @@
           const head = document.createElement("div");
           head.className = "context-request-head";
           const title = document.createElement("strong");
-          title.textContent = "Request " + (i + 1);
+          title.textContent = adminTr("Request " + (i + 1));
           const meta = document.createElement("span");
           meta.textContent = (q.model || "?") + " · " + fmtContextSize(q, sections);
           head.append(title, meta);
@@ -14096,7 +15082,7 @@
         if (q.truncated) {
           const note = document.createElement("p");
           note.className = "context-note";
-          note.textContent = "Stored payload was truncated.";
+          note.textContent = adminTr("Stored payload was truncated.");
           wrap.appendChild(note);
         }
         const renderedOverview = contextOverview(sections, "request context", (section, button, buttons) => {
@@ -14117,15 +15103,15 @@
         tog.className = "disclosure";
         const role = document.createElement("span");
         role.className = "role";
-        role.textContent = "sent to model";
+        role.textContent = adminTr("sent to model");
         const latest = requests[requests.length - 1] || { request: {} };
         const latestSections = opts.latestSections || contextSections(latest.request, latest.transport);
         const sync = () => {
           const open = !block.classList.contains("collapsed");
           tog.textContent = open ? "▾" : "▸";
           tog.setAttribute("aria-expanded", String(open));
-          tog.setAttribute("aria-label", open ? "Collapse model context" : "Expand model context");
-          tog.title = open ? "Collapse model context" : "Expand model context";
+          tog.setAttribute("aria-label", adminTr(open ? "Collapse model context" : "Expand model context"));
+          tog.title = adminTr(open ? "Collapse model context" : "Expand model context");
         };
         tog.onclick = () => {
           block.classList.toggle("collapsed");
@@ -14174,7 +15160,9 @@
         );
         const noMatch = document.createElement("p");
         noMatch.className = "empty hidden";
-        noMatch.textContent = capped ? "No files match — only the newest 2,000 are searched." : "No files match.";
+        noMatch.textContent = adminTr(
+          capped ? "No files match — only the newest 2,000 are searched." : "No files match.",
+        );
 
         let scopeWrap = null;
         if (index) {
@@ -14189,7 +15177,9 @@
           if (capped) {
             const note = document.createElement("p");
             note.className = "empty";
-            note.textContent = "Only the newest 2,000 files are indexed — a scope with only older files won't appear.";
+            note.textContent = adminTr(
+              "Only the newest 2,000 files are indexed — a scope with only older files won't appear.",
+            );
             scopeWrap.appendChild(note);
           }
         }
@@ -14238,7 +15228,7 @@
             box.appendChild(img);
           } else {
             box.textContent = "img";
-            box.title = "Large image — click to preview full size";
+            box.title = adminTr("Large image — click to preview full size");
           }
         }
         return box;
@@ -14247,7 +15237,7 @@
         if (!f.openable) return;
         const check = await api("GET", "/api/files/read?id=" + encodeURIComponent(f.id));
         if (!check.ok) {
-          alert(check.data?.message || `Couldn't open file (${check.status}).`);
+          alert(check.data?.message || `${adminTr("Couldn't open file")} (${check.status}).`);
           return;
         }
         const href = API_BASE + "/api/files/download?id=" + encodeURIComponent(f.id);

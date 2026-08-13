@@ -1,4 +1,5 @@
-import { html, nothing, render, type TemplateResult } from "lit";
+import { nothing, render, type TemplateResult } from "lit";
+import { html, t } from "./i18n.ts";
 import { ref } from "lit/directives/ref.js";
 import { Binoculars, Cog, Expand, Maximize2, Plus, Shrink, X } from "lucide";
 import {
@@ -543,8 +544,15 @@ function zoneTpl(edge: DropEdge, label: string, onDrop: () => void): TemplateRes
     e.preventDefault();
     onDrop();
   };
-  return html`<div class="split-zone zone-${edge}" @dragover=${over} @dragleave=${leave} @drop=${drop}>
-    <span>${label}</span>
+  return html`<div
+    class="split-zone zone-${edge}"
+    title=${t(label)}
+    aria-label=${t(label)}
+    @dragover=${over}
+    @dragleave=${leave}
+    @drop=${drop}
+  >
+    <span>${t(label)}</span>
   </div>`;
 }
 
@@ -638,8 +646,8 @@ function paneSession(panel: IDockviewPanel): CoreSession | undefined {
 function paneTitle(panel: IDockviewPanel): string {
   const session = paneSession(panel);
   if (session) return sessionTitle(session);
-  if (panelParams(panel).sessionId) return "Conversation";
-  return "New session";
+  if (panelParams(panel).sessionId) return t("Conversation");
+  return t("New session");
 }
 
 function paneIsWorking(panel: IDockviewPanel): boolean {
@@ -915,8 +923,8 @@ class GroupActions implements IHeaderActionsRenderer {
           html`<button
             class="icon-btn subtle${b.cls ?? ""}"
             type="button"
-            title=${b.label}
-            aria-label=${b.label}
+            title=${t(b.label)}
+            aria-label=${t(b.label)}
             @click=${b.run}
           >
             ${b.glyph}

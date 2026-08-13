@@ -1,4 +1,5 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
+import { html, t } from "./i18n.ts";
 
 export interface ForkOriginView {
   title: string;
@@ -85,10 +86,12 @@ export function forkOriginView(view: ForkOriginView | null): TemplateResult | ty
   if (!view) return nothing;
   return html`<div class="fork-origin-row">
     <button class="fork-origin-badge" type="button" @click=${view.navigate}>
-      ${view.icon ?? nothing}<span>Forked from ${view.title}</span>${
-        view.messageCount ? html`<span>· ${view.messageCount} messages</span>` : nothing
+      ${view.icon ?? nothing}<span>${t("Forked from")} ${view.title}</span>${
+        view.messageCount ? html`<span>· ${t(`${view.messageCount} messages`)}</span>` : nothing
       }
     </button>
-    <button class="fork-origin-toggle" type="button" @click=${view.toggle}>${view.expanded ? "hide" : "show"}</button>
+    <button class="fork-origin-toggle" type="button" @click=${view.toggle}>
+      ${t(view.expanded ? "hide" : "show")}
+    </button>
   </div>`;
 }

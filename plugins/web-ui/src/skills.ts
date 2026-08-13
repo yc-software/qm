@@ -1,4 +1,5 @@
-import { html, nothing, render, type TemplateResult } from "lit";
+import { nothing, render, type TemplateResult } from "lit";
+import { html, t } from "./i18n.ts";
 import { Box } from "lucide";
 import { api, type CoreContext } from "./core-bridge";
 import type { SkillItem } from "./composer";
@@ -70,12 +71,12 @@ let flowFocusTarget: HTMLElement | null = null;
 let archiveFocusTarget: HTMLElement | null = null;
 
 function scopeLabel(scope: string): string {
-  return scope ? scope.charAt(0).toUpperCase() + scope.slice(1) : "";
+  return scope ? t(scope.charAt(0).toUpperCase() + scope.slice(1)) : "";
 }
 
 function editAudience(scopeId: string | undefined): string {
-  if (scopeId?.startsWith("personal:")) return "only you";
-  return scopeId ? scopeTitle(scopeId) : "this context";
+  if (scopeId?.startsWith("personal:")) return t("only you");
+  return scopeId ? scopeTitle(scopeId) : t("this context");
 }
 
 async function startEdit(s: SkillItem): Promise<void> {
@@ -87,7 +88,7 @@ async function startEdit(s: SkillItem): Promise<void> {
   editing = null;
   editingTarget = s;
   editError = "";
-  skillsNotice = "Loading skill instructions…";
+  skillsNotice = t("Loading skill instructions…");
   drawSkills();
   queueMicrotask(() => skillsPageHost?.querySelector<HTMLElement>(".context-back")?.focus());
   try {
@@ -167,7 +168,7 @@ function startCreate(): void {
 }
 
 function skillMeta(s: SkillItem): string {
-  const source = s.source === "pack" ? `Pack ${s.pack?.upstreamName ?? "source"}` : "Created here";
+  const source = s.source === "pack" ? `${t("Pack")} ${s.pack?.upstreamName ?? t("source")}` : t("Created here");
   return `${scopeLabel(s.scope)} · v${s.version ?? 1} · ${source}`;
 }
 
@@ -186,7 +187,7 @@ function skillVariant(s: SkillItem, hasScopeVariants: boolean): TemplateResult {
       <div class="skill-variant-copy">
         <div class="skill-variant-description" title=${s.description}>${s.description}</div>
         <div class="skill-variant-meta">
-          ${skillMeta(s)}${s.assetCount ? ` · ${s.assetCount} asset${s.assetCount === 1 ? "" : "s"}` : ""}
+          ${skillMeta(s)}${s.assetCount ? ` · ${t(`${s.assetCount} asset${s.assetCount === 1 ? "" : "s"}`)}` : ""}
         </div>
         <details class="skill-variant-details">
           <summary>Details</summary>
@@ -198,13 +199,13 @@ function skillVariant(s: SkillItem, hasScopeVariants: boolean): TemplateResult {
             </div>
             <div>
               <dt>Capabilities</dt>
-              <dd>${s.requiredCapabilities?.length ? s.requiredCapabilities.join(", ") : "None required"}</dd>
+              <dd>${s.requiredCapabilities?.length ? s.requiredCapabilities.join(", ") : t("None required")}</dd>
             </div>
           </dl>
         </details>
       </div>
       <div class="skill-variant-state">
-        <span class="badge ${archived ? "" : "skill-active"}">${state}</span>
+        <span class="badge ${archived ? "" : "skill-active"}">${t(state)}</span>
         ${actions.edit && !archived ? html`<button class="btn skill-edit-trigger" data-skill-id=${s.id ?? ""} type="button" ?disabled=${deleting === s.id} @click=${() => void startEdit(s)}>Edit</button>` : nothing}
         ${
           actions.delete
@@ -215,7 +216,7 @@ function skillVariant(s: SkillItem, hasScopeVariants: boolean): TemplateResult {
                 ?disabled=${deleting === s.id}
                 @click=${(event: Event) => void deleteSkill(s, event.currentTarget as HTMLElement)}
               >
-                ${archiveLabel}
+                ${t(archiveLabel)}
               </button>`
             : nothing
         }
@@ -230,7 +231,7 @@ function skillGroup(name: string, skills: SkillItem[]): TemplateResult {
   return html`<section class="skill-group">
     <div class="skill-group-head">
       <h2 class="skill-group-name">
-        <code>/${name}</code>${skills.length > 1 ? html`<span>${skills.length} variants</span>` : nothing}
+        <code>/${name}</code>${skills.length > 1 ? html`<span>${t(`${skills.length} variants`)}</span>` : nothing}
       </h2>
       ${hasScopeVariants ? html`<span class="skill-precedence">Narrower scope takes precedence where both apply</span>` : nothing}
     </div>
@@ -246,7 +247,7 @@ function editorPane() {
       <div class="skill-form-heading">
         <div>
           <h1 class="pane-title">Edit /${editingTarget?.name ?? "skill"}</h1>
-          <p>${editError ? "Instructions unavailable." : "Loading instructions…"}</p>
+          <p>${t(editError ? "Instructions unavailable." : "Loading instructions…")}</p>
         </div>
       </div>
       ${editError ? html`<div class="form-error" role="alert">${editError}</div>` : nothing}
@@ -305,11 +306,11 @@ function editorPane() {
       ${
         reviewed
           ? html`<div class="skill-impact" role="alert">
-              <strong>Publish this change to ${scopeTitle(e.scopeId ?? null)}?</strong>
+              <strong>${t("Publish this change to")} ${scopeTitle(e.scopeId ?? null)}?</strong>
               <div class="card-meta">
-                Everyone in this context can invoke the updated instructions. Description
-                ${e.description === e.originalDescription ? "unchanged" : "changed"}; instructions
-                ${e.body === e.originalBody ? "unchanged" : "changed"}.
+                Everyone in this context can invoke the updated instructions. ${t("Description")}
+                ${t(e.description === e.originalDescription ? "unchanged" : "changed")}; ${t("instructions")}
+                ${t(e.body === e.originalBody ? "unchanged" : "changed")}.
               </div>
             </div>`
           : nothing
@@ -323,7 +324,7 @@ function editorPane() {
             if (shouldBlockRepeatedPublishClick(reviewed, event.detail)) event.preventDefault();
           }}
         >
-          ${saveLabel}
+          ${t(saveLabel)}
         </button>
         ${
           reviewed
@@ -434,7 +435,7 @@ function creatorPane() {
       ${
         reviewed
           ? html`<div class="skill-impact" role="alert">
-              <strong>Publish /${c.name.trim()} to ${scopeTitle(c.scopeId)}?</strong>
+              <strong>${t("Publish")} /${c.name.trim()} ${t("to")} ${scopeTitle(c.scopeId)}?</strong>
               <div class="card-meta">Everyone in this context can invoke and edit these instructions.</div>
             </div>`
           : nothing
@@ -448,7 +449,7 @@ function creatorPane() {
             if (shouldBlockRepeatedPublishClick(reviewed, event.detail)) event.preventDefault();
           }}
         >
-          ${createLabel}
+          ${t(createLabel)}
         </button>
         ${
           reviewed
@@ -536,7 +537,7 @@ function drawSkills(loading = false): void {
                     drawSkills();
                   }}
                 >
-                  ${label}<span>${count}</span>
+                  ${t(label)}<span>${count}</span>
                 </button>`,
             )}
           </div>
@@ -580,7 +581,13 @@ function drawSkills(loading = false): void {
           </div>
         </div>
         <div class="skill-result-count" aria-live="polite">
-          ${loading ? "Loading…" : `${filtered.length} skill${filtered.length === 1 ? "" : "s"} in ${groups.length} ${groups.length === 1 ? "group" : "groups"}`}
+          ${
+            loading
+              ? t("Loading…")
+              : t(
+                  `${filtered.length} skill${filtered.length === 1 ? "" : "s"} in ${groups.length} ${groups.length === 1 ? "group" : "groups"}`,
+                )
+          }
         </div>
         ${skillsNotice ? html`<div class="status">${skillsNotice}</div>` : nothing}`,
       rows,
@@ -653,7 +660,7 @@ function archiveDialog(skill: SkillItem): TemplateResult {
           ?disabled=${deleting === skill.id}
           @click=${() => void performArchive(skill)}
         >
-          ${deleting === skill.id ? "Archiving…" : "Archive skill"}
+          ${t(deleting === skill.id ? "Archiving…" : "Archive skill")}
         </button>
       </div>
     </div>

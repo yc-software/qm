@@ -19,7 +19,7 @@ test("the shell has exactly one dropdown, and it is a real select", () => {
 test("the dropdown keeps the accessible name, focus key and disabled state its callers pass", () => {
   for (const attr of [
     /id=\$\{props\.id \?\? nothing\}/,
-    /aria-label=\$\{props\.ariaLabel \?\? nothing\}/,
+    /aria-label=\$\{props\.ariaLabel \? t\(props\.ariaLabel\) : nothing\}/,
     /aria-describedby=\$\{props\.describedBy \?\? nothing\}/,
     /data-focus-key=\$\{props\.focusKey \?\? nothing\}/,
     /\?disabled=\$\{props\.disabled \?\? false\}/,

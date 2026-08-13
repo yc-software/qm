@@ -1,4 +1,5 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
+import { html, t } from "./i18n.ts";
 import { fetchRuntimeConfig, updateRuntimeConfig, type RuntimeConfig } from "./core-bridge";
 import { runtimeModelOptions, type ModelOption } from "./model-options";
 import { fieldSelect } from "./ui";
@@ -40,7 +41,7 @@ export async function loadContextModel(scopeId: string, onChange: () => void): P
   contextModelState.config = config;
   contextModelState.loading = false;
   if (!config) {
-    contextModelState.notice = "Couldn't load this project's model.";
+    contextModelState.notice = t("Couldn't load this project's model.");
     contextModelState.noticeKind = "error";
   }
   redraw();
@@ -80,11 +81,13 @@ async function choose(scope: string, value: string): Promise<void> {
     );
     if (seq !== loadSeq) return;
     contextModelState.config = config;
-    contextModelState.notice = `Saved — new conversations here run on ${labelForRuntime(config, config.effective)}.`;
+    contextModelState.notice = t(`Saved — new conversations here run on ${labelForRuntime(config, config.effective)}.`);
     contextModelState.noticeKind = "saved";
   } catch (e) {
     if (seq !== loadSeq) return;
-    contextModelState.notice = errMessage(e, "Couldn't change the model — try again.");
+    const fallback = "Couldn't change the model — try again.";
+    const message = errMessage(e, fallback);
+    contextModelState.notice = message === fallback ? t(fallback) : message;
     contextModelState.noticeKind = "error";
   } finally {
     if (seq === loadSeq) {
@@ -143,10 +146,10 @@ export function contextModelSection(scopeId: string): TemplateResult | typeof no
       <p class="context-model-hint">
         ${
           selected === INHERIT
-            ? "Following the org default — it changes when the org's does."
-            : "Pinned for this project. Anyone in a chat can still pick a different model for that conversation."
+            ? t("Following the org default — it changes when the org's does.")
+            : t("Pinned for this project. Anyone in a chat can still pick a different model for that conversation.")
         }
-        ${isSlack ? " The channel description in Slack names this model." : ""}
+        ${isSlack ? ` ${t("The channel description in Slack names this model.")}` : ""}
       </p>
       ${
         contextModelState.notice

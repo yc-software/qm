@@ -140,7 +140,7 @@ test("keychain overview wires managed connector grants into account controls", (
 
 test("destructive controls settle duplicate attempts while a mutation is busy", () => {
   assert.match(connectorsSource, /\?disabled=\$\{keychainOperations\.mutationInFlight\}/);
-  assert.match(connectorsSource, /connectorNotice = "Another keychain change is still in progress\."/);
+  assert.match(connectorsSource, /connectorNotice = t\("Another keychain change is still in progress\."\)/);
   assert.equal(connectorsSource.match(/const operation = beginKeychainMutation\(\)/g)?.length, 3);
   assert.equal(
     connectorsSource.match(/if \(keychainOperations\.finishMutation\(operation\)\) drawConnectors\(\)/g)?.length,

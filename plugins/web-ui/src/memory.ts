@@ -1,9 +1,10 @@
-import { html, nothing, render } from "lit";
+import { nothing, render } from "lit";
 import { Clock3, Pencil, RefreshCw, Search, Trash2 } from "lucide";
 import { api, ApiError } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
 import { appState, replacePanePreservingFocus } from "./shell";
+import { html, localeCode, t } from "./i18n.ts";
 
 interface RevisionRow {
   revision: string;
@@ -54,7 +55,7 @@ function removeFact(line: number): void {
 }
 
 function fmtDate(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return new Date(ms).toLocaleString(localeCode(), { dateStyle: "medium", timeStyle: "short" });
 }
 
 function drawMemory(loading = false): void {
@@ -81,7 +82,7 @@ function drawMemory(loading = false): void {
               drawMemory();
             }}
           >
-            ${icon(Pencil, 15)} ${rawEditing ? "Facts view" : "Edit notebook"}
+            ${icon(Pencil, 15)} ${t(rawEditing ? "Facts view" : "Edit notebook")}
           </button>
           <button class="btn" type="button" @click=${() => void toggleHistory()}>${icon(Clock3, 15)} History</button>
           <button
@@ -95,7 +96,7 @@ function drawMemory(loading = false): void {
           </button>
         </div>
       </div>
-      ${memoryNotice || loading ? html`<div class="status">${memoryNotice || "Loading…"}</div>` : nothing}
+      ${memoryNotice || loading ? html`<div class="status">${memoryNotice || t("Loading…")}</div>` : nothing}
       <div class="memory-editor">
         <p class="memory-help">
           Edit the notebook directly. Switch to Facts view to search or remove individual facts. Saves are protected if
@@ -148,7 +149,7 @@ function drawMemory(loading = false): void {
                             </div>`,
                         )
                       : html`<div class="empty-state">
-                          ${search ? "No remembered facts match this search." : "The agent hasn’t noted any facts yet."}
+                          ${t(search ? "No remembered facts match this search." : "The agent hasn’t noted any facts yet.")}
                         </div>`
                   }
                 </div>`
@@ -160,9 +161,9 @@ function drawMemory(loading = false): void {
             ?disabled=${loading || memorySaving || !dirty}
             @click=${() => void saveMemory()}
           >
-            ${memorySaving ? "Saving…" : "Save changes"}
+            ${t(memorySaving ? "Saving…" : "Save changes")}
           </button>
-          <span class="memory-hint">${dirty && !memorySaving ? "Unsaved changes" : ""}</span>
+          <span class="memory-hint">${dirty && !memorySaving ? t("Unsaved changes") : ""}</span>
         </div>
         ${
           historyOpen
@@ -174,9 +175,11 @@ function drawMemory(loading = false): void {
                         (row, i) =>
                           html` <div class="memory-revision">
                             <div>
-                              <strong>${i === 0 ? "Current" : `Revision ${row.revision}`}</strong>
+                              <strong>${i === 0 ? t("Current") : t(`Revision ${row.revision}`)}</strong>
                               <div class="card-meta">
-                                ${fmtDate(row.at)} · ${row.author || "automatic capture"} · ${row.operation}
+                                ${fmtDate(row.at)} ·
+                                ${row.author === "automatic capture" ? t(row.author) : row.author || t("automatic capture")}
+                                · ${row.operation}
                               </div>
                             </div>
                             ${i ? html`<button class="btn" type="button" @click=${() => requestRestoreRevision(row)}>Restore</button>` : nothing}
@@ -266,18 +269,20 @@ async function saveMemory(): Promise<void> {
     memorySaved = r.content ?? memoryDraft;
     memoryDraft = memorySaved;
     memoryRevision = r.revision ?? memoryRevision;
-    memoryNotice = "Saved ✓";
+    memoryNotice = t("Saved ✓");
     if (historyOpen) {
       try {
         await loadHistory();
       } catch {
-        memoryNotice = "Saved ✓ History could not refresh.";
+        memoryNotice = t("Saved ✓ History could not refresh.");
       }
     }
   } catch (e) {
     memoryNotice =
       e instanceof ApiError && e.status === 409
-        ? "Memory changed in another conversation. Your draft is still here; copy it if needed, then refresh to merge with the latest version."
+        ? t(
+            "Memory changed in another conversation. Your draft is still here; copy it if needed, then refresh to merge with the latest version.",
+          )
         : errMessage(e, "Failed to save memory.");
   } finally {
     memorySaving = false;
@@ -324,11 +329,11 @@ async function restoreRevision(row: RevisionRow): Promise<void> {
     memorySaved = r.content ?? "";
     memoryDraft = memorySaved;
     memoryRevision = r.revision ?? memoryRevision;
-    memoryNotice = "Revision restored ✓";
+    memoryNotice = t("Revision restored ✓");
     try {
       await loadHistory();
     } catch {
-      memoryNotice = "Revision restored ✓ History could not refresh.";
+      memoryNotice = t("Revision restored ✓ History could not refresh.");
     }
   } catch (e) {
     memoryNotice = errMessage(e, "Could not restore that revision.");

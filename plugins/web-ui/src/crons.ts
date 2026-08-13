@@ -1,4 +1,4 @@
-import { html, nothing, render, type TemplateResult } from "lit";
+import { nothing, render, type TemplateResult } from "lit";
 import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2 } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
@@ -8,6 +8,7 @@ import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
 import { mainConversation } from "./conversations";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
+import { html, localeCode, t } from "./i18n.ts";
 import {
   cronNextFire,
   cronRunSummary,
@@ -162,9 +163,9 @@ function cronPreview(c: CronView): string {
 function cronScopeLabel(c: CronView): string {
   const sep = c.ownerScopeId.indexOf(":");
   const kind = sep === -1 ? c.ownerScopeId : c.ownerScopeId.slice(0, sep);
-  if (kind === "channel") return c.scopeName ? `#${c.scopeName}` : "a Slack channel";
-  if (kind === "org") return "org-wide";
-  if (kind === "group") return "group";
+  if (kind === "channel") return c.scopeName ? `#${c.scopeName}` : t("a Slack channel");
+  if (kind === "org") return t("org-wide");
+  if (kind === "group") return t("group");
   return c.owner;
 }
 
@@ -180,7 +181,7 @@ function cronStatusLabel(c: CronView): "enabled" | "disabled" | "archived" {
 
 function cronStatusText(c: CronView): string {
   const status = cronStatusLabel(c);
-  return status.charAt(0).toUpperCase() + status.slice(1);
+  return t(status.charAt(0).toUpperCase() + status.slice(1));
 }
 
 export async function renderCronsPage(): Promise<void> {
@@ -196,7 +197,7 @@ export async function renderCronsPage(): Promise<void> {
     ? (cronList.find((c) => c.id === wanted) ?? visibleCronList.find((c) => c.id === wanted))
     : undefined;
   if (wanted && !cron) {
-    cronActionNotice = "That cron wasn't found, or you don't have access to it.";
+    cronActionNotice = t("That cron wasn't found, or you don't have access to it.");
   }
   if (cron) openCron(cron);
   else drawCronsPage();
@@ -291,24 +292,24 @@ function toggleDisabledCrons(): void {
 }
 
 function cronEmptyRow(text: string): TemplateResult {
-  return html`<div class="empty compact cron-filter-empty">${text}</div>`;
+  return html`<div class="empty compact cron-filter-empty">${t(text)}</div>`;
 }
 
 function cronTabs(counts: Record<CronTab, number>): TemplateResult {
-  const tabs = CRON_TABS.filter((t) => t.value === "yours" || counts[t.value] > 0 || cronTab === t.value);
+  const tabs = CRON_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || cronTab === tab.value);
   return html`
     <div class="cron-list-controls" role="tablist" aria-label="Cron view">
       ${tabs.map(
-        (t) => html`
+        (tab) => html`
           <button
             type="button"
             role="tab"
-            aria-selected=${cronTab === t.value}
-            class="cron-filter-chip ${cronTab === t.value ? "active" : ""}"
-            @click=${() => setCronTab(t.value)}
+            aria-selected=${cronTab === tab.value}
+            class="cron-filter-chip ${cronTab === tab.value ? "active" : ""}"
+            @click=${() => setCronTab(tab.value)}
           >
-            <span>${t.label}</span>
-            <span class="cron-filter-count">${counts[t.value]}</span>
+            <span>${t(tab.label)}</span>
+            <span class="cron-filter-count">${counts[tab.value]}</span>
           </button>
         `,
       )}
@@ -319,7 +320,7 @@ function cronTabs(counts: Record<CronTab, number>): TemplateResult {
 function cronDisabledToggle(count: number): TemplateResult {
   return html`
     <button class="archived-toggle cron-disabled-toggle" type="button" @click=${toggleDisabledCrons}>
-      <span>${showDisabledCrons ? "Hide disabled" : "Show disabled"}</span>
+      <span>${t(showDisabledCrons ? "Hide disabled" : "Show disabled")}</span>
       <span class="archived-count">${count}</span>
     </button>
   `;
@@ -477,7 +478,7 @@ function openCron(c: CronView, opts: { push?: boolean } = {}): void {
             : nothing
         }
         <div class="field">
-          <label>${c.message !== undefined ? "Message" : "Task"}</label>
+          <label>${t(c.message !== undefined ? "Message" : "Task")}</label>
           <div class="value pre">${cronText(c)}</div>
         </div>
         <div class="field">
@@ -514,11 +515,11 @@ function openCron(c: CronView, opts: { push?: boolean } = {}): void {
         }
         <div class="field">
           <label>Next run</label>
-          <div class="value">${next != null ? new Date(next).toLocaleString() : "—"}</div>
+          <div class="value">${next != null ? new Date(next).toLocaleString(localeCode()) : "—"}</div>
         </div>
         <div class="field">
           <label>Last fired</label>
-          <div class="value">${c.lastFiredAt ? new Date(c.lastFiredAt).toLocaleString() : "Never"}</div>
+          <div class="value">${c.lastFiredAt ? new Date(c.lastFiredAt).toLocaleString(localeCode()) : t("Never")}</div>
         </div>
         ${manageable ? cronRunHistory(c) : nothing}
         ${
@@ -567,7 +568,7 @@ function cronRunHistory(c: CronView): TemplateResult {
         const detail = run.note ?? (run.reply ? clipWords(run.reply, 120) : "");
         return html` <div class="cron-run-row">
           <span class="badge">${run.status ?? "completed"}</span>
-          <span class="cron-run-time">${new Date(run.firedAt).toLocaleString()}</span>
+          <span class="cron-run-time">${new Date(run.firedAt).toLocaleString(localeCode())}</span>
           <span class=${run.note ? "cron-run-detail cron-run-error" : "cron-run-detail"} title=${detail}>
             ${detail}
           </span>
@@ -625,7 +626,7 @@ function runCronNow(id: string): Promise<void> {
   return cronMutate(async () => {
     try {
       await api(`/api/crons/${encodeURIComponent(id)}/run`, { method: "POST" });
-      cronActionNotice = "Run started. Refresh recent runs after it completes.";
+      cronActionNotice = t("Run started. Refresh recent runs after it completes.");
     } catch (e) {
       cronActionNotice = errMessage(e, "run failed");
     }
@@ -709,9 +710,11 @@ function cronDialogTpl(dialog: { kind: "rename" | "delete"; cron: CronView }): T
             </div>`
       }
       <p class="hint">
-        To change
-        ${c.message === undefined ? "the schedule, timezone, destination, or run mode" : "the message, schedule, timezone, destination, or run mode"},
-        use the agent so it can validate the resulting behavior and permissions.
+        ${t(
+          c.message === undefined
+            ? "To change the schedule, timezone, destination, or run mode, use the agent so it can validate the resulting behavior and permissions."
+            : "To change the message, schedule, timezone, destination, or run mode, use the agent so it can validate the resulting behavior and permissions.",
+        )}
       </p>
       <div class="form-error"></div>
       <div class="project-dialog-actions">
@@ -731,13 +734,13 @@ async function saveCronEdit(event: SubmitEvent, c: CronView): Promise<void> {
   const task = taskControl?.value.trim();
   const error = form.querySelector<HTMLElement>(".form-error");
   if (!title || (taskControl && !task)) {
-    if (error) error.textContent = taskControl ? "Title and task are required." : "Title is required.";
+    if (error) error.textContent = t(taskControl ? "Title and task are required." : "Title is required.");
     return;
   }
   const ok = await patchCron(c.id, { title, ...(task ? { task } : {}) }, "edit failed");
   if (!ok) return;
   cronDialog = null;
-  cronActionNotice = "Cron updated.";
+  cronActionNotice = t("Cron updated.");
   await reopenCron(c.id);
 }
 
@@ -828,7 +831,7 @@ function onCreateCron(e: Event): void {
   const errSlot = form.querySelector(".form-error") as HTMLElement | null;
   const text = (form.querySelector('textarea[name="text"]') as HTMLTextAreaElement | null)?.value.trim() ?? "";
   if (!text) {
-    if (errSlot) errSlot.textContent = "Describe the cron you want.";
+    if (errSlot) errSlot.textContent = t("Describe the cron you want.");
     return;
   }
   const conv = mainConversation();
