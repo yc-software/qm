@@ -18,7 +18,7 @@ import {
   uploadFailureNote,
   applyReactions,
 } from "./lib.ts";
-import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import type { CoreClient } from "../api/core-client.ts";
 import type { Delivery } from "../types.ts";
 import type { CoreBridge } from "./core-bridge.ts";
 import type { Mirror } from "./mirror.ts";
@@ -36,7 +36,7 @@ function mergeSlackApiMs(body: unknown, slackApiMs: number | undefined): unknown
 }
 
 export function createDeliveryPoller(deps: {
-  core: SlackCoreClient;
+  core: CoreClient;
   bridge: CoreBridge;
   mirror: Mirror;
   threads: ReturnType<typeof createThreadTracker>;

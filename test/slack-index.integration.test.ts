@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
-import type { SlackCoreClient } from "../src/slack/index.ts";
+import type { CoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
@@ -183,7 +183,7 @@ mock.module("@slack/web-api", { namedExports: { WebClient: class {} } });
 
 const { slackPluginConfigFromEnv, startSlackPlugin } = await import("../src/slack/index.ts");
 
-class FakeCore implements SlackCoreClient {
+class FakeCore implements CoreClient {
   readonly turns: any[] = [];
   readonly ingests: any[][] = [];
   readonly directories: any[] = [];

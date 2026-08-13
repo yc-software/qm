@@ -26,7 +26,7 @@ import {
   uploadFailureNote,
 } from "./lib.ts";
 import { resolveAgentRequestTarget } from "./approval-context.ts";
-import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import type { CoreClient } from "../api/core-client.ts";
 import type { TurnResult } from "../types.ts";
 import type { CoreBridge, CoreTurnBody } from "./core-bridge.ts";
 import type { Directory } from "./directory.ts";
@@ -118,7 +118,7 @@ export interface Approvals {
 }
 
 export function createApprovals(deps: {
-  core: SlackCoreClient;
+  core: CoreClient;
   bridge: CoreBridge;
   directory: Directory;
   threads: ReturnType<typeof createThreadTracker>;

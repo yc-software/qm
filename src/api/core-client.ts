@@ -27,7 +27,7 @@ import { swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable, type RuntimeChoice } from "../harness/harness-router.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 
-interface SlackRunHooks {
+interface RunHooks {
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
   onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
@@ -53,7 +53,7 @@ interface DirectoryPush {
   groupsSyncedAt?: number;
 }
 
-export interface SlackCoreClient {
+export interface CoreClient {
   externalSlackParticipants(): Promise<boolean>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
   onScopeModelChanged(listener: (scope: ScopeId) => void): void;
@@ -62,7 +62,7 @@ export interface SlackCoreClient {
   readFileArtifact(artifactId: string, viewerId: string): Promise<Buffer>;
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
   submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
-  waitRun(runId: string, hooks?: SlackRunHooks): Promise<TurnResult | null>;
+  waitRun(runId: string, hooks?: RunHooks): Promise<TurnResult | null>;
   activeRunForThread(threadRef: string): Promise<string | undefined>;
   signalRunAbort(runId: string): Promise<void>;
   ackRunDelivery(runId: string): Promise<void>;
@@ -93,7 +93,7 @@ type AckPickInput = {
 
 export type { SurfaceContextRequest };
 
-export interface SlackCoreClientDeps {
+export interface CoreClientDeps {
   app: App;
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
@@ -116,7 +116,7 @@ function agentLabelFrom(raw: string | undefined): string | undefined {
 const RUN_FALLBACK_POLL_MS = 1_000;
 const RUN_STALL_BUDGET_MS = 300_000;
 
-export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
+export function createCoreClient(deps: CoreClientDeps, surface = "slack"): CoreClient {
   const orgScope: ScopeId = scopeId("org", configOrgId());
   const terminalWaiters = new Map<string, Set<() => void>>();
   deps.runs.onTerminal((run) => {
@@ -168,7 +168,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     submitTurn(body) {
-      return deps.app.turn({ ...body, surface: "slack" });
+      return deps.app.turn({ ...body, surface });
     },
 
     async waitRun(runId, hooks = {}) {
@@ -220,7 +220,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
             if (deps.turnStream.surfacePosted(runId)) signalSurface();
             if (isTerminal(run.status)) {
               const view = await deps.app.getRun(runId);
-              await emitTasks().catch(swallowAs("slack-core-client: terminal task refresh", undefined));
+              await emitTasks().catch(swallowAs("core-client: terminal task refresh", undefined));
               if (view?.surfacePosted) signalSurface();
               return (view?.result as TurnResult | null | undefined) ?? null;
             }
@@ -311,12 +311,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     pendingContextRequests() {
-      return deps.app.pendingContextRequests("slack");
+      return deps.app.pendingContextRequests(surface);
     },
 
     onContextRequest(listener) {
       return deps.app.onContextRequestCreated((request) => {
-        if (request.source === "slack") listener(request);
+        if (request.source === surface) listener(request);
       });
     },
 
@@ -329,7 +329,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       const ackModel = deps.ackModelId?.();
       await deps.ackPicks
         .record({
-          surface: "slack",
+          surface,
           channel: pick.channel,
           ts: pick.ts,
           outcome: pick.outcome,
@@ -350,7 +350,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         .then((ok) => {
           if (!ok) return;
         })
-        .catch(swallowAs("slack-core-client: fulfill context request", undefined));
+        .catch(swallowAs("core-client: fulfill context request", undefined));
     },
   };
 }
