@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { once } from "node:events";
@@ -84,7 +85,7 @@ export function createLocalDurableByteStore(dir: string): DurableByteStore {
       } catch (error) {
         void error;
       }
-      const partPath = join(base, `${sha256}.${process.pid}.part`);
+      const partPath = join(base, `${sha256}.${randomUUID()}.part`);
       const out = createWriteStream(partPath);
       try {
         if (!out.write(data)) await once(out, "drain");
@@ -95,7 +96,12 @@ export function createLocalDurableByteStore(dir: string): DurableByteStore {
         await rm(partPath, { force: true }).catch(swallowAs("files: partial-file cleanup", undefined));
         throw err;
       }
-      await rename(partPath, finalPath);
+      try {
+        await rename(partPath, finalPath);
+      } catch (err) {
+        await rm(partPath, { force: true }).catch(swallowAs("files: partial-file cleanup", undefined));
+        throw err;
+      }
       return { blobKey, sizeBytes: data.length, sha256 };
     },
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -71,6 +71,21 @@ test("DurableByteStore (local-fs) round-trips binary intact across a fresh store
     assert.deepEqual(back, PNG);
     const again = await w.put(PNG);
     assert.equal(again.blobKey, blobKey);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("DurableByteStore (local-fs) accepts concurrent identical writes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "docstore-"));
+  try {
+    const bytes = createLocalDurableByteStore(dir);
+    const big = Buffer.concat([PNG, Buffer.alloc(4 * 1024 * 1024, 7)]);
+    const results = await Promise.all(Array.from({ length: 8 }, () => bytes.put(big)));
+    for (const r of results) assert.equal(r.blobKey, results[0]!.blobKey);
+    assert.deepEqual(await drain(bytes as never, results[0]!.blobKey), big);
+    const leftovers = (await readdir(join(dir, "files"))).filter((name) => name.endsWith(".part"));
+    assert.deepEqual(leftovers, [], "no orphaned partial files survive the race");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
