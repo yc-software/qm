@@ -1300,6 +1300,25 @@ test("a delivered file is recorded as a durable entry and surfaced to the next t
   assert.doesNotMatch(t3.reply ?? "", /you delivered to this conversation in your previous turn/);
 });
 
+test("a file posted in a GROUP conversation is granted read to the conversation scope", async () => {
+  const { app, acl } = freshApp();
+  const grp = {
+    kind: "group" as const,
+    threadRef: "grp:G9:files",
+    channelRef: "G9",
+    audience: [internalActor, { externalId: "U2" }],
+  };
+  await app.turn(dm('!run printf FLAG > flag.png', { surface: "slack", conversation: grp, deliveryTarget: "slack:G9:files", surfaceTools: true }));
+  const t = await app.turn(
+    dm("!postfiles flag.png here you go", { surface: "slack", conversation: grp, deliveryTarget: "slack:G9:files", surfaceTools: true }),
+  );
+  assert.notEqual(t.status, "error");
+  const handles = await acl.handlesFor([scopeId("group", "G9")]);
+  const fileHandle = handles.find((h) => h.ownerPath.endsWith("/flag.png"));
+  assert.ok(fileHandle, "the posted file is granted to the conversation scope");
+  assert.equal(fileHandle!.ownerScopeId, scopeId("personal", "U1"));
+});
+
 test("a file shared with the session is LISTED in the cached system prompt — without provisioning a sandbox", async () => {
   const built = freshApp();
   const { app, acl } = built;

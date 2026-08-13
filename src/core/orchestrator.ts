@@ -1647,16 +1647,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ownerId: actor.id,
             }).grantees
           : [];
+        // Files posted into a group/DM conversation (e.g. a project web session) get no
+        // per-member grants from defaultPublishAudience ("auto-share deferred"), which left
+        // other members unable to load them. Grant the conversation scope itself read access
+        // so everyone party to the conversation can fetch what was posted into it.
+        const fileOwnerScopeId = toScopeId("personal", actor.id);
+        const fileGrantees = [...fileAudience];
+        if ((conversation.kind === "group" || conversation.kind === "dm") && scopeId !== fileOwnerScopeId) {
+          fileGrantees.push(scopeId);
+        }
         const fileRegistration: ArtifactRegistration = {
           store: deps.files,
-          ownerScopeId: toScopeId("personal", actor.id),
+          ownerScopeId: fileOwnerScopeId,
           createdBy: actor.id,
           createdInScope: scopeId,
           seed: input.runId ?? `${session.id}:${Date.now()}`,
-          ...(fileAudience.length
+          ...(fileGrantees.length
             ? {
                 onRegistered: async ({ ownerScopeId, path }) => {
-                  for (const granteeScopeId of fileAudience) {
+                  for (const granteeScopeId of fileGrantees) {
                     await deps.acl.grant({
                       ownerScopeId,
                       ref: path,
