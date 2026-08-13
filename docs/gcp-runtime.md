@@ -9,16 +9,16 @@ The control plane must run with Workload Identity and a namespace-scoped role th
 
 Required runtime environment:
 
-| Variable                 | Purpose                                       |
-| ------------------------ | --------------------------------------------- |
-| `SANDBOX_BACKEND=gke`    | Select GKE Agent Sandbox                      |
-| `GKE_SANDBOX_NAMESPACE`  | Namespace containing the template and claims  |
-| `GKE_SANDBOX_TEMPLATE`   | Existing `SandboxTemplate` name               |
-| `GKE_SANDBOX_ROUTER_URL` | Internal sandbox-router URL                   |
-| `SNAPSHOT_STORE=gcs`     | Store file bytes in Cloud Storage             |
-| `TRANSFER_STORE=gcs`     | Store staged transfer blobs in Cloud Storage  |
-| `GCS_BUCKET`             | Dedicated runtime bucket                      |
-| `GCS_PREFIX`             | Optional deployment prefix                    |
+| Variable                 | Purpose                                      |
+| ------------------------ | -------------------------------------------- |
+| `SANDBOX_BACKEND=gke`    | Select GKE Agent Sandbox                     |
+| `GKE_SANDBOX_NAMESPACE`  | Namespace containing the template and claims |
+| `GKE_SANDBOX_TEMPLATE`   | Existing `SandboxTemplate` name              |
+| `GKE_SANDBOX_ROUTER_URL` | Internal sandbox-router URL                  |
+| `SNAPSHOT_STORE=gcs`     | Store file bytes in Cloud Storage            |
+| `TRANSFER_STORE=gcs`     | Store staged transfer blobs in Cloud Storage |
+| `GCS_BUCKET`             | Dedicated runtime bucket                     |
+| `GCS_PREFIX`             | Optional deployment prefix                   |
 
 The sandbox template owns isolation, persistence, limits, and egress policy. QM claims the template but cannot weaken it. Agent Pods should run non-root under gVisor, omit service-account tokens, drop all capabilities, use bounded resources, and accept ingress only from the sandbox router. The router should accept ingress only from QM core.
 
