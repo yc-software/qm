@@ -29,6 +29,14 @@ import {
   SHARED_SKILL_TRIGGER_REFUSAL,
 } from "../artifact-share.ts";
 
+function contentTypeForFile(mimetype?: string): string {
+  const contentType = mimetype || "application/octet-stream";
+  if (/^(?:text\/|application\/(?:json|xml)(?:;|$))/i.test(contentType) && !/;\s*charset\s*=/i.test(contentType)) {
+    return `${contentType}; charset=utf-8`;
+  }
+  return contentType;
+}
+
 function isGrant(b: unknown): b is Grant {
   return (
     isObj(b) &&
@@ -252,7 +260,7 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
   const opened = await app.openFileForViewer(id, viewer);
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   res.writeHead(200, {
-    "content-type": opened.mimetype || "application/octet-stream",
+    "content-type": contentTypeForFile(opened.mimetype),
     "content-length": String(opened.sizeBytes),
     "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
   });
