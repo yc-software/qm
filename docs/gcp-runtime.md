@@ -2,7 +2,7 @@
 
 The GCP runtime uses two provider-native contracts:
 
-- `SANDBOX_BACKEND=gke` provisions `SandboxClaim` resources from a named GKE Agent Sandbox warm pool and routes the existing QM agent-daemon protocol through the upstream sandbox router.
+- `SANDBOX_BACKEND=gke` provisions `SandboxClaim` resources from a named GKE Agent Sandbox template and routes the existing QM agent-daemon protocol through the upstream sandbox router. GKE can satisfy matching claims from a separately managed warm pool.
 - `SNAPSHOT_STORE=gcs` and `TRANSFER_STORE=gcs` use Cloud Storage with Application Default Credentials and `GCS_BUCKET`.
 
 The control plane must run with Workload Identity and a namespace-scoped role that can create, get, list, watch, and delete `sandboxclaims.extensions.agents.x-k8s.io`. It does not need permission to create arbitrary Pods, Deployments, Secrets, Roles, or cluster-scoped resources.
@@ -13,7 +13,7 @@ Required runtime environment:
 | ------------------------ | --------------------------------------------- |
 | `SANDBOX_BACKEND=gke`    | Select GKE Agent Sandbox                      |
 | `GKE_SANDBOX_NAMESPACE`  | Namespace containing the warm pool and claims |
-| `GKE_SANDBOX_WARM_POOL`  | Existing `SandboxWarmPool` name               |
+| `GKE_SANDBOX_TEMPLATE`   | Existing `SandboxTemplate` name               |
 | `GKE_SANDBOX_ROUTER_URL` | Internal sandbox-router URL                   |
 | `SNAPSHOT_STORE=gcs`     | Store file bytes in Cloud Storage             |
 | `TRANSFER_STORE=gcs`     | Store staged transfer blobs in Cloud Storage  |

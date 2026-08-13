@@ -237,14 +237,14 @@ test("sandbox backend is parsed once before production backend guards", () => {
   const gke = loadConfig({
     SANDBOX_BACKEND: "gke",
     GKE_SANDBOX_NAMESPACE: "sandboxes",
-    GKE_SANDBOX_WARM_POOL: "pool",
+    GKE_SANDBOX_TEMPLATE: "template",
     GKE_SANDBOX_ROUTER_URL: "http://router:8080",
     GKE_SANDBOX_ROUTER_TOKEN: "router-token",
   });
   assert.equal(gke.sandboxBackend, "gke");
   assert.deepEqual(gke.gkeSandbox, {
     namespace: "sandboxes",
-    warmPool: "pool",
+    sandboxTemplate: "template",
     routerUrl: "http://router:8080",
     routerToken: "router-token",
   });

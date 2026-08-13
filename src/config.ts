@@ -252,7 +252,7 @@ interface LocalSandboxEnv {
 
 interface GkeSandboxEnv {
   namespace: string;
-  warmPool: string;
+  sandboxTemplate: string;
   routerUrl: string;
   routerToken?: string;
   agentPort?: number;
@@ -263,7 +263,7 @@ interface GkeSandboxEnv {
 function gkeSandboxEnv(env: NodeJS.ProcessEnv): GkeSandboxEnv {
   return {
     namespace: env.GKE_SANDBOX_NAMESPACE ?? "qm-sandboxes",
-    warmPool: env.GKE_SANDBOX_WARM_POOL ?? "qm-sandbox-pool",
+    sandboxTemplate: env.GKE_SANDBOX_TEMPLATE ?? "qm-sandbox-template",
     routerUrl: env.GKE_SANDBOX_ROUTER_URL ?? "http://sandbox-router.agent-sandbox-system.svc.cluster.local:8080",
     ...(env.GKE_SANDBOX_ROUTER_TOKEN ? { routerToken: env.GKE_SANDBOX_ROUTER_TOKEN } : {}),
     ...(numEnvStrict("GKE_SANDBOX_AGENT_PORT", env.GKE_SANDBOX_AGENT_PORT) !== undefined

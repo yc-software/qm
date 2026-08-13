@@ -67,7 +67,7 @@ test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", 
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "qm-gke-test-")));
   const sandbox = createGkeSandbox(workspace, {
     namespace: "qm-sandboxes",
-    warmPool: "qm-sandbox-pool",
+    sandboxTemplate: "qm-sandbox-template",
     routerUrl: "http://sandbox-router:8080",
     routerToken: "router-test-token",
     client,
@@ -94,7 +94,7 @@ test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", 
     name: (created.metadata as { name: string }).name,
   });
   assert.equal(created.apiVersion, "extensions.agents.x-k8s.io/v1alpha1");
-  assert.equal((created.spec as { warmPoolRef: { name: string } }).warmPoolRef.name, "qm-sandbox-pool");
+  assert.deepEqual(created.spec, { sandboxTemplateRef: { name: "qm-sandbox-template" } });
 
   await sandbox.writeFile(handle, "evidence.txt", "ready");
   assert.equal(await sandbox.readFile(handle, "evidence.txt"), "ready");
@@ -138,7 +138,7 @@ test("GKE sandbox deletes a newly-created claim when daemon readiness fails", as
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "qm-gke-failure-test-")));
   const sandbox = createGkeSandbox(workspace, {
     namespace: "qm-sandboxes",
-    warmPool: "qm-sandbox-pool",
+    sandboxTemplate: "qm-sandbox-template",
     routerUrl: "http://sandbox-router:8080",
     routerToken: "router-test-token",
     client,
@@ -174,7 +174,7 @@ test("GKE sandbox deletes a newly-created claim that never binds", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "qm-gke-unbound-test-")));
   const sandbox = createGkeSandbox(workspace, {
     namespace: "qm-sandboxes",
-    warmPool: "qm-sandbox-pool",
+    sandboxTemplate: "qm-sandbox-template",
     routerUrl: "http://sandbox-router:8080",
     routerToken: "router-test-token",
     client,
@@ -210,7 +210,7 @@ test("GKE sandbox accepts an SDK 404 while deleting an already-removed claim", a
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "qm-gke-removed-test-")));
   const sandbox = createGkeSandbox(workspace, {
     namespace: "qm-sandboxes",
-    warmPool: "qm-sandbox-pool",
+    sandboxTemplate: "qm-sandbox-template",
     routerUrl: "http://sandbox-router:8080",
     routerToken: "router-test-token",
     client,

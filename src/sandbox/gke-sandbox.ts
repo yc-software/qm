@@ -51,7 +51,7 @@ interface CustomObjectsClient {
 
 export interface GkeSandboxOptions {
   namespace: string;
-  warmPool: string;
+  sandboxTemplate: string;
   routerUrl: string;
   routerToken?: string;
   agentPort?: number;
@@ -145,12 +145,7 @@ export function createGkeSandbox(workspace: WorkspaceStore, opts: GkeSandboxOpti
               },
             },
             spec: {
-              warmPoolRef: { name: opts.warmPool },
-              additionalPodMetadata: {
-                labels: {
-                  "sandbox.users.io/qm-claim": claim,
-                },
-              },
+              sandboxTemplateRef: { name: opts.sandboxTemplate },
             },
           },
         });
