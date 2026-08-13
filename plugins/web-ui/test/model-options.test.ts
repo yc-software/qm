@@ -121,10 +121,22 @@ test("harness-only turn controls are exposed only where the adapter supports the
   assert.equal(harnessSupportsEffort("codex"), true);
   assert.equal(harnessSupportsEffort("claude"), true);
   assert.equal(harnessSupportsEffort("opencode"), false);
+  assert.equal(harnessSupportsEffort("cma"), true);
   assert.equal(harnessSupportsFastMode("pi"), true);
   assert.equal(harnessSupportsFastMode("claude"), true);
   assert.equal(harnessSupportsFastMode("codex"), false);
   assert.equal(harnessSupportsFastMode("opencode"), false);
+  assert.equal(harnessSupportsFastMode("cma"), false);
+});
+
+test("CMA is a pickable harness with the Anthropic model set", () => {
+  applyRuntimeOptions(["cma"], { cma: [] }, { harnessId: "cma", modelId: "claude-opus-5" });
+  assert.deepEqual(getHarnessOptions(), [{ value: "cma", label: "Claude Managed Agents" }]);
+  assert.equal(defaultModelValue(), "cma:claude-opus-5");
+  assert.deepEqual(
+    getModelOptionsForHarness("cma").map((o) => o.label),
+    ["Fable 5", "Opus 5", "Opus 4.8", "Sonnet 5", "Haiku 4.5"],
+  );
 });
 
 test("an all-retired list falls back within the approved harness", () => {

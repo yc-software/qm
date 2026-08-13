@@ -3,7 +3,7 @@ import { connect as netConnect, type Socket } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { QmConfig } from "./config.ts";
+import { configuredHarness, type QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue } from "./util.ts";
 
@@ -67,6 +67,20 @@ export function assertNodeEngine(deploymentDir?: string): void {
   }
 }
 
+async function probeFetch(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  subject: string,
+): Promise<Response | null> {
+  try {
+    return await fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+  } catch (e) {
+    warn(`could not verify ${subject}: ${errMessage(e)} — continuing`);
+    return null;
+  }
+}
+
 export async function flySandboxTokenPreflight(
   config: QmConfig,
   secrets: ReadonlyMap<string, string>,
@@ -76,16 +90,13 @@ export async function flySandboxTokenPreflight(
   if (!app) return;
   const token = deploymentSecretValue("FLY_SANDBOX_API_TOKEN", secrets.get("FLY_SANDBOX_API_TOKEN"))?.trim();
   if (!token) return;
-  let response: Response;
-  try {
-    response = await fetchImpl(`https://api.machines.dev/v1/apps/${encodeURIComponent(app)}`, {
-      headers: { authorization: token.startsWith("FlyV1") ? token : `Bearer ${token}` },
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-  } catch (e) {
-    warn(`could not verify FLY_SANDBOX_API_TOKEN against Fly app ${app}: ${errMessage(e)} — continuing`);
-    return;
-  }
+  const response = await probeFetch(
+    fetchImpl,
+    `https://api.machines.dev/v1/apps/${encodeURIComponent(app)}`,
+    { headers: { authorization: token.startsWith("FlyV1") ? token : `Bearer ${token}` } },
+    `FLY_SANDBOX_API_TOKEN against Fly app ${app}`,
+  );
+  if (!response) return;
   if (response.status === 401 || response.status === 403 || response.status === 404) {
     throw new CliError(
       `FLY_SANDBOX_API_TOKEN cannot access the Fly app ${app} (HTTP ${response.status}) — the app may not exist ` +
@@ -100,6 +111,103 @@ export async function flySandboxTokenPreflight(
     return;
   }
   step(`Fly sandbox app ${app}: FLY_SANDBOX_API_TOKEN ok`);
+}
+
+const CMA_CONSOLE_HINT = "the Claude console (platform.claude.com)";
+const CMA_DEFAULT_BASE_URL = "https://api.anthropic.com";
+const CMA_PROBE_HEADERS = { "anthropic-version": "2023-06-01", "anthropic-beta": "managed-agents-2026-04-01" };
+
+export async function cmaEnvironmentPreflight(
+  config: QmConfig,
+  secrets: ReadonlyMap<string, string>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  if (configuredHarness(config) !== "cma") return;
+  const core = config.env.core ?? {};
+  const environmentId = core.CMA_ENVIRONMENT_ID?.trim();
+  if (!environmentId) return;
+  const baseUrl = (core.CMA_BASE_URL?.trim() || CMA_DEFAULT_BASE_URL).replace(/\/$/, "");
+  const environmentPath = `${baseUrl}/v1/environments/${encodeURIComponent(environmentId)}`;
+  if (!(await cmaEnvironmentReadable(environmentPath, environmentId, secrets, fetchImpl))) return;
+  await cmaEnvironmentKeyAccepted(environmentPath, environmentId, secrets, fetchImpl);
+}
+
+async function cmaEnvironmentReadable(
+  environmentPath: string,
+  environmentId: string,
+  secrets: ReadonlyMap<string, string>,
+  fetchImpl: typeof fetch,
+): Promise<boolean> {
+  const apiKey = deploymentSecretValue("ANTHROPIC_API_KEY", secrets.get("ANTHROPIC_API_KEY"))?.trim();
+  if (!apiKey) return true;
+  const response = await probeFetch(
+    fetchImpl,
+    environmentPath,
+    { headers: { ...CMA_PROBE_HEADERS, "x-api-key": apiKey } },
+    `CMA environment ${environmentId}`,
+  );
+  if (!response) return false;
+  if (response.status === 401 || response.status === 403) {
+    throw new CliError(
+      `ANTHROPIC_API_KEY cannot read CMA environment ${environmentId} (HTTP ${response.status}) — ` +
+        "the key is invalid or belongs to a different workspace than the environment.",
+      { clause: "harness.cma-environment" },
+    );
+  }
+  if (response.status === 404) {
+    throw new CliError(
+      `CMA environment ${environmentId} was not found (HTTP 404) — the id has a typo, the environment lives in ` +
+        "another workspace, or the organization has no Claude Managed Agents access. Create a self-hosted " +
+        `environment in ${CMA_CONSOLE_HINT} and set env.core.CMA_ENVIRONMENT_ID to its id.`,
+      { clause: "harness.cma-environment" },
+    );
+  }
+  if (!response.ok) {
+    warn(
+      `the Claude API returned HTTP ${response.status} while verifying CMA environment ${environmentId} — continuing`,
+    );
+    return true;
+  }
+  const parsed = (await response.json().catch(() => null)) as { config?: { type?: string } } | null;
+  const environmentType = parsed?.config?.type;
+  if (environmentType && environmentType !== "self_hosted") {
+    throw new CliError(
+      `CMA environment ${environmentId} has type "${environmentType}" — qm needs a self-hosted environment so ` +
+        `tool calls run in each scope's own sandbox. Create one with the self-hosted type in ${CMA_CONSOLE_HINT}.`,
+      { clause: "harness.cma-environment" },
+    );
+  }
+  step(`CMA environment ${environmentId}: ANTHROPIC_API_KEY ok${environmentType ? ` (${environmentType})` : ""}`);
+  return true;
+}
+
+async function cmaEnvironmentKeyAccepted(
+  environmentPath: string,
+  environmentId: string,
+  secrets: ReadonlyMap<string, string>,
+  fetchImpl: typeof fetch,
+): Promise<void> {
+  const environmentKey = deploymentSecretValue("CMA_ENVIRONMENT_KEY", secrets.get("CMA_ENVIRONMENT_KEY"))?.trim();
+  if (!environmentKey) return;
+  const response = await probeFetch(
+    fetchImpl,
+    `${environmentPath}/work/wk_qm_preflight_probe/heartbeat`,
+    { method: "POST", headers: { ...CMA_PROBE_HEADERS, authorization: `Bearer ${environmentKey}` } },
+    `CMA_ENVIRONMENT_KEY against environment ${environmentId}`,
+  );
+  if (!response) return;
+  if (response.status === 401 || response.status === 403) {
+    throw new CliError(
+      `CMA_ENVIRONMENT_KEY is not accepted by environment ${environmentId} (HTTP ${response.status}) — generate a ` +
+        `fresh environment key on the environment's page in ${CMA_CONSOLE_HINT} and update the secret.`,
+      { clause: "harness.cma-environment" },
+    );
+  }
+  if (response.status !== 404 && !response.ok) {
+    warn(`the Claude API returned HTTP ${response.status} while verifying CMA_ENVIRONMENT_KEY — continuing`);
+    return;
+  }
+  step(`CMA environment ${environmentId}: CMA_ENVIRONMENT_KEY ok`);
 }
 
 type SmtpTlsMode = "starttls" | "implicit" | "none";

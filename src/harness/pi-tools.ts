@@ -1,4 +1,5 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { HarnessTurnInput } from "./harness.ts";
 import { Type } from "typebox";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
@@ -256,6 +257,58 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
   };
+}
+
+export function turnToolContext(turn: HarnessTurnInput): ToolContextRef {
+  return {
+    current: turn.tools,
+    pendingApprovals: [],
+    pausedOnApproval: false,
+    silentRequested: false,
+    pollFire: Boolean(turn.pollFire),
+    emit: turn.emit,
+    scopeLabel: turn.scopeLabel,
+    orgScopeId: turn.orgScopeId,
+    screenExternalContent: turn.screenExternalContent,
+    toolApprovalGate: turn.toolApprovalGate,
+  };
+}
+
+export function turnToolOptions(opts: CoreToolOptions, turn?: HarnessTurnInput): PiToolsOptions {
+  return {
+    scratchExec: opts.scratchExec,
+    ownerAuthExec: opts.ownerAuthExec,
+    reachExec: opts.reachExec,
+    controlTools: opts.controlTools,
+    execTimeoutMs: opts.execTimeoutMs,
+    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
+    backgroundJobTtlMs: opts.backgroundJobTtlMs,
+    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
+    ...(turn
+      ? { readOnly: turn.readOnly, surfaceTools: turn.surfaceTools, surfaceName: turn.surfaceName }
+      : { surfaceTools: true, surfaceName: "slack" }),
+  };
+}
+
+export type BridgedTool = {
+  name: string;
+  description: string;
+  parameters: unknown;
+  execute(
+    callId: string,
+    args: unknown,
+  ): Promise<{ content?: Array<{ type?: string; text?: string }>; terminate?: boolean }>;
+};
+
+export function bridgedTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {
+  return createPiTools(ref, options) as unknown as BridgedTool[];
+}
+
+export function bridgedToolText(result: Awaited<ReturnType<BridgedTool["execute"]>>): string {
+  return (result.content ?? [])
+    .filter((item): item is { type?: string; text: string } => typeof item.text === "string")
+    .map((item) => item.text)
+    .join("\n");
 }
 
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently"]);

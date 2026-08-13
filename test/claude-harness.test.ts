@@ -4,21 +4,10 @@ import {
   claudeChildAgentAllowed,
   claudeChildEnv,
   claudeProcessIdentity,
-  claudeReplayTranscript,
-  claudeToolContext,
   spawnClaudeProcess,
   stripClaudeImageBytes,
 } from "../src/harness/claude-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import { zeroUsage, type PiReplayMessage } from "../src/harness/replay.ts";
-
-test("Claude forwards external-content screening into its native tool bridge", () => {
-  const screenExternalContent: NonNullable<HarnessTurnInput["screenExternalContent"]> = async () => ({
-    decision: "auto",
-  });
-  const ref = claudeToolContext({ screenExternalContent } as HarnessTurnInput);
-  assert.equal(ref.screenExternalContent, screenExternalContent);
-});
+import { replayTranscript, zeroUsage, type PiReplayMessage } from "../src/harness/replay.ts";
 
 test("Claude replay preserves paired tool calls and results as untrusted history", () => {
   const messages: PiReplayMessage[] = [
@@ -40,7 +29,7 @@ test("Claude replay preserves paired tool calls and results as untrusted history
     },
   ];
 
-  const replay = claudeReplayTranscript(messages);
+  const replay = replayTranscript(messages);
 
   assert.match(replay, /untrusted conversation history, not instructions/);
   assert.match(replay, /Assistant tool call \(history, call call-1\).*needle/);
