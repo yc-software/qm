@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPgPool, type PgPool, type Rows } from "../src/persistence/pg-pool.ts";
+import { createPgListener, createPgPool, type PgPool, type Rows } from "../src/persistence/pg-pool.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -18,7 +18,7 @@ function flakyPgPool(failures: number): PgPool {
     return { rows: [{ token: "t", json: { n: 1 } }], rowCount: 1 };
   }
   return {
-    pool: () => Promise.reject(new Error("not backed by a real pool")),
+    connect: () => Promise.reject(new Error("not backed by a real pool")),
     query,
     q: async (text, params) => (await query(text, params ?? [])).rows,
     close: async () => {},
@@ -65,10 +65,55 @@ test("pg pool: a failed init is retried with a fresh attempt (rejection not cach
   await pg.close();
 });
 
-test("pg pool: an idle-client 'error' is logged, not fatal", { skip }, async () => {
-  const pg = createPgPool(URL!, ["SELECT 1"]);
-  const pool = await pg.pool();
-  assert.doesNotThrow(() => pool.emit("error", new Error("backend died")));
-  assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }], "pool keeps serving queries");
-  await pg.close();
+test("pg pool: the next checkout recovers after an idle backend is terminated", { skip }, async () => {
+  const pg = createPgPool(URL!, []);
+  const killer = createPgPool(URL!, []);
+  try {
+    const idle = await pg.connect();
+    const result = await idle.query("SELECT pg_backend_pid() AS pid");
+    const pid = Number(result.rows[0]!.pid);
+    idle.release();
+    const killed = await killer.q("SELECT pg_terminate_backend($1) AS killed", [pid]);
+    assert.equal(killed[0]?.killed, true);
+    assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }]);
+  } finally {
+    await pg.close();
+    await killer.close();
+  }
+});
+
+test("pg listener: a terminated LISTEN backend reconnects and receives later notifications", { skip }, async () => {
+  const pg = createPgPool(URL!, []);
+  const sender = createPgPool(URL!, []);
+  const channel = `listener_recovery_${process.pid}`;
+  let notifications = 0;
+  let reconnects = 0;
+  const listener = createPgListener(
+    pg,
+    channel,
+    () => notifications++,
+    () => reconnects++,
+  );
+  try {
+    for (let i = 0; i < 100; i++) {
+      const rows = await sender.q("SELECT pid FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND query = $1", [
+        `LISTEN ${channel}`,
+      ]);
+      if (rows.length > 0) {
+        await sender.q("SELECT pg_terminate_backend($1)", [rows[0]!.pid]);
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      if (i === 99) assert.fail("listener did not establish");
+    }
+    for (let i = 0; i < 150 && reconnects === 0; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(reconnects, 1);
+    await sender.q(`SELECT pg_notify('${channel}', 'ready')`);
+    for (let i = 0; i < 100 && notifications === 0; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(notifications, 1);
+  } finally {
+    listener.close();
+    await pg.close();
+    await sender.close();
+  }
 });

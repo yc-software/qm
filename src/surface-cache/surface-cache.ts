@@ -37,7 +37,7 @@ export function createPostgresSurfaceCache(
   opts: { liveFallback?: LiveFallback } = {},
 ): SurfaceCache {
   const orgId = configOrgId();
-  const { q, query, pool, close } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     `CREATE TABLE IF NOT EXISTS channel_messages(
         org_id TEXT NOT NULL, container TEXT NOT NULL, ts TEXT NOT NULL,
         sub TEXT, author_id TEXT, author_name TEXT, text TEXT NOT NULL DEFAULT '', mentions JSONB,
@@ -80,6 +80,7 @@ export function createPostgresSurfaceCache(
          WHERE sub IS NOT NULL AND deleted = FALSE
          GROUP BY org_id, container, sub`,
   ]);
+  const { q, query, close } = pg;
 
   const liveFallback = opts.liveFallback;
 
@@ -106,7 +107,7 @@ export function createPostgresSurfaceCache(
     async ingest(events) {
       if (!events.length) return { upserted: 0 };
       const now = Date.now();
-      const client = await (await pool()).connect();
+      const client = await pg.connect();
       let upserted = 0;
       try {
         await client.query("BEGIN");

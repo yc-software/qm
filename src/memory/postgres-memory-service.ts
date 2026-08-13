@@ -16,7 +16,8 @@ const SCHEMA = [
 ];
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {
-  const { q, pool } = createPgPool(connectionString, SCHEMA);
+  const pg = createPgPool(connectionString, SCHEMA);
+  const { q } = pg;
 
   async function currentBody(scopeId: string): Promise<string> {
     const rows = await q("SELECT body FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1", [scopeId]);
@@ -39,7 +40,7 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
     author: string | undefined,
     op: string,
   ): Promise<boolean> {
-    const client = await (await pool()).connect();
+    const client = await pg.connect();
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(hashtext('memory'), hashtext($1))", [scopeId]);
@@ -76,7 +77,7 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
     author: string | undefined,
     derive: (existing: string) => { body: string } | null,
   ): Promise<void> {
-    await withPgTransaction(await pool(), async (client) => {
+    await withPgTransaction(pg, async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('memory'), hashtext($1))", [scopeId]);
       const head = await client.query(
         "SELECT body, seq FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1",

@@ -33,7 +33,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       return rows.map(rowToGrant);
     },
     async put(g) {
-      const client = await (await db.pool()).connect();
+      const client = await db.connect();
       try {
         await client.query("BEGIN");
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${g.ownerScopeId}\n${g.ref}`]);
@@ -53,7 +53,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       }
     },
     async remove(g) {
-      const client = await (await db.pool()).connect();
+      const client = await db.connect();
       try {
         await client.query("BEGIN");
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${g.ownerScopeId}\n${g.ref}`]);
@@ -70,7 +70,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       }
     },
     async replaceForResourceIfCurrent(ownerScopeId, ref, expected, replacement) {
-      const client = await (await db.pool()).connect();
+      const client = await db.connect();
       try {
         await client.query("BEGIN");
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${ownerScopeId}\n${ref}`]);

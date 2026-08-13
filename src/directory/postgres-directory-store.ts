@@ -141,7 +141,8 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
 }
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
-  const { q, pool } = createPgPool(connectionString, SCHEMA);
+  const pg = createPgPool(connectionString, SCHEMA);
+  const { q } = pg;
   const orgId = configOrgId();
 
   async function pick<T>(
@@ -189,7 +190,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     write: (client: PoolClient) => Promise<void>,
   ): Promise<boolean> {
     const syncedAtCol = hashCol.replace(/_hash$/, "_synced_at");
-    return withPgTransaction(await pool(), async (client) => {
+    return withPgTransaction(pg, async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
       const sync = await client.query(`SELECT ${hashCol}, ${syncedAtCol} FROM directory_sync WHERE org_id = $1`, [
         orgId,
@@ -360,7 +361,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async upsertGroup(groupId, principalIds) {
       const ids = [...new Set(principalIds.filter(Boolean))];
       if (!groupId || !ids.length) return;
-      await withPgTransaction(await pool(), async (client) => {
+      await withPgTransaction(pg, async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);
         await client.query(

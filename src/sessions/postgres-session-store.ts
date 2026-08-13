@@ -158,7 +158,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                   ELSE NULL END
         FROM (SELECT safe_json(replace(${col}, '\\u0000', '')) AS j) _)`;
 
-  const { pool, q } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     `CREATE OR REPLACE FUNCTION safe_json(t text) RETURNS json
         LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $safe_json$
         BEGIN RETURN t::json; EXCEPTION WHEN others THEN RETURN NULL; END $safe_json$`,
@@ -261,12 +261,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       WHERE s.messages IS NULL
          OR ${lastActivityExpr("s")} > (EXTRACT(EPOCH FROM now()) * 1000)::bigint - 172800000`,
   ]);
+  const { q } = pg;
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
 
   const withLease = async <T>(lease: Lease, invalidMsg: string, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
-    withPgTransaction(await pool(), async (client) => {
+    withPgTransaction(pg, async (client) => {
       await lockSession(client, lease.sessionId);
       const held = await client.query("SELECT token FROM session_leases WHERE session_id = $1 FOR UPDATE", [
         lease.sessionId,
@@ -375,7 +376,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async acquireLease(sessionId, holder): Promise<LeaseAttempt> {
       const token = randomUUID();
       const t = now();
-      return withPgTransaction(await pool(), async (client) => {
+      return withPgTransaction(pg, async (client) => {
         await lockSession(client, sessionId);
         const granted = await client.query(
           `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
@@ -607,7 +608,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async deleteSession(sessionId): Promise<void> {
-      await withPgTransaction(await pool(), async (client) => {
+      await withPgTransaction(pg, async (client) => {
         await lockSession(client, sessionId);
         await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
@@ -619,7 +620,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async deleteSessionIfEmpty(sessionId): Promise<boolean> {
-      return withPgTransaction(await pool(), async (client) => {
+      return withPgTransaction(pg, async (client) => {
         await lockSession(client, sessionId);
         const gone = await client.query(
           `DELETE FROM sessions

@@ -51,9 +51,8 @@ export function createPostgresAdvisoryLock(
   return {
     async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
       const deadline = Date.now() + timeoutMs;
-      const pool = await pg.pool();
       for (;;) {
-        const client = await pool.connect();
+        const client = await pg.connect();
         try {
           const res = await client.query<{ locked: boolean }>(
             "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
@@ -76,8 +75,7 @@ export function createPostgresAdvisoryLock(
     },
 
     async tryWithLock<T>(key: string, fn: () => Promise<T>): Promise<T | null> {
-      const pool = await pg.pool();
-      const client = await pool.connect();
+      const client = await pg.connect();
       try {
         const res = await client.query<{ locked: boolean }>(
           "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",

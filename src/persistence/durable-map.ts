@@ -110,7 +110,7 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
      ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
   async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
-    const client = await (await pg.pool()).connect();
+    const client = await pg.connect();
     try {
       await client.query("BEGIN");
       await client.query(bumpSql);

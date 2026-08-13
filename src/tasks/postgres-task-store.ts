@@ -97,7 +97,7 @@ export function createPostgresTaskStore(connectionString: string, opts: { now?: 
       const id = input.id ?? randomUUID();
       const at = now();
       const status = input.status ?? "pending";
-      const client = await (await pg.pool()).connect();
+      const client = await pg.connect();
       try {
         await client.query("BEGIN");
         const inserted = await client.query(
@@ -139,7 +139,7 @@ export function createPostgresTaskStore(connectionString: string, opts: { now?: 
 
     async transitionStatus(id, expectedStatus, nextStatus, runId): Promise<Task | null> {
       const at = now();
-      const client = await (await pg.pool()).connect();
+      const client = await pg.connect();
       try {
         await client.query("BEGIN");
         const updated = await client.query(

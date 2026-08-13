@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import { createPgPool, assertOneStatement } from "../src/persistence/pg-pool.ts";
+import { createPgListener, createPgPool, assertOneStatement, type PoolClient } from "../src/persistence/pg-pool.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
   const pg = createPgPool("postgres://does-not-exist:0/none", ["SELECT 1"]);
@@ -65,6 +66,25 @@ test("assertOneStatement: a single-quoted literal or line comment containing ';'
 
 test("assertOneStatement: an apostrophe in a line comment can't hide a following statement's ';'", () => {
   assert.throws(() => assertOneStatement("SELECT 1 -- don't\n; SELECT 'x'"), /single statement/);
+});
+
+test("createPgListener destroys a client whose LISTEN setup fails", async () => {
+  let releases = 0;
+  let destroyed = false;
+  const client = Object.assign(new EventEmitter(), {
+    query: async () => {
+      throw new Error("LISTEN failed");
+    },
+    release: (destroy?: boolean | Error) => {
+      releases++;
+      destroyed = destroy === true;
+    },
+  }) as unknown as PoolClient;
+  const listener = createPgListener({ connect: async () => client }, "failed_listener", () => {});
+  for (let i = 0; i < 100 && releases === 0; i++) await new Promise((resolve) => setTimeout(resolve, 1));
+  listener.close();
+  assert.equal(releases, 1);
+  assert.equal(destroyed, true);
 });
 
 function pathToUrl(p: string): string {

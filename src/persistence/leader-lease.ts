@@ -41,7 +41,7 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
     if (!conn) {
       const entry: Conn = { cp: undefined as unknown as Promise<PoolClient>, onError: () => {}, lost: new Set() };
       entry.cp = (async () => {
-        const c = await (await pg.pool()).connect();
+        const c = await pg.connect();
         entry.onError = (e: unknown) => {
           swallow("leader-lease: lock connection died (its locks auto-released)", e);
           drop(entry, c, true);
