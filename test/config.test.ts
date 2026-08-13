@@ -43,6 +43,25 @@ test("store kinds default to memory and accept postgres", () => {
   );
 });
 
+test("deploy provider selection rejects unsupported values instead of falling back to Docker", () => {
+  assert.equal(loadConfig({}).deployProvider, "docker");
+  assert.equal(loadConfig({ DEPLOY_PROVIDER: "docker" }).deployProvider, "docker");
+  assert.equal(loadConfig({ DEPLOY_PROVIDER: "aws" }).deployProvider, "aws");
+  assert.equal(loadConfig({ FLY_APP_NAME: "qm-core" }).deployProvider, "unavailable");
+  assert.equal(loadConfig({ FLY_APP_NAME: "qm-core", DEPLOY_PROVIDER: " " }).deployProvider, "unavailable");
+  assert.equal(loadConfig({ FLY_APP_NAME: "qm-core", DEPLOY_PROVIDER: "aws" }).deployProvider, "aws");
+  assert.throws(
+    () => loadConfig({ FLY_APP_NAME: "qm-core", DEPLOY_PROVIDER: "docker" }),
+    /DEPLOY_PROVIDER="docker" cannot run on Fly/,
+  );
+  for (const provider of ["fly", "unknown"]) {
+    assert.throws(
+      () => loadConfig({ DEPLOY_PROVIDER: provider }),
+      new RegExp(`DEPLOY_PROVIDER=${JSON.stringify(provider)} is not supported`),
+    );
+  }
+});
+
 test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }), /missing or insecure required core secrets/);
   assert.equal(loadConfig(productionEnv).production, true);

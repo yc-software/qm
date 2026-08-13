@@ -89,7 +89,11 @@ test("--target fly overrides a docker config's target for one run", () => {
   const { result } = fly(["plan", "--target", "fly"], cfg, { secrets: [] });
   assert.equal(result.code, 0, result.out);
   assert.match(result.out, /target: fly/);
-  assert.doesNotMatch(result.out, /FLY_DEPLOY_API_TOKEN/, "a Fly target does not opt into the separate app publisher");
+  assert.doesNotMatch(
+    result.out,
+    /FLY_DEPLOY_API_TOKEN/,
+    "the obsolete Fly application deploy token is not scaffolded",
+  );
   assert.match(
     result.out,
     /PUBLIC_API_URL/,

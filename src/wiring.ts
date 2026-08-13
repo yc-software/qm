@@ -70,6 +70,7 @@ import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
+import { createUnavailableFlyDeployProvider } from "./deploy/unavailable-fly-deploy-provider.ts";
 import type { DeployProvider } from "./deploy/deploy-provider.ts";
 import { createDeployService } from "./deploy/deploy-service.ts";
 import {
@@ -830,17 +831,19 @@ export function buildApp(
         : {}),
     },
   });
-  const deployProvider: DeployProvider =
-    config.deployProvider === "aws"
-      ? createAwsDeployProvider({
-          ...config.awsDeploy,
-          ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket
-            ? { dataBucket: config.awsSandbox.s3Bucket }
-            : {}),
-          advisoryLock,
-          store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
-        })
-      : createDockerDeployProvider();
+  let deployProvider: DeployProvider;
+  if (config.deployProvider === "aws") {
+    deployProvider = createAwsDeployProvider({
+      ...config.awsDeploy,
+      ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket ? { dataBucket: config.awsSandbox.s3Bucket } : {}),
+      advisoryLock,
+      store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
+    });
+  } else if (config.deployProvider === "unavailable") {
+    deployProvider = createUnavailableFlyDeployProvider();
+  } else {
+    deployProvider = createDockerDeployProvider();
+  }
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
     console.warn(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",

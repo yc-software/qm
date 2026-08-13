@@ -425,7 +425,7 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
   }
 });
 
-test("fly secrets push removes the disabled Fly app publisher token", async () => {
+test("fly secrets push removes the obsolete Fly application deploy token", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-publisher-off-"));
   const config: QmConfig = {
     contract: 1,

@@ -33,7 +33,7 @@ export interface Config {
   securityPosture: SecurityPosture;
   sandboxBackend: "aws" | "local" | "sprites";
   sandboxSecondaryBackend?: "aws" | "local" | "sprites";
-  deployProvider: "docker" | "aws";
+  deployProvider: "docker" | "aws" | "unavailable";
   egressServiceHosts?: string[];
   brandingDefault?: { accent?: string; mark?: string; selfLabel?: string };
   modelId?: string;
@@ -552,6 +552,21 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
+function deployProviderEnvStrict(env: NodeJS.ProcessEnv): "aws" | "docker" | "unavailable" {
+  const declared = env.DEPLOY_PROVIDER?.trim();
+  if (!declared) return env.FLY_APP_NAME?.trim() ? "unavailable" : "docker";
+  if (declared === "aws") return declared;
+  if (declared === "docker" && !env.FLY_APP_NAME?.trim()) return declared;
+  if (declared === "docker") {
+    throw new Error(
+      'DEPLOY_PROVIDER="docker" cannot run on Fly — omit it to disable application publishing, use "aws" with its required AWS settings, or run core where Docker is available.',
+    );
+  }
+  throw new Error(
+    `DEPLOY_PROVIDER=${JSON.stringify(declared)} is not supported — qm does not implement a Fly application deploy provider; use "aws", or use "docker" only where core can access Docker.`,
+  );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const missingSecrets = validateCoreSecretEnv(env);
   if (missingSecrets.length) {
@@ -635,7 +650,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL ?? publicApiUrl;
-  const deployProvider: "aws" | "docker" = env.DEPLOY_PROVIDER === "aws" ? "aws" : "docker";
+  const deployProvider = deployProviderEnvStrict(env);
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
   if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
   const providerBaseUrls = providerBaseUrlsFromEnv(env);

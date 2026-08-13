@@ -516,7 +516,7 @@ test("fly doctor reports a missing flyctl before trying `fly secrets list`", asy
   }
 });
 
-test("Fly doctor token probes reject expired scoped tokens without exposing them", () => {
+test("Fly doctor token probes reject expired sandbox tokens without exposing them", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-doctor-fly-token-"));
   const bin = join(dir, "fake-fly.cjs");
   writeFileSync(
@@ -548,29 +548,7 @@ process.exit(1);
         return true;
       },
     );
-    assert.doesNotThrow(() =>
-      verifyLocalFlyTokens(
-        flyConfig,
-        new Map([
-          ["FLY_SANDBOX_API_TOKEN", "FlyV1-good"],
-          ["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"],
-        ]),
-      ),
-    );
-    assert.throws(
-      () =>
-        verifyLocalFlyTokens(
-          {
-            ...flyConfig,
-            env: { ...flyConfig.env, core: { ...flyConfig.env.core, DEPLOY_PROVIDER: "fly" } },
-          },
-          new Map([
-            ["FLY_SANDBOX_API_TOKEN", "FlyV1-good"],
-            ["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"],
-          ]),
-        ),
-      /FLY_DEPLOY_API_TOKEN was rejected/,
-    );
+    assert.doesNotThrow(() => verifyLocalFlyTokens(flyConfig, new Map([["FLY_SANDBOX_API_TOKEN", "FlyV1-good"]])));
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;

@@ -167,17 +167,12 @@ test("the Fly sandbox token avoids flyctl's FLY_API_TOKEN authentication variabl
   assert.ok(!computedSecrets(fly).some((secret) => secret.name === "FLY_API_TOKEN"));
 });
 
-test("the Fly tokens belong to a Fly target, and the publisher token only to a Fly deploy provider", () => {
+test("the Fly sandbox token belongs only to a Fly target", () => {
   assert.ok(secretByName(makeConfig({ target: "fly" }), "FLY_SANDBOX_API_TOKEN").required);
-  assert.ok(!computedSecrets(makeConfig({ target: "fly" })).some((secret) => secret.name === "FLY_DEPLOY_API_TOKEN"));
-  assert.ok(
-    secretByName(makeConfig({ target: "fly", env: { core: { DEPLOY_PROVIDER: "fly" } } }), "FLY_DEPLOY_API_TOKEN")
-      .required,
-  );
   for (const config of [makeConfig(), makeConfig({ sandbox: { app: "acme-sb" } }), makeConfig({ target: "aws" })]) {
     assert.ok(!computedSecrets(config).some((secret) => secret.name === "FLY_SANDBOX_API_TOKEN"));
-    assert.ok(!computedSecrets(config).some((secret) => secret.name === "FLY_DEPLOY_API_TOKEN"));
   }
+  assert.ok(!computedSecrets(makeConfig({ target: "fly" })).some((secret) => secret.name === "FLY_DEPLOY_API_TOKEN"));
 });
 
 test("the sprites token is a catalog secret when the sandbox backend is sprites", () => {

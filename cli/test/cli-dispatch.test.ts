@@ -674,6 +674,30 @@ test("--target revalidates the effective provider config", async () => {
   }
 });
 
+test("doctor reports an unsupported Fly application deploy provider before backend probes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-deploy-provider-"));
+  writeFileSync(
+    join(dir, CONFIG_FILENAME),
+    JSON.stringify({
+      contract: 1,
+      orgId: "acme",
+      publicUrl: "http://localhost:8080",
+      target: "docker",
+      services: ["core"],
+      env: { core: { DEPLOY_PROVIDER: "fly" } },
+      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+    }),
+  );
+  try {
+    const result = await run(["doctor"], dir);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.out, /qm does not implement a Fly application deploy provider/);
+    assert.match(result.out, /use "aws", or use "docker" only where core can access Docker/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("check --json routes failures on structured clause data, not message sniffing", async () => {
   const base = {
     contract: 1,

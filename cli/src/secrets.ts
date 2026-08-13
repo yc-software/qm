@@ -118,13 +118,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: "fly tokens create deploy -a <sandbox-app> -x 8760h",
   },
   {
-    name: "FLY_DEPLOY_API_TOKEN",
-    service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "fly" } },
-    description: "Fly organization token used only by qm's opt-in per-deployment app publisher.",
-    generate: "fly tokens create org -o <fly-org> -x 8760h",
-  },
-  {
     name: "SPRITES_TOKEN",
     service: "core",
     required: { when: { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "sprites" } },

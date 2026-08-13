@@ -28,6 +28,16 @@ export function runChecks(
   const { plugins, errors: pluginErrors } = discoverPlugins(configDir, config);
   const configErrors: Array<{ clause: string; message: string }> = [];
   const configError = (message: string, clause = "config.v1"): void => void configErrors.push({ clause, message });
+  const deployProvider = config.env.core?.DEPLOY_PROVIDER?.trim();
+  if (deployProvider && deployProvider !== "aws" && deployProvider !== "docker") {
+    configError(
+      `contract config.env.core.DEPLOY_PROVIDER: ${JSON.stringify(deployProvider)} is not supported; qm does not implement a Fly application deploy provider — use "aws", or use "docker" only where core can access Docker`,
+    );
+  } else if (config.target === "fly" && deployProvider === "docker") {
+    configError(
+      `contract config.env.core.DEPLOY_PROVIDER: "docker" cannot run on target "fly" — omit it to disable application publishing, set it to "aws" with the required AWS settings, or run core where Docker is available`,
+    );
+  }
   const provider = hostingProvider(config.target);
   configErrors.push(...provider.validateConfig(config, plugins));
   if (provider.requiresSandboxApp && !config.sandbox?.app?.trim()) {

@@ -76,7 +76,14 @@ test("every Fly deployment requires durable S3-compatible stores", () => {
   const ephemeral = deployment(() => {}, base);
   const durable = deployment(() => {}, {
     ...base,
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: {
+      core: {
+        SNAPSHOT_STORE: "s3",
+        TRANSFER_STORE: "s3",
+        S3_BUCKET: "acme-data",
+        S3_REGION: "auto",
+      },
+    },
   });
   try {
     assert.throws(() => check(ephemeral), /Fly deployment requires env\.core\.SNAPSHOT_STORE/);
@@ -84,6 +91,34 @@ test("every Fly deployment requires durable S3-compatible stores", () => {
   } finally {
     rmSync(ephemeral.dir, { recursive: true, force: true });
     rmSync(durable.dir, { recursive: true, force: true });
+  }
+});
+
+test("a Fly application deploy provider is rejected before deployment commands run", () => {
+  const d = deployment(() => {}, {
+    env: { core: { DEPLOY_PROVIDER: "fly" } },
+  });
+  try {
+    assert.throws(
+      () => check(d),
+      /DEPLOY_PROVIDER: "fly" is not supported; qm does not implement a Fly application deploy provider/,
+    );
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
+test("a Fly target rejects an explicit Docker deploy provider", () => {
+  const d = deployment(() => {}, {
+    target: "fly",
+    region: "sjc",
+    flyOrg: "personal",
+    env: { core: { DEPLOY_PROVIDER: "docker" } },
+  });
+  try {
+    assert.throws(() => check(d), /"docker" cannot run on target "fly"/);
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
   }
 });
 

@@ -961,12 +961,11 @@ function unsetDisabledSecurityScreenToken(config: QmConfig, appPrefix: string): 
   note(`removed the disabled security screen token from ${app}`);
 }
 
-function unsetDisabledFlyPublisherToken(config: QmConfig, appPrefix: string): void {
-  if (config.env.core?.DEPLOY_PROVIDER === "fly") return;
+function unsetObsoleteFlyDeployToken(appPrefix: string): void {
   const app = `${appPrefix}-core`;
   if (!secretNames(app)?.has("FLY_DEPLOY_API_TOKEN")) return;
   fly(["secrets", "unset", "--stage", "-a", app, "FLY_DEPLOY_API_TOKEN"]);
-  note(`removed the disabled Fly app publisher token from ${app}`);
+  note(`removed the obsolete Fly application deploy token from ${app}`);
 }
 
 export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts = {}): Promise<void> {
@@ -1107,7 +1106,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
     }
     if (services.includes("core")) {
       unsetDisabledSecurityScreenToken(config, ctx.appPrefix);
-      unsetDisabledFlyPublisherToken(config, ctx.appPrefix);
+      unsetObsoleteFlyDeployToken(ctx.appPrefix);
     }
 
     for (const phase of flyDeployPhases(services)) await deployPhase(ctx, phase, imageSource, timing);
@@ -1440,9 +1439,6 @@ export function verifyLocalFlyTokens(config: QmConfig, secrets: ReadonlyMap<stri
   if (config.sandbox?.app) {
     verify("FLY_SANDBOX_API_TOKEN", ["machine", "list", "-a", config.sandbox.app, "--json"], config.sandbox.app);
   }
-  if (config.flyOrg && config.env.core?.DEPLOY_PROVIDER === "fly") {
-    verify("FLY_DEPLOY_API_TOKEN", ["apps", "list", "-o", config.flyOrg, "--json"], `organization ${config.flyOrg}`);
-  }
 }
 
 export async function flyCheckLive(
@@ -1661,7 +1657,7 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
     ensureApp(`${prefix}-${workload}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix);
   for (const plugin of pluginNames) ensureApp(`${prefix}-${plugin}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix);
   unsetDisabledSecurityScreenToken(config, prefix);
-  unsetDisabledFlyPublisherToken(config, prefix);
+  unsetObsoleteFlyDeployToken(prefix);
   const stagedApps = new Set<string>();
   for (const secret of operatorSecrets) {
     const supplied = deploymentSecretValue(secret.name, values.get(secret.name));

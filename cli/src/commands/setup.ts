@@ -103,11 +103,6 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
     "A Fly deploy token scoped to the agent-computer app <sandbox-app>.",
     "Create the app first if it does not exist: fly apps create <sandbox-app>",
   ],
-  FLY_DEPLOY_API_TOKEN: [
-    "Required only when env.core.DEPLOY_PROVIDER is explicitly set to fly.",
-    "A separate Fly organization token for qm's per-deployment apps.",
-    "Scope it to the configured organization <fly-org>; do not reuse a personal token.",
-  ],
   GOOGLE_OAUTH_CLIENT_SECRET: ["From your Google Cloud OAuth client (APIs & Services -> Credentials)."],
   DROPBOX_OAUTH_CLIENT_SECRET: ["From your Dropbox app console (https://www.dropbox.com/developers/apps)."],
   LINEAR_OAUTH_CLIENT_SECRET: ["From your Linear OAuth application settings."],
