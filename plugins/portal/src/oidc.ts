@@ -135,19 +135,16 @@ export function resolvePrincipal(
   const verified = args.userinfo.email_verified;
   if (verified !== true && verified !== "true") throw new Error("email is not verified by the identity provider");
   const email = rawEmail.trim().toLowerCase();
-  if (
-    rule.allowedEmails?.length &&
-    !rule.allowedEmails.map((allowed) => allowed.trim().toLowerCase()).includes(email)
-  ) {
-    throw new Error("account is not on the permitted email list");
-  }
+  if (rule.allowedEmails?.map((allowed) => allowed.trim().toLowerCase()).includes(email)) return email;
   if (rule.allowedEmailDomain) {
     const domain = rule.allowedEmailDomain.toLowerCase();
     if (!email.endsWith(`@${domain}`)) throw new Error("account is outside the permitted domain");
     const hd = args.userinfo.hd ?? args.claims.hd;
     if (typeof hd === "string" && hd.toLowerCase() !== domain)
       throw new Error("account is outside the permitted domain");
+    return email;
   }
+  if (rule.allowedEmails?.length) throw new Error("account is not on the permitted email list");
   return email;
 }
 

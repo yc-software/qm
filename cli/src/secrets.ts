@@ -316,7 +316,10 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AUTH_ALLOWED_EMAILS",
     service: "auth",
-    required: { when: { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" } },
+    required: {
+      when: { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
+      optionalOtherwise: true,
+    },
     description: "Comma-separated email addresses allowed to sign in through the built-in broker.",
   },
   {
@@ -331,6 +334,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
           { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
         ],
       },
+      optionalOtherwise: true,
     },
     description: "Email addresses allowed to sign in; the portal enforces the same list the broker does.",
   },
