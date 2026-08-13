@@ -47,6 +47,7 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
     assert.match(spec?.os ?? "", /Ubuntu/);
     assert.equal(spec?.homeDir, "/home/sprite");
     assert.equal(spec?.workdir, "/home/sprite/workspace");
+    assert.deepEqual(spec?.tools, ["git", "curl", "jq", "tar", "python3"]);
     assert.ok(spec?.notInstalled?.includes("gh"));
     assert.equal(typeof sprites.backupComputer, "function");
   });

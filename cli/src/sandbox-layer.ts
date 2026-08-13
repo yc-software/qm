@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { JUNK_FILE, deploymentLayerBundle } from "./deployment-layer.ts";
+import type { QmConfig } from "./config.ts";
 import { errMessage } from "./log.ts";
 
 export type ApprovalDecision = "require_approval" | "deny";
@@ -787,7 +788,8 @@ const subdirs = (dir: string): string[] => {
 const isCidr = (host: string): boolean =>
   /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(host) || /^[0-9A-Fa-f:]+\/\d{1,3}$/.test(host);
 
-export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
+export function validateSandboxLayer(sandboxDir: string, config?: QmConfig): SandboxValidation {
+  const sprites = config?.target === "fly";
   const out: SandboxValidation = {
     exists: existsSync(sandboxDir),
     hasDockerfile: existsSync(join(sandboxDir, "Dockerfile")),
@@ -835,7 +837,11 @@ export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
     const binaryName = descriptor.install?.binary ?? descriptor.id;
     const exePath = join(toolsDir, name, binaryName);
     const hasExe = isFile(exePath);
-    if (!hasExe && !out.hasDockerfile) {
+    if (sprites) {
+      out.errors.push(
+        `tool "${descriptor.id}" cannot be installed in Fly Sprites because the installed SDK cannot materialize tool binaries or a custom image; remove it`,
+      );
+    } else if (!hasExe && !out.hasDockerfile) {
       out.errors.push(
         `tool "${descriptor.id}" (tools/${name}/) can't get its binary on PATH: ship an executable ` +
           `"${binaryName}" in the folder, or add a sandbox/Dockerfile that installs it`,
@@ -897,6 +903,12 @@ export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
     } catch (e) {
       out.errors.push(errMessage(e));
     }
+  }
+
+  if (sprites && out.hasDockerfile) {
+    out.errors.push(
+      "sandbox/Dockerfile cannot be applied to Fly Sprites because the installed SDK cannot materialize a custom image; remove it",
+    );
   }
 
   return out;

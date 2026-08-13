@@ -7,7 +7,6 @@ import { awsScaffold, dockerScaffold, flyScaffold, type ProviderScaffold } from 
 import type { ResolvedPlugin } from "../plugins.ts";
 import { runnableServices } from "../services.ts";
 import {
-  assertAwsSandboxPinRecordable,
   awsCheckLive,
   awsDoctor,
   awsDown,
@@ -214,8 +213,12 @@ const fly: HostingProvider = {
     ...(config.flyOrg ? { accountOrOrganization: config.flyOrg } : {}),
     ...(config.region ? { region: config.region } : {}),
   }),
-  requiresSandboxApp: true,
-  publishSandbox: (ctx, opts) => publishFlySandbox(ctx, opts, true),
+  requiresSandboxApp: false,
+  publishSandbox: async () => {
+    throw new CliError(
+      "Fly Sprites use the stock runtime; the installed SDK cannot materialize images from `qm sandbox publish`",
+    );
+  },
   validateConfig: (config) => {
     const errors: Array<{ clause: string; message: string }> = [...sandboxImagePinErrors(config)];
     if (!config.region?.trim())
@@ -293,19 +296,10 @@ const aws: HostingProvider = {
   coordinates: (config) =>
     config.aws ? { accountOrOrganization: config.aws.accountId, region: config.aws.region } : {},
   requiresSandboxApp: false,
-  publishSandbox: async (ctx, opts) => {
-    if (ctx.config.sandbox?.backend !== "sprites") {
-      throw new CliError(
-        `this AWS deployment runs Lambda MicroVM sandboxes (sandbox.backend is not "sprites"); use \`qm sandbox build\` to validate the layer and \`qm infra build-image\` to publish the runtime — or set "sandbox.backend": "sprites" with "sandbox.app" to host sandboxes in an operator-published layer image`,
-      );
-    }
-    if (!opts.dryRun) assertAwsSandboxPinRecordable(ctx.config);
-    const published = runSandboxPublish(opts);
-    if (!published || opts.dryRun) return;
-    const config = loadConfigAt(ctx.configPath, { target: ctx.target }).config;
-    await hostingProvider(ctx.target)
-      .createBackend({ ...ctx, config })
-      .pinSandbox(published.image);
+  publishSandbox: async () => {
+    throw new CliError(
+      'AWS Lambda MicroVM sandboxes use `qm infra build-image`; "sandbox.backend": "sprites" custom images are unsupported',
+    );
   },
   validateConfig: (config, plugins) => {
     if (!config.aws) return [];

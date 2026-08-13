@@ -46,6 +46,7 @@ test(
       ) as Array<{ filename: string; files: Array<{ path: string }> }>;
       const tarball = join(dir, packed[0]!.filename);
       const deployment = join(dir, "deployment");
+      const dockerDeployment = join(dir, "docker-deployment");
       const awsDeployment = join(dir, "aws-deployment");
       const tarballBytes = readFileSync(tarball);
       const packageManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")) as Record<string, unknown>;
@@ -84,6 +85,7 @@ test(
       const registryUrl = `http://127.0.0.1:${(registry.address() as AddressInfo).port}/`;
       const consumers = [
         { dir: deployment, org: "acme", target: "fly" },
+        { dir: dockerDeployment, org: "acme-docker", target: "docker" },
         { dir: awsDeployment, org: "acme-aws", target: "aws" },
       ] as const;
       for (const consumer of consumers) {
@@ -140,15 +142,16 @@ test(
       await new Promise<void>((resolve, reject) => registry!.close((error) => (error ? reject(error) : resolve())));
       registry = undefined;
       const bin = join(deployment, "node_modules", ".bin", "qm");
+      const dockerBin = join(dockerDeployment, "node_modules", ".bin", "qm");
       const awsBin = join(awsDeployment, "node_modules", ".bin", "qm");
       rmSync(tarball);
 
-      const deploymentConfig = join(deployment, "qm.config.jsonc");
+      const dockerConfig = join(dockerDeployment, "qm.config.jsonc");
       writeFileSync(
-        deploymentConfig,
-        readFileSync(deploymentConfig, "utf8").replace(
-          '"sandbox": { "app": "acme-sandboxes" }',
-          `"sandbox": { "app": "acme-sandboxes", "image": "registry.fly.io/acme-sandboxes@sha256:${"a".repeat(64)}" }`,
+        dockerConfig,
+        readFileSync(dockerConfig, "utf8").replace(
+          '"sandbox": { "app": "acme-docker-sandboxes" }',
+          `"sandbox": { "app": "acme-docker-sandboxes", "image": "registry.fly.io/acme-docker-sandboxes@sha256:${"a".repeat(64)}" }`,
         ),
       );
 
@@ -175,8 +178,8 @@ test(
 
       assert.match(execFileSync(bin, ["version"], { encoding: "utf8" }), /^\d+\.\d+\.\d+/);
       assert.match(execFileSync(bin, ["check"], { cwd: deployment, encoding: "utf8", env }), /check passed/);
-      const dockerPlan = execFileSync(bin, ["plan", "--target", "docker"], {
-        cwd: deployment,
+      const dockerPlan = execFileSync(dockerBin, ["plan"], {
+        cwd: dockerDeployment,
         encoding: "utf8",
         env,
       });
@@ -195,8 +198,16 @@ test(
       const generatedCore = join(deployment, ".generated", "fly", "acme", "core.fly.toml");
       assert.ok(existsSync(generatedCore));
       assert.doesNotMatch(readFileSync(generatedCore, "utf8"), /^\s*PI_(?:MODEL|DETECT_MODEL)\s*=/m);
+      assert.throws(
+        () => execFileSync(bin, ["sandbox", "publish", "--dry-run"], { cwd: deployment, encoding: "utf8", env }),
+        /stock runtime/,
+      );
       assert.match(
-        execFileSync(bin, ["sandbox", "publish", "--dry-run"], { cwd: deployment, encoding: "utf8", env }),
+        execFileSync(dockerBin, ["sandbox", "publish", "--dry-run"], {
+          cwd: dockerDeployment,
+          encoding: "utf8",
+          env,
+        }),
         /qm-sandbox-base@sha256:a{64}/,
       );
       const outputs = JSON.parse(

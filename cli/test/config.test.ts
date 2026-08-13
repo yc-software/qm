@@ -712,43 +712,37 @@ test("a tag-pinned sandbox.image is refused: staleness compares image references
   });
 });
 
-test("a mutable sandbox tag fails check, while an unpublished deployment is only pending", () => {
-  withConfig({ target: "fly", region: "sjc", flyOrg: "acme", sandbox: { app: "acme-sandboxes" } }, ({ path }) => {
+test("Fly Sprites reject every unsupported image and resident-environment setting", () => {
+  for (const sandbox of [
+    { app: "acme-sandboxes" },
+    { image: `registry.fly.io/acme-sandboxes@sha256:${"1a".repeat(32)}` },
+    { baseImage: `registry.example/base@sha256:${"2b".repeat(32)}` },
+    { env: { TZ: "UTC" } },
+    { secretEnv: ["COMPANY_API_TOKEN"] },
+  ]) {
+    withConfig({ target: "fly", region: "sjc", flyOrg: "acme", sandbox }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /Fly Sprites use the stock runtime and do not support/);
+    });
+  }
+  withConfig({ target: "fly", region: "sjc", flyOrg: "acme" }, ({ path }) => {
     const { config } = loadConfigAt(path);
-    assert.deepEqual(sandboxImagePinErrors(config), [], "check cannot demand a pin only `sandbox publish` can write");
-    assert.equal(sandboxPinPending(config), true);
-    assert.throws(
-      () => sandboxCoreEnv(config),
-      /no sandbox layer image is pinned/,
-      "rendering core still fails closed",
-    );
+    assert.equal(sandboxPinPending(config), false);
+    assert.deepEqual(sandboxImagePinErrors(config), []);
+    assert.deepEqual(sandboxCoreEnv(config), { env: { SANDBOX_BACKEND: "sprites" }, missingSecrets: [] });
   });
-  withConfig(
-    {
-      target: "fly",
-      region: "sjc",
-      flyOrg: "acme",
-      sandbox: { app: "acme-sandboxes", image: "registry.fly.io/acme-sandboxes:latest" },
-    },
-    ({ path }) => {
-      const { config } = loadConfigAt(path);
-      const errors = sandboxImagePinErrors(config);
-      assert.equal(errors.length, 1);
-      assert.equal(errors[0]!.clause, "config.v1");
-      assert.match(errors[0]!.message, /must be pinned by digest/);
-    },
-  );
-  withConfig(
-    {
-      target: "fly",
-      region: "sjc",
-      flyOrg: "acme",
-      sandbox: { app: "acme-sandboxes", image: `registry.fly.io/acme-sandboxes@sha256:${"1a".repeat(32)}` },
-    },
-    ({ path }) => {
-      assert.deepEqual(sandboxImagePinErrors(loadConfigAt(path).config), []);
-    },
-  );
+  withConfig({ target: "fly", region: "sjc", flyOrg: "acme", sandbox: { backend: "sprites" } }, ({ path }) => {
+    assert.deepEqual(loadConfigAt(path).config.sandbox, { backend: "sprites" });
+  });
+  for (const override of [
+    { env: { core: { FLY_BASE_IMAGE: "registry.example/acme:latest" } } },
+    { env: { core: { FLY_CPUS: "99" } } },
+    { env: { core: { SANDBOX_BACKEND: "aws" } } },
+    { secretEnv: { core: { FLY_API_TOKEN: "TOKEN" } } },
+  ]) {
+    withConfig({ target: "fly", region: "sjc", flyOrg: "acme", ...override }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /Fly Sprites use the stock runtime and do not support/);
+    });
+  }
 });
 
 test("sandbox.image requires sandbox.app and must be non-empty", () => {
@@ -812,7 +806,7 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
     { sandbox: { secretEnv: ["1BAD"] }, rx: /not a valid env var name/ },
     { sandbox: { backend: "k8s", app: "acme-sandboxes" }, rx: /"sandbox.backend" must be "sprites".*or "aws"/ },
     { sandbox: { backend: "fly", app: "acme-sandboxes" }, rx: /"sandbox.backend" must be "sprites".*or "aws"/ },
-    { sandbox: { backend: "sprites" }, rx: /"sandbox.backend": "sprites" requires "sandbox.app"/ },
+    { sandbox: { backend: "sprites" }, rx: /"sandbox.backend": "sprites" is only supported for target "fly"/ },
     {
       sandbox: { backend: "aws", app: "acme-sandboxes" },
       rx: /"sandbox.backend": "aws" \(Lambda MicroVM sandboxes\) requires target "aws"/,
@@ -825,7 +819,7 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
   }
 });
 
-test("aws target makes the sandbox substrate explicit: backend required with a sandbox block, sprites needs app, aws forbids fly-image settings", () => {
+test("aws target accepts only its MicroVM backend and rejects the old Sprites image mode", () => {
   const aws = {
     accountId: "123456789012",
     region: "us-west-2",
@@ -837,16 +831,13 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
     services: { core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 } },
   };
   withConfig({ target: "aws", aws, sandbox: { app: "acme-sandboxes" } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /target "aws" requires an explicit "sandbox.backend"/);
+    assert.throws(() => loadConfigAt(path), /target "aws" requires "sandbox.backend": "aws"/);
   });
   withConfig({ target: "aws", aws, sandbox: { backend: "sprites", app: "acme-sandboxes" } }, ({ path }) => {
-    assert.equal(loadConfigAt(path).config.sandbox?.backend, "sprites");
+    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "sprites" is only supported for target "fly"/);
   });
   withConfig({ target: "aws", aws, sandbox: { backend: "aws" } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.sandbox?.backend, "aws");
-  });
-  withConfig({ target: "aws", aws, sandbox: { backend: "sprites", app: "acme-sandboxes" } }, ({ path }) => {
-    assert.equal(loadConfigAt(path).config.sandbox?.backend, "sprites");
   });
   withConfig({ target: "aws", aws, sandbox: { backend: "aws", app: "acme-sandboxes" } }, ({ path }) => {
     assert.throws(

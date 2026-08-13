@@ -708,7 +708,7 @@ test("AWS sandbox publish preconditions run before the build: frozen override an
       publicUrl: "https://agent.acme.example",
       target: "docker",
       services: ["core"],
-      sandbox: { backend: "sprites", app: "acme-sandboxes", image: pin },
+      sandbox: { app: "acme-sandboxes", image: pin },
     });
     writeFileSync(configPath, configBody);
     const toolDir = join(dir, "sandbox", "tools", "t");
@@ -733,11 +733,11 @@ test("AWS sandbox publish preconditions run before the build: frozen override an
           config: frozen.config,
           configPath,
         }),
-      /freezes the sandbox pin/,
+      /custom images are unsupported/,
     );
     const pinless: DeployContext = {
       ...frozen,
-      config: { ...frozen.config, sandbox: { backend: "sprites", app: "acme-sandboxes" } },
+      config: { ...frozen.config, sandbox: { app: "acme-sandboxes" } },
     };
     await assert.rejects(
       () =>
@@ -746,7 +746,7 @@ test("AWS sandbox publish preconditions run before the build: frozen override an
           config: pinless.config,
           configPath,
         }),
-      /no AWS deployment manifest exists yet/,
+      /custom images are unsupported/,
     );
     assert.equal(readFileSync(dockerLog, "utf8"), "", "preconditions fail before any docker side effect");
     assert.equal(readFileSync(configPath, "utf8"), configBody);
@@ -757,7 +757,7 @@ test("AWS sandbox publish preconditions run before the build: frozen override an
   }
 });
 
-test("sandbox publish on AWS with sandbox.backend sprites proceeds to the layer build (operator-hosted sandbox image)", async () => {
+test("the AWS provider rejects the removed Sprites image mode before inspecting the layer", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-publish-aws-fly-"));
   const aws = fakeAwsBin(dir, {
     id: "m1",
@@ -772,7 +772,7 @@ test("sandbox publish on AWS with sandbox.backend sprites proceeds to the layer 
       publicUrl: "https://agent.acme.example",
       target: "docker",
       services: ["core"],
-      sandbox: { backend: "sprites", app: "acme-sandboxes" },
+      sandbox: { app: "acme-sandboxes" },
     });
     writeFileSync(configPath, configBody);
     const { config } = loadConfigAt(configPath);
@@ -785,7 +785,7 @@ test("sandbox publish on AWS with sandbox.backend sprites proceeds to the layer 
     };
     await assert.rejects(
       () => hostingProvider("aws").publishSandbox(ctx, { sandboxDir: ctx.sandboxDir, config: ctx.config, configPath }),
-      /nothing to build/,
+      /custom images are unsupported/,
     );
     assert.equal(readFileSync(configPath, "utf8"), configBody);
   } finally {

@@ -134,6 +134,40 @@ test("a tool with no executable BUT a sandbox/Dockerfile passes (Dockerfile inst
   }
 });
 
+test("Fly Sprites accept skills and reject every sandbox image tool path", () => {
+  const flyConfig: Partial<QmConfig> = {
+    target: "fly",
+    publicUrl: "https://acme.example.com",
+    region: "sjc",
+    flyOrg: "personal",
+    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    sandbox: undefined,
+  };
+  const customized = deployment((dir) => {
+    writeTool(dir, "custom-tool", { id: "custom-tool", install: { binary: "custom-tool" } });
+    writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM base\n");
+    writeSkill(dir, "greet", "name: greet\ndescription: Greet a teammate.");
+  }, flyConfig);
+  const skillOnly = deployment(
+    (dir) => writeSkill(dir, "greet", "name: greet\ndescription: Greet a teammate."),
+    flyConfig,
+  );
+  try {
+    assert.throws(
+      () => check(customized),
+      (error) => {
+        assert.match(String(error), /tool "custom-tool" cannot be installed in Fly Sprites/);
+        assert.match(String(error), /sandbox\/Dockerfile cannot be applied to Fly Sprites/);
+        return true;
+      },
+    );
+    assert.doesNotThrow(() => check(skillOnly));
+  } finally {
+    rmSync(customized.dir, { recursive: true, force: true });
+    rmSync(skillOnly.dir, { recursive: true, force: true });
+  }
+});
+
 test("duplicate tool ids are flagged", () => {
   const d = deployment((dir) => {
     writeTool(dir, "folderA", { id: "same", install: { binary: "same" } });

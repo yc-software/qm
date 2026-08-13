@@ -1,7 +1,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CliError, bold, die, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
@@ -36,7 +36,6 @@ import {
 } from "../config.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { computedSecrets, runtimeSecretNames, secretDestinations, secretsForService } from "../secrets.ts";
-import { flySandboxRepository, imageRepository, pinnedByDigest, recordSandboxPin } from "../commands/sandbox.ts";
 import { manifestRef } from "../manifest.ts";
 import { doctorCommon, localDoctorSecrets, requireFlyAuth } from "./doctor.ts";
 
@@ -192,13 +191,7 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
     delete configuredEnv.FLY_ORG;
     delete configuredEnv.FLY_DEPLOY_BASE_IMAGE;
   }
-  const deploymentEnv =
-    service === "core"
-      ? {
-          ...(ctx.flyOrg ? { FLY_ORG: ctx.flyOrg } : {}),
-          ...(sandboxEnv.FLY_BASE_IMAGE ? { FLY_DEPLOY_BASE_IMAGE: sandboxEnv.FLY_BASE_IMAGE } : {}),
-        }
-      : {};
+  const deploymentEnv: Record<string, string> = service === "core" && ctx.flyOrg ? { FLY_ORG: ctx.flyOrg } : {};
   const overrides: Record<string, string> = {
     ...spec.managed(ctx.serviceCtx),
     ...sandboxEnv,
@@ -452,16 +445,6 @@ function ensureApp(app: string, flyOrg: string, orgId: string, appPrefix: string
   }
   fly(["secrets", "set", "--stage", "-a", app, `${marker}=1`]);
   note(`app ${app}: created`);
-}
-
-function assertOwnedApp(app: string, flyOrg: string, orgId: string, appPrefix: string): void {
-  if (!flyOrgApps(flyOrg).has(app)) {
-    throw new CliError(`app ${app} is not present in configured Fly organization ${flyOrg}`);
-  }
-  const marker = flyOwnershipMarker(flyOrg, orgId, appPrefix);
-  if (!secretNames(app)?.has(marker)) {
-    throw new CliError(`app ${app} is not marked as owned by deployment ${flyDeploymentId(flyOrg, orgId, appPrefix)}`);
-  }
 }
 
 function ensurePostgres(ctx: FlyCtx): void {
@@ -1317,67 +1300,12 @@ export function flyDown(config: QmConfig, configDir: string): void {
   ok("down — all apps scaled to 0.");
 }
 
-export function flyPinSandbox(config: QmConfig, image: string, configDir = process.cwd()): void {
-  const appPrefix = appPrefixOf(config);
-  const app = `${appPrefix}-core`;
-  const flyOrg = config.flyOrg ?? "";
-  if (!flyOrgApps(flyOrg).has(app)) {
-    note(
-      `${app} is not deployed in Fly organization ${flyOrg} — no live core to roll; the pin only takes effect from the config's sandbox.image on the next \`qm up\``,
-    );
-    return;
-  }
-  assertOwnedApp(app, flyOrg, config.orgId, appPrefix);
-  let running: string;
-  try {
-    running = currentImage(app);
-  } catch {
-    note(
-      `${app} is not running — no live core to roll; the pin only takes effect from the config's sandbox.image on the next \`qm up\``,
-    );
-    return;
-  }
-  const pinned: QmConfig = { ...config, sandbox: { ...config.sandbox, image } };
-  const cfgPath = writeDerived(buildCtx(pinned, configDir, {}), "core");
-  if (secretNames(app)?.has("FLY_BASE_IMAGE")) {
-    fly(["secrets", "unset", "--stage", "-a", app, "FLY_BASE_IMAGE"]);
-    note(`removed the stale FLY_BASE_IMAGE secret on ${app}; the derived [env] pin is authoritative`);
-  }
-  fly(["deploy", "--yes", "-c", cfgPath, "--image", running, ...serviceDef("core").fly!.deployFlags]);
-  ok(`${app} now boots sandboxes from ${image}`);
+export function flyPinSandbox(_config: QmConfig, _image: string, _configDir = process.cwd()): void {
+  throw new CliError("Fly Sprites use the stock runtime and do not support sandbox image pins");
 }
 
-export function flyRollback(config: QmConfig, configPath: string, to?: string): void {
-  if (!to) throw new CliError("Fly rollback requires --to <sandbox-sha-or-image>");
-  if (to.startsWith("sha256:") && !/^sha256:[a-f0-9]{64}$/.test(to)) {
-    throw new CliError(`rollback --to must resolve to an image tag or sha256 digest (got ${JSON.stringify(to)})`);
-  }
-  let image: string;
-  if (to.includes("/")) {
-    image = to;
-  } else {
-    let repository: string | undefined;
-    if (config.sandbox?.image) repository = imageRepository(config.sandbox.image);
-    else if (config.sandbox?.app) repository = flySandboxRepository(config.sandbox.app);
-    if (!repository) {
-      throw new CliError(
-        "rollback cannot derive an image repository: the config has no sandbox.app or sandbox.image — " +
-          "pass a full ref instead (--to <registry/repository@sha256:…>)",
-      );
-    }
-    image = to.startsWith("sha256:") ? `${repository}@${to}` : `${repository}:${to}`;
-  }
-  const digestRef = /^\S+@sha256:[a-f0-9]{64}$/;
-  const slash = image.lastIndexOf("/");
-  const colon = image.lastIndexOf(":");
-  const taggedRef = colon > slash && /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(image.slice(colon + 1));
-  if (image.includes("@") ? !digestRef.test(image) : !taggedRef) {
-    throw new CliError(`rollback --to must resolve to an image tag or sha256 digest (got ${JSON.stringify(image)})`);
-  }
-  const pinned = pinnedByDigest(image);
-  recordSandboxPin(configPath, pinned);
-  note(`recorded sandbox.image = ${pinned} in ${configPath}`);
-  flyPinSandbox(config, pinned, dirname(configPath));
+export function flyRollback(_config: QmConfig, _configPath: string, _to?: string): void {
+  throw new CliError("Fly rollback is unavailable because Sprites do not support sandbox image pins");
 }
 
 export async function flyDoctor(config: QmConfig, configDir: string, envFile?: string): Promise<void> {
@@ -1437,9 +1365,6 @@ export function verifyLocalFlyTokens(config: QmConfig, secrets: ReadonlyMap<stri
     }
     step(`${name}: live authorization ok`);
   };
-  if (config.sandbox?.app) {
-    verify("FLY_SANDBOX_API_TOKEN", ["machine", "list", "-a", config.sandbox.app, "--json"], config.sandbox.app);
-  }
   if (config.flyOrg && config.env.core?.DEPLOY_PROVIDER === "fly") {
     verify("FLY_DEPLOY_API_TOKEN", ["apps", "list", "-o", config.flyOrg, "--json"], `organization ${config.flyOrg}`);
   }

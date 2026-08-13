@@ -146,12 +146,11 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   status                                   show what's running
   logs [<service>] [-f] [--tail <n>]       tail service logs (omit <service> for all, interleaved)
   down [--purge]                           stop the deployment (--purge drops docker volumes)
-  rollback [--to <target>]                 roll back workloads (AWS: prior deployment manifest,
-                                           or manifest id/release label; Fly: sandbox image/tag)
+  rollback [--to <target>]                 roll back an AWS deployment manifest by id or release label
   sandbox build [--from <img>] [--tag <t>] [--dry-run]
-                                           build and validate the sandbox image locally
+                                           build and validate the Docker target's sandbox image locally
   sandbox publish [--from <img>] [--app <registry/repo>] [--tag <t>] [--dry-run]
-                                           build, push, resolve digest, and record the immutable pin
+                                           publish and pin the Docker target's sandbox image
 
   ${dim("Options (apply to all deploy commands):")}
     --config <path>                        path to deploy config (default: qm.config.jsonc in deploy dir)

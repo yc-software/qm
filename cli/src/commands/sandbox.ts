@@ -248,8 +248,13 @@ function assertPublishPlatform(body: string): void {
 }
 
 function prepare(opts: SandboxBuildOpts): PreparedBuild {
+  if (opts.config.target === "fly") {
+    throw new CliError(
+      "Fly Sprites use the stock runtime; the installed SDK cannot materialize images built by `qm sandbox build` or `qm sandbox publish`",
+    );
+  }
   const sandboxDir = resolve(opts.sandboxDir);
-  const layer = validateSandboxLayer(sandboxDir);
+  const layer = validateSandboxLayer(sandboxDir, opts.config);
   if (layer.errors.length) {
     throw new CliError(`sandbox check failed:\n${layer.errors.map((error) => `  - ${error}`).join("\n")}`);
   }

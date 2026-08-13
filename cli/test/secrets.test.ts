@@ -159,22 +159,17 @@ test("model credentials are optional at deploy time because Admin onboarding can
   assert.equal(secretByName(docker, "ANTHROPIC_API_KEY").required, false);
 });
 
-test("the Fly sandbox token avoids flyctl's FLY_API_TOKEN authentication variable", () => {
-  const fly = makeConfig({ target: "fly" });
-  const sandbox = secretByName(fly, "FLY_SANDBOX_API_TOKEN");
-  assert.ok(sandbox.required);
-  assert.deepEqual(runtimeSecretNames("core", sandbox), ["FLY_API_TOKEN"]);
-  assert.ok(!computedSecrets(fly).some((secret) => secret.name === "FLY_API_TOKEN"));
+test("the Fly target does not request a token for an unsupported custom sandbox app", () => {
+  assert.ok(!computedSecrets(makeConfig({ target: "fly" })).some((secret) => secret.name === "FLY_SANDBOX_API_TOKEN"));
 });
 
-test("the Fly tokens belong to a Fly target, and the publisher token only to a Fly deploy provider", () => {
-  assert.ok(secretByName(makeConfig({ target: "fly" }), "FLY_SANDBOX_API_TOKEN").required);
+test("the Fly deploy publisher token only belongs to an enabled Fly deploy provider", () => {
   assert.ok(!computedSecrets(makeConfig({ target: "fly" })).some((secret) => secret.name === "FLY_DEPLOY_API_TOKEN"));
   assert.ok(
     secretByName(makeConfig({ target: "fly", env: { core: { DEPLOY_PROVIDER: "fly" } } }), "FLY_DEPLOY_API_TOKEN")
       .required,
   );
-  for (const config of [makeConfig(), makeConfig({ sandbox: { app: "acme-sb" } }), makeConfig({ target: "aws" })]) {
+  for (const config of [makeConfig(), makeConfig({ target: "aws" })]) {
     assert.ok(!computedSecrets(config).some((secret) => secret.name === "FLY_SANDBOX_API_TOKEN"));
     assert.ok(!computedSecrets(config).some((secret) => secret.name === "FLY_DEPLOY_API_TOKEN"));
   }

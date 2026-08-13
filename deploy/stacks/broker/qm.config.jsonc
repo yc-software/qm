@@ -11,10 +11,6 @@
   "region": "sjc",
   "flyOrg": "personal",
   "deployAppPrefix": "qm-d",
-  "sandbox": {
-    "app": "acme-sandboxes",
-    "image": "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-  },
   "services": ["core", "slack", "admin", "web-ui", "portal", "auth"],
   "env": {
     "admin": {

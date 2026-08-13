@@ -141,6 +141,7 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     assert.deepEqual(config.services, ["core", "slack", "web-ui", "admin", "portal", "auth"]);
     assert.equal(config.publicUrl, "https://acme-portal.fly.dev");
     assert.equal(config.flyOrg, "personal");
+    assert.equal(config.sandbox, undefined);
     assert.ok(config.region, "region is scaffolded");
     assert.equal(config.appPrefix, "acme");
     assert.deepEqual(
@@ -175,6 +176,10 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
       assert.ok(env.split("\n").includes(line), `.env.example should offer ${line}`);
     }
     assert.ok(existsSync(join(dir, "slack-app-manifest.yml")), "Slack manifest is scaffolded on fly too");
+    assert.equal(existsSync(join(dir, "sandbox", "tools")), false);
+    const greet = readFileSync(join(dir, "sandbox", "skills", "greet", "SKILL.md"), "utf8");
+    assert.doesNotMatch(greet, /example-tool/);
+    assert.deepEqual(validateSandboxLayer(join(dir, "sandbox"), config).errors, []);
     assert.equal(existsSync(join(dir, "slack-sso-manifest.yml")), false);
     for (const line of ["# OIDC_CLIENT_ID=", "# OIDC_CLIENT_SECRET=", "# PORTAL_EXPECTED_TEAM_ID="]) {
       assert.ok(env.split("\n").includes(line), `external-IdP secret ${line} stays documented but unrequired`);

@@ -516,7 +516,7 @@ test("fly doctor reports a missing flyctl before trying `fly secrets list`", asy
   }
 });
 
-test("Fly doctor token probes reject expired scoped tokens without exposing them", () => {
+test("Fly doctor token probes only the enabled deployment publisher token", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-doctor-fly-token-"));
   const bin = join(dir, "fake-fly.cjs");
   writeFileSync(
@@ -529,9 +529,7 @@ process.exit(1);
   );
   chmodSync(bin, 0o755);
   const prior = process.env.FLY_BIN;
-  const priorSandboxToken = process.env.FLY_SANDBOX_API_TOKEN;
   process.env.FLY_BIN = bin;
-  process.env.FLY_SANDBOX_API_TOKEN = "FlyV1-good";
   const flyConfig: QmConfig = {
     ...config,
     target: "fly",
@@ -540,23 +538,8 @@ process.exit(1);
     flyOrg: "personal",
   };
   try {
-    assert.throws(
-      () => verifyLocalFlyTokens(flyConfig, new Map([["FLY_SANDBOX_API_TOKEN", "FlyV1-expired"]])),
-      (error: unknown) => {
-        assert.match((error as Error).message, /FLY_SANDBOX_API_TOKEN was rejected/);
-        assert.doesNotMatch((error as Error).message, /FlyV1-expired/);
-        return true;
-      },
-    );
-    assert.doesNotThrow(() =>
-      verifyLocalFlyTokens(
-        flyConfig,
-        new Map([
-          ["FLY_SANDBOX_API_TOKEN", "FlyV1-good"],
-          ["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"],
-        ]),
-      ),
-    );
+    assert.doesNotThrow(() => verifyLocalFlyTokens(flyConfig, new Map([["FLY_SANDBOX_API_TOKEN", "FlyV1-expired"]])));
+    assert.doesNotThrow(() => verifyLocalFlyTokens(flyConfig, new Map([["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"]])));
     assert.throws(
       () =>
         verifyLocalFlyTokens(
@@ -564,18 +547,17 @@ process.exit(1);
             ...flyConfig,
             env: { ...flyConfig.env, core: { ...flyConfig.env.core, DEPLOY_PROVIDER: "fly" } },
           },
-          new Map([
-            ["FLY_SANDBOX_API_TOKEN", "FlyV1-good"],
-            ["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"],
-          ]),
+          new Map([["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"]]),
         ),
-      /FLY_DEPLOY_API_TOKEN was rejected/,
+      (error: unknown) => {
+        assert.match((error as Error).message, /FLY_DEPLOY_API_TOKEN was rejected/);
+        assert.doesNotMatch((error as Error).message, /FlyV1-expired/);
+        return true;
+      },
     );
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
-    if (priorSandboxToken === undefined) delete process.env.FLY_SANDBOX_API_TOKEN;
-    else process.env.FLY_SANDBOX_API_TOKEN = priorSandboxToken;
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -200,7 +200,7 @@ else console.log("{}");
     services: ["core"],
     env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app", AWS_DEPLOY_IMAGE_VERSION: "1" } },
     imageOverrides: { core: `ghcr.io/acme/core@sha256:${"a".repeat(64)}` },
-    sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+    sandbox: { backend: "aws" },
     aws: {
       accountId: "123456789012",
       region: "us-west-2",
@@ -242,7 +242,7 @@ test("successful check --json --live reports the live-drift clause", async () =>
     services: ["core"],
     env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app", AWS_DEPLOY_IMAGE_VERSION: "1" } },
     imageOverrides: { core: `ghcr.io/acme/core@${digest}` },
-    sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+    sandbox: { backend: "aws" },
     aws: {
       accountId: "123456789012",
       region: "us-west-2",
@@ -447,7 +447,7 @@ test("sandbox publish directs MicroVM AWS deployments (no sandbox.app) to the im
   }
 });
 
-test("sandbox publish on an AWS deployment with sandbox.app dry-runs the operator layer image", async () => {
+test("sandbox publish rejects the removed AWS Sprites image mode at config load", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
   const configPath = join(dir, CONFIG_FILENAME);
   const raw = JSON.stringify({
@@ -474,9 +474,8 @@ test("sandbox publish on an AWS deployment with sandbox.app dry-runs the operato
   writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM scratch\n");
   try {
     const result = await run(["sandbox", "publish", "--dry-run"], dir);
-    assert.equal(result.exitCode, null, result.out);
-    assert.match(result.out, /sandbox publish → registry\.fly\.io\/acme-sandboxes:latest/);
-    assert.match(result.out, /DRY RUN — nothing built, pushed, or recorded/);
+    assert.equal(result.exitCode, 1, result.out);
+    assert.match(result.out, /"sandbox.backend": "sprites" is only supported for target "fly"/);
     assert.equal(readFileSync(configPath, "utf8"), raw);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -638,7 +637,8 @@ test("config get prints raw scalars and JSON objects, honors --target, and fails
     );
 
     const overridden = await run(["config", "get", "target", "--target", "fly"], dir);
-    assert.equal(overridden.out, "fly", "--target overrides the config's durable value, same as every deploy command");
+    assert.equal(overridden.exitCode, 1);
+    assert.match(overridden.out, /Fly Sprites use the stock runtime and do not support/);
 
     const missing = await run(["config", "get", "aws.deployRoleArn"], dir);
     assert.equal(missing.exitCode, 1);
@@ -662,7 +662,6 @@ test("--target revalidates the effective provider config", async () => {
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
     }),
   );
   try {

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -23,35 +22,14 @@ test("Fly runs the live session smoke inside the private core machine", () => {
   assert.equal(flyLiveSessionCommand(), "node src/deployment/postdeploy-smoke.ts session http://127.0.0.1:8080");
 });
 
-test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image, env literals)", () => {
+test("a fly config uses the stock Sprites runtime", () => {
   const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
-  const cfg = {
-    ...config,
-    sandbox: {
-      app: "acme-sb",
-      image: "registry.fly.io/acme-sb@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-      env: { TZ: "UTC" },
-      secretEnv: ["COMPANY_API_TOKEN"],
-    },
-  };
+  const core = derivedTomlFor(config, "core", repoRoot);
+  assert.match(core, /SANDBOX_BACKEND = "sprites"/);
+  assert.doesNotMatch(core, /FLY_SANDBOX_APP_NAME|FLY_BASE_IMAGE|FLY_RESIDENT_ENV_/);
 
-  const core = derivedTomlFor(cfg, "core", repoRoot);
-  assert.match(core, /FLY_SANDBOX_APP_NAME = "acme-sb"/, "sandbox.app overrides the baked app name");
-  assert.match(
-    core,
-    /FLY_BASE_IMAGE = "registry\.fly\.io\/acme-sb@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"/,
-    "FLY_BASE_IMAGE is the config's digest pin",
-  );
-  assert.match(core, /FLY_RESIDENT_ENV_TZ = "UTC"/, "sandbox.env literal forwarded as FLY_RESIDENT_ENV_*");
-  assert.doesNotMatch(
-    core,
-    /FLY_RESIDENT_ENV_COMPANY_API_TOKEN/,
-    "secretEnv value/name must not be written to the toml",
-  );
-
-  const admin = derivedTomlFor(cfg, "admin", repoRoot);
-  assert.doesNotMatch(admin, /FLY_RESIDENT_ENV_TZ/);
-  assert.doesNotMatch(admin, /FLY_SANDBOX_APP_NAME = "acme-sb"/);
+  const admin = derivedTomlFor(config, "admin", repoRoot);
+  assert.doesNotMatch(admin, /SANDBOX_BACKEND|FLY_SANDBOX_APP_NAME|FLY_BASE_IMAGE|FLY_RESIDENT_ENV_/);
 });
 
 test("the fly target routes security screen proxy configuration only to core", () => {
@@ -179,7 +157,7 @@ test("--only rejects a name that is neither a service nor a plugin (before any F
   );
 });
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { flyPinSandbox, flyRollback, flySecretsPush } from "../src/backends/fly.ts";
 
 function fakeFly(dir: string, script: string): { log: string; restore: () => void } {
@@ -1084,261 +1062,10 @@ else console.log("ok");`,
   }
 });
 
-test("fly rollback joins a bare digest with @ and records the pin in the config file", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-rollback-"));
-  const appPrefix = "qmrbtest";
-  const digest = `sha256:${"d".repeat(64)}`;
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    appPrefix,
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-    sandbox: { app: `${appPrefix}-sb` },
-  };
-  const configPath = join(dir, "qm.config.jsonc");
-  writeFileSync(
-    configPath,
-    `${JSON.stringify({ contract: 1, orgId: "acme", sandbox: { app: `${appPrefix}-sb` } }, null, 2)}\n`,
-  );
-  const marker = `QM_OWNER_${createHash("sha256").update(`qm-v2:personal:acme:${appPrefix}`).digest("hex").slice(0, 16).toUpperCase()}`;
-  const fake = fakeFly(
-    dir,
-    `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "${appPrefix}-core" }]));
-else if (a.startsWith("secrets list")) console.log("NAME  DIGEST  CREATED AT\\n${marker}  abc123  1m ago");
-else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", config: { image: "registry.fly.io/${appPrefix}-core:cur" } }] }));
-else if (a.startsWith("image show")) console.log(JSON.stringify([{ MachineID: "machine-core", Registry: "registry.fly.io", Repository: "${appPrefix}-core", Tag: "cur", Digest: "sha256:${"a".repeat(64)}" }]));
-else console.log("");`,
-  );
-  const resolved = `sha256:${"e".repeat(64)}`;
-  const docker = join(dir, "docker");
-  writeFileSync(docker, `#!/usr/bin/env bash\necho "Digest: ${resolved}"\n`);
-  chmodSync(docker, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath ?? ""}`;
-  const generated = join(dir, ".generated", "fly", appPrefix);
-  const log = console.log;
-  console.log = (): void => {};
-  try {
-    flyRollback(config, configPath, digest);
-    const toml = readFileSync(join(generated, "core.fly.toml"), "utf8");
-    assert.ok(
-      toml.includes(`FLY_BASE_IMAGE = "registry.fly.io/${appPrefix}-sb@${digest}"`),
-      "digest joins the repository with @, not :",
-    );
-    const pinned = JSON.parse(readFileSync(configPath, "utf8")) as { sandbox?: { image?: string } };
-    assert.equal(
-      pinned.sandbox?.image,
-      `registry.fly.io/${appPrefix}-sb@${digest}`,
-      "the pin is durable in the config file",
-    );
-
-    flyRollback(config, configPath, "v12");
-    const tagged = readFileSync(join(generated, "core.fly.toml"), "utf8");
-    assert.ok(
-      tagged.includes(`FLY_BASE_IMAGE = "registry.fly.io/${appPrefix}-sb:v12@${resolved}"`),
-      "a tag is resolved to its immutable digest",
-    );
-    const repinned = JSON.parse(readFileSync(configPath, "utf8")) as { sandbox?: { image?: string } };
-    assert.equal(
-      repinned.sandbox?.image,
-      `registry.fly.io/${appPrefix}-sb:v12@${resolved}`,
-      "a tag pin would never compare stale; only a digest may land in the config",
-    );
-  } finally {
-    console.log = log;
-    if (priorPath === undefined) delete process.env.PATH;
-    else process.env.PATH = priorPath;
-    fake.restore();
-    rmSync(dir, { recursive: true, force: true });
-    if (existsSync(generated)) rmSync(generated, { recursive: true, force: true });
-  }
-});
-
-test("fly rollback with no sandbox config fails cleanly instead of deriving a garbage ref", () => {
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  };
-  assert.throws(
-    () => flyRollback(config, "/nonexistent/config.json", `sha256:${"e".repeat(64)}`),
-    /cannot derive an image repository/,
-  );
-});
-
-test("fly rollback validates an image pin before changing the committed config", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-rollback-invalid-"));
-  const configPath = join(dir, "qm.config.jsonc");
-  const raw = JSON.stringify({ contract: 1, orgId: "acme", sandbox: { app: "acme-sb" } }, null, 2) + "\n";
-  writeFileSync(configPath, raw);
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-    sandbox: { app: "acme-sb" },
-  };
-  try {
-    assert.throws(
-      () => flyRollback(config, configPath, "sha256:not-a-digest"),
-      /must resolve to an image tag or sha256 digest/,
-    );
-    assert.equal(readFileSync(configPath, "utf8"), raw);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("fly rollback refuses to change the committed config when the image cannot be resolved", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-rollback-missing-"));
-  const configPath = join(dir, "qm.config.jsonc");
-  const raw = JSON.stringify({ contract: 1, orgId: "acme", sandbox: { app: "acme-sb" } }, null, 2) + "\n";
-  writeFileSync(configPath, raw);
-  const docker = join(dir, "docker");
-  writeFileSync(docker, "#!/usr/bin/env bash\necho missing >&2\nexit 1\n");
-  chmodSync(docker, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath ?? ""}`;
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-    sandbox: { app: "acme-sb" },
-  };
-  try {
-    assert.throws(() => flyRollback(config, configPath, "v12"), /could not resolve an immutable digest/);
-    assert.equal(readFileSync(configPath, "utf8"), raw);
-  } finally {
-    if (priorPath === undefined) delete process.env.PATH;
-    else process.env.PATH = priorPath;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("fly sandbox pin re-derives the core [env] and unsets any stale FLY_BASE_IMAGE secret", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-pin-"));
-  const appPrefix = "qmpintest";
-  const pin = `registry.fly.io/${appPrefix}-sb@sha256:${"c".repeat(64)}`;
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    appPrefix,
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-    sandbox: { app: `${appPrefix}-sb`, image: pin },
-  };
-  const marker = `QM_OWNER_${createHash("sha256").update(`qm-v2:personal:acme:${appPrefix}`).digest("hex").slice(0, 16).toUpperCase()}`;
-  const fake = fakeFly(
-    dir,
-    `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "${appPrefix}-core" }]));
-else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", config: { image: "registry.fly.io/${appPrefix}-core:cur" } }] }));
-else if (a.startsWith("image show")) console.log(JSON.stringify([{ MachineID: "machine-core", Registry: "registry.fly.io", Repository: "${appPrefix}-core", Tag: "cur", Digest: "sha256:${"a".repeat(64)}" }]));
-else if (a.startsWith("secrets list")) console.log("NAME            DIGEST  CREATED AT\\n${marker}  abc123  1m ago\\nFLY_BASE_IMAGE  abc123  1m ago");
-else console.log("");`,
-  );
-  const generated = join(dir, ".generated", "fly", appPrefix);
-  const log = console.log;
-  console.log = (): void => {};
-  try {
-    flyPinSandbox(config, pin, dir);
-    const calls = readFileSync(fake.log, "utf8");
-    assert.ok(
-      calls.includes(`secrets unset --stage -a ${appPrefix}-core FLY_BASE_IMAGE`),
-      "the stale shadowing secret is removed",
-    );
-    assert.ok(!/secrets set/.test(calls), "the pin is never staged as a Fly secret");
-    const deploy = calls.split("\n").find((line) => line.startsWith("deploy"));
-    assert.ok(
-      deploy?.includes(`--image registry.fly.io/${appPrefix}-core@sha256:${"a".repeat(64)}`),
-      `rolls the current immutable image: ${deploy}`,
-    );
-    const toml = readFileSync(join(generated, "core.fly.toml"), "utf8");
-    assert.ok(toml.includes(`FLY_BASE_IMAGE = "${pin}"`), "the pin lands in the derived [env], owned by the config");
-    assert.ok(deploy?.includes(join(generated, "core.fly.toml")), "deploy uses the derived config");
-  } finally {
-    console.log = log;
-    fake.restore();
-    rmSync(dir, { recursive: true, force: true });
-    if (existsSync(generated)) rmSync(generated, { recursive: true, force: true });
-  }
-});
-
-test("fly sandbox pin refuses to mutate an unmarked app with the configured name", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-pin-unowned-"));
-  const appPrefix = "qmpinunowned";
-  const pin = `registry.fly.io/${appPrefix}-sb@sha256:${"d".repeat(64)}`;
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    appPrefix,
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-    sandbox: { app: `${appPrefix}-sb`, image: pin },
-  };
-  const fake = fakeFly(
-    dir,
-    `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "${appPrefix}-core" }]));
-else if (a.startsWith("secrets list")) console.log("NAME  DIGEST  CREATED AT");
-else console.log("");`,
-  );
-  const log = console.log;
-  console.log = (): void => {};
-  try {
-    assert.throws(
-      () => flyPinSandbox(config, pin),
-      /not marked as owned by deployment qm-v2:personal:acme:qmpinunowned/,
-    );
-    const calls = readFileSync(fake.log, "utf8");
-    assert.doesNotMatch(calls, /secrets unset|deploy/, "an unowned app is never mutated");
-  } finally {
-    console.log = log;
-    fake.restore();
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("fly sandbox pin and rollback reject unsupported Sprites images", () => {
+  const config = {} as QmConfig;
+  assert.throws(() => flyPinSandbox(config, "registry.fly.io/acme-sb:latest"), /stock runtime.*image pins/);
+  assert.throws(() => flyRollback(config, "/nonexistent/config.json"), /rollback is unavailable.*image pins/);
 });
 
 test("fly secrets push stages a secretEnv alias under its declared env name on its service's app", async () => {

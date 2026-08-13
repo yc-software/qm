@@ -156,15 +156,12 @@ export const dockerScaffold: ProviderScaffold = {
       env: `{ "core": { "HARNESS": "pi" } }`,
       secretEnv: "",
       sandbox: `,
-
-  // The Fly app agents execute in. The core boots the immutable sandbox image
-  // recorded by \`qm sandbox publish\`.
   "sandbox": { "app": ${JSON.stringify(`${orgId}-sandboxes`)} }`,
     }),
   ignores: [".env", "node_modules/", ".generated/"],
   agentsAppendix: "",
   files: noFiles,
-  configurationHint: "docker: confirm the local public port and Fly sandbox app before setup",
+  configurationHint: "docker: confirm the local public port and sandbox image registry before setup",
   finalCommand: "npm exec qm -- up",
   finalWhy: "pull images, start services, print URLs",
 };
@@ -189,11 +186,7 @@ export const flyScaffold: ProviderScaffold = {
 
   // The initial admin seed is kept in the provider secret store, never in config.
   "secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } },`,
-      sandbox: `
-
-  // The Fly app agents execute in. The core boots the immutable sandbox image
-  // recorded by \`qm sandbox publish\`.
-  "sandbox": { "app": ${JSON.stringify(`${orgId}-sandboxes`)} }`,
+      sandbox: "",
     }),
   ignores: [".env", "node_modules/", ".generated/"],
   agentsAppendix: "",
@@ -247,12 +240,7 @@ export const awsScaffold: ProviderScaffold = {
 
   // The initial admin seed is kept in the provider secret store, never in config.
   "secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`,
-      sandbox: `
-
-  // Where agent sandboxes execute. Omitting "sandbox" entirely runs AWS Lambda MicroVMs
-  // (published by \`qm infra build-image\`). To boot an operator-published sandbox layer
-  // image in a Fly app instead (published by \`qm sandbox publish\`), declare it explicitly:
-  //   "sandbox": { "backend": "sprites", "app": ${JSON.stringify(`${orgId}-sandboxes`)} }`,
+      sandbox: "",
     });
   },
   ignores: [

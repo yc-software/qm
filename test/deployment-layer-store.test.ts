@@ -117,6 +117,41 @@ test("invalid descriptors never replace the durable current layer", async () => 
   assert.equal((await store.get())?.version, 1);
 });
 
+test("a store bundle validator rejects new and persisted unsupported tools before applying them", async () => {
+  const backing = createMemoryMap<StoredDeploymentLayer>();
+  const org = scopeId("org", "default-org");
+  const writer = createDeploymentLayerStore({
+    backing,
+    runtime: emptyDeploymentLayer(),
+    skills: createSkillStore({ signingSecret: "layer-test" }),
+    scopeId: org,
+  });
+  await writer.put({ contract: 1, tools: [tool("acme")], skills: [] }, "old");
+
+  const runtime = emptyDeploymentLayer();
+  const guarded = createDeploymentLayerStore({
+    backing,
+    runtime,
+    skills: createSkillStore({ signingSecret: "layer-test" }),
+    scopeId: org,
+    validateBundle: (bundle) => {
+      if (bundle.tools.length) throw new Error("tools unsupported");
+    },
+  });
+  const priorError = console.error;
+  console.error = (): void => {};
+  try {
+    await guarded.hydrate();
+  } finally {
+    console.error = priorError;
+  }
+  assert.deepEqual(runtime.tools, []);
+  await assert.rejects(
+    guarded.put({ contract: 1, tools: [tool("acme")], skills: [] }, "new"),
+    DeploymentLayerValidationError,
+  );
+});
+
 test("a legacy published skill with an unsafe name is quarantined without blocking layer replacement", async () => {
   const skillBacking = createMemoryMap<Skill>();
   const org = scopeId("org", "default-org");

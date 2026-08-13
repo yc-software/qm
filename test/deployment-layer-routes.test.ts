@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -18,8 +18,8 @@ import { DeploymentLayerPersistedError } from "../src/deployment/deployment-laye
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";
 
-function start(overrides: { deploymentLayerDir?: string } = {}, serverDeps: Record<string, unknown> = {}) {
-  const built = buildApp(testConfig({ signingSecret: SECRET, ...overrides }));
+function start(overrides: Parameters<typeof testConfig>[0] = {}, serverDeps: Record<string, unknown> = {}) {
+  const built = buildApp(testConfig({ signingSecret: SECRET, sandboxBackend: "local", ...overrides }));
   const server = createServer(built.app, {
     signingSecret: SECRET,
     deploymentLayer: built.deploymentLayerStore,
@@ -106,6 +106,39 @@ test("a signed PUT lands under portal-identity enforcement (deploy-time sync is 
     assert.equal(putBody.version, 1);
   } finally {
     await srv.close();
+  }
+});
+
+test("a primary or secondary Sprites backend rejects tool-bearing deployment layers before persisting them", async () => {
+  for (const config of [
+    { sandboxBackend: "sprites" as const },
+    { sandboxBackend: "local" as const, sandboxSecondaryBackend: "sprites" as const },
+  ]) {
+    const srv = start(config);
+    try {
+      const put = await fetch(`${srv.base}${PATH}`, { method: "PUT", headers: signed("PUT", bundle), body: bundle });
+      assert.equal(put.status, 400);
+      const body = (await put.json()) as { error: string; message: string };
+      assert.equal(body.error, "invalid_deployment_layer");
+      assert.match(body.message, /does not support deployment-layer tools/);
+      assert.equal(await srv.deploymentLayerStore.get(), null);
+    } finally {
+      await srv.close();
+    }
+  }
+});
+
+test("a secondary Sprites backend rejects a baked tool-bearing layer at boot", () => {
+  const dir = mkdtempSync(join(tmpdir(), "layer-routes-secondary-sprites-"));
+  mkdirSync(join(dir, "tools", "acme"), { recursive: true });
+  writeFileSync(join(dir, "tools", "acme", "tool.json"), JSON.stringify({ id: "acme", advertise: "acme CLI" }));
+  try {
+    assert.throws(
+      () => start({ deploymentLayerDir: dir, sandboxBackend: "local", sandboxSecondaryBackend: "sprites" }),
+      /does not support deployment-layer tools/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

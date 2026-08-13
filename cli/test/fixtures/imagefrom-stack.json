@@ -7,10 +7,6 @@
   "region": "sjc",
   "flyOrg": "personal",
   "imageFrom": "qm",
-  "sandbox": {
-    "app": "beta-sandboxes",
-    "image": "registry.fly.io/beta-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
-  },
   "services": ["core", "slack", "admin", "web-ui", "portal"],
   "vms": {
     "core": { "size": "shared-cpu-2x", "memory": "4gb" }
@@ -18,7 +14,6 @@
   "env": {
     "core": {
       "PUBLIC_WEB_URL": "https://beta-portal.fly.dev",
-      "FLY_SANDBOX_APP_NAME": "beta-sandboxes",
       "SNAPSHOT_STORE": "s3",
       "TRANSFER_STORE": "s3",
       "S3_BUCKET": "beta-data",

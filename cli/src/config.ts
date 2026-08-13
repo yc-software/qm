@@ -198,7 +198,7 @@ export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.
 const SANDBOX_PIN_PENDING = `"sandbox.app" is set but no sandbox layer image is pinned; run \`qm sandbox publish\` to build and record the digest-pinned "sandbox.image" agents boot from`;
 
 export const sandboxPinPending = (config: QmConfig): boolean =>
-  config.target !== "aws" && Boolean(config.sandbox?.app && !config.sandbox.image);
+  config.target === "docker" && Boolean(config.sandbox?.app && !config.sandbox.image);
 
 export function sandboxImagePinErrors(config: QmConfig): Array<{ clause: string; message: string }> {
   const sb = config.sandbox;
@@ -218,6 +218,7 @@ export function sandboxCoreEnv(
   const env: Record<string, string> = {};
   const missingSecrets: string[] = [];
   const sb = config.sandbox;
+  if (config.target === "fly") return { env: { SANDBOX_BACKEND: "sprites" }, missingSecrets };
   if (!sb) return { env, missingSecrets };
   if (sb.app) {
     if (!sb.image) throw new CliError(SANDBOX_PIN_PENDING, { clause: "config.v1" });
@@ -225,8 +226,6 @@ export function sandboxCoreEnv(
     if (violation) throw new CliError(violation.message, { clause: violation.clause });
     env.FLY_SANDBOX_APP_NAME = sb.app;
     env.FLY_BASE_IMAGE = sb.image;
-    const backend = sb.backend ?? (config.target === "fly" ? "sprites" : undefined);
-    if (backend) env.SANDBOX_BACKEND = backend;
   }
   for (const [k, v] of Object.entries(sb.env ?? {})) env[`FLY_RESIDENT_ENV_${k}`] = v;
   for (const name of sb.secretEnv ?? []) {
@@ -633,6 +632,21 @@ function validate(raw: unknown, path: string): QmConfig {
     return v;
   });
   const sandbox = validateSandbox(o["sandbox"], path, target);
+  if (target === "fly") {
+    const unsupportedRuntimeEnv = (name: string): boolean => name === "SANDBOX_BACKEND" || name.startsWith("FLY_");
+    const configured = Object.keys(env.core ?? {}).find(unsupportedRuntimeEnv);
+    if (configured) {
+      throw new CliError(
+        `${path}: Fly Sprites use the stock runtime and do not support "env.core.${configured}"; remove it`,
+      );
+    }
+    const routed = Object.keys(secretEnv.core ?? {}).find(unsupportedRuntimeEnv);
+    if (routed) {
+      throw new CliError(
+        `${path}: Fly Sprites use the stock runtime and do not support "secretEnv.core.${routed}"; remove it`,
+      );
+    }
+  }
 
   const out: QmConfig = {
     contract,
@@ -1254,14 +1268,14 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   if (o["backend"] !== undefined) {
     if (o["backend"] !== "sprites" && o["backend"] !== "aws") {
       throw new CliError(
-        `${path}: "sandbox.backend" must be "sprites" (Fly Sprites, booting the operator-published layer image from the Fly app in "sandbox.app") or "aws" (Lambda MicroVM sandboxes)`,
+        `${path}: "sandbox.backend" must be "sprites" (the stock Fly Sprites runtime) or "aws" (Lambda MicroVM sandboxes)`,
       );
     }
     out.backend = o["backend"];
   }
   if (o["app"] !== undefined) {
     if (typeof o["app"] !== "string" || !o["app"].trim()) {
-      throw new CliError(`${path}: "sandbox.app" must be a non-empty string (the Fly sandbox app name)`);
+      throw new CliError(`${path}: "sandbox.app" must be a non-empty string (the Docker sandbox image repository)`);
     }
     out.app = o["app"];
   }
@@ -1296,21 +1310,31 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
-        `${path}: "sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore ${stray.map((key) => `"sandbox.${key}"`).join(", ")} (Fly layer-image settings) — remove them or set "sandbox.backend": "sprites"`,
+        `${path}: "sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore ${stray.map((key) => `"sandbox.${key}"`).join(", ")} — remove them`,
+      );
+    }
+  }
+  if (out.backend === "sprites" && target !== "fly") {
+    throw new CliError(
+      `${path}: "sandbox.backend": "sprites" is only supported for target "fly"; the installed Sprites SDK cannot materialize the custom image contract previously used on other targets`,
+    );
+  }
+  if (target === "fly") {
+    const unsupported = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter(
+      (key) => out[key] !== undefined,
+    );
+    if (unsupported.length) {
+      throw new CliError(
+        `${path}: Fly Sprites use the stock runtime and do not support ${unsupported.map((key) => `"sandbox.${key}"`).join(", ")}; remove ${unsupported.length === 1 ? "it" : "them"}`,
       );
     }
   }
   if (out.image && !out.app) {
-    throw new CliError(`${path}: "sandbox.image" requires "sandbox.app" (the app the microVMs run in)`);
-  }
-  if (out.backend === "sprites" && !out.app) {
-    throw new CliError(
-      `${path}: "sandbox.backend": ${JSON.stringify(out.backend)} requires "sandbox.app" (the Fly app agents execute in)`,
-    );
+    throw new CliError(`${path}: "sandbox.image" requires "sandbox.app" (the image repository)`);
   }
   if (target === "aws" && out.backend === undefined) {
     throw new CliError(
-      `${path}: target "aws" requires an explicit "sandbox.backend" — "sprites" boots the operator-published layer image in "sandbox.app"; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default)`,
+      `${path}: target "aws" requires "sandbox.backend": "aws", or omit the whole "sandbox" block for the Lambda MicroVM default`,
     );
   }
   return out;

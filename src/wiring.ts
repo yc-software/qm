@@ -259,6 +259,7 @@ import {
   createDeploymentLayerStore,
   LAYER_CREATED_BY,
   LAYER_REVIEWER,
+  type DeploymentLayerBundle,
   type DeploymentLayerStore,
   type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
@@ -461,6 +462,10 @@ export function buildApp(
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
+  const spritesEnabled = config.sandboxBackend === "sprites" || config.sandboxSecondaryBackend === "sprites";
+  if (spritesEnabled && deploymentLayer.tools.length) {
+    throw new Error("SANDBOX_BACKEND=sprites does not support deployment-layer tools; deploy skills only");
+  }
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
@@ -468,6 +473,15 @@ export function buildApp(
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
+    ...(spritesEnabled
+      ? {
+          validateBundle: (bundle: DeploymentLayerBundle): void => {
+            if (bundle.tools.length) {
+              throw new Error("SANDBOX_BACKEND=sprites does not support deployment-layer tools; deploy skills only");
+            }
+          },
+        }
+      : {}),
     skills,
     skillBundles,
     scopeId: orgScope,
@@ -576,7 +590,6 @@ export function buildApp(
     createSpritesSandbox(workspace, {
       ...config.spritesSandbox,
       blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),

@@ -232,6 +232,7 @@ function validateBundle(
 export function createDeploymentLayerStore(opts: {
   backing: DurableMap<StoredDeploymentLayer>;
   runtime: DeploymentLayerRuntime;
+  validateBundle?: (bundle: DeploymentLayerBundle) => void;
   skills: SkillStore;
   skillBundles?: SkillBundleStore;
   scopeId: ScopeId;
@@ -250,6 +251,11 @@ export function createDeploymentLayerStore(opts: {
   const queue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
   const withFleetLock = <T>(fn: () => Promise<T>): Promise<T> => advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, fn);
+  const validatedBundle = (input: DeploymentLayerBundle, dir: string): ReturnType<typeof validateBundle> => {
+    const validated = validateBundle(input, dir);
+    opts.validateBundle?.(validated.bundle);
+    return validated;
+  };
 
   const retrying = async <T>(fn: () => Promise<T>): Promise<T> => {
     for (let attempt = 0; ; attempt++) {
@@ -310,7 +316,7 @@ export function createDeploymentLayerStore(opts: {
     validated?: ReturnType<typeof validateBundle>,
   ): Promise<boolean> => {
     if (opts.runtime.dir !== `durable:${record.contentHash}`) return false;
-    const next = validated ?? validateBundle(record.bundle, `durable:${record.contentHash}`);
+    const next = validated ?? validatedBundle(record.bundle, `durable:${record.contentHash}`);
     if (JSON.stringify(publicResolved(opts.runtime)) !== JSON.stringify(publicResolved(next.runtime))) return false;
     const current = layerSkills(await opts.skills.list());
     const wanted = new Set(next.manifests.map((manifest) => manifest.name));
@@ -330,7 +336,7 @@ export function createDeploymentLayerStore(opts: {
   };
 
   const apply = async (record: StoredDeploymentLayer): Promise<void> => {
-    const { manifests, runtime: nextRuntime } = validateBundle(record.bundle, `durable:${record.contentHash}`);
+    const { manifests, runtime: nextRuntime } = validatedBundle(record.bundle, `durable:${record.contentHash}`);
     if (
       appliedHash === record.contentHash &&
       (await projectionMatches(record, { bundle: record.bundle, manifests, runtime: nextRuntime }))
@@ -502,7 +508,7 @@ export function createDeploymentLayerStore(opts: {
         let manifests: SkillManifest[];
         let runtime: DeploymentLayerRuntime;
         try {
-          const validated = validateBundle(input, "durable:pending");
+          const validated = validatedBundle(input, "durable:pending");
           bundle = validated.bundle;
           manifests = validated.manifests;
           runtime = validated.runtime;

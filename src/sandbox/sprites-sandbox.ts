@@ -59,7 +59,6 @@ export interface SpritesSandboxOptions {
   signingSecret?: string;
   capabilitySecret?: string;
   apiBaseUrl?: string;
-  extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   client?: SpritesClientLike;
   fetchImpl?: typeof fetch;
@@ -310,10 +309,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       os: "Ubuntu 26.04 LTS — Fly Sprite microVM (auto-sleeps when idle; the whole disk persists)",
       runtimes: ["Node 24", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
+        return visibleTools(["git", "curl", "jq", "tar", "python3"]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], []);
       },
       diskGb: 100,
       homeDir: HOME_DIR,

@@ -150,3 +150,19 @@ test("a broken layer (tool with no executable and no Dockerfile) fails before bu
     rmSync(sb, { recursive: true, force: true });
   }
 });
+
+test("Fly Sprites reject sandbox image builds before inspecting the layer", () => {
+  const sb = sandboxDir(() => undefined);
+  const config: QmConfig = {
+    ...CONFIG,
+    target: "fly",
+    publicUrl: "https://acme.example.com",
+    region: "sjc",
+    flyOrg: "personal",
+  };
+  try {
+    assert.throws(() => dryRun({ sandboxDir: sb, config }), /Fly Sprites use the stock runtime/);
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});

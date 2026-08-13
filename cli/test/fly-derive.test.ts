@@ -37,7 +37,7 @@ test("an imageFrom stack reuses the reference images and overrides only its own 
   assert.match(coreToml, /app = "beta-core"/);
   assert.match(coreToml, /ORG_ID = "beta"/);
   assert.match(coreToml, /PUBLIC_WEB_URL = "https:\/\/beta-portal\.fly\.dev"/);
-  assert.match(coreToml, /FLY_SANDBOX_APP_NAME = "beta-sandboxes"/);
+  assert.match(coreToml, /SANDBOX_BACKEND = "sprites"/);
 });
 
 test("derived Fly configs contain only the deployment's region, org, sandbox, and portal policy", () => {
@@ -50,11 +50,6 @@ test("derived Fly configs contain only the deployment's region, org, sandbox, an
     appPrefix: "example-stack",
     region: "ord",
     flyOrg: "example-org",
-    sandbox: {
-      app: "example-sandboxes",
-      image:
-        "registry.fly.io/example-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-    },
     services: ["core", "admin", "web-ui", "portal"],
     plugins: [],
     skills: [],
@@ -70,10 +65,7 @@ test("derived Fly configs contain only the deployment's region, org, sandbox, an
   assert.match(admin, /^\s*ADMIN_BASE_PATH = "\/admin"$/m);
   assert.match(core, /^\s*FLY_ORG = "example-org"$/m);
   assert.match(core, /^\s*PI_MODEL = "example-model"$/m);
-  assert.match(
-    core,
-    /^\s*FLY_DEPLOY_BASE_IMAGE = "registry\.fly\.io\/example-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"$/m,
-  );
+  assert.match(core, /^\s*SANDBOX_BACKEND = "sprites"$/m);
   assert.match(core, /^\s*QM_DEPLOYMENT_ID = "qm-v2:example-org:example:example-stack"$/m);
   assert.doesNotMatch(core, /PI_DETECT_MODEL/);
   assert.doesNotMatch(portal, /OIDC_ALLOWED_EMAIL_DOMAIN/);

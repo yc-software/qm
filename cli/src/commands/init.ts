@@ -49,18 +49,20 @@ the scaffolded \`.gitignore\`.
 
 ## Customizing the sandbox
 
-\`sandbox/\` defines what the agent gets in its execution environment:
+\`sandbox/\` defines supported additions to the agent's execution environment:
 
 - A skill is \`sandbox/skills/<id>/SKILL.md\`: markdown with \`name\` and
   \`description\` frontmatter that teaches the agent a workflow and when to use it.
-- A tool is \`sandbox/tools/<id>/tool.json\`: a descriptor whose minimal form is
+- On image-customizable targets, a tool is \`sandbox/tools/<id>/tool.json\`: a descriptor whose minimal form is
   \`{ "id": ..., "advertise": ..., "install": { "binary": ... } }\`, with the
   executable next to it when the binary is not already in the base image.
-- \`sandbox/Dockerfile\` is optional and only needed for system packages or
+- On those targets, \`sandbox/Dockerfile\` is optional and only needed for system packages or
   runtimes.
 
-The scaffold ships a working example, the \`greet\` skill and \`example-tool\`.
-Copy its shape, then replace or delete it.
+Fly uses the stock Sprites runtime exposed by the installed SDK, so it accepts
+text skills and rejects tool descriptors, binaries, and Dockerfiles. The
+scaffold always ships the \`greet\` skill; image-customizable targets also ship
+\`example-tool\`. Copy the supported examples, then replace or delete them.
 
 ## The workflow
 
@@ -94,6 +96,13 @@ description: Greet a teammate by name. Use whenever asked to say hello to someon
 Run \`example-tool <name>\` to greet someone, e.g. \`example-tool Ada\`.
 `;
 
+const SPRITES_GREET_SKILL = `---
+name: greet
+description: Greet a teammate by name. Use whenever asked to say hello to someone.
+---
+Reply with a friendly greeting addressed to the requested person.
+`;
+
 const EXAMPLE_TOOL_DESCRIPTOR =
   JSON.stringify({ id: "example-tool", advertise: "example-tool", install: { binary: "example-tool" } }, null, 2) +
   "\n";
@@ -116,8 +125,9 @@ function writeIfAbsent(dir: string, segments: string[], content: string, mode?: 
   ok(`wrote ${rel}`);
 }
 
-function scaffoldSandbox(dir: string): void {
-  writeIfAbsent(dir, ["sandbox", "skills", "greet", "SKILL.md"], GREET_SKILL);
+function scaffoldSandbox(dir: string, target: Target): void {
+  writeIfAbsent(dir, ["sandbox", "skills", "greet", "SKILL.md"], target === "fly" ? SPRITES_GREET_SKILL : GREET_SKILL);
+  if (target === "fly") return;
   writeIfAbsent(dir, ["sandbox", "tools", "example-tool", "tool.json"], EXAMPLE_TOOL_DESCRIPTOR);
   writeIfAbsent(dir, ["sandbox", "tools", "example-tool", "example-tool"], EXAMPLE_TOOL_BIN, 0o755);
 }
@@ -295,7 +305,7 @@ export function runInit(opts: {
   const manifests = renderSlackManifests(config);
   writeIfAbsent(dir, ["slack-app-manifest.yml"], manifests.bot);
   if (usesSlackOidc(config)) writeIfAbsent(dir, ["slack-sso-manifest.yml"], manifests.sso);
-  scaffoldSandbox(dir);
+  scaffoldSandbox(dir, target);
   for (const file of provider.scaffold.files(config)) writeIfAbsent(dir, file.segments, file.content);
 
   note("");

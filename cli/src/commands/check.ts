@@ -24,14 +24,14 @@ export function runChecks(
   opts: { report?: boolean } = {},
 ): ChecksResult {
   const report = opts.report ?? true;
-  const layer = validateSandboxLayer(sandboxDir);
+  const layer = validateSandboxLayer(sandboxDir, config);
   const { plugins, errors: pluginErrors } = discoverPlugins(configDir, config);
   const configErrors: Array<{ clause: string; message: string }> = [];
   const configError = (message: string, clause = "config.v1"): void => void configErrors.push({ clause, message });
   const provider = hostingProvider(config.target);
   configErrors.push(...provider.validateConfig(config, plugins));
   if (provider.requiresSandboxApp && !config.sandbox?.app?.trim()) {
-    configError("contract sandbox.app: a Fly agent-computer app is required for docker and fly targets");
+    configError("contract sandbox.app: a sandbox image registry app is required for the docker target");
   }
   for (const skill of config.skills) {
     const path = resolve(configDir, skill);

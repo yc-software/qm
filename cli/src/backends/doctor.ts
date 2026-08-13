@@ -145,6 +145,8 @@ export async function doctorCommon(
   }
   if (config.target === "aws") {
     step("AWS Lambda MicroVM sandbox: configured");
+  } else if (config.target === "fly") {
+    step("Fly Sprites stock sandbox: configured");
   } else if (config.sandbox?.app) {
     requireFlyAuth();
     try {
