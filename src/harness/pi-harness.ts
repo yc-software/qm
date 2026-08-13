@@ -1554,10 +1554,19 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           let tapeWriteFailed = bootstrapTapeWriteFailed;
           let tapeFlushed = false;
           let tapedTriggerUser = false;
+          let userAborted = false;
           const tapeMessage = (message: unknown): void => {
             if (!turn.tape) return;
             const role = (message as { role?: string }).role;
             if (role !== "user" && role !== "assistant" && role !== "toolResult") return;
+            let replayMessage = message;
+            if (role === "assistant" && userAborted && (message as { stopReason?: unknown }).stopReason === "aborted") {
+              const text = textFromContent((message as { content?: unknown }).content);
+              if (text.trim()) {
+                const { errorMessage: _errorMessage, ...assistant } = message as Record<string, unknown>;
+                replayMessage = { ...assistant, content: [{ type: "text", text }], stopReason: "stop" };
+              }
+            }
             const isTrigger = role === "user" && !tapedTriggerUser;
             if (isTrigger) tapedTriggerUser = true;
             const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
@@ -1566,7 +1575,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",
-              payload: stripImageBytes(message, isTrigger ? turn.images : undefined),
+              payload: stripImageBytes(replayMessage, isTrigger ? turn.images : undefined),
               scopeLabel: resultScope ?? turn.scopeLabel,
               ...(isTrigger
                 ? {
@@ -1697,7 +1706,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           let wallClock!: TurnWallClockOutcome;
           const messagesBefore = entry.agentSession.messages.length;
-          let userAborted = false;
           let recoveryDead = false;
           const toolAbort = new AbortController();
           entry.ref.abortSignal = toolAbort.signal;
