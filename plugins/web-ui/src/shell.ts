@@ -84,11 +84,6 @@ export const ADMIN_BASE = (() => {
 })();
 export const ADMIN_HOME_URL = `${ADMIN_BASE}/`;
 
-export function adminSessionLogUrl(sessionId: string, scopeId: string): string {
-  const q = new URLSearchParams({ view: "history", scope: scopeId, session: sessionId });
-  return `${ADMIN_BASE}/?${q.toString()}`;
-}
-
 export function syncUrlFromState(): void {
   const chatState = mainConversation().state;
   const sessionId = splitState.active ? null : (chatState.sessionId ?? chatState.rememberedSessionId);

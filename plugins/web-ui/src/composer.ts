@@ -11,7 +11,6 @@ import {
   ChevronDown,
   FileText,
   Paperclip,
-  ScrollText,
   SlidersHorizontal,
   Square,
   X,
@@ -46,7 +45,7 @@ import {
 import { modelSupportsFastMode, setFastModeModelIds } from "./pi-models";
 import type { ComposerSurface, ConvCtx } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
-import { adminSessionLogUrl, appState, can } from "./shell";
+import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 
@@ -447,18 +446,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         }
         <div class="composer-toolbar">
           <div class="composer-left">
-            ${
-              !ctx.pane && ctx.chat.state.sessionId && can("admin")
-                ? html`<a
-                    class="icon-btn"
-                    title="View session log (admin)"
-                    href=${adminSessionLogUrl(ctx.chat.state.sessionId, ctx.chat.state.scopeId ?? `org:${appState.me?.org ?? ""}`)}
-                    target="_blank"
-                    rel="noreferrer"
-                    >${icon(ScrollText, 18)}</a
-                  >`
-                : nothing
-            }
             <input
               class="file-input"
               type="file"

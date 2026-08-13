@@ -81,7 +81,7 @@ import {
   harnessSupportsFastMode,
 } from "./model-options";
 import { browserRenderableImage, formatBytes, icon, relTime } from "./ui";
-import { adminSessionLogUrl, appState, can, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
+import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeCronCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
@@ -1129,18 +1129,6 @@ export function createChatSurface(
           <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
         </div>
         <div class="topbar-actions">
-          ${
-            chatState.sessionId && can("admin")
-              ? html`<a
-                  class="icon-btn subtle"
-                  title="View session log (admin)"
-                  href=${adminSessionLogUrl(chatState.sessionId, chatState.scopeId ?? `org:${appState.me?.org ?? ""}`)}
-                  target="_blank"
-                  rel="noreferrer"
-                  >${icon(ScrollText, 17)}</a
-                >`
-              : nothing
-          }
           <button
             class="icon-btn subtle"
             title="Refresh conversations"
