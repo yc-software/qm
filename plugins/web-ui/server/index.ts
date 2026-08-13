@@ -447,7 +447,7 @@ async function coreFetchCap(
   rawBody = "",
 ): Promise<{ status: number; text: string }> {
   const cap = await coreFetch("POST", "/v1/session-cap", "");
-  if (cap.status !== 200) return { status: cap.status === 401 ? 401 : 503, text: cap.text };
+  if (cap.status !== 200) return { status: cap.status >= 400 && cap.status < 500 ? cap.status : 503, text: cap.text };
   let token: string | undefined;
   try {
     token = (JSON.parse(cap.text) as { token?: string }).token;
@@ -553,6 +553,15 @@ async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<
 
 function declaredSha(url: URL): string {
   return url.searchParams.get("sha") ?? "";
+}
+
+async function allowPortalUpload(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  if (AUTH_MODE !== "portal") return true;
+  const access = await coreFetch("POST", "/v1/session-cap", "");
+  if (access.status === 200) return true;
+  req.resume();
+  relay(res, access);
+  return false;
 }
 
 async function uploadBlobFromRequest(req: IncomingMessage, res: ServerResponse, sha256: string): Promise<void> {
@@ -768,6 +777,10 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!user) return unauthorized(res, req);
 
     if (path === "/me") {
+      if (AUTH_MODE === "portal") {
+        const access = await coreFetch("POST", "/v1/session-cap", "");
+        if (access.status !== 200) return relay(res, access);
+      }
       res.setHeader("set-cookie", sessionCookie(user));
       const permissions = await userPermissions();
       return json(res, 200, {
@@ -781,10 +794,12 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "POST" && path === "/api/blobs") {
+      if (!(await allowPortalUpload(req, res))) return;
       return uploadBlobFromRequest(req, res, declaredSha(url));
     }
 
     if (method === "POST" && path === "/api/files/upload") {
+      if (!(await allowPortalUpload(req, res))) return;
       return uploadFileFromRequest(
         req,
         res,

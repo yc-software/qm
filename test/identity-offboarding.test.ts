@@ -68,6 +68,62 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
   });
 
+  it("a directory sync cannot deactivate a durable identity it did not create", async () => {
+    await built.directory.replace([
+      { principalId: "portal@example.com", displayName: "Portal User", type: "internal" },
+      { principalId: "U-slack", displayName: "Slack User", type: "internal", identitySource: "directory-sync" },
+    ]);
+
+    await built.app.upsertDirectory([]);
+
+    assert.equal(built.identity.classify("portal@example.com").type, "internal");
+    assert.equal(built.identity.deactivation("portal@example.com"), null);
+    assert.equal(built.identity.classify("U-slack").type, "guest");
+    assert.equal(built.identity.deactivation("U-slack")?.identitySource, "directory-sync");
+    await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
+  });
+
+  it("a portal-owned identity remains portal-owned after appearing in a Slack snapshot", async () => {
+    await built.directory.replace([
+      { principalId: "Portal@Example.com", displayName: "Portal User", type: "internal" },
+    ]);
+
+    await built.app.upsertDirectory([
+      {
+        principalId: "portal@example.com",
+        displayName: "Portal User from Slack",
+        type: "internal",
+        slackId: "U-portal",
+      },
+    ]);
+    await built.app.upsertDirectory([]);
+
+    assert.equal(built.identity.deactivation("portal@example.com"), null);
+    const stored = await built.directory.get("portal@example.com");
+    assert.equal(stored?.identitySource, undefined);
+    assert.equal(stored?.displayName, "Portal User from Slack");
+  });
+
+  it("a guest-shaped source row cannot erase or claim a portal-owned identity", async () => {
+    await built.directory.replace([
+      { principalId: "portal-guest@example.com", displayName: "Portal Guest", type: "internal" },
+    ]);
+    await built.app.upsertDirectory([
+      { principalId: "portal-guest@example.com", displayName: "Slack Guest", type: "guest" },
+    ]);
+    assert.equal(built.identity.deactivation("portal-guest@example.com"), null);
+    assert.equal((await built.directory.get("portal-guest@example.com"))?.identitySource, undefined);
+  });
+
+  it("newer roster state wins when concurrent sync calls finish in the opposite order", async () => {
+    await built.app.upsertDirectory([member("ordered@example.com")], 1000);
+    await Promise.all([
+      built.app.upsertDirectory([member("ordered@example.com")], 3000),
+      built.app.upsertDirectory([], 2000),
+    ]);
+    assert.equal(built.identity.deactivation("ordered@example.com"), null);
+  });
+
   it("the deactivate/reactivate routes flip classification and are audited", async () => {
     const off = await signedPost("/v1/principals/U-manual/deactivate");
     assert.equal(off.status, 200);
@@ -95,6 +151,6 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": cap },
     });
-    assert.equal(res.status, 401);
+    assert.equal(res.status, 403);
   });
 });

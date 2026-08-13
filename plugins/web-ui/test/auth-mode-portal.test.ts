@@ -4,7 +4,19 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
-const core = createServer((_req, res) => {
+let accountDeactivated = false;
+const core = createServer((req, res) => {
+  if (accountDeactivated && req.url?.startsWith("/v1/session-cap")) {
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "account_deactivated",
+        reason: "account_deactivated",
+        message: "This account is deactivated. Ask an administrator to reactivate it.",
+      }),
+    );
+    return;
+  }
   res.writeHead(200, { "content-type": "application/json" });
   res.end("{}");
 });
@@ -64,4 +76,16 @@ test("a verified allowed principal gets through and /me reports the mode", async
   const body = await r.json();
   assert.equal(body.user, "alice");
   assert.equal(body.mode, "portal");
+});
+
+test("a valid portal session relays the core's explicit account-deactivated state", async () => {
+  accountDeactivated = true;
+  try {
+    const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET);
+    const r = await fetch(`${base}/me`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
+    assert.equal(r.status, 403);
+    assert.equal((await r.json()).reason, "account_deactivated");
+  } finally {
+    accountDeactivated = false;
+  }
 });

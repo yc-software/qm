@@ -6,6 +6,7 @@ export interface DirectoryMember {
   displayName: string;
   type: PrincipalType;
   slackId?: string;
+  identitySource?: "directory-sync";
 }
 
 export interface DirectoryChannel {

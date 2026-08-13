@@ -1,6 +1,6 @@
 import { html, nothing, render } from "lit";
 import { File, Image, Upload } from "lucide";
-import { api, reportSigninRequired, type SigninRequired, withBase } from "./core-bridge";
+import { api, reportAccessGate, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect, formatBytes, icon, relTime } from "./ui";
 import { contextsState, ensureContexts, personalScopeId, scopeChip, scopeFilterControl } from "./contexts";
@@ -223,8 +223,8 @@ async function uploadOne(file: globalThis.File): Promise<void> {
     const text = await r.text();
     let message = `Upload failed (${r.status})`;
     try {
-      const parsed = JSON.parse(text) as { message?: string; error?: string } & SigninRequired;
-      if (r.status === 401) reportSigninRequired(parsed);
+      const parsed = JSON.parse(text) as { message?: string; error?: string };
+      reportAccessGate(r.status, parsed);
       message = parsed.message ?? parsed.error ?? message;
     } catch {
       if (text.trim()) message = text.trim();

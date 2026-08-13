@@ -158,4 +158,22 @@ test("live session smoke proves a model turn, persistence, title, error log, and
     /returned 500/,
   );
   assert.equal(archivedFailedRequest, true);
+
+  await assert.rejects(
+    checkLiveSession(config, "http://core.internal:8080", async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/turns") {
+        return Response.json(
+          {
+            error: "account_deactivated",
+            reason: "account_deactivated",
+            message: "This account is deactivated. Ask an administrator to reactivate it.",
+          },
+          { status: 403 },
+        );
+      }
+      return Response.json({ sessions: [] });
+    }),
+    /account_deactivated.*reactivate/i,
+  );
 });

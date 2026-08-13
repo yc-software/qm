@@ -114,7 +114,12 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   else if (r.kind === "ambiguous") found = r.candidates;
   const matches = found.map((m) => {
     const slackId = m.slackId ?? (SLACK_ID_RE.test(m.principalId) ? m.principalId : undefined);
-    return slackId ? { ...m, slackId } : m;
+    return {
+      principalId: m.principalId,
+      displayName: m.displayName,
+      type: m.type,
+      ...(slackId ? { slackId } : {}),
+    };
   });
   return sendJson(res, 200, { matches });
 }

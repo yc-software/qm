@@ -66,6 +66,7 @@ function start() {
     sessions: built.sessions,
     memory: built.memory,
     auditLog: built.auditLog,
+    identity: built.identity,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -299,6 +300,47 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
     ).json();
     const u9 = d.users.find((u: { principalId: string }) => u.principalId === "U9");
     assert.ok(u9 && u9.admin.role === "org_admin");
+  } finally {
+    await s.close();
+  }
+});
+
+test("/v1/admin/users exposes deactivation state and an org admin can recover the account", async () => {
+  const s = start();
+  try {
+    await s.built.identity.deactivate("locked@example.com", "directory-sync", "directory-sync");
+    const headers = { "x-admin-actor": "admin-alice@default-org" };
+
+    const listed = (await (await fetch(`${s.base}/v1/admin/users`, { headers })).json()) as any;
+    const locked = listed.users.find((user: { principalId: string }) => user.principalId === "locked@example.com");
+    assert.equal(locked.deactivation.source, "directory-sync");
+
+    const detail = (await (
+      await fetch(`${s.base}/v1/admin/users/${encodeURIComponent("locked@example.com")}`, { headers })
+    ).json()) as any;
+    assert.equal(detail.deactivation.identitySource, "directory-sync");
+
+    const denied = await fetch(`${s.base}/v1/admin/users/${encodeURIComponent("locked@example.com")}/reactivate`, {
+      method: "POST",
+      headers: { "x-admin-actor": "user-uma@default-org" },
+    });
+    assert.equal(denied.status, 403);
+
+    const recovered = await fetch(`${s.base}/v1/admin/users/${encodeURIComponent("locked@example.com")}/reactivate`, {
+      method: "POST",
+      headers,
+    });
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(await recovered.json(), { ok: true, principalId: "locked@example.com", active: true });
+    assert.equal(s.built.identity.deactivation("locked@example.com"), null);
+    assert.ok(
+      (await s.built.auditLog.events()).some(
+        (event) =>
+          event.action === "principal.reactivate" &&
+          event.principalId === "admin-alice" &&
+          event.resource === "locked@example.com",
+      ),
+    );
   } finally {
     await s.close();
   }

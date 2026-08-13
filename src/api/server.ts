@@ -21,6 +21,8 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId } from "../types.ts";
+import { orgScope as configOrgScope } from "../config.ts";
+import type { DeactivationRecord } from "../identity/identity-service.ts";
 import { canonicalPayload, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import { dispatch, findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
@@ -46,6 +48,9 @@ function capabilityAdminDenied(method: string, pathname: string, url: URL, claim
   }
   if (pathname.startsWith("/v1/admin/impersonate")) {
     return "impersonating a user is portal-only — the agent cannot act as another person";
+  }
+  if (/^\/v1\/admin\/users\/[^/]+\/reactivate$/.test(pathname)) {
+    return "reactivating a user is portal-only — the agent cannot restore account access";
   }
   if (
     method === "PUT" &&
@@ -248,6 +253,7 @@ async function gate(
   }
 
   let actor: PortalIdentity | null = null;
+  let actorDeactivation: DeactivationRecord | null = null;
   if (!capability) {
     const psecret = deps.portalIdentitySecret ?? secret;
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
@@ -255,33 +261,52 @@ async function gate(
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
       await deps.identity.refresh();
-      if (deps.identity.classify(actor.p).type !== "internal") actor = null;
+      const access = await deps.identity.portalIdentityAccess(actor.p, !actor.imp);
+      if (!access.active) {
+        actorDeactivation = access.deactivation;
+        actor = null;
+      } else if (access.recovered) {
+        deps.auditLog?.record({
+          at: Date.now(),
+          principalId: actor.p,
+          action: "principal.reactivate",
+          resource: "portal-identity-recovery",
+          scopeLabel: configOrgScope(),
+        });
+      }
     }
-    if (!isPublicRoute && requirePortalIdentity) {
-      const webTurn =
-        method === "POST" &&
-        pathname === "/v1/turns" &&
-        body !== null &&
-        typeof body === "object" &&
-        (body as { surface?: unknown }).surface === "web";
-      const needsActor =
-        isUserScoped(method, pathname) ||
-        webTurn ||
-        pathname.startsWith("/v1/admin/") ||
-        isUnclassifiedWrite(method, pathname);
-      if (needsActor) {
-        if (!psecret || !actor) {
-          sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
-          return null;
-        }
-        const field = webTurn ? undefined : userScopedField(method, pathname);
-        let asserted: unknown = null;
-        if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
-        else if (field) asserted = assertedActor(field, url, body, req);
-        if ((field && asserted !== actor.p) || (!field && asserted !== null && asserted !== actor.p)) {
-          sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
-          return null;
-        }
+    const webTurn =
+      method === "POST" &&
+      pathname === "/v1/turns" &&
+      body !== null &&
+      typeof body === "object" &&
+      (body as { surface?: unknown }).surface === "web";
+    const needsActor =
+      isUserScoped(method, pathname) ||
+      webTurn ||
+      pathname.startsWith("/v1/admin/") ||
+      isUnclassifiedWrite(method, pathname);
+    if (!isPublicRoute && needsActor && actorDeactivation) {
+      sendJson(res, 403, {
+        error: "account_deactivated",
+        message: "This account is deactivated. Ask an administrator to reactivate it.",
+        reason: "account_deactivated",
+        source: actorDeactivation.source,
+      });
+      return null;
+    }
+    if (!isPublicRoute && requirePortalIdentity && needsActor) {
+      if (!psecret || !actor) {
+        sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
+        return null;
+      }
+      const field = webTurn ? undefined : userScopedField(method, pathname);
+      let asserted: unknown = null;
+      if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
+      else if (field) asserted = assertedActor(field, url, body, req);
+      if ((field && asserted !== actor.p) || (!field && asserted !== null && asserted !== actor.p)) {
+        sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
+        return null;
       }
     }
   }

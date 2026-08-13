@@ -21,6 +21,7 @@ const SCHEMA = [
     display_name_lc TEXT NOT NULL,
     type            TEXT NOT NULL,
     slack_id        TEXT,
+    identity_source TEXT,
     PRIMARY KEY (org_id, principal_id)
   )`,
   `CREATE INDEX IF NOT EXISTS directory_members_name
@@ -35,6 +36,32 @@ const SCHEMA = [
     ) THEN
       ALTER TABLE directory_members ADD COLUMN slack_id TEXT;
     END IF;
+  END $$`,
+  `DO $$
+  BEGIN
+    CREATE TABLE IF NOT EXISTS directory_member_ownership(
+      org_id        TEXT NOT NULL,
+      principal_key TEXT NOT NULL,
+      source        TEXT NOT NULL,
+      PRIMARY KEY (org_id, principal_key)
+    );
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'directory_members' AND column_name = 'identity_source'
+    ) THEN
+      ALTER TABLE directory_members ADD COLUMN identity_source TEXT;
+    END IF;
+    LOCK TABLE directory_members IN SHARE MODE;
+    INSERT INTO directory_member_ownership (org_id, principal_key, source)
+    SELECT org_id,
+      CASE WHEN position('@' in principal_id) > 0 THEN lower(principal_id) ELSE principal_id END,
+      CASE
+        WHEN identity_source = 'directory-sync' OR slack_id IS NOT NULL OR principal_id ~ '^[UW][A-Z0-9]+$'
+          THEN 'directory-sync'
+        ELSE 'portal'
+      END
+    FROM directory_members
+    ON CONFLICT (org_id, principal_key) DO NOTHING;
   END $$`,
   `CREATE TABLE IF NOT EXISTS directory_channels(
     org_id     TEXT NOT NULL,
@@ -96,14 +123,28 @@ const SCHEMA = [
 ];
 
 function memberRow(r: Record<string, unknown>): DirectoryMember {
+  const principalId = r.principal_id as string;
+  const identitySource =
+    r.ownership_source === "directory-sync" ||
+    (r.ownership_source !== "portal" &&
+      (r.identity_source === "directory-sync" || r.slack_id || /^[UW][A-Z0-9]+$/.test(principalId)))
+      ? "directory-sync"
+      : undefined;
   return {
-    principalId: r.principal_id as string,
+    principalId,
     displayName: r.display_name as string,
     type: r.type as PrincipalType,
     ...(r.slack_id ? { slackId: r.slack_id as string } : {}),
+    ...(identitySource ? { identitySource } : {}),
   };
 }
-const MEMBER_COLS = "principal_id, display_name, type, slack_id";
+const MEMBER_COLS = `principal_id, display_name, type, slack_id, identity_source,
+  (SELECT source FROM directory_member_ownership ownership
+   WHERE ownership.org_id = directory_members.org_id
+     AND ownership.principal_key = CASE
+       WHEN position('@' in directory_members.principal_id) > 0 THEN lower(directory_members.principal_id)
+       ELSE directory_members.principal_id
+     END) AS ownership_source`;
 function channelRow(r: Record<string, unknown>): DirectoryChannel {
   return { channelId: r.channel_id as string, name: r.name as string, isPrivate: r.is_private as boolean };
 }
@@ -225,17 +266,19 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   return {
     async replace(members, syncedAt) {
       const byId = new Map<string, DirectoryMember>();
-      for (const m of members) if (m.principalId && m.type === "internal") byId.set(m.principalId, m);
+      for (const m of members) if (m.principalId && m.type === "internal") byId.set(personKey(m.principalId), m);
       const internal = [...byId.values()];
 
-      const hash = hashRoster(internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}`));
+      const hash = hashRoster(
+        internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.identitySource ?? ""}`),
+      );
 
       return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
         await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
         if (internal.length) {
           await client.query(
-            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[])`,
+            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, identity_source)
+             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
             [
               orgId,
               internal.map((m) => m.principalId),
@@ -243,7 +286,17 @@ export function createPostgresDirectoryStore(connectionString: string): Director
               internal.map((m) => normDirectoryQuery(m.displayName)),
               internal.map((m) => m.type),
               internal.map((m) => m.slackId ?? null),
+              internal.map((m) => m.identitySource ?? null),
             ],
+          );
+          await client.query(
+            `INSERT INTO directory_member_ownership (org_id, principal_key, source)
+             SELECT $1, * FROM unnest($2::text[], $3::text[])
+             ON CONFLICT (org_id, principal_key) DO UPDATE SET source = CASE
+               WHEN directory_member_ownership.source = 'portal' THEN 'portal'
+               ELSE EXCLUDED.source
+             END`,
+            [orgId, internal.map((m) => personKey(m.principalId)), internal.map((m) => m.identitySource ?? "portal")],
           );
         }
       });

@@ -17,12 +17,24 @@ type TurnBody = {
   model?: string;
 };
 let lastTurnBody: TurnBody | null = null;
+let accountDeactivated = false;
 const setTurnBody = (b: TurnBody | null): void => {
   lastTurnBody = b;
 };
 
 const core = createServer((req: IncomingMessage, res) => {
   const u = req.url ?? "";
+  if (req.method === "POST" && u.startsWith("/v1/session-cap")) {
+    req.resume();
+    res.writeHead(accountDeactivated ? 403 : 200, { "content-type": "application/json" });
+    return void res.end(
+      JSON.stringify(
+        accountDeactivated
+          ? { error: "account_deactivated", reason: "account_deactivated" }
+          : { token: "upload-capability" },
+      ),
+    );
+  }
   if (req.method === "POST" && u.startsWith("/v1/blobs")) {
     const sha = String(req.headers["x-content-sha256"] ?? "");
     let size = 0;
@@ -56,6 +68,7 @@ const SECRET = "blob-route-test-secret";
 process.env.CORE_API_URL = coreUrl;
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "alice";
+process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 
 const { handler } = await import("../server/index.ts");
 
@@ -113,6 +126,24 @@ test("POST /api/blobs requires a signed-in user (401 before any core call)", asy
   });
   assert.equal(r.status, 401, "unauthenticated upload is denied");
   assert.equal(blobUploads.length, before, "no upload forwarded for an unauthenticated request");
+});
+
+test("POST /api/blobs rejects a deactivated account before staging bytes", async () => {
+  const before = blobUploads.length;
+  const sha = createHash("sha256").update("blocked").digest("hex");
+  accountDeactivated = true;
+  try {
+    const r = await fetch(`${base}/api/blobs?sha=${sha}`, {
+      method: "POST",
+      headers: { ...IDENTITY, "content-type": "application/octet-stream" },
+      body: Buffer.from("blocked"),
+    });
+    assert.equal(r.status, 403);
+    assert.equal(((await r.json()) as { reason?: string }).reason, "account_deactivated");
+    assert.equal(blobUploads.length, before);
+  } finally {
+    accountDeactivated = false;
+  }
 });
 
 test("the sha rides as a query param (portal-safe): a custom header is NOT how the surface reads it", async () => {

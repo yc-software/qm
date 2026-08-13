@@ -325,6 +325,16 @@ function deniedGate() {
   `);
 }
 
+function deactivatedGate() {
+  return gateShell(html`
+    <h1>Your account is deactivated</h1>
+    <p class="signin-body">
+      Your portal session is valid, but this account is inactive in QM. Ask an administrator to reactivate it.
+    </p>
+    <button class="btn" type="button" @click=${signOut}>Sign out</button>
+  `);
+}
+
 function retryBoot(): void {
   void bootSafely();
 }
@@ -390,6 +400,7 @@ function devGate(gate: { value?: string; error?: string; pending?: boolean }) {
 export type AuthGate =
   | { kind: "portal" }
   | { kind: "denied" }
+  | { kind: "deactivated" }
   | { kind: "unreachable" }
   | { kind: "dev"; value?: string; error?: string; pending?: boolean };
 
@@ -401,6 +412,8 @@ export function renderAuthGate(gate: AuthGate): void {
         return portalGate();
       case "denied":
         return deniedGate();
+      case "deactivated":
+        return deactivatedGate();
       case "unreachable":
         return unreachableGate();
       default:
@@ -410,7 +423,11 @@ export function renderAuthGate(gate: AuthGate): void {
   render(body, appEl as HTMLElement);
 }
 
-function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | undefined): AuthGate {
+function gateFor(
+  mode: AuthMode,
+  reason: "unauthenticated" | "not_allowed" | "account_deactivated" | undefined,
+): AuthGate {
+  if (reason === "account_deactivated") return { kind: "deactivated" };
   if (reason === "not_allowed") return { kind: "denied" };
   return mode === "dev" ? { kind: "dev" } : { kind: "portal" };
 }
@@ -805,8 +822,12 @@ export async function boot(): Promise<void> {
     renderAuthGate({ kind: "unreachable" });
     return;
   }
-  if (r.status === 401) {
+  if (r.status === 401 || r.status === 403) {
     const body = (await r.json().catch(() => ({}))) as SigninRequired;
+    if (r.status === 403 && body.reason !== "account_deactivated") {
+      renderAuthGate({ kind: "unreachable" });
+      return;
+    }
     authMode = body.mode ?? "portal";
     renderAuthGate(gateFor(authMode, body.reason));
     return;

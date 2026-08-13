@@ -32,6 +32,8 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
       scheduler: built.scheduler,
+      identity: built.identity,
+      auditLog: built.auditLog,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -300,6 +302,74 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     const claims = await verifyCapabilityToken(body.token as string, CAP);
     assert.equal(claims?.actorId, "U1");
     assert.equal(claims?.scopeId, "personal:U1");
+  });
+
+  it("reports an owned deactivation without disguising it as an expired portal session", async () => {
+    await built.identity.deactivate("owned@example.com", "directory-sync", "directory-sync");
+    const response = await fetch(`${base}/v1/contexts?principalId=owned@example.com`, {
+      headers: { "x-portal-identity": await token("owned@example.com") },
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), {
+      error: "account_deactivated",
+      message: "This account is deactivated. Ask an administrator to reactivate it.",
+      reason: "account_deactivated",
+      source: "directory-sync",
+    });
+    await built.identity.reactivate("owned@example.com");
+  });
+
+  it("reports a deactivation when optional portal enforcement is disabled", async () => {
+    const permissiveServer = createInsecureTestServer(built.app, {
+      capabilitySecret: CAP,
+      portalIdentitySecret: PID,
+      identity: built.identity,
+    });
+    await new Promise<void>((resolve) => permissiveServer.listen(0, resolve));
+    try {
+      await built.identity.deactivate("manual@example.com");
+      const permissiveBase = `http://localhost:${(permissiveServer.address() as AddressInfo).port}`;
+      const response = await fetch(`${permissiveBase}/v1/session-cap`, {
+        method: "POST",
+        headers: { "x-portal-identity": await token("manual@example.com") },
+      });
+      assert.equal(response.status, 403);
+      assert.equal(((await response.json()) as { reason?: string }).reason, "account_deactivated");
+    } finally {
+      await built.identity.reactivate("manual@example.com");
+      await new Promise<void>((resolve) => permissiveServer.close(() => resolve()));
+    }
+  });
+
+  it("repairs a legacy sync deactivation when a separately verified portal identity asserts itself", async () => {
+    await built.identity.deactivate("legacy@example.com", "directory-sync");
+    const response = await fetch(`${base}/v1/contexts?principalId=legacy@example.com`, {
+      headers: { "x-portal-identity": await token("legacy@example.com") },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(built.identity.deactivation("legacy@example.com"), null);
+    assert.ok(
+      (await built.auditLog.events()).some(
+        (event) =>
+          event.action === "principal.reactivate" &&
+          event.principalId === "legacy@example.com" &&
+          event.resource === "portal-identity-recovery",
+      ),
+    );
+  });
+
+  it("does not repair a legacy sync deactivation through impersonation", async () => {
+    await built.identity.deactivate("impersonated@example.com", "directory-sync");
+    const impersonated = await mintSignedPayload(
+      { p: "impersonated@example.com", imp: "admin@example.com", exp: Date.now() + 60_000 },
+      PID,
+    );
+    const response = await fetch(`${base}/v1/contexts?principalId=impersonated@example.com`, {
+      headers: { "x-portal-identity": impersonated },
+    });
+    assert.equal(response.status, 403);
+    assert.equal(built.identity.deactivation("impersonated@example.com")?.source, "directory-sync");
+    await built.identity.reactivate("impersonated@example.com");
   });
 });
 

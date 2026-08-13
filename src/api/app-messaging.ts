@@ -310,31 +310,65 @@ export function createMessagingMethods(
     },
 
     async upsertDirectory(members, syncedAt) {
-      const previous = await deps.directory.list();
-      if (!(await deps.directory.replace(members, syncedAt))) return;
-      const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
-      const presentSet = new Set(present);
-      const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
-      const outcome = await deps.identity.recordDirectorySync(removed, present);
-      const orgScope = scopeId("org", orgIdOf());
-      for (const id of outcome.deactivated) {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: id,
-          action: "principal.deactivate",
-          resource: "directory-sync",
-          scopeLabel: orgScope,
+      const sync = async () => {
+        const previous = await deps.directory.list();
+        const previousByKey = new Map(previous.map((member) => [personKey(member.principalId), member]));
+        const incomingByKey = new Map(
+          members
+            .filter((member) => member.principalId && member.type === "internal")
+            .map((member) => [personKey(member.principalId), member]),
+        );
+        const next = [...incomingByKey].map(([key, member]) => {
+          const prior = previousByKey.get(key);
+          const identitySource =
+            !prior || prior.identitySource === "directory-sync" ? ("directory-sync" as const) : undefined;
+          return {
+            principalId: prior?.principalId ?? member.principalId,
+            displayName: member.displayName,
+            type: member.type,
+            ...(member.slackId ? { slackId: member.slackId } : {}),
+            ...(identitySource ? { identitySource } : {}),
+          };
         });
-      }
-      for (const id of outcome.reactivated) {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: id,
-          action: "principal.reactivate",
-          resource: "directory-sync",
-          scopeLabel: orgScope,
-        });
-      }
+        for (const member of previous) {
+          if (member.identitySource !== "directory-sync" && !incomingByKey.has(personKey(member.principalId))) {
+            next.push(member);
+          }
+        }
+        if (!(await deps.directory.replace(next, syncedAt))) return;
+        const present = next
+          .filter(
+            (member) => member.identitySource === "directory-sync" && incomingByKey.has(personKey(member.principalId)),
+          )
+          .map((member) => member.principalId);
+        const presentSet = new Set(present.map(personKey));
+        const removed = previous
+          .filter((member) => member.identitySource === "directory-sync")
+          .map((member) => member.principalId)
+          .filter((id) => !presentSet.has(personKey(id)));
+        const outcome = await deps.identity.recordDirectorySync(removed, present);
+        const orgScope = scopeId("org", orgIdOf());
+        for (const id of outcome.deactivated) {
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId: id,
+            action: "principal.deactivate",
+            resource: "directory-sync",
+            scopeLabel: orgScope,
+          });
+        }
+        for (const id of outcome.reactivated) {
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId: id,
+            action: "principal.reactivate",
+            resource: "directory-sync",
+            scopeLabel: orgScope,
+          });
+        }
+      };
+      if (deps.advisoryLock) await deps.advisoryLock.withLock(`directory-members:${orgIdOf()}`, sync);
+      else await sync();
     },
     async upsertChannels(channels, channelMembers, syncedAt) {
       await deps.directory.replaceChannels(channels, channelMembers, syncedAt);

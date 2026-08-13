@@ -10,7 +10,7 @@ before(async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query(
-    "DROP TABLE IF EXISTS directory_members, directory_channels, directory_channel_members, directory_group_members, directory_sync, directory_meta CASCADE",
+    "DROP TABLE IF EXISTS directory_members, directory_member_ownership, directory_channels, directory_channel_members, directory_group_members, directory_sync, directory_meta CASCADE",
   );
   await p.end();
 });
@@ -31,6 +31,80 @@ const seed = async (store: ReturnType<typeof createPostgresDirectoryStore>) => {
     { channelId: "C-secret", name: "secret", isPrivate: true },
   ]);
 };
+
+test("pg directory: upgrade claims legacy Slack rows without claiming portal-only rows", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  try {
+    await raw.query(`CREATE TABLE directory_members(
+      org_id TEXT NOT NULL,
+      principal_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      display_name_lc TEXT NOT NULL,
+      type TEXT NOT NULL,
+      slack_id TEXT,
+      PRIMARY KEY (org_id, principal_id)
+    )`);
+    await raw.query(
+      `INSERT INTO directory_members(org_id, principal_id, display_name, display_name_lc, type, slack_id)
+       VALUES ('default-org', 'slack@example.com', 'Slack Email', 'slack email', 'internal', 'U123ABC'),
+              ('default-org', 'U456DEF', 'Slack ID', 'slack id', 'internal', NULL),
+              ('default-org', 'portal@example.com', 'Portal', 'portal', 'internal', NULL)`,
+    );
+  } finally {
+    await raw.end();
+  }
+
+  const store = createPostgresDirectoryStore(URL!);
+  assert.equal((await store.get("slack@example.com"))?.identitySource, "directory-sync");
+  assert.equal((await store.get("U456DEF"))?.identitySource, "directory-sync");
+  assert.equal((await store.get("portal@example.com"))?.identitySource, undefined);
+
+  const legacyWriter = new pg.Pool({ connectionString: URL });
+  try {
+    await legacyWriter.query("DELETE FROM directory_members WHERE principal_id = 'portal@example.com'");
+  } finally {
+    await legacyWriter.end();
+  }
+  await store.replace([
+    {
+      principalId: "slack@example.com",
+      displayName: "Slack Email",
+      type: "internal",
+      slackId: "U123ABC",
+      identitySource: "directory-sync",
+    },
+    {
+      principalId: "portal@example.com",
+      displayName: "Portal in Slack",
+      type: "internal",
+      slackId: "U999XYZ",
+      identitySource: "directory-sync",
+    },
+  ]);
+  assert.equal((await store.get("portal@example.com"))?.identitySource, undefined);
+
+  const oldWriter = new pg.Pool({ connectionString: URL });
+  try {
+    await oldWriter.query("UPDATE directory_members SET identity_source = NULL");
+  } finally {
+    await oldWriter.end();
+  }
+  const newReader = createPostgresDirectoryStore(URL!);
+  assert.equal((await newReader.get("slack@example.com"))?.identitySource, "directory-sync");
+  assert.equal((await newReader.get("portal@example.com"))?.identitySource, undefined);
+
+  await newReader.replace([
+    {
+      principalId: "portal@example.com",
+      displayName: "Portal Reintroduced by Slack",
+      type: "internal",
+      slackId: "U999XYZ",
+      identitySource: "directory-sync",
+    },
+  ]);
+  assert.equal((await newReader.get("portal@example.com"))?.identitySource, undefined);
+});
 
 test(
   "pg directory: indexed resolve — exact id, prefix, ambiguity, none; guests unaddressable (G1)",
@@ -84,12 +158,19 @@ test("pg directory: exact channel-id resolution has a matching expression index"
 test("pg directory: slackId round-trips through replace → get/list/resolve; a change re-writes", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   await store.replace([
-    { principalId: "eve@acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
+    {
+      principalId: "eve@acme.com",
+      displayName: "Eve",
+      type: "internal",
+      slackId: "U9",
+      identitySource: "directory-sync",
+    },
     { principalId: "U5", displayName: "Dana", type: "internal" },
   ]);
   assert.equal((await store.get("eve@acme.com"))?.slackId, "U9");
   assert.equal((await store.get("U5"))?.slackId, undefined);
   assert.equal((await store.list()).find((m) => m.principalId === "eve@acme.com")?.slackId, "U9");
+  assert.equal((await store.list()).find((m) => m.principalId === "eve@acme.com")?.identitySource, "directory-sync");
   const r = await store.resolve("Eve");
   assert.equal(r.kind === "one" && r.member.slackId, "U9");
 

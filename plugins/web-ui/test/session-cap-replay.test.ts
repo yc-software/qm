@@ -81,6 +81,6 @@ test("same-second session-cap mints stay unique past core's replay dedupe", asyn
     Date.now = realNow;
   }
 
-  assert.equal(sessionCapMints, 2);
-  assert.equal(seenSignatures.size, 2, "each session-cap mint must carry a distinct signature");
+  assert.equal(sessionCapMints, 3);
+  assert.equal(seenSignatures.size, 3, "each session-cap mint must carry a distinct signature");
 });

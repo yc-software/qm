@@ -88,6 +88,22 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
   }
 });
 
+test("an admin capability cannot reactivate another account", async () => {
+  const s = start();
+  try {
+    await s.built.identity.deactivate("member@example.com");
+    const response = await fetch(`${s.base}/v1/admin/users/member%40example.com/reactivate`, {
+      method: "POST",
+      headers: { "x-agent-capability": await capFor("admin-alice") },
+    });
+    assert.equal(response.status, 403);
+    assert.match(((await response.json()) as { message: string }).message, /portal-only/);
+    assert.equal(s.built.identity.deactivation("member@example.com")?.source, "manual");
+  } finally {
+    await s.close();
+  }
+});
+
 test("whoami answers an agent capability token for admins and non-admins alike", async () => {
   const s = start();
   try {

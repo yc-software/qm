@@ -24,7 +24,15 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   const turns = (await deps.sessions?.attributedTurns()) ?? [];
   const grants = (await deps.admin?.listGrants()) ?? [];
-  const users = computeUsers({ participants, turns, grants });
+  await deps.identity?.refresh();
+  const deactivations = deps.identity?.deactivations() ?? [];
+  const deactivationByPrincipal = new Map(deactivations.map((record) => [personKey(record.principalId), record]));
+  const users = computeUsers({
+    participants,
+    turns,
+    grants,
+    principalIds: deactivations.map((record) => record.principalId),
+  }).map((user) => ({ ...user, deactivation: deactivationByPrincipal.get(personKey(user.principalId)) ?? null }));
   return sendJson(res, 200, { scopeId: scope, users, grants });
 }
 
@@ -105,6 +113,8 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
 
   const grants = (await deps.admin?.listGrants()) ?? [];
   const member = await app.directoryMember(principalId);
+  await deps.identity?.refresh();
+  const deactivation = deps.identity?.deactivation(principalId) ?? null;
 
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   const attributed = (await deps.sessions?.attributedTurns()) ?? [];
@@ -230,6 +240,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     scopeId: personal,
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
+    deactivation,
     stats: { sessions: mySessionIds.size, turns, firstSeenAt, lastSeenAt },
     conversations,
     files,
@@ -238,6 +249,23 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     config,
     onboarding,
   });
+}
+
+export async function reactivateUser(ctx: ApiCtx): Promise<void> {
+  const { res, deps, params } = ctx;
+  const scope = orgScope(deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+  const principalId = params.principalId!;
+  await deps.identity.reactivate(principalId);
+  audit(deps, {
+    principalId: actor.id,
+    action: "principal.reactivate",
+    resource: principalId,
+    scopeLabel: scope,
+  });
+  return sendJson(res, 200, { ok: true, principalId, active: true });
 }
 
 export async function startImpersonation(ctx: ApiCtx): Promise<void> {

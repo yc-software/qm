@@ -13,7 +13,11 @@ export interface DeactivationRecord {
   principalId: string;
   source: DeactivationSource;
   at: number;
+  identitySource?: "directory-sync";
 }
+
+export type PortalIdentityAccess =
+  { active: true; recovered: boolean } | { active: false; deactivation: DeactivationRecord };
 
 interface DirectorySyncOutcome {
   deactivated: string[];
@@ -23,9 +27,12 @@ interface DirectorySyncOutcome {
 export interface IdentityService extends IdentityProvider {
   isInternal(p: Principal): boolean;
   audienceIsAllInternal(audience: Principal[]): boolean;
-  deactivate(externalId: string, source?: DeactivationSource): Promise<void>;
+  deactivate(externalId: string, source?: DeactivationSource, identitySource?: "directory-sync"): Promise<void>;
   reactivate(externalId: string): Promise<void>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
+  portalIdentityAccess(externalId: string, recoverLegacy?: boolean): Promise<PortalIdentityAccess>;
+  deactivation(externalId: string): DeactivationRecord | null;
+  deactivations(): DeactivationRecord[];
   hydrate(): Promise<void>;
   refresh(): Promise<void>;
 }
@@ -43,13 +50,53 @@ export function createIdentityService(backing?: DurableMap<DeactivationRecord>):
     return { id: externalId, type };
   }
 
-  async function deactivate(externalId: string, source: DeactivationSource = "manual"): Promise<void> {
+  const atomicUpdate = store.update;
+  const atomicDelete = store.deleteIf;
+
+  async function deactivateRecord(
+    externalId: string,
+    source: DeactivationSource = "manual",
+    identitySource?: "directory-sync",
+  ): Promise<boolean> {
     const key = personKey(externalId);
-    const existing = deactivated.get(key);
-    if (existing && (existing.source === "manual" || existing.source === source)) return;
-    const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
-    deactivated.set(key, record);
-    await store.put(key, record);
+    const record: DeactivationRecord = {
+      principalId: externalId,
+      source,
+      at: Date.now(),
+      ...(identitySource ? { identitySource } : {}),
+    };
+    if (!atomicUpdate) throw new Error("deactivation store does not support atomic updates");
+    for (;;) {
+      const existing = await store.get(key);
+      if (!existing) {
+        const stored = await store.putIfAbsent(key, record);
+        deactivated.set(key, stored);
+        if (stored.at === record.at && stored.source === record.source) return true;
+        continue;
+      }
+      let changed = false;
+      const stored = await atomicUpdate.call(store, key, (current) => {
+        if (source === "directory-sync") {
+          if (current.source === "manual" || current.identitySource === "directory-sync") return current;
+          changed = true;
+          return { ...current, identitySource: "directory-sync" };
+        }
+        if (current.source === "manual") return current;
+        changed = true;
+        return record;
+      });
+      if (!stored) continue;
+      deactivated.set(key, stored);
+      return changed;
+    }
+  }
+
+  async function deactivate(
+    externalId: string,
+    source: DeactivationSource = "manual",
+    identitySource?: "directory-sync",
+  ): Promise<void> {
+    await deactivateRecord(externalId, source, identitySource);
   }
 
   async function reactivate(externalId: string): Promise<void> {
@@ -62,16 +109,52 @@ export function createIdentityService(backing?: DurableMap<DeactivationRecord>):
     classify,
     deactivate,
     reactivate,
+    deactivation(externalId) {
+      return deactivated.get(personKey(externalId)) ?? null;
+    },
+    deactivations() {
+      return [...deactivated.values()].sort((a, b) => a.principalId.localeCompare(b.principalId));
+    },
+    async portalIdentityAccess(externalId, recoverLegacy = true) {
+      const key = personKey(externalId);
+      const record = await store.get(key);
+      if (record) deactivated.set(key, record);
+      else deactivated.delete(key);
+      if (!record) return { active: true, recovered: false };
+      if (recoverLegacy && record.source === "directory-sync" && record.identitySource !== "directory-sync") {
+        if (!atomicDelete) throw new Error("deactivation store does not support conditional deletes");
+        const recovered = await atomicDelete.call(
+          store,
+          key,
+          (current) => current.source === "directory-sync" && current.identitySource !== "directory-sync",
+        );
+        if (recovered) {
+          deactivated.delete(key);
+          return { active: true, recovered: true };
+        }
+        const current = await store.get(key);
+        if (!current) {
+          deactivated.delete(key);
+          return { active: true, recovered: false };
+        }
+        deactivated.set(key, current);
+        return { active: false, deactivation: current };
+      }
+      return { active: false, deactivation: record };
+    },
     async recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome> {
       const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
-      for (const id of removedIds) {
-        if (deactivated.has(personKey(id))) continue;
-        await deactivate(id, "directory-sync");
-        outcome.deactivated.push(id);
+      const removed = new Map(removedIds.map((id) => [personKey(id), id]));
+      const present = new Map(presentIds.map((id) => [personKey(id), id]));
+      for (const [key, id] of removed) {
+        if (present.has(key)) continue;
+        if (await deactivateRecord(id, "directory-sync", "directory-sync")) outcome.deactivated.push(id);
       }
-      for (const id of presentIds) {
-        if (deactivated.get(personKey(id))?.source !== "directory-sync") continue;
-        await reactivate(id);
+      for (const [key, id] of present) {
+        if (!atomicDelete) throw new Error("deactivation store does not support conditional deletes");
+        const reactivated = await atomicDelete.call(store, key, (current) => current.source === "directory-sync");
+        if (!reactivated) continue;
+        deactivated.delete(key);
         outcome.reactivated.push(id);
       }
       return outcome;

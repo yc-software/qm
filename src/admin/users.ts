@@ -12,6 +12,7 @@ export interface AdminUserRow {
 
 export interface UsersInput extends Omit<AttributionInput, "sessionIds"> {
   grants: readonly AdminGrant[];
+  principalIds?: readonly string[];
 }
 
 export function computeUsers(input: UsersInput): AdminUserRow[] {
@@ -37,7 +38,11 @@ export function computeUsers(input: UsersInput): AdminUserRow[] {
     },
   });
 
-  const ids = new Set<string>([...sessionsByUser.keys(), ...grants.map((g) => g.principalId)]);
+  const ids = new Set<string>([
+    ...sessionsByUser.keys(),
+    ...grants.map((g) => g.principalId),
+    ...(input.principalIds ?? []),
+  ]);
   return [...ids]
     .map((principalId) => ({
       principalId,

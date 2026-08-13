@@ -72,6 +72,7 @@ const USER_SCOPED: Rule[] = [
   pat("GET", "/v1/runs/:id"),
   pat("GET", "/v1/runs"),
   pat("POST", "/v1/runs/:id/signal"),
+  pat("POST", "/v1/session-cap"),
 ];
 
 const SYSTEM: Rule[] = [
@@ -92,7 +93,6 @@ const SYSTEM: Rule[] = [
   pat("POST", "/v1/egress-audit"),
   pat("POST", "/v1/auth/broker/claim"),
   pat("PUT", "/v1/deployment-layer"),
-  pat("POST", "/v1/session-cap"),
   pat("POST", "/v1/keychain/drops/:id"),
   pat("POST", "/v1/keychain/asks"),
   pat("POST", "/v1/keychain/asks/:id/decline"),

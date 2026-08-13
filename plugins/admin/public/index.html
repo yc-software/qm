@@ -10754,11 +10754,14 @@
       function renderUsers(root, d) {
         const users = d.users || [];
         const grants = d.grants || [];
+        const samePrincipal = (a, b) =>
+          a === b || (a.includes("@") && b.includes("@") && a.toLowerCase() === b.toLowerCase());
         let filterVal = "";
         defaultShell({
           stats: [
             [users.length, "Users"],
             [grants.length, "Admins"],
+            [users.filter((u) => u.deactivation).length, "Deactivated"],
           ],
           search: {
             placeholder: "principal, role, or scope",
@@ -10865,7 +10868,11 @@
             const members = await dirMembers(v);
             if (members.length > 1)
               return setStatus("st-imp", "Matches several people — pick one from the suggestions.", "err");
-            await openWebUiAs(members[0]?.principalId ?? v);
+            const target = members[0]?.principalId ?? v;
+            if (users.find((u) => samePrincipal(u.principalId, target))?.deactivation) {
+              return setStatus("st-imp", "Reactivate this account before impersonating it.", "err");
+            }
+            await openWebUiAs(target);
           } catch (e) {
             setStatus("st-imp", "Couldn't resolve that (" + (e?.message || "directory lookup failed") + ").", "err");
           } finally {
@@ -10894,7 +10901,12 @@
           lists.textContent = "";
           const filteredGrants = grants.filter((g) => matches([g.principalId, g.role, g.scopeId, g.grantedBy || ""]));
           const filteredUsers = users.filter((u) =>
-            matches([u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"]),
+            matches([
+              u.principalId,
+              u.admin?.role || "",
+              u.admin?.scopeId || "member",
+              u.deactivation ? "deactivated " + (u.deactivation.source || "") : "active",
+            ]),
           );
 
           const admins = actionTable(
@@ -10922,47 +10934,76 @@
           );
 
           const roster = openableTable(
-            ["Principal", "Role", "Last seen", "Sessions", "Turns", "", ""],
+            ["Principal", "Role", "Access", "Last seen", "Sessions", "Turns", "", ""],
             filteredUsers,
             (u) => [
               { text: u.principalId, cls: "mono" },
               nodeCell(mutedText(u.admin?.isAdmin ? labelRole(u.admin.role) : "member")),
+              nodeCell(mutedText(u.deactivation ? "deactivated" : "active", u.deactivation ? "err" : "ok")),
               u.lastSeenAt ? timeCell(u.lastSeenAt) : { text: "-", cls: "num" },
               { text: String(u.sessionCount), cls: "num" },
               { text: String(u.turnCount), cls: "num" },
               {
                 action: {
                   label: "Impersonate ↗",
+                  disabled: !!u.deactivation,
+                  title: u.deactivation ? "Reactivate this account before impersonating it." : "",
                   run: (ev) => {
                     ev?.stopPropagation?.();
                     openWebUiAs(u.principalId);
                   },
                 },
               },
-              u.admin?.isAdmin
-                ? { text: "" }
-                : {
+              u.deactivation
+                ? {
                     action: {
-                      label: "Make admin",
-                      run: (ev) => {
+                      label: "Reactivate",
+                      run: async (ev) => {
                         ev?.stopPropagation?.();
-                        pInput.value = u.principalId;
-                        pInput.focus();
-                        form.scrollIntoView({ block: "center" });
+                        const button = ev?.currentTarget;
+                        if (button) button.disabled = true;
+                        try {
+                          const r = await api(
+                            "POST",
+                            "/api/users/" + encodeURIComponent(u.principalId) + "/reactivate",
+                          );
+                          if (r.ok) renderData();
+                          else setStatus("st-user-access-list", r.data?.message || "Reactivation failed.", "err");
+                        } catch (e) {
+                          setStatus("st-user-access-list", e?.message || "Reactivation failed.", "err");
+                        } finally {
+                          if (button?.isConnected) button.disabled = false;
+                        }
                       },
                     },
-                  },
+                  }
+                : u.admin?.isAdmin
+                  ? { text: "" }
+                  : {
+                      action: {
+                        label: "Make admin",
+                        run: (ev) => {
+                          ev?.stopPropagation?.();
+                          pInput.value = u.principalId;
+                          pInput.focus();
+                          form.scrollIntoView({ block: "center" });
+                        },
+                      },
+                    },
             ],
             (u) => go({ view: "user", scope, session: null, principal: u.principalId }),
             "No users match.",
           );
-          lists.appendChild(
-            dataCard(
-              "Users",
-              "Everyone who has used the agent — click a row for their activity, artifacts, and config.",
-              roster,
-            ),
+          const usersCard = dataCard(
+            "Users",
+            "Everyone who has used the agent — click a row for their activity, artifacts, and config.",
+            roster,
           );
+          const usersStatus = document.createElement("p");
+          usersStatus.className = "status";
+          usersStatus.id = "st-user-access-list";
+          usersCard.querySelector(".body").appendChild(usersStatus);
+          lists.appendChild(usersCard);
         };
         drawLists();
       }
@@ -11765,12 +11806,74 @@
         pageShell({
           back: { label: "← Users", onClick: () => history.back() },
           title: d.displayName || d.principalId || principalId,
-          context: [d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId || ""].filter(Boolean).join(" · "),
+          context: [
+            d.admin?.isAdmin ? labelRole(d.admin.role) : "member",
+            d.deactivation ? "deactivated" : "active",
+            d.scopeId || "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
         });
         const userActions = document.createElement("div");
         userActions.style.margin = "0 0 14px";
-        userActions.appendChild(webUiAsButton(d.principalId || principalId));
+        const impersonate = webUiAsButton(d.principalId || principalId);
+        if (d.deactivation) {
+          impersonate.disabled = true;
+          impersonate.title = "Reactivate this account before impersonating it.";
+        }
+        userActions.appendChild(impersonate);
+        if (d.deactivation) {
+          const reactivate = document.createElement("button");
+          reactivate.type = "button";
+          reactivate.className = "primary";
+          reactivate.style.marginLeft = "8px";
+          reactivate.textContent = "Reactivate account";
+          reactivate.onclick = async () => {
+            reactivate.disabled = true;
+            try {
+              const response = await api(
+                "POST",
+                "/api/users/" + encodeURIComponent(d.principalId || principalId) + "/reactivate",
+              );
+              if (response.ok) return void showUserDetail(principalId);
+              setStatus("st-user-access", response.data?.message || "Reactivation failed.", "err");
+            } catch (e) {
+              setStatus("st-user-access", e?.message || "Reactivation failed.", "err");
+            } finally {
+              reactivate.disabled = false;
+            }
+          };
+          userActions.appendChild(reactivate);
+        }
         detail.appendChild(userActions);
+
+        const accessState = document.createElement("div");
+        accessState.appendChild(
+          table(
+            ["State", "Source", "Changed"],
+            [
+              [
+                nodeCell(mutedText(d.deactivation ? "Deactivated" : "Active", d.deactivation ? "err" : "ok")),
+                d.deactivation?.source || "—",
+                d.deactivation?.at ? fmtTime(d.deactivation.at) : "—",
+              ],
+            ],
+            "",
+          ),
+        );
+        const accessStatus = document.createElement("p");
+        accessStatus.className = "status";
+        accessStatus.id = "st-user-access";
+        accessState.appendChild(accessStatus);
+        detail.appendChild(
+          dataCard(
+            "Account access",
+            d.deactivation
+              ? "This identity cannot use QM until an org admin reactivates it."
+              : "This identity can use QM.",
+            accessState,
+          ),
+        );
 
         const stats = d.stats || {};
         detail.appendChild(

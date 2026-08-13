@@ -72,6 +72,19 @@ test("GET /api/users forwards to /v1/admin/users", async () => {
   assert.equal(c.actor, "U-admin@acme");
 });
 
+test("POST /api/users/:id/reactivate forwards the recovery request", async () => {
+  const r = await fetch(`${base}/api/users/locked%40example.com/reactivate`, {
+    method: "POST",
+    headers: { cookie: ADMIN },
+  });
+  assert.equal(r.status, 200);
+  const c = calls.at(-1)!;
+  assert.equal(c.method, "POST");
+  assert.equal(c.url, "/v1/admin/users/locked%40example.com/reactivate");
+  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.signed, true);
+});
+
 test("GET /api/keychain forwards to /v1/admin/keychain", async () => {
   const r = await fetch(`${base}/api/keychain`, { headers: { cookie: ADMIN } });
   assert.equal(r.status, 200);
