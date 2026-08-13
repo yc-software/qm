@@ -101,7 +101,8 @@ test(
     });
     assert.deepEqual(JSON.parse(out), { id: "m1", threadId: "t1" });
     const recorded = JSON.parse(readFileSync(argsFile, "utf8"));
-    assert.ok(recorded.argv.includes("https://gmail.googleapis.com/gmail/v1/users/me/drafts/send"));
+    const sendUrl = recorded.argv.find((a: string) => a.startsWith("https://"));
+    assert.equal(sendUrl, "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send");
     assert.ok(recorded.argv.includes("Authorization: Bearer tok"));
     assert.equal(recorded.stdin, '{"id": "d1"}');
   },
