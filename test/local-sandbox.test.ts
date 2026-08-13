@@ -118,6 +118,21 @@ test("cold provision creates volume + container, run() execs over the daemon, by
   assert.equal(await sb.readFileBytes(h, "bin/missing.dat"), null);
 });
 
+test("layer credential paths stay out of default home backups", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake, { credentialPaths: [{ path: ".config/example", kind: "directory" }] });
+  const h = await sb.provision(rw(scopeId("personal", "U9")));
+  const seeded = await sb.run(
+    h,
+    'mkdir -p "$HOME/.config/example" && printf secret > "$HOME/.config/example/token" && printf keep > "$HOME/backup-note.txt"',
+  );
+  assert.equal(seeded.code, 0);
+  const entries = await sb.backupComputer!(h, { include: ["home"] });
+  const paths = entries.map((entry) => entry.path);
+  assert.ok(paths.includes("backup-note.txt"));
+  assert.ok(!paths.some((path) => path.startsWith(".config/example")));
+});
+
 test("teardown parks the container and the next provision restarts it warm", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);

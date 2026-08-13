@@ -14,7 +14,7 @@ import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecBackup, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import { spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
-import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
+import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import type {
@@ -46,6 +46,7 @@ export interface LocalSandboxOptions {
   defaultTimeoutSec?: number;
   homeDir?: string;
   repoRoot?: string;
+  credentialPaths?: CredentialPathSpec[];
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
@@ -352,7 +353,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: homeDir,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths().map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
 
   const sandbox: Sandbox = {
