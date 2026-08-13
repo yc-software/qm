@@ -23,6 +23,7 @@ import {
   v1PaneSeeds,
   layoutNeedsSessionList,
   paneNeedsSessionList,
+  serializedActiveSessionId,
   type DropEdge,
   type PaneSeed,
   type SplitEdge,
@@ -359,6 +360,20 @@ function paneShowing(sessionId: string): IDockviewPanel | null {
 
 export function sessionInCanvas(sessionId: string): boolean {
   return splitState.active && paneShowing(sessionId) !== null;
+}
+
+export function focusedCanvasSessionId(): string | null {
+  if (!splitState.active) return null;
+  if (dockApi) {
+    const panel =
+      (splitState.focusedId ? dockApi.getPanel(splitState.focusedId) : null) ??
+      dockApi.activePanel ??
+      dockApi.panels[0];
+    if (panel) return panelParams(panel).sessionId ?? null;
+  }
+  if (pendingSeed?.kind === "v2") return serializedActiveSessionId(pendingSeed.layout);
+  if (pendingSeed?.kind === "v1") return pendingSeed.seeds.find((seed) => seed.sessionId)?.sessionId ?? null;
+  return lastLayout ? serializedActiveSessionId(lastLayout) : null;
 }
 
 export function splitInterceptsOpen(s: CoreSession): boolean {

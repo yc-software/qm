@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deepLinkPath, parseDeepLink, sessionLink } from "../src/deep-link.ts";
+import { authReturnPath, deepLinkPath, parseDeepLink, sessionLink } from "../src/deep-link.ts";
 
 test("chats view with an active session is addressed by /?session=", () => {
   assert.equal(deepLinkPath("", "chats", "abc-123"), "/?session=abc-123");
@@ -93,4 +93,13 @@ test("only the first two path segments are addressed", () => {
 test("sessionLink builds an absolute link under the serving base", () => {
   assert.equal(sessionLink("https://portal.example", "/web-ui/", "s1"), "https://portal.example/web-ui/?session=s1");
   assert.equal(sessionLink("http://localhost:8096", "", "s1"), "http://localhost:8096/?session=s1");
+});
+
+test("auth return targets the focused canvas conversation", () => {
+  assert.equal(authReturnPath("", "/", "", "s1"), "/?session=s1");
+  assert.equal(authReturnPath("/web-ui", "/web-ui/", "", "s1"), "/web-ui/?session=s1");
+});
+
+test("auth return preserves the current page outside a conversation canvas", () => {
+  assert.equal(authReturnPath("", "/files", "?scope=personal%3Aalice", null), "/files?scope=personal%3Aalice");
 });

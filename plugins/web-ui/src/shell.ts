@@ -33,12 +33,13 @@ import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection, seedRuntimeConfig } from "./composer";
 import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
-import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
+import { authReturnPath, deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
 import {
   addBlankPane,
   canvasToast,
   drawCanvas,
   exitSplitIfActive,
+  focusedCanvasSessionId,
   loadPersistedSplit,
   mountRestoredCanvas,
   restoredCanvasNeedsSessionList,
@@ -279,7 +280,7 @@ function signInWithPortal(): void {
   } catch {
     void 0;
   }
-  const returnTo = `${location.pathname}${location.search}`;
+  const returnTo = authReturnPath(UI_BASE, location.pathname, location.search, focusedCanvasSessionId());
   location.href = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
 }
 

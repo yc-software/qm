@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { MAX_TILES, v1PaneSeeds } from "../src/split-layout.ts";
+import { MAX_TILES, serializedActiveSessionId, v1PaneSeeds } from "../src/split-layout.ts";
 
 const leaf = (sessionId: string | null = null, threadRef: string | null = null): object => ({
   kind: "leaf",
@@ -37,6 +37,27 @@ test("v1PaneSeeds normalizes non-string ids to null", () => {
     { sessionId: null, threadRef: null },
     { sessionId: "s2", threadRef: null },
   ]);
+});
+
+test("serializedActiveSessionId restores the active canvas tab before the dock mounts", () => {
+  const layout = {
+    activeGroup: "group-2",
+    panels: {
+      "panel-1": { params: { sessionId: "session-1" } },
+      "panel-2": { params: { sessionId: "session-2" } },
+    },
+    grid: {
+      root: {
+        data: [{ data: { id: "group-1", activeView: "panel-1" } }, { data: { id: "group-2", activeView: "panel-2" } }],
+      },
+    },
+  };
+  assert.equal(serializedActiveSessionId(layout), "session-2");
+});
+
+test("serializedActiveSessionId fails closed on incomplete persisted state", () => {
+  assert.equal(serializedActiveSessionId(null), null);
+  assert.equal(serializedActiveSessionId({ activeGroup: "missing", panels: {}, grid: {} }), null);
 });
 
 test("a conversation can be dropped onto a pane's tab strip to become a tab", () => {

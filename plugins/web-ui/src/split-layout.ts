@@ -63,6 +63,30 @@ export function layoutNeedsSessionList(layout: unknown): boolean {
   });
 }
 
+export function serializedActiveSessionId(layout: unknown): string | null {
+  if (!layout || typeof layout !== "object") return null;
+  const o = layout as { activeGroup?: unknown; panels?: unknown; grid?: { root?: unknown } };
+  if (!o.panels || typeof o.panels !== "object") return null;
+  const panels = o.panels as Record<string, { params?: PaneSeedLike }>;
+  const stack: unknown[] = [o.grid?.root];
+  for (let budget = WALK_BUDGET; stack.length; budget--) {
+    if (budget <= 0) return null;
+    const node = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    const n = node as { data?: unknown };
+    if (Array.isArray(n.data)) {
+      stack.push(...n.data);
+      continue;
+    }
+    if (!n.data || typeof n.data !== "object") continue;
+    const group = n.data as { id?: unknown; activeView?: unknown };
+    if (group.id !== o.activeGroup || typeof group.activeView !== "string") continue;
+    const sessionId = panels[group.activeView]?.params?.sessionId;
+    return typeof sessionId === "string" && sessionId ? sessionId : null;
+  }
+  return null;
+}
+
 interface PaneSeedLike {
   sessionId?: unknown;
   threadRef?: unknown;
