@@ -21,6 +21,20 @@ a PipesHub thing.
 attachment. Each person supplies their own token from their own keychain, so
 answers stay bounded by their own access.
 
+**To be precise about that last part:** it holds in DMs, and we've only built
+for DMs. In a personal scope QM injects the speaker's own keychain credential,
+so the person asking is the person whose permissions apply — we've confirmed
+that end to end. In a shared conversation it works differently: your own
+credential isn't injected, someone grants one to the conversation instead, and
+that grant then serves whoever speaks next. For us that would mean one person's
+token answering another person's question, which is the exact thing this design
+exists to prevent. So we've scoped v1 to personal DMs and say so in our docs.
+
+Supporting shared rooms properly would need QM to broker per speaker — inject
+the credential belonging to whoever is talking, rather than one attached to the
+room. We're not asking for that today; flagging it as the thing that would
+unlock it.
+
 **What we're asking:**
 
 1. **Fix the two bugs below** — they're the only thing stopping this working.
