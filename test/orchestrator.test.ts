@@ -15,6 +15,9 @@ import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
 import { contextSummaryPayload } from "../src/harness/context-compaction.ts";
 import { egressDecision } from "../src/resolution/egress-policy.ts";
 import { hashId } from "../src/util/crypto.ts";
+import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
+import type { AclStore } from "../src/acl/acl-store.ts";
+import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 
 function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecurityScreener) {
@@ -62,6 +65,16 @@ function channel(text: string, extra: Partial<TurnRequest> = {}): TurnRequest {
     gatewayContext: { reactionGuidance: "react with a Slack emoji short-name like :pray:" },
     ...extra,
   };
+}
+
+async function grantCred(acl: AclStore, org: ScopeId, slug: string, grantee: ScopeId = org): Promise<void> {
+  await acl.grant({
+    ownerScopeId: org,
+    ref: encodeRef(serviceCredRef(slug)),
+    granteeScopeId: grantee,
+    permission: "read",
+    grantedBy: "admin@default-org",
+  });
 }
 
 test("internal DM turn runs end-to-end and records the session", async () => {
@@ -441,7 +454,7 @@ test("org env-delivery credentials ride provision env under their envKey — rea
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl } = buildApp(config);
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -451,6 +464,8 @@ test("org env-delivery credentials ride provision env under their envKey — rea
     secret: "steel-org-key",
     host: "",
   });
+  await grantCred(acl, org, "browse-steel");
+  await grantCred(acl, org, "browse-model-key");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-model-key",
     name: "Browse model key",
@@ -490,8 +505,10 @@ test("a disabled or broker-delivery credential never rides provision env", async
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl } = buildApp(config);
   const org = scopeId("org", "default-org");
+  await grantCred(acl, org, "x-firehose");
+  await grantCred(acl, org, "browse-steel");
   await serviceCreds.setServiceCredential(org, {
     slug: "x-firehose",
     name: "X",
@@ -530,7 +547,7 @@ test("a credential flipped away from env between the metadata read and the secre
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl } = buildApp(config);
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -540,6 +557,7 @@ test("a credential flipped away from env between the metadata read and the secre
     secret: "steel-org-key",
     host: "",
   });
+  await grantCred(acl, org, "browse-steel");
   const realGet = serviceCreds.getServiceCredentialSecret.bind(serviceCreds);
   serviceCreds.getServiceCredentialSecret = async (scope, slug) => {
     const rec = await realGet(scope, slug);
@@ -563,7 +581,7 @@ test("env-delivery injection is all-internal only, and an existing env key (keyc
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl } = buildApp(config);
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -573,6 +591,7 @@ test("env-delivery injection is all-internal only, and an existing env key (keyc
     secret: "steel-org-key",
     host: "",
   });
+  await grantCred(acl, org, "browse-steel");
   const captures: ProvisionOptions[] = [];
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -593,6 +612,48 @@ test("env-delivery injection is all-internal only, and an existing env key (keyc
   );
   assert.equal(externalRoom.status, "ok");
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a room with externals gets no org env credentials");
+});
+
+test("env-delivery credentials are gated by service-cred grants — no grant, no env var; a person grant admits only that person", async () => {
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+  });
+  const { app, sandbox, serviceCreds, acl } = buildApp(config);
+  const org = scopeId("org", "default-org");
+  await serviceCreds.setServiceCredential(org, {
+    slug: "browse-steel",
+    name: "Steel",
+    delivery: "env",
+    envKey: "STEEL_API_KEY",
+    secret: "steel-org-key",
+    host: "",
+  });
+  const captures: ProvisionOptions[] = [];
+  const realProvision = sandbox.provision.bind(sandbox);
+  sandbox.provision = (layers, opts) => {
+    if (opts) captures.push(opts);
+    return realProvision(layers, opts);
+  };
+
+  let res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:gate1" } }));
+  assert.equal(res.status, "ok");
+  assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "ungranted env credential stays home");
+
+  await grantCred(acl, org, "browse-steel", scopeId("personal", "somebody-else"));
+  res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:gate2" } }));
+  assert.equal(res.status, "ok");
+  assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a grant to someone else does not admit this actor");
+
+  await grantCred(acl, org, "browse-steel", scopeId("personal", "U1"));
+  res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:gate3" } }));
+  assert.equal(res.status, "ok");
+  assert.equal(
+    captures.at(-1)?.env?.STEEL_API_KEY,
+    "steel-org-key",
+    "a personal grant to the actor admits the env var",
+  );
 });
 
 test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STEPS)", async () => {

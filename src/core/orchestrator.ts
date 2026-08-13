@@ -1039,12 +1039,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const liveAuthorTurn = (humanTurn || authoredDetection) && allInternal;
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
         const orgScope = toScopeId("org", orgId());
+        // Env delivery is gated by the same service-cred grants as the broker: the env var rides
+        // only when every internal participant in this conversation is entitled to the credential.
+        const envGrantedSlugs = new Set(
+          (
+            await deps.acl.grantsOfKind(
+              "service-cred",
+              conversation.audience,
+              scopeId,
+              resolution.orgScopeId,
+              principalEntitledToScope,
+            )
+          ).map((g) => parseRef(g.ref).id),
+        );
         for (const cred of await deps.serviceCreds.listServiceCredentials(orgScope)) {
           if (
             cred.delivery !== "env" ||
             !cred.envKey ||
             !cred.enabled ||
             !cred.hasSecret ||
+            !envGrantedSlugs.has(cred.slug) ||
             cred.envKey in connectorEnv
           )
             continue;

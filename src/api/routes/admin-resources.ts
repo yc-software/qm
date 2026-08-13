@@ -893,12 +893,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       });
       if (badGrantee !== undefined)
         return { error: `grantee must be this org or a valid personal:/team: scope (got ${badGrantee})` };
-      if (delivery === "env" && desired?.some((g) => g !== scope)) {
-        return {
-          error:
-            "env-delivery credentials are injected into every all-internal conversation — person/team grants don't gate them; share org-wide",
-        };
-      }
       const injection =
         b.injection && typeof b.injection === "object"
           ? ({
