@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { type ScopeId, parseScopeId, scopeId as makeScopeId } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
+import { createKeyedQueue } from "../util/async.ts";
 import { RECALL_MAX_CHARS, bullets, capTail, dateStr, isBullet, normalize } from "./notebook.ts";
 
 export const MEMORY_FILE = "memory/MEMORY.md";
@@ -105,17 +106,20 @@ export function normalizeReplace(content: string): string {
 }
 
 export function createMemoryService(workspace: WorkspaceStore): MemoryService {
+  const perScope = createKeyedQueue<ScopeId>();
   return {
     async recall(scopeId) {
       return recallBody((await workspace.read(scopeId, MEMORY_FILE)) ?? "");
     },
 
     async capture(scopeId, facts, at, author) {
-      const existing = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
-      const { body, added } = foldCapture(existing, facts, at, author?.startsWith("cc:") === true);
-      if (!added) return 0;
-      await workspace.write(scopeId, MEMORY_FILE, `${body}\n`);
-      return added;
+      return perScope(scopeId, async () => {
+        const existing = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
+        const { body, added } = foldCapture(existing, facts, at, author?.startsWith("cc:") === true);
+        if (!added) return 0;
+        await workspace.write(scopeId, MEMORY_FILE, `${body}\n`);
+        return added;
+      });
     },
 
     async query(scopeId, q, limit = 20) {
@@ -127,26 +131,32 @@ export function createMemoryService(workspace: WorkspaceStore): MemoryService {
     },
 
     async replace(scopeId, content) {
-      const next = normalizeReplace(content);
-      if (!next) {
-        await workspace.remove(scopeId, MEMORY_FILE);
-        return;
-      }
-      await workspace.write(scopeId, MEMORY_FILE, next);
+      await perScope(scopeId, async () => {
+        const next = normalizeReplace(content);
+        if (!next) {
+          await workspace.remove(scopeId, MEMORY_FILE);
+          return;
+        }
+        await workspace.write(scopeId, MEMORY_FILE, next);
+      });
     },
 
     async readHead(scopeId) {
-      const content = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
-      return { content, revision: revisionToken(content) };
+      return perScope(scopeId, async () => {
+        const content = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
+        return { content, revision: revisionToken(content) };
+      });
     },
 
     async replaceIfRevision(scopeId, content, revision) {
-      const current = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
-      if (revisionToken(current) !== revision) return false;
-      const next = normalizeReplace(content);
-      if (!next) await workspace.remove(scopeId, MEMORY_FILE);
-      else await workspace.write(scopeId, MEMORY_FILE, next);
-      return true;
+      return perScope(scopeId, async () => {
+        const current = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
+        if (revisionToken(current) !== revision) return false;
+        const next = normalizeReplace(content);
+        if (!next) await workspace.remove(scopeId, MEMORY_FILE);
+        else await workspace.write(scopeId, MEMORY_FILE, next);
+        return true;
+      });
     },
   };
 }

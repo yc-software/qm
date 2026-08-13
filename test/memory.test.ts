@@ -24,6 +24,21 @@ function freshApp(overrides: Partial<Config> = {}) {
 
 const actor = { externalId: "U1" };
 
+test("file memory compare-and-set permits only one writer for a revision", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memory-cas-")));
+  const memory = createMemoryService(workspace);
+  const target = scopeId("personal", "cas-user");
+  await memory.replace(target, "# Memory\n\n- original");
+  const head = await memory.readHead!(target);
+
+  const results = await Promise.all([
+    memory.replaceIfRevision!(target, "# Memory\n\n- first", head.revision),
+    memory.replaceIfRevision!(target, "# Memory\n\n- second", head.revision),
+  ]);
+
+  assert.deepEqual(results.sort(), [false, true]);
+});
+
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }

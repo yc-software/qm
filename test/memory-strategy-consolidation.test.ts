@@ -155,6 +155,46 @@ test("a one-shot failure leaves the notebook untouched — consolidation is best
   assert.equal(await workspace.read(SCOPE, MEMORY_FILE), before);
 });
 
+test("an edit landing during consolidation survives without disabling later consolidation", async () => {
+  const { memory } = freshMemory();
+  await memory.capture(SCOPE, ["original fact"], AT);
+  let calls = 0;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let modelStarted!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    modelStarted = resolve;
+  });
+  const logs: string[] = [];
+  const consolidator = createConsolidator({
+    harness: {
+      async oneShot() {
+        calls++;
+        modelStarted();
+        await blocked;
+        return "UPDATE 1: consolidated fact";
+      },
+    },
+    memory,
+    log: (message) => logs.push(message),
+  })!;
+
+  const first = consolidator.maintain(SCOPE);
+  await waiting;
+  await memory.replace(SCOPE, "# Memory\n\n- user edit");
+  release();
+  await first;
+
+  assert.match(await memory.read(SCOPE), /user edit/);
+  assert.doesNotMatch(await memory.read(SCOPE), /consolidated fact/);
+  assert.deepEqual(logs, []);
+
+  await consolidator.maintain(SCOPE);
+  assert.equal(calls, 2);
+});
+
 test("degrades to capture-only when the store can't round-trip a rewrite: logs once, stops trying, never crashes", async () => {
   const body = "# Memory\n\n- (2026-06-01) a fact\n";
   const memory: MemoryService = {

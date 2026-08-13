@@ -133,7 +133,9 @@ export function createConsolidator(deps: {
   const degraded = new Set<ScopeId>();
   async function maintain(scopeId: ScopeId): Promise<void> {
     if (degraded.has(scopeId) || !deps.harness.oneShot) return;
-    const body = await deps.memory.read(scopeId);
+    const guarded = deps.memory.readHead && deps.memory.replaceIfRevision;
+    const head = guarded ? await deps.memory.readHead!(scopeId) : undefined;
+    const body = head?.content ?? (await deps.memory.read(scopeId));
     const bullets = body.split("\n").filter(isBullet);
     if (!bullets.length) return;
 
@@ -146,6 +148,10 @@ export function createConsolidator(deps: {
     }
     const at = now();
     const next = applyConsolidationActions(body, parseConsolidationActions(out ?? ""), at);
+    if (head) {
+      await deps.memory.replaceIfRevision!(scopeId, next, head.revision, "system");
+      return;
+    }
     await deps.memory.replace(scopeId, next, "system");
 
     const after = await deps.memory.read(scopeId);
