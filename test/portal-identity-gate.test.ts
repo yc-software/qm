@@ -6,13 +6,15 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
+import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { isUnclassifiedWrite } from "../src/api/user-scoped-routes.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
+import { CAPABILITY_HEADER } from "../src/api/contract.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -65,6 +67,100 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     try {
       const prodBase = `http://localhost:${(prodServer.address() as AddressInfo).port}`;
       assert.equal((await fetch(`${prodBase}/d/missing/`)).status, 403);
+    } finally {
+      await new Promise<void>((resolve) => prodServer.close(() => resolve()));
+    }
+  });
+
+  it("production issues a run-bound capability for a service to read its queued run", async () => {
+    const prodServer = createServer(built.app, {
+      production: true,
+      signingSecret: SOURCE,
+      capabilitySecret: CAP,
+      portalIdentitySecret: PID,
+    });
+    await new Promise<void>((resolve) => prodServer.listen(0, resolve));
+    try {
+      const prodBase = `http://localhost:${(prodServer.address() as AddressInfo).port}`;
+      const turnPath = "/v1/turns?async=1&runAccess=capability";
+      const turnBody = JSON.stringify({
+        surface: "slack",
+        text: "run capability probe",
+        async: true,
+        actor: { externalId: "U9" },
+        conversation: { kind: "dm", threadRef: "dm:run-capability-probe" },
+      });
+      const queued = await fetch(`${prodBase}${turnPath}`, {
+        method: "POST",
+        headers: signedRequestHeaders(SOURCE, "POST", turnPath, turnBody),
+        body: turnBody,
+      });
+      assert.equal(queued.status, 202);
+      const queuedBody = (await queued.json()) as { runId?: unknown };
+      const runAccessToken = queued.headers.get(CAPABILITY_HEADER);
+      assert.equal(typeof queuedBody.runId, "string");
+      assert.equal(typeof runAccessToken, "string");
+      const ordinaryPath = "/v1/turns?async=1";
+      const ordinaryBody = JSON.stringify({
+        surface: "slack",
+        text: "ordinary async turn",
+        async: true,
+        actor: { externalId: "U9" },
+        conversation: { kind: "dm", threadRef: "dm:ordinary-async-turn" },
+      });
+      const ordinary = await fetch(`${prodBase}${ordinaryPath}`, {
+        method: "POST",
+        headers: signedRequestHeaders(SOURCE, "POST", ordinaryPath, ordinaryBody),
+        body: ordinaryBody,
+      });
+      assert.equal(ordinary.status, 202);
+      assert.equal(ordinary.headers.get(CAPABILITY_HEADER), null);
+      const path = `/v1/runs/${encodeURIComponent(queuedBody.runId as string)}`;
+      assert.equal(
+        (
+          await fetch(`${prodBase}${path}`, {
+            headers: { [CAPABILITY_HEADER]: runAccessToken as string },
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await fetch(`${prodBase}/v1/runs/another-run`, {
+            headers: { [CAPABILITY_HEADER]: runAccessToken as string },
+          })
+        ).status,
+        404,
+      );
+      assert.equal(
+        (
+          await fetch(`${prodBase}${path}`, {
+            headers: signedRequestHeaders(SOURCE, "GET", path),
+          })
+        ).status,
+        401,
+      );
+      assert.equal(
+        (
+          await fetch(`${prodBase}${path}`, {
+            headers: {
+              ...signedRequestHeaders(SOURCE, "GET", path),
+              "x-portal-identity": await token("U2"),
+            },
+          })
+        ).status,
+        404,
+      );
+      const userPath = "/v1/sessions/missing?viewer=U1";
+      assert.equal(
+        (
+          await fetch(`${prodBase}${userPath}`, {
+            headers: signedRequestHeaders(SOURCE, "GET", userPath),
+          })
+        ).status,
+        401,
+      );
+      assert.equal((await fetch(`${prodBase}${path}`)).status, 401);
     } finally {
       await new Promise<void>((resolve) => prodServer.close(() => resolve()));
     }

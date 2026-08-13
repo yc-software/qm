@@ -3,15 +3,18 @@ import assert from "node:assert/strict";
 import { apiRoutes, rawRoutes } from "../src/api/routes/index.ts";
 import { findRoute, type RouteAuth } from "../src/api/routes/route.ts";
 import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
-import { OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
+import { OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, RUN_READ_AUD } from "../src/auth/capability-token.ts";
 
 const PUBLIC_ROUTES = new Set<string>();
+const SOURCE_AUD_ROUTES = new Map<string, string>([["GET /v1/runs/sample", RUN_READ_AUD]]);
 const AUD_ROUTES = new Map<string, string>([
   ["POST /v1/connectors/oauth/consent/mint", OAUTH_CONSENT_AUD],
   ["POST /v1/credentials/broker", CREDENTIAL_BROKER_AUD],
 ]);
 function expectedAuth(method: string, pathname: string): RouteAuth {
   if (PUBLIC_ROUTES.has(`${method} ${pathname}`)) return "public";
+  const sourceAud = SOURCE_AUD_ROUTES.get(`${method} ${pathname}`);
+  if (sourceAud) return { aud: sourceAud, source: true };
   const aud = AUD_ROUTES.get(`${method} ${pathname}`);
   if (aud) return { aud };
   if (agentApiMatches(method, pathname)) return "either";

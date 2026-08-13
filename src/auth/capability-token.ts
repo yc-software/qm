@@ -10,6 +10,7 @@ export const CREDENTIAL_BROKER_AUD = "credential-broker";
 export const EGRESS_PROXY_AUD = "egress-proxy";
 export const BLOB_TRANSFER_AUD = "blob-transfer";
 export const SECRET_DROP_AUD = "secret-drop";
+export const RUN_READ_AUD = "run-read";
 
 interface BlobGrant {
   dir: "read" | "write";
@@ -34,6 +35,7 @@ export interface CapabilityClaims {
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;
+  runId?: string;
   memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
   liveActor?: boolean;
   liveAuthor?: boolean;
@@ -81,6 +83,8 @@ export async function verifyCapabilityToken(
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
   if (claims.blob !== undefined && claims.blob?.dir !== "read" && claims.blob?.dir !== "write") return null;
   if (claims.drop !== undefined && typeof claims.drop !== "string") return null;
+  if (claims.runId !== undefined && typeof claims.runId !== "string") return null;
+  if (claims.aud === RUN_READ_AUD && typeof claims.runId !== "string") return null;
   if (now >= claims.exp) return null;
   return claims;
 }

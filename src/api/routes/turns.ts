@@ -1,4 +1,6 @@
-import type { TurnOrigin, TurnRequest } from "../../types.ts";
+import { scopeId, type TurnOrigin, type TurnRequest } from "../../types.ts";
+import { CAPABILITY_TTL_MS, mintCapabilityToken, RUN_READ_AUD } from "../../auth/capability-token.ts";
+import { CAPABILITY_HEADER } from "../contract.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
@@ -34,12 +36,30 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
   }
   const wantAsync = url.searchParams.get("async") === "1" || body.async === true;
+  const wantRunCapability = url.searchParams.get("runAccess") === "capability";
   const { ownerKeychainUnion: _ownerKeychainUnion, spawned: _spawned, ...safeBody } = body;
   const resolvedOrigin = publicTurnOrigin(safeBody);
   if (resolvedOrigin.error) return sendJson(res, 400, { error: "bad_request", message: resolvedOrigin.error });
   const origin = resolvedOrigin.origin;
   const result = await app.turn({ ...safeBody, ...(origin ? { origin } : {}), async: wantAsync });
-  if (result.status === "queued") return sendJson(res, 202, result);
+  if (result.status === "queued") {
+    if (!wantRunCapability) return sendJson(res, 202, result);
+    if (!result.runId) return sendJson(res, 500, { error: "internal_error", message: "queued run has no id" });
+    const secret = ctx.deps.capabilitySecret ?? ctx.secret;
+    if (!secret) return sendJson(res, 202, result);
+    const runAccessToken = await mintCapabilityToken(
+      {
+        actorId: safeBody.actor.externalId,
+        scopeId: scopeId("personal", safeBody.actor.externalId),
+        aud: RUN_READ_AUD,
+        runId: result.runId,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+      },
+      secret,
+    );
+    res.setHeader(CAPABILITY_HEADER, runAccessToken);
+    return sendJson(res, 202, result);
+  }
   const status = result.status === "refused" ? 403 : 200;
   return sendJson(res, status, result);
 }
@@ -86,9 +106,12 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
 }
 
 async function getRun(ctx: ApiCtx): Promise<void> {
-  const { res, app, actor } = ctx;
+  const { res, app, actor, capability } = ctx;
   const id = ctx.params.id!;
-  const run = await app.getRun(id, actor?.p);
+  if (capability && capability.runId !== id) {
+    return sendJson(res, 404, { error: "not_found" });
+  }
+  const run = await app.getRun(id, actor?.p ?? capability?.actorId);
   if (!run) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, run);
 }
@@ -157,7 +180,7 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/approvals/:id", auth: "source", handle: getApproval },
   { method: "POST", path: "/v1/runs/:id/delivery-state", auth: "source", handle: postRunDeliveryState },
   { method: "POST", path: "/v1/runs/:id/signal", auth: "source", handle: postRunSignal },
-  { method: "GET", path: "/v1/runs/:id", auth: "source", handle: getRun },
+  { method: "GET", path: "/v1/runs/:id", auth: { aud: RUN_READ_AUD, source: true }, handle: getRun },
   { method: "GET", path: "/v1/runs", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
   { method: "POST", path: "/v1/deliveries/:id/ack", auth: "source", handle: ackDelivery },

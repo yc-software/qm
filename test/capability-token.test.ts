@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   BLOB_TRANSFER_AUD,
   CAPABILITY_TTL_MS,
+  RUN_READ_AUD,
   mintCapabilityToken,
   verifyBlobTransferCapability,
   verifyCapabilityToken,
@@ -73,6 +74,29 @@ test("the wrong secret fails verification", async () => {
 test("an expired token fails closed", async () => {
   assert.equal(
     await verifyCapabilityToken(await mintCapabilityToken(claims({ exp: Date.now() - 1 }), SECRET), SECRET),
+    null,
+  );
+});
+
+test("run-read capabilities require a string run id", async () => {
+  assert.ok(
+    await verifyCapabilityToken(
+      await mintCapabilityToken(claims({ aud: RUN_READ_AUD, runId: "run-1" }), SECRET),
+      SECRET,
+    ),
+  );
+  assert.equal(
+    await verifyCapabilityToken(await mintCapabilityToken(claims({ aud: RUN_READ_AUD }), SECRET), SECRET),
+    null,
+  );
+  assert.equal(
+    await verifyCapabilityToken(
+      await mintCapabilityToken(
+        claims({ aud: RUN_READ_AUD, runId: 1 } as unknown as Partial<CapabilityClaims>),
+        SECRET,
+      ),
+      SECRET,
+    ),
     null,
   );
 });

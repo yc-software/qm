@@ -126,6 +126,15 @@ interface GateResult {
   actor: PortalIdentity | null;
 }
 
+function acceptsSourceAuth(routeAuth: RouteAuth | undefined): boolean {
+  return (
+    routeAuth === undefined ||
+    routeAuth === "source" ||
+    routeAuth === "either" ||
+    (typeof routeAuth === "object" && routeAuth.source === true)
+  );
+}
+
 interface Wiring {
   app: App;
   deps: ServerDeps;
@@ -210,7 +219,7 @@ async function gate(
       sendJson(res, 403, { error: "forbidden", message: "capability token not valid for this route" });
       return null;
     }
-  } else if (requiredAud) {
+  } else if (requiredAud && !acceptsSourceAuth(routeAuth)) {
     sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
     return null;
   } else if (
@@ -463,8 +472,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (await dispatch(rawRoutes, base)) return;
     const matched = findRoute(apiRoutes, base.method, base.pathname);
     const routeAuth = matched?.route.auth;
-    const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
-    if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {
+    if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth(routeAuth)) {
       const timestamp = Number(req.headers["x-timestamp"] ?? 0);
       if (
         !Number.isFinite(timestamp) ||
