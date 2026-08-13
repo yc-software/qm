@@ -635,6 +635,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sandboxSecondaryBackend = secondary;
   }
   if (
+    (sandboxBackend === "gke" || sandboxSecondaryBackend === "gke") &&
+    env.GKE_SANDBOX_WARM_POOL?.trim()
+  ) {
+    throw new Error(
+      "GKE_SANDBOX_WARM_POOL is no longer supported — set GKE_SANDBOX_TEMPLATE to the SandboxTemplate referenced by the warm pool.",
+    );
+  }
+  if (
     env.NODE_ENV === "production" &&
     (sandboxBackend === "gke" || sandboxSecondaryBackend === "gke") &&
     !env.GKE_SANDBOX_ROUTER_TOKEN?.trim()

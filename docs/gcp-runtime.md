@@ -12,7 +12,7 @@ Required runtime environment:
 | Variable                 | Purpose                                       |
 | ------------------------ | --------------------------------------------- |
 | `SANDBOX_BACKEND=gke`    | Select GKE Agent Sandbox                      |
-| `GKE_SANDBOX_NAMESPACE`  | Namespace containing the warm pool and claims |
+| `GKE_SANDBOX_NAMESPACE`  | Namespace containing the template and claims  |
 | `GKE_SANDBOX_TEMPLATE`   | Existing `SandboxTemplate` name               |
 | `GKE_SANDBOX_ROUTER_URL` | Internal sandbox-router URL                   |
 | `SNAPSHOT_STORE=gcs`     | Store file bytes in Cloud Storage             |
@@ -21,6 +21,8 @@ Required runtime environment:
 | `GCS_PREFIX`             | Optional deployment prefix                    |
 
 The sandbox template owns isolation, persistence, limits, and egress policy. QM claims the template but cannot weaken it. Agent Pods should run non-root under gVisor, omit service-account tokens, drop all capabilities, use bounded resources, and accept ingress only from the sandbox router. The router should accept ingress only from QM core.
+
+`GKE_SANDBOX_WARM_POOL` is not a claim selector in the managed `v1alpha1` API. Replace that legacy setting with `GKE_SANDBOX_TEMPLATE`; a separately managed warm pool can still reference the same template.
 
 The adapter intentionally does not create GKE, Cloud SQL, buckets, IAM, or Secret Manager resources. Those belong to the operator's versioned infrastructure repository. It also does not synchronize Secret Manager into Kubernetes Secret objects.
 

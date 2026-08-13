@@ -250,6 +250,14 @@ test("sandbox backend is parsed once before production backend guards", () => {
   });
   assert.throws(() => loadConfig({ ...productionEnv, SANDBOX_BACKEND: "gke" }), /requires GKE_SANDBOX_ROUTER_TOKEN/);
   assert.throws(
+    () =>
+      loadConfig({
+        SANDBOX_BACKEND: "gke",
+        GKE_SANDBOX_WARM_POOL: "legacy-pool",
+      }),
+    /GKE_SANDBOX_WARM_POOL is no longer supported.*GKE_SANDBOX_TEMPLATE/,
+  );
+  assert.throws(
     () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: "bogus" }),
     /SANDBOX_BACKEND="bogus" is not recognized/,
   );
