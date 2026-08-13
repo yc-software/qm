@@ -312,6 +312,12 @@ export function isPrivateNetworkUrl(raw: string): boolean {
   if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
   if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
   if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;
+  // Docker service names (single-label hostnames like "auth", "portal", "core",
+  // "admin" inside a docker-compose network). These resolve to internal
+  // container IPs that the built-in broker runs on. Public DNS hostnames
+  // always have at least one dot (TLD), so a single-label hostname inside
+  // a private docker network is safe to trust.
+  if (/^[a-z][a-z0-9_-]{0,62}$/.test(host)) return true;
   return false;
 }
 

@@ -191,6 +191,12 @@ test("isPrivateNetworkUrl admits only unroutable hosts", () => {
     "http://192.168.1.9:8080",
     "http://[fdaa:0:1::3]:8080",
     "http://[::1]:8080",
+    // docker-compose service names (single-label hostnames on the private docker network)
+    "http://auth:8080",
+    "http://portal:8080",
+    "http://core:8080",
+    "http://admin:8080",
+    "http://qm-pilot-core:8080",
   ]) {
     assert.equal(isPrivateNetworkUrl(url), true, url);
   }
