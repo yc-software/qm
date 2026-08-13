@@ -206,6 +206,63 @@ test("runtime stores backend truth, routes one private Slack alert, and records 
   }
 });
 
+test("runtime correlates terminal runs stored by session id, matching the Postgres path", async () => {
+  const incidents = createOperatorIncidentStore();
+  const deliveries = createDeliveryStore();
+  const directory = createDirectoryStore();
+  await directory.replace([
+    {
+      principalId: "ahmad@chirocandy.com",
+      displayName: "Ahmad Bukhari",
+      type: "internal",
+      slackId: "U_AHMAD",
+    },
+  ]);
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("dm:U_BILLY", "dm", "personal:billy@chirocandy.com");
+  const { runs } = createMemoryRunStore();
+  const runtime = createOperatorIncidentRuntime({
+    incidents,
+    errors: createErrorLog(),
+    runs,
+    runActivity: createMemoryRunActivityStore(),
+    sessions,
+    deliveries,
+    directory,
+    recipient: "ahmad@chirocandy.com",
+    orgScopeId: "org:chirocandy",
+    cursors: createMemoryMap<OperatorIncidentCursor>(),
+    intervalMs: 5,
+  });
+  runtime.start();
+  try {
+    const enqueued = await runs.enqueue({ sessionId: session.id, request: request("Read the missing test file") });
+    const claimed = await runs.claim("worker-1", 5_000);
+    assert.equal(claimed?.id, enqueued.run.id);
+    await runs.complete(enqueued.run.id, claimed!.leaseToken!, {
+      status: "ok",
+      reply: "I can't read the missing test file because no file tool is available.",
+    });
+    const rows = await eventually(
+      () => incidents.list({ source: "run" }),
+      (value) => value.length === 1,
+    );
+    assert.equal(rows[0]?.sessionId, session.id);
+    assert.equal(rows[0]?.scopeLabel, session.scopeId);
+    assert.equal(
+      (
+        await eventually(
+          () => deliveries.pending("principal"),
+          (value) => value.length === 1,
+        )
+      ).length,
+      1,
+    );
+  } finally {
+    runtime.stop();
+  }
+});
+
 test("a session-bound backend error outside a run escalates after the grace window", async () => {
   const errors = createErrorLog();
   const incidents = createOperatorIncidentStore();

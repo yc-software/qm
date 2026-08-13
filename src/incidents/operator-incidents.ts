@@ -267,7 +267,7 @@ export function createOperatorIncidentRuntime(deps: OperatorIncidentDeps): Sweep
 
   deps.runs.onTerminal((run) => {
     void (async () => {
-      const session = await deps.sessions.getByThread(run.sessionId);
+      const session = (await deps.sessions.get(run.sessionId)) ?? (await deps.sessions.getByThread(run.sessionId));
       const [activity, backendErrors] = await Promise.all([
         deps.runActivity.list(run.id),
         session
