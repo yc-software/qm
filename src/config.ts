@@ -31,9 +31,9 @@ export interface Config {
   databaseUrl?: string;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
-  sandboxBackend: "aws" | "local" | "sprites";
-  sandboxSecondaryBackend?: "aws" | "local" | "sprites";
-  deployProvider: "docker" | "aws";
+  sandboxBackend: "aws" | "gke" | "local" | "sprites";
+  sandboxSecondaryBackend?: "aws" | "gke" | "local" | "sprites";
+  deployProvider: "docker" | "aws" | "disabled";
   egressServiceHosts?: string[];
   brandingDefault?: { accent?: string; mark?: string; selfLabel?: string };
   modelId?: string;
@@ -96,11 +96,13 @@ export interface Config {
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
   layerEnv?: Readonly<Record<string, string | undefined>>;
-  snapshotStore: "local" | "s3";
-  transferStore: "local" | "s3";
+  snapshotStore: "gcs" | "local" | "s3";
+  transferStore: "gcs" | "local" | "s3";
   s3Bucket?: string;
   s3Region?: string;
   s3Prefix?: string;
+  gcsBucket?: string;
+  gcsPrefix?: string;
   deployIdleTtlMs?: number;
   deployGitDir: string;
   deployDialTimeoutMs: number;
@@ -142,6 +144,7 @@ export interface Config {
   awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
+  gkeSandbox: GkeSandboxEnv;
   awsDeploy: AwsDeployEnv;
 }
 
@@ -245,6 +248,32 @@ interface LocalSandboxEnv {
   cpus?: number;
   memoryMb?: number;
   defaultTimeoutSec?: number;
+}
+
+interface GkeSandboxEnv {
+  namespace: string;
+  sandboxTemplate: string;
+  routerUrl: string;
+  routerToken?: string;
+  agentPort?: number;
+  defaultTimeoutSec?: number;
+  homeDir?: string;
+}
+
+function gkeSandboxEnv(env: NodeJS.ProcessEnv): GkeSandboxEnv {
+  return {
+    namespace: env.GKE_SANDBOX_NAMESPACE ?? "qm-sandboxes",
+    sandboxTemplate: env.GKE_SANDBOX_TEMPLATE ?? "qm-sandbox-template",
+    routerUrl: env.GKE_SANDBOX_ROUTER_URL ?? "http://sandbox-router.agent-sandbox-system.svc.cluster.local:8080",
+    ...(env.GKE_SANDBOX_ROUTER_TOKEN ? { routerToken: env.GKE_SANDBOX_ROUTER_TOKEN } : {}),
+    ...(numEnvStrict("GKE_SANDBOX_AGENT_PORT", env.GKE_SANDBOX_AGENT_PORT) !== undefined
+      ? { agentPort: numEnvStrict("GKE_SANDBOX_AGENT_PORT", env.GKE_SANDBOX_AGENT_PORT) }
+      : {}),
+    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
+      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
+      : {}),
+    ...(env.GKE_SANDBOX_HOME_DIR ? { homeDir: env.GKE_SANDBOX_HOME_DIR } : {}),
+  };
 }
 
 function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
@@ -476,8 +505,24 @@ function harnessEnvStrict(value: string | undefined): Config["harness"] {
 function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): Config["sandboxBackend"] {
   if (value === undefined || value.trim() === "") return "local";
   const backend = value.trim();
-  if (backend === "aws" || backend === "local" || backend === "sprites") return backend;
-  throw new Error(`${name}=${JSON.stringify(value)} is not recognized — use aws, local, or sprites, or unset it.`);
+  if (backend === "aws" || backend === "gke" || backend === "local" || backend === "sprites") return backend;
+  throw new Error(`${name}=${JSON.stringify(value)} is not recognized — use aws, gke, local, or sprites, or unset it.`);
+}
+
+function deployProviderEnvStrict(value: string | undefined): Config["deployProvider"] {
+  if (value === undefined || value.trim() === "") return "docker";
+  const provider = value.trim();
+  if (provider === "aws" || provider === "docker" || provider === "disabled") return provider;
+  throw new Error(
+    `DEPLOY_PROVIDER=${JSON.stringify(value)} is not recognized — use aws, docker, or disabled, or unset it.`,
+  );
+}
+
+function objectStoreEnvStrict(value: string | undefined): Config["snapshotStore"] {
+  if (value === undefined || value.trim() === "") return "local";
+  const store = value.trim();
+  if (store === "s3" || store === "gcs" || store === "local") return store;
+  throw new Error(`object store ${JSON.stringify(value)} is not recognized — use s3, gcs, or local, or unset it.`);
 }
 
 function secretsBackendEnvStrict(value: string | undefined, prefix: string): Config["secretsBackend"] {
@@ -579,7 +624,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const dataDir = resolve(env.DATA_DIR ?? "./data");
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
-    throw new Error("SANDBOX_BACKEND must be set explicitly in production — use sprites, aws, or local.");
+    throw new Error("SANDBOX_BACKEND must be set explicitly in production — use sprites, aws, gke, or local.");
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
   const secondaryRaw = env.SANDBOX_SECONDARY_BACKEND?.trim();
@@ -588,6 +633,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const secondary = sandboxBackendEnvStrict(secondaryRaw, "SANDBOX_SECONDARY_BACKEND");
     if (secondary === sandboxBackend) throw new Error("SANDBOX_SECONDARY_BACKEND must differ from SANDBOX_BACKEND.");
     sandboxSecondaryBackend = secondary;
+  }
+  if ((sandboxBackend === "gke" || sandboxSecondaryBackend === "gke") && env.GKE_SANDBOX_WARM_POOL?.trim()) {
+    throw new Error(
+      "GKE_SANDBOX_WARM_POOL is no longer supported — set GKE_SANDBOX_TEMPLATE to the SandboxTemplate referenced by the warm pool.",
+    );
+  }
+  if (
+    env.NODE_ENV === "production" &&
+    (sandboxBackend === "gke" || sandboxSecondaryBackend === "gke") &&
+    !env.GKE_SANDBOX_ROUTER_TOKEN?.trim()
+  ) {
+    throw new Error("a GKE sandbox backend requires GKE_SANDBOX_ROUTER_TOKEN in production");
   }
   const securityScreenBackend = securityScreenBackendEnvStrict(env.SECURITY_SCREEN_BACKEND);
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
@@ -635,7 +692,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL ?? publicApiUrl;
-  const deployProvider: "aws" | "docker" = env.DEPLOY_PROVIDER === "aws" ? "aws" : "docker";
+  const deployProvider = deployProviderEnvStrict(env.DEPLOY_PROVIDER);
+  if ((env.SNAPSHOT_STORE === "gcs" || env.TRANSFER_STORE === "gcs") && !env.GCS_BUCKET?.trim()) {
+    throw new Error("SNAPSHOT_STORE=gcs or TRANSFER_STORE=gcs requires GCS_BUCKET");
+  }
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
   if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
@@ -810,11 +870,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) !== undefined
       ? { memoryCaptureMaxTurns: numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) }
       : {}),
-    snapshotStore: env.SNAPSHOT_STORE === "s3" ? "s3" : "local",
-    transferStore: env.TRANSFER_STORE === "s3" ? "s3" : "local",
+    snapshotStore: objectStoreEnvStrict(env.SNAPSHOT_STORE),
+    transferStore: objectStoreEnvStrict(env.TRANSFER_STORE),
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),
     ...(env.S3_PREFIX ? { s3Prefix: env.S3_PREFIX } : {}),
+    ...(env.GCS_BUCKET ? { gcsBucket: env.GCS_BUCKET } : {}),
+    ...(env.GCS_PREFIX ? { gcsPrefix: env.GCS_PREFIX } : {}),
     ...(numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) !== undefined
       ? { deployIdleTtlMs: numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) }
       : {}),
@@ -854,6 +916,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),
+    gkeSandbox: gkeSandboxEnv(env),
     awsDeploy: awsDeployEnv(env),
   };
 }

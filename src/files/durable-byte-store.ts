@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { Readable } from "node:stream";
 import { join } from "node:path";
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { Storage } from "@google-cloud/storage";
 import { swallowAs } from "../util/errors.ts";
 import { collectBytes, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
@@ -133,6 +134,59 @@ export interface S3DurableByteOptions {
   region?: string;
   prefix?: string;
   _client?: S3Send;
+}
+
+interface GcsDurableFile {
+  save(data: Buffer, options?: { resumable?: boolean }): Promise<unknown>;
+  getMetadata(): Promise<Array<{ size?: string | number }>>;
+  createReadStream(): Readable;
+  delete(options?: { ignoreNotFound?: boolean }): Promise<unknown>;
+}
+
+interface GcsDurableBucket {
+  file(name: string): GcsDurableFile;
+}
+
+export interface GcsDurableByteOptions {
+  bucket: string;
+  prefix?: string;
+  _bucket?: GcsDurableBucket;
+}
+
+const isGcsNotFound = (error: unknown): boolean =>
+  (error as { code?: number | string } | undefined)?.code === 404 ||
+  (error as { code?: number | string } | undefined)?.code === "404";
+
+export function createGcsDurableByteStore(options: GcsDurableByteOptions): DurableByteStore {
+  const bucket = options._bucket ?? (new Storage().bucket(options.bucket) as unknown as GcsDurableBucket);
+  const prefix = options.prefix ?? "";
+
+  return {
+    async put(source, opts) {
+      const { data, sha256 } = await collect(source, opts?.maxBytes);
+      const blobKey = keyFor(sha256);
+      await bucket.file(prefix + blobKey).save(data, { resumable: false });
+      return { blobKey, sizeBytes: data.length, sha256 };
+    },
+
+    async open(blobKey) {
+      if (!BLOB_KEY.test(blobKey)) return null;
+      const file = bucket.file(prefix + blobKey);
+      let metadata: { size?: string | number };
+      try {
+        [metadata = {}] = await file.getMetadata();
+      } catch (error) {
+        if (isGcsNotFound(error)) return null;
+        throw error;
+      }
+      return { sizeBytes: Number(metadata.size ?? 0), stream: file.createReadStream() };
+    },
+
+    async delete(blobKey) {
+      if (!BLOB_KEY.test(blobKey)) return;
+      await bucket.file(prefix + blobKey).delete({ ignoreNotFound: true });
+    },
+  };
 }
 
 export function createS3DurableByteStore(options: S3DurableByteOptions): DurableByteStore {
