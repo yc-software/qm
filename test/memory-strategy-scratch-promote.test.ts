@@ -17,6 +17,12 @@ function harnessOf(oneShot?: HarnessModelUtilities["oneShot"]): HarnessModelUtil
   return oneShot ? { oneShot } : {};
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
 function fresh(opts: { oneShot?: HarnessModelUtilities["oneShot"]; consolidateAfter?: number } = {}) {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "msp-")));
   const base = createMemoryService(workspace);
@@ -101,6 +107,26 @@ test("maintain promotes: one-shot judges the window, rewrites MEMORY.md, leaves 
   assert.equal(await workspace.read(SCOPE, logPath(TODAY)), logBefore, "log untouched");
 });
 
+test("an edit during promotion survives the stale model result", async () => {
+  const entered = deferred<void>();
+  const release = deferred<string>();
+  const { strategy, memory } = fresh({
+    oneShot: async () => {
+      entered.resolve();
+      return release.promise;
+    },
+  });
+  await memory.replace(SCOPE, "# Memory\n\n- original");
+  await memory.capture(SCOPE, ["recent"], TODAY);
+  const maintaining = withNow(TODAY, () => strategy.maintain!(SCOPE));
+  await entered.promise;
+  await memory.replace(SCOPE, "# Memory\n\n- original\n- concurrent edit");
+  release.resolve("# Memory\n\n- stale promotion");
+  await maintaining;
+  assert.match(await memory.read(SCOPE), /concurrent edit/);
+  assert.doesNotMatch(await memory.read(SCOPE), /stale promotion/);
+});
+
 test("maintain is a no-op rewrite when the judge says NONE, and prunes logs past retention", async () => {
   const { workspace, strategy, memory } = fresh({ oneShot: () => Promise.resolve("NONE") });
   await memory.replace(SCOPE, "# Memory\n\n- keep me");
@@ -144,6 +170,36 @@ test("after-N marker trigger: the Nth capture fires promotion and resets the dur
     /captures-since-promote: [1-9]/,
     "counter reset",
   );
+});
+
+test("concurrent captures preserve every scratch fact and marker increment", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "msp-")));
+  const base = createMemoryService(workspace);
+  const first = createScratchPromote({ harness: {}, memory: base, workspace, consolidateAfter: 0 }).memory;
+  const second = createScratchPromote({ harness: {}, memory: base, workspace, consolidateAfter: 0 }).memory;
+  await Promise.all([
+    first.capture(SCOPE, ["first concurrent fact"], TODAY),
+    second.capture(SCOPE, ["second concurrent fact"], TODAY),
+  ]);
+  const log = (await workspace.read(SCOPE, logPath(TODAY))) ?? "";
+  assert.match(log, /first concurrent fact/);
+  assert.match(log, /second concurrent fact/);
+  assert.match(await first.read(SCOPE), /captures-since-promote: 2/);
+});
+
+test("concurrent equivalent captures dedupe the scratch fact and marker increment", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "msp-")));
+  const base = createMemoryService(workspace);
+  const first = createScratchPromote({ harness: {}, memory: base, workspace, consolidateAfter: 0 }).memory;
+  const second = createScratchPromote({ harness: {}, memory: base, workspace, consolidateAfter: 0 }).memory;
+  const results = await Promise.all([
+    first.capture(SCOPE, ["same concurrent fact"], TODAY),
+    second.capture(SCOPE, ["SAME concurrent fact"], TODAY),
+  ]);
+  const log = (await workspace.read(SCOPE, logPath(TODAY))) ?? "";
+  assert.equal((log.match(/concurrent fact/gi) ?? []).length, 1);
+  assert.deepEqual(results.sort(), [0, 1]);
+  assert.match(await first.read(SCOPE), /captures-since-promote: 1/);
 });
 
 test("onTurnEnd extracts facts and captures them into today's log", async () => {

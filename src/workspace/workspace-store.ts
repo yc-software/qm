@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile, readdir, rm } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute, dirname } from "node:path";
+import { lock } from "proper-lockfile";
 import type { ScopeId } from "../types.ts";
 import { scopeStorageKey } from "../util/scope-storage-key.ts";
 
@@ -9,6 +10,11 @@ export interface WorkspaceStore {
   read(scopeId: ScopeId, relPath: string): Promise<string | null>;
   readBytes(scopeId: ScopeId, relPath: string): Promise<Uint8Array | null>;
   write(scopeId: ScopeId, relPath: string, data: string | Uint8Array): Promise<void>;
+  update?(
+    scopeId: ScopeId,
+    relPath: string,
+    derive: (current: string | null) => string | Uint8Array | null,
+  ): Promise<void>;
   remove(scopeId: ScopeId, relPath: string): Promise<void>;
   list(scopeId: ScopeId): Promise<string[]>;
 }
@@ -20,6 +26,24 @@ function safeJoin(baseDir: string, relPath: string): string {
     throw new Error(`path escapes workspace: ${relPath}`);
   }
   return target;
+}
+
+async function updateFile(path: string, derive: (current: string | null) => string | Uint8Array | null) {
+  await mkdir(dirname(path), { recursive: true });
+  const release = await lock(path, { realpath: false, retries: { retries: 100, minTimeout: 10, maxTimeout: 100 } });
+  try {
+    let current: string | null;
+    try {
+      current = await readFile(path, "utf8");
+    } catch {
+      current = null;
+    }
+    const next = derive(current);
+    if (next === null) await rm(path, { force: true });
+    else await writeFile(path, next);
+  } finally {
+    await release();
+  }
 }
 
 export function createLocalWorkspaceStore(rootDir: string): WorkspaceStore {
@@ -54,6 +78,9 @@ export function createLocalWorkspaceStore(rootDir: string): WorkspaceStore {
       const path = safeJoin(scopeDir(scopeId), relPath);
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, data);
+    },
+    async update(scopeId, relPath, derive) {
+      await updateFile(safeJoin(scopeDir(scopeId), relPath), derive);
     },
     async remove(scopeId, relPath) {
       await rm(safeJoin(scopeDir(scopeId), relPath), { force: true });

@@ -35,6 +35,12 @@ function oneShotHarness(reply: string, calls?: Array<{ system: string; prompt: s
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
 test("parseConsolidationActions: UPDATE/DELETE/ADD in, NONE/prose/malformed out", () => {
   assert.deepEqual(
     parseConsolidationActions(
@@ -153,6 +159,59 @@ test("a one-shot failure leaves the notebook untouched — consolidation is best
   };
   await createConsolidator({ harness, memory })!.maintain(SCOPE);
   assert.equal(await workspace.read(SCOPE, MEMORY_FILE), before);
+});
+
+test("a capture during consolidation survives the stale model result", async () => {
+  const { memory } = freshMemory();
+  await memory.capture(SCOPE, ["original"], AT);
+  const entered = deferred<void>();
+  const release = deferred<string>();
+  const consolidator = createConsolidator({
+    memory,
+    harness: {
+      async oneShot() {
+        entered.resolve();
+        return release.promise;
+      },
+    },
+    now: () => AT,
+  })!;
+  const maintaining = consolidator.maintain(SCOPE);
+  await entered.promise;
+  await memory.capture(SCOPE, ["concurrent capture"], AT);
+  release.resolve("NONE");
+  await maintaining;
+  assert.match(await memory.read(SCOPE), /concurrent capture/);
+  assert.doesNotMatch(await memory.read(SCOPE), /consolidated:/);
+});
+
+test("a revision conflict skips consolidation without degrading the scope", async () => {
+  const body = "# Memory\n\n- a fact\n";
+  let calls = 0;
+  const logs: string[] = [];
+  const memory: MemoryService = {
+    recall: () => Promise.resolve(body),
+    capture: () => Promise.resolve(0),
+    query: () => Promise.resolve([]),
+    read: () => Promise.resolve(body),
+    replace: () => Promise.resolve(),
+    readHead: () => Promise.resolve({ content: body, revision: "1" }),
+    replaceIfRevision: () => Promise.resolve(false),
+  };
+  const consolidator = createConsolidator({
+    memory,
+    harness: {
+      oneShot: async () => {
+        calls++;
+        return "NONE";
+      },
+    },
+    log: (line) => logs.push(line),
+  })!;
+  await consolidator.maintain(SCOPE);
+  await consolidator.maintain(SCOPE);
+  assert.equal(calls, 2);
+  assert.deepEqual(logs, []);
 });
 
 test("degrades to capture-only when the store can't round-trip a rewrite: logs once, stops trying, never crashes", async () => {

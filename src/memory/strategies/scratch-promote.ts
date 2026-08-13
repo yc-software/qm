@@ -72,21 +72,33 @@ export interface ScratchPromoteDeps {
 export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: MemoryStrategy; memory: MemoryService } {
   const base = deps.memory;
   const workspace = deps.workspace;
+  const perScope = createKeyedQueue<ScopeId>();
+
+  async function updateNotebook(scopeId: ScopeId, update: (body: string) => string): Promise<string> {
+    if (!base.readHead || !base.replaceIfRevision) {
+      const next = update(await base.read(scopeId));
+      await base.replace(scopeId, next);
+      return next;
+    }
+    for (;;) {
+      const head = await base.readHead(scopeId);
+      const next = update(head.content);
+      if (await base.replaceIfRevision(scopeId, next, head.revision)) return next;
+    }
+  }
 
   async function bumpMarker(scopeId: ScopeId, by: number): Promise<number> {
-    const body = await base.read(scopeId);
-    const m = body.match(MARKER_RE);
-    const count = (m ? Number(m[1]) : 0) + by;
-    const marker = `<!-- captures-since-promote: ${count} -->`;
-    const next = m ? body.replace(MARKER_RE, marker) : `${body.trim() || "# Memory"}\n\n${marker}`;
-    await base.replace(scopeId, next);
-    return count;
+    const next = await updateNotebook(scopeId, (body) => {
+      const m = body.match(MARKER_RE);
+      const count = (m ? Number(m[1]) : 0) + by;
+      const marker = `<!-- captures-since-promote: ${count} -->`;
+      return m ? body.replace(MARKER_RE, marker) : `${body.trim() || "# Memory"}\n\n${marker}`;
+    });
+    return Number(next.match(MARKER_RE)?.[1] ?? 0);
   }
 
   async function resetMarker(scopeId: ScopeId): Promise<void> {
-    const body = await base.read(scopeId);
-    if (MARKER_RE.test(body))
-      await base.replace(scopeId, body.replace(MARKER_RE, "<!-- captures-since-promote: 0 -->"));
+    await updateNotebook(scopeId, (body) => body.replace(MARKER_RE, "<!-- captures-since-promote: 0 -->"));
   }
 
   async function readLogWindow(
@@ -114,31 +126,43 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
     },
 
     async capture(scopeId, facts, at) {
-      const clean = facts.map((f) => f.replace(/\s+/g, " ").trim()).filter(Boolean);
-      if (!clean.length) return 0;
-      const path = logPath(at);
-      const existing = (await workspace.read(scopeId, path)) ?? "";
-      const seen = new Set(bullets(existing).map(normalize));
-      const date = dateStr(at);
-      const added: string[] = [];
-      for (const f of clean) {
-        const key = normalize(f);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        added.push(`- (${date}) ${f}`);
-      }
-      if (!added.length) return 0;
-      const body = existing.trim()
-        ? `${existing.replace(/\s+$/, "")}\n${added.join("\n")}`
-        : `# Scratch log ${date}\n\n${added.join("\n")}`;
-      await workspace.write(scopeId, path, `${body}\n`);
-
-      const count = await bumpMarker(scopeId, added.length);
-      if (deps.consolidateAfter > 0 && count >= deps.consolidateAfter) {
-        await resetMarker(scopeId);
-        await strategy.maintain!(scopeId).catch(() => {});
-      }
-      return added.length;
+      const result = await perScope(scopeId, async () => {
+        const clean = facts.map((f) => f.replace(/\s+/g, " ").trim()).filter(Boolean);
+        if (!clean.length) return { added: 0, promote: false };
+        const path = logPath(at);
+        const existing = (await workspace.read(scopeId, path)) ?? "";
+        const seen = new Set(bullets(existing).map(normalize));
+        const date = dateStr(at);
+        const added: string[] = [];
+        for (const f of clean) {
+          const key = normalize(f);
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          added.push(`- (${date}) ${f}`);
+        }
+        if (!added.length) return { added: 0, promote: false };
+        if (workspace.update) {
+          let committed: string[] = [];
+          await workspace.update(scopeId, path, (current) => {
+            const latest = current ?? "";
+            const currentSeen = new Set(bullets(latest).map(normalize));
+            committed = added.filter((line) => !currentSeen.has(normalize(line)));
+            if (!committed.length) return current;
+            return `${latest.replace(/\s+$/, "")}${latest.trim() ? "\n" : ""}${committed.join("\n")}\n`;
+          });
+          added.splice(0, added.length, ...committed);
+          if (!added.length) return { added: 0, promote: false };
+        } else {
+          const body = existing.trim() ? `${existing.replace(/\s+$/, "")}\n${added.join("\n")}` : `${added.join("\n")}`;
+          await workspace.write(scopeId, path, `${body}\n`);
+        }
+        const count = await bumpMarker(scopeId, added.length);
+        const promote = deps.consolidateAfter > 0 && count >= deps.consolidateAfter;
+        if (promote) await resetMarker(scopeId);
+        return { added: added.length, promote };
+      });
+      if (result.promote) await strategy.maintain!(scopeId).catch(() => {});
+      return result.added;
     },
 
     async query(scopeId, q, limit = 20) {
@@ -156,19 +180,15 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
     },
   };
 
-  const perScope = createKeyedQueue<ScopeId>();
-
   async function flushBurst(burst: Burst): Promise<void> {
     const autonomous = isAutonomousBurst(burst);
     const facts = await extractFacts(deps.harness, burst.turns, { autonomous });
     if (!facts.length) return;
     const at = Date.now();
-    await perScope(burst.scopeId, () => memory.capture(burst.scopeId, facts, at));
+    await memory.capture(burst.scopeId, facts, at);
     const ccTarget = autonomous ? null : ccTargetFor(burst.conversationScopeId, burst.actorId);
     if (!ccTarget) return;
-    await perScope(ccTarget, () =>
-      ccCaptureToPersonal(memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel),
-    );
+    await ccCaptureToPersonal(memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel);
   }
 
   const strategy: MemoryStrategy = {
@@ -181,9 +201,10 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
 
     async maintain(scopeId) {
       const now = Date.now();
+      const head = await base.readHead?.(scopeId);
       const window = await readLogWindow(scopeId, now, LOG_RETENTION_DAYS);
       if (window.length && deps.harness.oneShot) {
-        const longTerm = stripMarker(await base.read(scopeId));
+        const longTerm = stripMarker(head?.content ?? (await base.read(scopeId)));
         const scratch = window.map(({ date, body }) => `## ${date}\n${body}`).join("\n\n");
         const out = (
           (await deps.harness.oneShot(
@@ -191,7 +212,10 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
             `Current notebook:\n${longTerm || "(empty)"}\n\nScratch log:\n${scratch}`,
           )) ?? ""
         ).trim();
-        if (out && !/^none$/i.test(out)) await base.replace(scopeId, out);
+        if (out && !/^none$/i.test(out)) {
+          if (head && base.replaceIfRevision) await base.replaceIfRevision(scopeId, out, head.revision);
+          else await base.replace(scopeId, out);
+        }
       }
       const cutoff = dateStr(now - LOG_RETENTION_DAYS * 86_400_000);
       for (const abs of await workspace.list(scopeId)) {

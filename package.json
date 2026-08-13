@@ -73,6 +73,7 @@
     "opencode-ai": "1.17.18",
     "pg": "^8.13.1",
     "pg-boss": "^12.26.1",
+    "proper-lockfile": "^4.1.2",
     "tar-stream": "^3.2.0",
     "typebox": "^1.1.38",
     "zod": "4.4.3"
@@ -97,6 +98,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
+    "@types/proper-lockfile": "^4.1.4",
     "@types/tar-stream": "^3.1.4",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",
