@@ -542,23 +542,21 @@ export function renderSidebarTop(): void {
           `,
         )}
       </nav>
-      ${
-        html`
-              <div class="section-label recents-label">
-                <span>Sessions</span>
-                <button
-                  class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
-                  type="button"
-                  role="switch"
-                  aria-checked=${sessionsState.webOnly ? "true" : "false"}
-                  title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
-                  @click=${toggleWebOnly}
-                >
-                  <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
-                </button>
-              </div>
-            `
-      }
+      ${html`
+        <div class="section-label recents-label">
+          <span>Sessions</span>
+          <button
+            class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
+            type="button"
+            role="switch"
+            aria-checked=${sessionsState.webOnly ? "true" : "false"}
+            title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
+            @click=${toggleWebOnly}
+          >
+            <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
+          </button>
+        </div>
+      `}
     `,
     appState.topEl,
   );
