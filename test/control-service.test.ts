@@ -722,10 +722,28 @@ test("soul read returns the effective SOUL; write replaces this scope's SOUL and
   assert.match(after.effectiveSoul, /Always greet in Spanish\./);
 });
 
-test("soul write in a shared (channel) scope is allowed (allowSharedScope, like the agent route)", async () => {
-  const { control } = setup();
+test("soul write in a shared scope follows current scope-management policy", async () => {
+  const { built, control } = setup();
+  await built.app.upsertChannels(
+    [
+      { channelId: "C9", name: "private", isPrivate: true },
+      { channelId: "C-public", name: "public", isPrivate: false },
+    ],
+    [
+      { channelId: "C9", principalId: "U1" },
+      { channelId: "C-public", principalId: "U1" },
+    ],
+  );
   const w = await control.writeSoul("Channel standing note.", claims("U1", scopeId("channel", "C9")));
   assert.ok(w.ok, JSON.stringify(w));
   const after = control.readSoul(claims("U1", scopeId("channel", "C9")));
   assert.equal(after.soul, "Channel standing note.");
+
+  const outsider = await control.writeSoul("outsider", claims("U2", scopeId("channel", "C9")));
+  assert.equal(outsider.ok, false);
+  assert.equal(outsider.ok ? "" : outsider.code, "soul_update_denied");
+  const publicMember = await control.writeSoul("public", claims("U1", scopeId("channel", "C-public")));
+  assert.equal(publicMember.ok, false);
+  assert.equal(publicMember.ok ? "" : publicMember.code, "soul_update_denied");
+  assert.equal(control.readSoul(claims("U1", scopeId("channel", "C-public"))).soul, null);
 });

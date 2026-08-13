@@ -44,18 +44,21 @@ describe("capability-token control plane (crons + SOUL)", () => {
     audienceScopeId: scopeId("channel", "C"),
     label: "#eng (the whole channel)",
   } as const;
-  const capChannel = async (actorId: string) =>
-    await mintCapabilityToken(
+  const capChannel = async (actorId: string, channelId = "C") => {
+    const thread = { ...THREAD, target: `${channelId}:111`, audienceScopeId: scopeId("channel", channelId) };
+    const root = { ...ROOT, target: channelId, audienceScopeId: scopeId("channel", channelId) };
+    return mintCapabilityToken(
       {
         actorId,
-        scopeId: scopeId("channel", "C"),
-        destination: { type: THREAD.type, target: THREAD.target, audienceScopeId: THREAD.audienceScopeId },
-        destinations: [THREAD, ROOT],
-        defaultDestinationKey: THREAD.key,
+        scopeId: scopeId("channel", channelId),
+        destination: { type: thread.type, target: thread.target, audienceScopeId: thread.audienceScopeId },
+        destinations: [thread, root],
+        defaultDestinationKey: thread.key,
         exp: Date.now() + CAPABILITY_TTL_MS,
       },
       SECRET,
     );
+  };
 
   before(async () => {
     built = buildApp(
@@ -244,18 +247,36 @@ describe("capability-token control plane (crons + SOUL)", () => {
 
   it("updates the token's shared-scope SOUL without touching the actor's personal SOUL", async () => {
     const personalScope = scopeId("personal", "U8");
-    const channelScope = scopeId("channel", "C");
+    const channelScope = scopeId("channel", "C-soul");
+    await built.app.upsertChannels(
+      [{ channelId: "C-soul", name: "private", isPrivate: true }],
+      [{ channelId: "C-soul", principalId: "U8" }],
+    );
     const personalBefore = built.config.soulVersion(personalScope);
     const res = await post(
       "/v1/soul",
       { content: "Channel C speaks in haiku.", scopeId: personalScope, actorId: "U2" },
-      { "x-agent-capability": await capChannel("U8") },
+      { "x-agent-capability": await capChannel("U8", "C-soul") },
     );
     assert.equal(res.status, 200);
 
     assert.equal(built.config.getSoul(channelScope), "Channel C speaks in haiku.");
     assert.ok(built.config.soulVersion(channelScope) >= 1, "channel SOUL was updated");
     assert.equal(built.config.soulVersion(personalScope), personalBefore, "actor's personal SOUL was not touched");
+  });
+
+  it("rejects a shared-scope capability when the actor cannot currently manage the scope", async () => {
+    const channelScope = scopeId("channel", "C-soul");
+    const versionBefore = built.config.soulVersion(channelScope);
+    const res = await post(
+      "/v1/soul",
+      { content: "outsider overwrite" },
+      { "x-agent-capability": await capChannel("U9", "C-soul") },
+    );
+    assert.equal(res.status, 403);
+    assert.equal(((await res.json()) as { error: string }).error, "soul_update_denied");
+    assert.equal(built.config.soulVersion(channelScope), versionBefore);
+    assert.notEqual(built.config.getSoul(channelScope), "outsider overwrite");
   });
 
   it("does not let capability self-update org or team SOUL", async () => {

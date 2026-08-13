@@ -653,18 +653,19 @@ export function createSessionMethods(
       };
     },
 
-    async updateSoul(scopeIdValue, content, actorId, opts) {
-      const { kind, ref } = parseScopeId(scopeIdValue);
-      const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
-      const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
-      if (!allowedPersonal && !allowedShared) {
-        throw new Error("not authorized to update SOUL for this scope");
-      }
+    async updateSoul(scopeIdValue, content, actorId) {
       const write = async (): Promise<number> => {
         let snapshot: Awaited<ReturnType<typeof deps.config.captureSoulSnapshot>> | undefined;
         try {
           await deps.config.refreshScope(scopeIdValue);
           snapshot = await deps.config.captureSoulSnapshot(scopeIdValue);
+          const { kind, ref } = parseScopeId(scopeIdValue);
+          const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
+          const allowedShared =
+            (kind === "channel" || kind === "group") && (await principalCanManageScope(actorId, scopeIdValue));
+          if (!allowedPersonal && !allowedShared) {
+            throw new Error("not authorized to update SOUL for this scope");
+          }
           const version = await deps.config.setSoulLatest(scopeIdValue, content, actorId);
           deps.auditLog.record({
             at: Date.now(),
