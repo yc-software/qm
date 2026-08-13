@@ -84,7 +84,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
     assert.equal(download.status, 200);
     assert.equal(
       download.headers.get("content-type"),
-      "text/plain",
+      "text/plain; charset=utf-8",
       "browser-renderable types open in the browser instead of downloading",
     );
     assert.match(download.headers.get("content-disposition") ?? "", /^inline/);

@@ -2,7 +2,7 @@ import { parseScopeId } from "../../../types.ts";
 import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
 import { fileArtifactId } from "../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
-import { contentDispositionAttachment, pipeToResponse, sendJson } from "../../http.ts";
+import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
@@ -68,7 +68,7 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
   const opened = await deps.files.open(id);
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   res.writeHead(200, {
-    "content-type": inline ? mime : "application/octet-stream",
+    "content-type": inline ? contentTypeWithUtf8Charset(art.mimetype) : "application/octet-stream",
     "content-length": String(opened.sizeBytes),
     "content-disposition": contentDispositionAttachment(art.name, inline ? "inline" : "attachment"),
     "x-content-type-options": "nosniff",

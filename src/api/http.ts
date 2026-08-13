@@ -7,6 +7,43 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
   res.end(data);
 }
 
+export function contentTypeWithUtf8Charset(contentType: string): string {
+  let parameterStart = -1;
+  let inQuotes = false;
+  let escaped = false;
+  for (let i = 0; i < contentType.length; i += 1) {
+    const character = contentType[i]!;
+    if (escaped) {
+      escaped = false;
+    } else if (inQuotes && character === "\\") {
+      escaped = true;
+    } else if (character === '"') {
+      inQuotes = !inQuotes;
+    } else if (!inQuotes && character === ";") {
+      if (parameterStart >= 0 && /^\s*charset\s*=/i.test(contentType.slice(parameterStart, i))) return contentType;
+      parameterStart = i + 1;
+    }
+  }
+  if (parameterStart >= 0 && /^\s*charset\s*=/i.test(contentType.slice(parameterStart))) return contentType;
+  const mime = contentType.split(";", 1)[0]!.trim().toLowerCase();
+  const textual =
+    mime.startsWith("text/") ||
+    mime === "application/json" ||
+    mime === "application/xml" ||
+    mime === "application/yaml" ||
+    mime === "application/x-yaml" ||
+    mime === "application/javascript" ||
+    mime === "application/x-javascript" ||
+    mime === "application/graphql" ||
+    mime === "application/sql" ||
+    mime === "application/toml" ||
+    mime === "image/svg+xml" ||
+    mime.endsWith("+json") ||
+    mime.endsWith("+xml") ||
+    mime.endsWith("+yaml");
+  return textual ? `${contentType}; charset=utf-8` : contentType;
+}
+
 export function pipeToResponse(
   res: ServerResponse,
   stream: NodeJS.ReadableStream & { destroy?: () => void },

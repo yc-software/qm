@@ -18,7 +18,7 @@ import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalo
 import { errMessage } from "../../util/errors.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { pipeToResponse, sendJson } from "../http.ts";
+import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import {
@@ -252,7 +252,7 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
   const opened = await app.openFileForViewer(id, viewer);
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   res.writeHead(200, {
-    "content-type": opened.mimetype || "application/octet-stream",
+    "content-type": contentTypeWithUtf8Charset(opened.mimetype || "application/octet-stream"),
     "content-length": String(opened.sizeBytes),
     "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
   });
