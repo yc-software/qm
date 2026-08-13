@@ -13,7 +13,25 @@ import {
 import type { AckGate } from "./deferred-ack.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { Mirror } from "./mirror.ts";
+import type { SlackPluginConfig } from "./config.ts";
 import type { SlackReactionEvent, TurnHandler } from "./turn-handler.ts";
+
+function canProcessSlackEvent(
+  config: SlackPluginConfig,
+  channelType: string | undefined,
+  userId: string | undefined,
+  channelId: string | undefined,
+): boolean {
+  if (channelType === "im") {
+    if (!config.allow_dms) return false;
+    if (config.user_allowlist.length > 0 && (!userId || !config.user_allowlist.includes(userId))) return false;
+    return true;
+  }
+  if (channelType === "channel" || channelType === "group" || channelType === "mpim") {
+    if (config.channel_allowlist.length > 0 && (!channelId || !config.channel_allowlist.includes(channelId))) return false;
+  }
+  return true;
+}
 
 export function registerSlackEvents(
   app: {
@@ -28,15 +46,17 @@ export function registerSlackEvents(
     deduper: ReturnType<typeof createDeduper>;
     webUiPublicUrl?: string;
     ensureHeader?: (client: SurfaceHeaderClient, channel: string, scopeId: string, kind: "dm" | "channel") => void;
+    config: SlackPluginConfig;
   },
 ): void {
-  const { handler, mirror, directory, ids, deduper } = deps;
+  const { handler, mirror, directory, ids, deduper, config } = deps;
   const { dispatch, handleReactionEvent, botHasStakeInThread } = handler;
   const { mirrorMessageEvent, pushSurfaceEvents } = mirror;
   const { knownPublicChannels, syncForUnseenGroup, forceDirectorySync } = directory;
 
   app.event("app_mention", async ({ event, body, client, context }: any) => {
     const e = event as any;
+    if (!canProcessSlackEvent(config, e.channel_type ?? "channel", e.user, e.channel)) return;
     const key = dedupeKey({
       event_id: (body as any)?.event_id,
       client_msg_id: e.client_msg_id,
@@ -101,6 +121,7 @@ export function registerSlackEvents(
     if (!shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) return;
 
     if (m.channel_type === "im") {
+      if (!canProcessSlackEvent(config, m.channel_type, m.user, m.channel)) return;
       const key = dedupeKey({
         event_id: (body as any)?.event_id,
         client_msg_id: m.client_msg_id,
@@ -126,6 +147,7 @@ export function registerSlackEvents(
     }
 
     if (m.channel_type === "channel" || m.channel_type === "group" || m.channel_type === "mpim") {
+      if (!canProcessSlackEvent(config, m.channel_type, m.user, m.channel)) return;
       if (m.channel_type === "mpim" && m.channel) syncForUnseenGroup(client, String(m.channel));
       const threadReply = isThreadReply(m);
       const isMention = mentionsBot(m.text ?? "", ids.botUserId);

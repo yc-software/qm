@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
+import type { SlackPluginConfig } from "../src/slack/config.ts";
 import type { TurnResult } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
@@ -301,16 +302,23 @@ async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
   }
 }
 
-async function fixture(options: { externalParticipants?: boolean; webUiPublicUrl?: string } = {}) {
+async function fixture(
+  options: { externalParticipants?: boolean; webUiPublicUrl?: string; slackConfig?: Partial<SlackPluginConfig> } = {},
+) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
+  const slackConfig: SlackPluginConfig = {
+    botToken: "xoxb-test",
+    appToken: "xapp-test",
+    identityEmail: "0",
+    allow_dms: true,
+    user_allowlist: [],
+    channel_allowlist: [],
+    ...(options.slackConfig ?? {}),
+    ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
+  };
   const started = startSlackPlugin(
-    {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
-      identityEmail: "0",
-      ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
-    },
+    slackConfig,
     core,
   );
   const app = FakeApp.instances.at(-1)!;
@@ -342,7 +350,14 @@ test("config is all-or-nothing and numeric tuning fails closed", () => {
     SLACK_CHANNEL_MEMBERS_TTL_MS: "NaN",
     SLACK_MAX_PRIVATE_CHANNELS: "10",
   });
-  assert.deepEqual(config, { botToken: "xoxb", appToken: "xapp", maxPrivateChannels: 10 });
+  assert.deepEqual(config, {
+    botToken: "xoxb",
+    appToken: "xapp",
+    maxPrivateChannels: 10,
+    allow_dms: true,
+    user_allowlist: [],
+    channel_allowlist: [],
+  });
 });
 
 test("a mid-turn message that STEERS the live run does not post the reply twice", async () => {
@@ -538,6 +553,30 @@ test("an external principal is refused in a DM before core sees the text", async
   }
 });
 
+test("a DM allowlist blocks non-pilot users before core sees the text", async () => {
+  const f = await fixture({ slackConfig: { user_allowlist: ["U2"] } });
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "let me in", ts: "102.2" });
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.client.posts.length, 0);
+    assert.equal(f.core.ingests.flat().some((event) => event.text === "let me in"), false);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("allow_dms=false blocks direct messages before core sees the text", async () => {
+  const f = await fixture({ slackConfig: { allow_dms: false } });
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello?", ts: "102.3" });
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.client.posts.length, 0);
+    assert.equal(f.core.ingests.flat().some((event) => event.text === "hello?"), false);
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a Slack Connect mention is refused ephemerally and never mirrored", async () => {
   const f = await fixture();
   try {
@@ -548,6 +587,34 @@ test("a Slack Connect mention is refused ephemerally and never mirrored", async 
     assert.equal(f.client.posts.length, 0);
     assert.equal(f.client.ephemerals.length, 1);
     assert.match(f.client.ephemerals[0].text, /isn't fully internal/);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a channel allowlist blocks mentions before orchestration starts", async () => {
+  const f = await fixture({ slackConfig: { channel_allowlist: ["C9"] } });
+  try {
+    const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> hello", ts: "103.15" };
+    await f.app.emitEvent("app_mention", event);
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.core.ingests.length, 0);
+    assert.equal(f.client.posts.length, 0);
+    assert.equal(f.client.ephemerals.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a channel allowlist blocks mpim thread-follow before directory sync or orchestration", async () => {
+  const f = await fixture({ slackConfig: { channel_allowlist: ["C1"] } });
+  try {
+    f.client.channelsById.set("G9", { id: "G9", name: "", is_member: true, is_private: true, is_mpim: true });
+    const listedBefore = f.client.groupListings;
+    await f.app.emitMessage({ channel: "G9", channel_type: "mpim", user: "U1", text: "also update", ts: "400.1", thread_ts: "300.1" });
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.client.groupListings, listedBefore);
+    assert.equal(f.core.ingests.length, 0);
   } finally {
     await f.stop();
   }
