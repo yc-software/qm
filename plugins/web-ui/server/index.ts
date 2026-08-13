@@ -1918,7 +1918,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
 const server = createServer((req, res) => {
   void handler(req, res).catch((err: unknown) => {
-    console.error(`[web-ui] 502 ${req.method ?? "?"} ${req.url ?? "?"}:`, String(err));
+    console.error("[web-ui] 502 %s %s: %s", req.method ?? "?", req.url ?? "?", String(err));
     if (!res.headersSent) json(res, 502, { error: "bad_gateway", message: "upstream error" });
     else res.end();
   });

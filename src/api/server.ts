@@ -299,7 +299,7 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     else res.destroy();
     return;
   }
-  console.error(`[server] 500 ${req.method ?? "?"} ${req.url ?? "?"}:`, errMessage(err));
+  console.error("[server] 500 %s %s: %s", req.method ?? "?", req.url ?? "?", errMessage(err));
   if (!res.headersSent) sendJson(res, 500, { error: "internal_error", message: "internal server error" });
   else res.destroy();
 }
