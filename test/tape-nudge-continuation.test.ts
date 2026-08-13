@@ -53,7 +53,13 @@ function fakeSandbox(): Sandbox {
 }
 
 async function runScenario(
-  options: { failPrimaryTapeMessage?: boolean; omitPrimaryCheckpoint?: boolean; staleNudgeRead?: boolean } = {},
+  options: {
+    failDirectDelivery?: boolean;
+    failPrimaryTapeMessage?: boolean;
+    omitPrimaryCheckpoint?: boolean;
+    staleNudgeRead?: boolean;
+    stoppedPartial?: boolean;
+  } = {},
 ) {
   const modes: Array<"shadow" | "serve" | undefined> = [];
   const folds: unknown[][] = [];
@@ -130,7 +136,30 @@ async function runScenario(
           });
           return { reply: "posted", modelCalls: 2 };
         }
-        const reply = turn.input === "needs nudge" ? "worklog without a post" : "primed";
+        const stopAgain = options.stoppedPartial && turn.input.startsWith("keep stopping");
+        let reply = "primed";
+        if (turn.input === "needs nudge") reply = "worklog without a post";
+        else if (stopAgain) reply = `partial: ${turn.input}`;
+        if ((options.stoppedPartial && turn.input === "needs nudge") || stopAgain) {
+          if (!options.failPrimaryTapeMessage) {
+            await turn.tape?.({
+              kind: "message",
+              harness: "pi",
+              payload: {
+                role: "assistant",
+                content: [{ type: "text", text: reply }],
+                stopReason: "aborted",
+              },
+              scopeLabel: turn.scopeLabel,
+            });
+          }
+          await turn.emit({
+            type: "assistant",
+            payload: { text: reply },
+            scopeLabel: turn.scopeLabel,
+          });
+          return { reply, stopped: true, modelCalls: 1 };
+        }
         const failTapeMessage = options.failPrimaryTapeMessage && turn.input === "needs nudge";
         if (!failTapeMessage) {
           await turn.tape?.({
@@ -190,6 +219,13 @@ async function runScenario(
     acl,
   });
   const deliveries = createDeliveryStore();
+  if (options.failDirectDelivery) {
+    const enqueue = deliveries.enqueue.bind(deliveries);
+    deliveries.enqueue = async (delivery) => {
+      if (delivery.text === "worklog without a post") throw new Error("surface rejected the direct reply");
+      return enqueue(delivery);
+    };
+  }
   const orchestrator = createOrchestrator({
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
@@ -319,6 +355,80 @@ test("a coverage gap self-heals at the next read: one legacy_import, served the 
     await sessions.tapeCoverage(session.id),
     entries.at(-1)!.seq,
     "the watermark advances again — the latch is gone",
+  );
+});
+
+test("a stopped partial withholds coverage until its saved text is imported for replay", async () => {
+  const { modes, folds, sessions, session, entries, orchestrator, input } = await runScenario({ stoppedPartial: true });
+  const partial = entries.find(
+    (entry) =>
+      entry.type === "assistant" && (entry.payload as { text?: unknown } | null)?.text === "worklog without a post",
+  );
+  assert.ok(partial);
+  assert.ok((await sessions.tapeCoverage(session.id)) < partial.seq);
+
+  await orchestrator.handleTurn(input("continue after stop"));
+  assert.equal(modes.at(-1), "serve");
+  assert.ok(JSON.stringify(folds.at(-1)).includes("worklog without a post"));
+  const imports = (await sessions.getTape(session.id)).filter(
+    (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
+  );
+  assert.equal(imports.length, 1);
+});
+
+test("consecutive stopped turns heal one import each and converge once a turn completes", async () => {
+  const { modes, folds, sessions, session, orchestrator, input } = await runScenario({ stoppedPartial: true });
+  await orchestrator.handleTurn(input("keep stopping one"));
+  await orchestrator.handleTurn(input("keep stopping two"));
+  await orchestrator.handleTurn(input("continue after stops"));
+  const countImports = async () =>
+    (await sessions.getTape(session.id)).filter(
+      (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
+    ).length;
+  assert.equal(await countImports(), 3, "one heal per stopped predecessor — no compounding within a turn");
+  assert.equal(modes.at(-1), "serve");
+  const foldText = JSON.stringify(folds.at(-1));
+  assert.ok(foldText.includes("worklog without a post"));
+  assert.ok(foldText.includes("partial: keep stopping two"), "every stopped partial reaches the final fold");
+  const entries = await sessions.getEntries(session.id);
+  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq, "the completed turn re-arms coverage");
+
+  await orchestrator.handleTurn(input("one more"));
+  assert.equal(await countImports(), 3, "no further imports once coverage is restored");
+});
+
+test("a stopped partial keeps withholding coverage when the direct delivery fails and the nudge replaces the result", async () => {
+  const { sessions, session, entries, orchestrator, input } = await runScenario({
+    stoppedPartial: true,
+    failDirectDelivery: true,
+  });
+  const partial = entries.find(
+    (entry) =>
+      entry.type === "assistant" && (entry.payload as { text?: unknown } | null)?.text === "worklog without a post",
+  );
+  assert.ok(partial);
+  assert.ok(
+    (await sessions.tapeCoverage(session.id)) < partial.seq,
+    "the nudge result must not launder the stopped primary into an advanced watermark",
+  );
+
+  await orchestrator.handleTurn(input("continue after stop"));
+  const imports = (await sessions.getTape(session.id)).filter(
+    (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
+  );
+  assert.equal(imports.length, 1, "the stopped partial still reaches the replay via the heal");
+});
+
+test("a stopped partial whose tape message write ALSO failed still reaches the replay via the heal", async () => {
+  const { modes, folds, orchestrator, input } = await runScenario({
+    stoppedPartial: true,
+    failPrimaryTapeMessage: true,
+  });
+  await orchestrator.handleTurn(input("continue after stop"));
+  assert.equal(modes.at(-1), "serve");
+  assert.ok(
+    JSON.stringify(folds.at(-1)).includes("worklog without a post"),
+    "the saved session entry supplies the partial even though its tape mirror never landed",
   );
 });
 

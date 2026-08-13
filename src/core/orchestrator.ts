@@ -2448,6 +2448,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !result.silent
         ) {
           const firstTapeWriteFailed = !!result.tapeWriteFailed;
+          const primaryStopped = !!result.stopped;
           // The model already wrote a reply as plain assistant text — deliver that text
           // directly instead of nudging it to re-post (a nudge here re-sends near-identical
           // text, which surfaces that render assistant entries show twice).
@@ -2520,6 +2521,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
             );
             if (firstTapeWriteFailed || result.tapeWriteFailed) result = { ...result, tapeWriteFailed: true };
+            if (primaryStopped && !result.stopped) result = { ...result, stopped: true };
             if (spine.surfaceOutboundCount === 0 && spine.staySilentReason === undefined && !result.silent) {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
               if (fallback && defaultDestination && deps.deliveries) {
@@ -2658,7 +2660,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             -1,
           );
           const preTurnCovered = tapeRows ? tapeRows.covered : false;
-          if (lastSeq >= 0 && preTurnCovered && !result.tapeWriteFailed && !compactionMirrorFailed) {
+          if (lastSeq >= 0 && preTurnCovered && !result.stopped && !result.tapeWriteFailed && !compactionMirrorFailed) {
             await withManagedRosterVersion(() =>
               deps.sessions.appendTape(lease, {
                 kind: "annotation",
