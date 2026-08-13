@@ -123,6 +123,7 @@ describe("runTrigger: fire-time visibility gate", () => {
     assert.equal(out.authzFailed, false, "not disabled — staleness must not kill a cron");
     assert.equal((await deps.deliveries.pending("slack")).length, 0, "no post to a channel the owner can't see");
     assert.match(out.note ?? "", /no longer visible/);
+    assert.equal(out.status, "refused", "a withheld delivery is not recorded as a success");
   });
 
   it("skips the run entirely (§10 leg a) when the actor lost the HOME scope — the exfil shape", async () => {

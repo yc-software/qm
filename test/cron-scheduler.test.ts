@@ -291,7 +291,13 @@ test("a recurring teammate-DM cron without current recipient consent is withheld
     },
   });
   await scheduler.runNow(cron.id);
-  assert.equal((await deliveries.pending("principal")).length, 0);
+  const pending = await deliveries.pending("principal");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.destination.target, "U1");
+  assert.match(pending[0]?.text ?? "", /consent.*skipped/i);
+  const stored = await crons.get(cron.id);
+  assert.equal(stored?.fireLog?.[0]?.status, "refused");
+  assert.match(stored?.fireLog?.[0]?.note ?? "", /consent/);
 });
 
 test("a teammate-DM cron created in a channel delivers its real output (§10 parity gate)", async () => {

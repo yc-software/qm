@@ -12,7 +12,7 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../core/turn-options.ts";
-import { reachEnqueue } from "../reach/reach.ts";
+import { principalDestination, reachEnqueue } from "../reach/reach.ts";
 import { consentRequiredRecipient, recipientConsentSatisfied } from "./trigger-store.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import { samePerson } from "../directory/person.ts";
@@ -188,15 +188,27 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let note: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
+  const ownerSkipNotice = async () => {
+    await deps.deliveries.enqueue({
+      destination: principalDestination(spec.owner, spec.owner),
+      text: `Scheduled delivery skipped: ${consentNote}`,
+      idempotencyKey: `${spec.fireKey}:err`,
+      provenance: deliveryProvenance(spec, threadRef),
+      ...(spec.shadow ? { shadow: true } : {}),
+    });
+  };
   const ran = await deps.idempotency.once(spec.fireKey, async () => {
     if (spec.message !== undefined) {
       status = "ok";
       if (!spec.destination) return;
       if (!consented) {
+        status = "refused";
         note = consentNote;
+        await ownerSkipNotice();
         return;
       }
       if (!deliverable) {
+        status = "refused";
         note = notVisibleNote;
         return;
       }
@@ -248,10 +260,13 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       if (!spec.destination) return;
       if (liveDelivery) return;
       if (!consented) {
+        status = "refused";
         note = consentNote;
+        await ownerSkipNotice();
         return;
       }
       if (!deliverable) {
+        status = "refused";
         note = notVisibleNote;
         return;
       }
