@@ -9,10 +9,18 @@ type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
 
 let currentScript: Script = async function* () {};
+let lastQueryOptions: Record<string, unknown> = {};
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
-    query: ({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+    query: ({
+      prompt,
+      options,
+    }: {
+      prompt: AsyncIterable<{ message: { content: unknown } }>;
+      options: Record<string, unknown>;
+    }) => {
+      lastQueryOptions = options;
       const generator = currentScript(prompt);
       return {
         async initializationResult() {
@@ -300,4 +308,61 @@ test("the claude harness offers compaction and detection so a utility role canno
     recordModelCall: () => {},
   });
   assert.equal(verdict.respond, true);
+});
+
+test("web search reaches the agent and its subagents, and is withheld under approval gating", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("ok");
+  };
+  const harness = createClaudeHarness({});
+  const open = harnessTurn({ readOnly: false });
+  await harness.turns.runTurn(open.turn);
+  assert.deepEqual(lastQueryOptions.tools, ["WebSearch", "Agent"]);
+  assert.ok((lastQueryOptions.allowedTools as string[]).includes("WebSearch"));
+  const agents = lastQueryOptions.agents as Record<string, { tools: string[] }>;
+  assert.ok(agents.research!.tools.includes("WebSearch"));
+  assert.ok(agents.code!.tools.includes("WebSearch"));
+
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("ok");
+  };
+  const gated = harnessTurn({ readOnly: false, toolApprovalGate: () => true });
+  await harness.turns.runTurn(gated.turn);
+  assert.deepEqual(lastQueryOptions.tools, ["Agent"]);
+  assert.ok(!(lastQueryOptions.allowedTools as string[]).includes("WebSearch"));
+  const gatedAgents = lastQueryOptions.agents as Record<string, { tools: string[] }>;
+  assert.ok(!gatedAgents.research!.tools.includes("WebSearch"));
+
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("ok");
+  };
+  const readOnly = harnessTurn();
+  await harness.turns.runTurn(readOnly.turn);
+  assert.deepEqual(lastQueryOptions.tools, []);
+});
+
+test("the web-search switch and the toolless oneshot path both keep the turn webless", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("ok");
+  };
+  const disabled = createClaudeHarness({ webSearch: false });
+  const open = harnessTurn({ readOnly: false });
+  await disabled.turns.runTurn(open.turn);
+  assert.deepEqual(lastQueryOptions.tools, ["Agent"]);
+
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("a compact summary");
+  };
+  const harness = createClaudeHarness({});
+  await harness.models.compactHistory!({
+    session: { id: "session-1" } as HarnessTurnInput["session"],
+    history: [],
+    recordModelCall: () => {},
+  });
+  assert.deepEqual(lastQueryOptions.tools, []);
 });

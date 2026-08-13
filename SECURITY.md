@@ -129,8 +129,9 @@ these, not through them.
   how a compromised agent process can use it.
 - **Security screening is incomplete and heuristic.** Auto screens supported,
   provenance-labelled external text and supported tool results. Command and
-  background-process output, opaque or multimodal results, raw webhook payloads, and
-  replay remediation across a shadow-to-enforcement cutover are not all covered.
+  background-process output, opaque or multimodal results, raw webhook payloads,
+  provider-executed web-search results, and replay remediation across a
+  shadow-to-enforcement cutover are not all covered.
   Classifier approval is not authorization and cannot guarantee prompt-injection
   resistance.
 - **Audience-floor filtering has known gaps.** Model-context entries do not yet carry

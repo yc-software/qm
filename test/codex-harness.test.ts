@@ -42,8 +42,8 @@ test("Codex replay keeps paired tool ids within the provider's 64-character limi
   assert.equal(codexReplayCallId("short-id"), "short-id");
 });
 
-function fakeCodexBinary(dir: string): string {
-  const path = join(dir, "fake-codex");
+function fakeCodexBinary(dir: string, expectedWebSearch = "live"): string {
+  const path = join(dir, `fake-codex-${expectedWebSearch}`);
   writeFileSync(
     path,
     `#!/usr/bin/env node
@@ -58,6 +58,7 @@ rl.on("line", (line) => {
     if (msg.params.sandbox !== "read-only" || msg.params.approvalPolicy !== "never" || !Array.isArray(msg.params.dynamicTools) ||
         !Array.isArray(msg.params.environments) || msg.params.environments.length !== 0 ||
         msg.params.config?.features?.shell_tool !== false || msg.params.config?.features?.unified_exec !== false ||
+        msg.params.config?.web_search !== ${JSON.stringify(expectedWebSearch)} ||
         process.env.CORE_SIGNING_SECRET || process.env.DATABASE_URL || process.env.HOME !== msg.params.cwd ||
         !process.env.CODEX_HOME?.startsWith(msg.params.cwd)) {
       return send({ id: msg.id, error: { code: -1, message: "unsafe or missing adapter settings" } });
@@ -214,6 +215,94 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
     (await tasks.list()).map(({ title, status }) => ({ title, status })),
     [{ title: "return ALPHA", status: "completed" }],
   );
+});
+
+test("Codex withholds live web search when tool approvals gate the turn", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-test-"));
+  const tasks = createMemoryTaskStore();
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir, "disabled"), env: process.env, tasks });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const session = { id: "session-approvals" } as Session;
+  const result = await harness.turns.runTurn({
+    session,
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    toolApprovalGate: () => true,
+    emit: async (entry) => {
+      const saved = { ...entry, sessionId: session.id, seq: entries.length + 1, createdAt: Date.now() } as SessionEntry;
+      entries.push(saved);
+      return saved;
+    },
+    recordModelCall: () => {},
+  });
+  assert.equal(result.reply, "hello");
+
+  const readOnlyEntries: SessionEntry[] = [];
+  const readOnlyResult = await harness.turns.runTurn({
+    session: { id: "session-readonly" } as Session,
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    readOnly: true,
+    emit: async (entry) => {
+      const saved = {
+        ...entry,
+        sessionId: "session-readonly",
+        seq: readOnlyEntries.length + 1,
+        createdAt: Date.now(),
+      } as SessionEntry;
+      readOnlyEntries.push(saved);
+      return saved;
+    },
+    recordModelCall: () => {},
+  });
+  assert.equal(readOnlyResult.reply, "hello");
+});
+
+test("Codex keeps web search off when the deployment disables it", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-test-"));
+  const tasks = createMemoryTaskStore();
+  const harness = createCodexHarness({
+    binaryPath: fakeCodexBinary(dir, "disabled"),
+    env: process.env,
+    tasks,
+    webSearch: false,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const session = { id: "session-switch" } as Session;
+  const result = await harness.turns.runTurn({
+    session,
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) => {
+      const saved = { ...entry, sessionId: session.id, seq: entries.length + 1, createdAt: Date.now() } as SessionEntry;
+      entries.push(saved);
+      return saved;
+    },
+    recordModelCall: () => {},
+  });
+  assert.equal(result.reply, "hello");
 });
 
 test("Codex task titles stay concise when the provider includes the parent request", () => {
@@ -669,7 +758,7 @@ test(
       experimentalRawEvents: true,
       environments: [],
       config: {
-        web_search: "disabled",
+        web_search: "live",
         features: {
           shell_tool: false,
           unified_exec: false,

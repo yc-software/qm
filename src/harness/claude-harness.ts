@@ -58,6 +58,7 @@ export interface ClaudeHarnessOptions {
   backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
   tasks?: TaskStore;
+  webSearch?: boolean;
 }
 
 export function claudeHarnessConfigOptions(config: Config): ClaudeHarnessOptions {
@@ -70,6 +71,7 @@ export function claudeHarnessConfigOptions(config: Config): ClaudeHarnessOptions
     env: config.claudeProcessEnv,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
+    webSearch: config.webSearchEnabled,
   };
 }
 
@@ -337,15 +339,20 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       .filter((definition) => CHILD_TOOL_NAMES.has(definition.name))
       .map((definition) => `mcp__qm__${definition.name}`);
     const allowSubagents = !turn.readOnly;
+    const webTools =
+      toolsEnabled && opts.webSearch !== false && !turn.readOnly && !turn.toolApprovalGate ? ["WebSearch"] : [];
+    const baseTools = [...webTools, ...(allowSubagents ? ["Agent"] : [])];
+    const allowedTools = [...baseTools, ...bridgedNames];
+    const childTools = [...webTools, ...childToolNames];
     const childPolicy = `${turn.systemPrompt}\n\nComplete only the delegated task. Do not contact people, schedule work, change standing configuration, or suppress the parent reply.`;
     const childAgents = {
       research: {
         description: "Research a bounded question and report evidence.",
         prompt: childPolicy,
-        tools: childToolNames,
+        tools: childTools,
       },
-      code: { description: "Implement or inspect a bounded code task.", prompt: childPolicy, tools: childToolNames },
-      consult: { description: "Provide an independent expert analysis.", prompt: childPolicy, tools: childToolNames },
+      code: { description: "Implement or inspect a bounded code task.", prompt: childPolicy, tools: childTools },
+      consult: { description: "Provide an independent expert analysis.", prompt: childPolicy, tools: childTools },
     };
     const queue = new MessageQueue();
     let terminateProvider = () => {
@@ -430,12 +437,12 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         abortController: controller,
         cwd: jail,
         env: claudeChildEnv(opts.env ?? {}, jail),
-        tools: allowSubagents ? ["Agent"] : [],
+        tools: baseTools,
         skills: [],
         settingSources: [],
         strictMcpConfig: true,
         mcpServers: { qm: server },
-        allowedTools: [...(allowSubagents ? ["Agent"] : []), ...bridgedNames],
+        allowedTools,
         ...(allowSubagents ? { agents: childAgents } : {}),
         ...(allowSubagents
           ? {
@@ -522,8 +529,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const recordedRequest = {
       system: turn.systemPrompt,
       prompt: text,
-      tools: allowSubagents ? ["Agent"] : [],
-      allowedTools: [...(allowSubagents ? ["Agent"] : []), ...bridgedNames],
+      tools: baseTools,
+      allowedTools,
       childAgents: allowSubagents ? childAgents : {},
       permissionMode: "bypassPermissions",
       cwd: "[ephemeral control jail]",

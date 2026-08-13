@@ -136,6 +136,7 @@ export interface Config {
   reachDeniedNotifyChannel?: string;
   scratchExecEnabled: boolean;
   reachExecEnabled: boolean;
+  webSearchEnabled: boolean;
   sharedOwnerAuthIsolation: boolean;
   surfaceDebugFooter: boolean;
   eagerProvisionEnabled: boolean;
@@ -847,6 +848,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       numEnvStrict("INSIGHTS_INTERVAL_MS", env.INSIGHTS_INTERVAL_MS) ?? CONFIG_DEFAULTS.insightsIntervalMs,
     ...(env.REACH_DENIED_NOTIFY_CHANNEL ? { reachDeniedNotifyChannel: env.REACH_DENIED_NOTIFY_CHANNEL.trim() } : {}),
     scratchExecEnabled: boolEnvStrict("EXECUTE_SCRATCH", env.EXECUTE_SCRATCH) ?? false,
+    webSearchEnabled: boolEnvStrict("WEB_SEARCH", env.WEB_SEARCH) ?? true,
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     sharedOwnerAuthIsolation: boolEnvStrict("SHARED_OWNER_AUTH_ISOLATION", env.SHARED_OWNER_AUTH_ISOLATION) ?? false,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,

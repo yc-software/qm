@@ -36,6 +36,7 @@ export interface CodexHarnessOptions {
   appServerStartTimeoutMs?: number;
   signals?: RunSignalStore;
   tasks?: TaskStore;
+  webSearch?: boolean;
 }
 
 export function codexHarnessConfigOptions(config: Config): CodexHarnessOptions {
@@ -48,6 +49,7 @@ export function codexHarnessConfigOptions(config: Config): CodexHarnessOptions {
     env: config.codexProcessEnv,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
+    webSearch: config.webSearchEnabled,
   };
 }
 
@@ -611,7 +613,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       experimentalRawEvents: true,
       environments: [],
       config: {
-        web_search: "disabled",
+        web_search:
+          toolsEnabled && opts.webSearch !== false && !turn.readOnly && !turn.toolApprovalGate ? "live" : "disabled",
         ...(codexReasoningEffort(turn.thinkingLevel)
           ? { model_reasoning_effort: codexReasoningEffort(turn.thinkingLevel) }
           : {}),
