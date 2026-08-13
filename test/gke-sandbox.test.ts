@@ -26,8 +26,8 @@ test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", 
     async getNamespacedCustomObject(input: CustomObjectsApiGetNamespacedCustomObjectRequest) {
       getRequest = input;
       if (!created) {
-        const error = new Error("missing") as Error & { statusCode: number };
-        error.statusCode = 404;
+        const error = new Error("missing") as Error & { code: number };
+        error.code = 404;
         throw error;
       }
       return { status: { sandbox: { Name: "sandbox-abc" } } };

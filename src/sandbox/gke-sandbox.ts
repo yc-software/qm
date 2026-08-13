@@ -69,12 +69,17 @@ const bodyOf = <T>(value: unknown): T => ((value as { body?: unknown } | undefin
 
 const statusCodeOf = (error: unknown): number | undefined => {
   const candidate = error as {
+    code?: number;
     statusCode?: number;
     response?: { statusCode?: number; status?: number };
     body?: { code?: number };
   };
   return (
-    candidate?.statusCode ?? candidate?.response?.statusCode ?? candidate?.response?.status ?? candidate?.body?.code
+    candidate?.code ??
+    candidate?.statusCode ??
+    candidate?.response?.statusCode ??
+    candidate?.response?.status ??
+    candidate?.body?.code
   );
 };
 
