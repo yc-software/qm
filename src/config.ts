@@ -164,6 +164,16 @@ export function baseModelProviders(config: Config): ModelProviderAvailability | 
   return config.modelProvider ? onlyProvider(config.modelProvider) : undefined;
 }
 
+export function harnessCarriedModelAuth(config: Config): ModelProvider | undefined {
+  if (
+    config.harness === "claude" &&
+    (config.claudeProcessEnv.CLAUDE_CODE_OAUTH_TOKEN || config.claudeProcessEnv.ANTHROPIC_AUTH_TOKEN)
+  )
+    return "anthropic";
+  if (config.harness === "codex" && config.codexProcessEnv.CODEX_ACCESS_TOKEN) return "openai";
+  return undefined;
+}
+
 interface AwsSandboxEnv {
   region: string;
   profile?: string;

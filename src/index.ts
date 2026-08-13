@@ -1,4 +1,10 @@
-import { baseModelProviders, configuredModelForHarness, loadConfig, providerKeysPresent } from "./config.ts";
+import {
+  baseModelProviders,
+  configuredModelForHarness,
+  harnessCarriedModelAuth,
+  loadConfig,
+  providerKeysPresent,
+} from "./config.ts";
 import { buildApp, stopWithBackstop } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { errMessage } from "./util/errors.ts";
@@ -8,6 +14,7 @@ import { slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 
 const config = loadConfig();
+const carriedModelAuth = harnessCarriedModelAuth(config);
 
 const built = buildApp(config);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
@@ -35,6 +42,7 @@ const server = createServer(built.app, {
   modelCredentials: built.modelCredentials,
   ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
   harnessId: config.harness,
+  ...(carriedModelAuth ? { harnessCarriedModelAuth: carriedModelAuth } : {}),
   connectorTokens: built.connectorTokens,
   slackInstallation: built.slackInstallation,
   slackEnvironmentState,

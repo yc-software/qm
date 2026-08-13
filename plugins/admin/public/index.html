@@ -7097,19 +7097,20 @@
         const baseModel = config.data.baseModel || config.data.baseModelDefault || "";
         const baseProvider = onboardingProviderForModel(baseModel);
         const baseStatus = onboardingModelStatuses.find((item) => item.provider === baseProvider);
-        onboardingBadge(
-          "onboarding-model-badge",
-          baseStatus?.configured ? "Ready" : "Needs a key",
-          Boolean(baseStatus?.configured),
-        );
+        const harnessAuth = models.data.harnessAuth;
+        const baseHarnessAuth = Boolean(harnessAuth && harnessAuth.provider === baseProvider);
+        const baseReady = Boolean(baseModel) && (Boolean(baseStatus?.configured) || baseHarnessAuth);
+        onboardingBadge("onboarding-model-badge", baseReady ? "Ready" : "Needs a key", baseReady);
         $("onboarding-model-summary").textContent = !baseModel
           ? "No base model is configured yet — pick a provider and model below."
           : baseStatus?.configured
             ? baseModel + " · " + (baseStatus.source === "admin" ? "admin-managed key" : "deployment key")
-            : baseModel +
-              " cannot run until its " +
-              (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
-              " key is configured.";
+            : baseHarnessAuth
+              ? baseModel + " · authenticated by the " + harnessAuth.harnessId + " harness — no API key needed."
+              : baseModel +
+                " cannot run until its " +
+                (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
+                " key is configured.";
         renderOnboardingProviderOptions(baseProvider);
         renderOnboardingModelOptions(baseModel);
 

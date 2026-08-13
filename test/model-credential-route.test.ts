@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { harnessCarriedModelAuth } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -22,18 +23,17 @@ function start(
   built: BuiltApp;
   close: () => Promise<void>;
 } {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "model-credential-route-")),
-      ...config,
-    }),
-    { modelCredentialFetch },
-  );
+  const cfg = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "model-credential-route-")),
+    ...config,
+  });
+  const built = buildApp(cfg, { modelCredentialFetch });
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     modelCredentialFetch,
     harnessId: config.harness ?? "pi",
+    ...(harnessCarriedModelAuth(cfg) ? { harnessCarriedModelAuth: harnessCarriedModelAuth(cfg) } : {}),
     providerKeys: {
       anthropic: Boolean(config.anthropicApiKey),
       openai: Boolean(config.openaiApiKey),
@@ -396,6 +396,47 @@ test("surface-config reports whether any model provider is configured", async ()
     await srv.built.modelCredentials.set("anthropic", "working-admin-key", "admin-alice@default-org");
     const after = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(((await after.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a claude harness with an OAuth token counts as configured without corrupting store statuses", async () => {
+  const srv = start({
+    harness: "claude",
+    claudeProcessEnv: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-test" } as NodeJS.ProcessEnv,
+  });
+  try {
+    const surface = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(surface.status, 200);
+    assert.equal(((await surface.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+
+    const providers = await fetch(`${srv.base}/v1/admin/model-providers`, { headers: ADMIN });
+    assert.equal(providers.status, 200);
+    const body = (await providers.json()) as {
+      providers: Array<{ provider: string; configured: boolean; source: string }>;
+      harnessAuth?: { harnessId: string; provider: string };
+    };
+    assert.deepEqual(body.harnessAuth, { harnessId: "claude", provider: "anthropic" });
+    assert.deepEqual(
+      body.providers.find((item) => item.provider === "anthropic"),
+      { provider: "anthropic", configured: false, source: "absent" },
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a claude harness without any token stays unconfigured", async () => {
+  const srv = start({ harness: "claude" });
+  try {
+    const surface = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(surface.status, 200);
+    assert.equal(((await surface.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, false);
+
+    const providers = await fetch(`${srv.base}/v1/admin/model-providers`, { headers: ADMIN });
+    assert.equal(providers.status, 200);
+    assert.equal("harnessAuth" in ((await providers.json()) as Record<string, unknown>), false);
   } finally {
     await srv.close();
   }
