@@ -61,6 +61,50 @@ describe("directory resolution (agent → teammate addressing, §10)", () => {
     assert.equal((await d.resolve("Alice")).kind, "none");
     assert.equal((await d.list()).length, 1);
   });
+
+  it("keeps authenticated members across directory snapshots without treating them as sync-owned", async () => {
+    const d = createDirectoryStore();
+    await d.registerAuthenticated({ principalId: "Portal@Example.com", displayName: "Portal User", type: "internal" });
+    await d.replace([
+      {
+        principalId: "portal@example.com",
+        displayName: "Slack Portal",
+        type: "internal",
+        slackId: "U-PORTAL",
+      },
+      { principalId: "slack@example.com", displayName: "Slack Only", type: "internal" },
+    ]);
+
+    assert.equal((await d.resolve("Slack Portal")).kind, "one");
+    assert.equal((await d.get("portal@example.com"))?.slackId, "U-PORTAL");
+    assert.deepEqual(
+      (await d.listSynced()).map((member) => member.principalId),
+      ["slack@example.com"],
+    );
+
+    await d.replace([]);
+    assert.equal((await d.resolve("Slack Portal")).kind, "one");
+    assert.equal(await d.get("slack@example.com"), null);
+    assert.equal((await d.get("portal@example.com"))?.slackId, undefined);
+  });
+
+  it("rejects non-internal authenticated registrations", async () => {
+    const d = createDirectoryStore();
+    await assert.rejects(
+      d.registerAuthenticated({ principalId: "guest@example.com", displayName: "Guest", type: "guest" }),
+      /must be internal/,
+    );
+  });
+
+  it("reapplies a repeated sync name after authenticated ownership changes it", async () => {
+    const d = createDirectoryStore();
+    const slack = { principalId: "named@example.com", displayName: "Slack Name", type: "internal" as const };
+    await d.replace([slack]);
+    await d.registerAuthenticated({ principalId: slack.principalId, displayName: "Portal Name", type: "internal" });
+    await d.replace([slack]);
+    assert.equal((await d.get(slack.principalId))?.displayName, slack.displayName);
+    assert.deepEqual(await d.listSynced(), []);
+  });
 });
 
 describe("channel resolution (agent → channel addressing, §10)", () => {

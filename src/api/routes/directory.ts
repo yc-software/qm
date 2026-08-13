@@ -1,4 +1,3 @@
-import type { PrincipalType } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
@@ -49,20 +48,25 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   }
   let memberCount: number | undefined;
   if (Array.isArray(b.members)) {
-    const members = b.members
-      .filter(
-        (m): m is { principalId: string; displayName: string; type: PrincipalType; slackId?: string } =>
-          isObj(m) &&
-          typeof m.principalId === "string" &&
-          typeof m.displayName === "string" &&
-          typeof m.type === "string",
-      )
-      .map((m) => ({
-        principalId: m.principalId,
-        displayName: m.displayName,
-        type: m.type,
-        ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
-      }));
+    for (const member of b.members) {
+      if (
+        !isObj(member) ||
+        typeof member.principalId !== "string" ||
+        typeof member.displayName !== "string" ||
+        (member.type !== "internal" && member.type !== "guest")
+      ) {
+        return sendJson(res, 400, { error: "bad_request", message: "members must have a valid principal type" });
+      }
+    }
+    const members = b.members.map((m) => {
+      const member = m as { principalId: string; displayName: string; type: "internal" | "guest"; slackId?: unknown };
+      return {
+        principalId: member.principalId,
+        displayName: member.displayName,
+        type: member.type,
+        ...(typeof member.slackId === "string" && member.slackId ? { slackId: member.slackId } : {}),
+      };
+    });
     await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;
   }

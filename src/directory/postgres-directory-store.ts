@@ -21,6 +21,7 @@ const SCHEMA = [
     display_name_lc TEXT NOT NULL,
     type            TEXT NOT NULL,
     slack_id        TEXT,
+    source          TEXT NOT NULL DEFAULT 'directory-sync',
     PRIMARY KEY (org_id, principal_id)
   )`,
   `CREATE INDEX IF NOT EXISTS directory_members_name
@@ -36,6 +37,7 @@ const SCHEMA = [
       ALTER TABLE directory_members ADD COLUMN slack_id TEXT;
     END IF;
   END $$`,
+  `ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'directory-sync'`,
   `CREATE TABLE IF NOT EXISTS directory_channels(
     org_id     TEXT NOT NULL,
     channel_id TEXT NOT NULL,
@@ -225,17 +227,29 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   return {
     async replace(members, syncedAt) {
       const byId = new Map<string, DirectoryMember>();
-      for (const m of members) if (m.principalId && m.type === "internal") byId.set(m.principalId, m);
+      for (const m of members) if (m.principalId && m.type === "internal") byId.set(personKey(m.principalId), m);
       const internal = [...byId.values()];
 
       const hash = hashRoster(internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}`));
 
       return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
-        await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
+        await client.query("DELETE FROM directory_members WHERE org_id = $1 AND source = 'directory-sync'", [orgId]);
+        await client.query("UPDATE directory_members SET slack_id = NULL WHERE org_id = $1", [orgId]);
         if (internal.length) {
           await client.query(
-            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[])`,
+            `WITH incoming AS (
+               SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
+                 AS rows(principal_id, display_name, display_name_lc, type, slack_id, principal_key)
+             )
+             UPDATE directory_members existing
+             SET display_name = incoming.display_name,
+               display_name_lc = incoming.display_name_lc,
+               type = incoming.type,
+               slack_id = incoming.slack_id
+             FROM incoming
+             WHERE existing.org_id = $1
+               AND CASE WHEN position('@' in existing.principal_id) > 0
+                 THEN lower(existing.principal_id) ELSE existing.principal_id END = incoming.principal_key`,
             [
               orgId,
               internal.map((m) => m.principalId),
@@ -243,10 +257,83 @@ export function createPostgresDirectoryStore(connectionString: string): Director
               internal.map((m) => normDirectoryQuery(m.displayName)),
               internal.map((m) => m.type),
               internal.map((m) => m.slackId ?? null),
+              internal.map((m) => personKey(m.principalId)),
+            ],
+          );
+          await client.query(
+            `WITH incoming AS (
+               SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
+                 AS rows(principal_id, display_name, display_name_lc, type, slack_id, principal_key)
+             )
+             INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, source)
+             SELECT $1, principal_id, display_name, display_name_lc, type, slack_id, 'directory-sync'
+             FROM incoming
+             WHERE NOT EXISTS (
+               SELECT 1 FROM directory_members existing
+               WHERE existing.org_id = $1
+                 AND CASE WHEN position('@' in existing.principal_id) > 0
+                   THEN lower(existing.principal_id) ELSE existing.principal_id END = incoming.principal_key
+             )`,
+            [
+              orgId,
+              internal.map((m) => m.principalId),
+              internal.map((m) => m.displayName),
+              internal.map((m) => normDirectoryQuery(m.displayName)),
+              internal.map((m) => m.type),
+              internal.map((m) => m.slackId ?? null),
+              internal.map((m) => personKey(m.principalId)),
             ],
           );
         }
       });
+    },
+
+    async registerAuthenticated(member) {
+      if (!member.principalId || member.type !== "internal")
+        throw new Error("authenticated directory member must be internal");
+      const key = personKey(member.principalId);
+      const displayName = member.displayName?.trim() || undefined;
+      const existing = await q(
+        `SELECT display_name, type, source FROM directory_members
+         WHERE org_id = $1
+           AND CASE WHEN position('@' in principal_id) > 0 THEN lower(principal_id) ELSE principal_id END = $2`,
+        [orgId, key],
+      );
+      if (
+        existing[0]?.source === "authenticated" &&
+        existing[0]?.type === member.type &&
+        (!displayName || existing[0]?.display_name === displayName)
+      )
+        return;
+      await withPgTransaction(await pool(), async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
+        const updated = await client.query(
+          `UPDATE directory_members
+           SET display_name = COALESCE($3, display_name),
+             display_name_lc = COALESCE($4, display_name_lc),
+             type = $5,
+             source = 'authenticated'
+           WHERE org_id = $1
+             AND CASE WHEN position('@' in principal_id) > 0 THEN lower(principal_id) ELSE principal_id END = $2`,
+          [orgId, key, displayName ?? null, displayName ? normDirectoryQuery(displayName) : null, member.type],
+        );
+        await client.query("UPDATE directory_sync SET members_hash = NULL WHERE org_id = $1", [orgId]);
+        if (updated.rowCount) return;
+        const insertedName = displayName ?? member.principalId;
+        await client.query(
+          `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, source)
+           VALUES ($1, $2, $3, $4, $5, $6, 'authenticated')`,
+          [orgId, member.principalId, insertedName, normDirectoryQuery(insertedName), member.type, null],
+        );
+      });
+    },
+
+    async listSynced() {
+      const rows = await q(
+        `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1 AND source = 'directory-sync'`,
+        [orgId],
+      );
+      return rows.map(memberRow);
     },
 
     async replaceChannels(channels, channelMembers, syncedAt) {

@@ -235,3 +235,22 @@ test("directory push stores the workspace URL; /v1/directory/meta serves it", as
     await s.close();
   }
 });
+
+test("directory push rejects unknown principal types", async () => {
+  const s = start();
+  try {
+    const push = await fetch(`${s.base}/v1/directory`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ members: [{ principalId: "alice", displayName: "Alice", type: "user" }] }),
+    });
+    assert.equal(push.status, 400);
+    assert.deepEqual(await push.json(), {
+      error: "bad_request",
+      message: "members must have a valid principal type",
+    });
+    assert.deepEqual(await s.built.directory.list(), []);
+  } finally {
+    await s.close();
+  }
+});

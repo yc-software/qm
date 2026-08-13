@@ -21,6 +21,7 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId } from "../types.ts";
+import { orgId as orgIdOf } from "../config.ts";
 import { canonicalPayload, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import { dispatch, findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
@@ -254,8 +255,24 @@ async function gate(
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
-      await deps.identity.refresh();
-      if (deps.identity.classify(actor.p).type !== "internal") actor = null;
+      const verifiedActor = actor;
+      const identity = deps.identity;
+      const register = async () => {
+        await identity.refresh();
+        const principal = identity.classify(verifiedActor.p);
+        if (principal.type !== "internal") actor = null;
+        else if (!verifiedActor.imp && deps.directory) {
+          await deps.directory.registerAuthenticated({
+            principalId: verifiedActor.p,
+            ...(typeof verifiedActor.n === "string" && verifiedActor.n.trim()
+              ? { displayName: verifiedActor.n.trim() }
+              : {}),
+            type: principal.type,
+          });
+        }
+      };
+      if (deps.advisoryLock) await deps.advisoryLock.withLock(`directory-members:${orgIdOf()}`, register);
+      else await register();
     }
     if (!isPublicRoute && requirePortalIdentity) {
       const webTurn =

@@ -310,31 +310,35 @@ export function createMessagingMethods(
     },
 
     async upsertDirectory(members, syncedAt) {
-      const previous = await deps.directory.list();
-      if (!(await deps.directory.replace(members, syncedAt))) return;
-      const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
-      const presentSet = new Set(present);
-      const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
-      const outcome = await deps.identity.recordDirectorySync(removed, present);
-      const orgScope = scopeId("org", orgIdOf());
-      for (const id of outcome.deactivated) {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: id,
-          action: "principal.deactivate",
-          resource: "directory-sync",
-          scopeLabel: orgScope,
-        });
-      }
-      for (const id of outcome.reactivated) {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: id,
-          action: "principal.reactivate",
-          resource: "directory-sync",
-          scopeLabel: orgScope,
-        });
-      }
+      const sync = async () => {
+        const previous = await deps.directory.listSynced();
+        if (!(await deps.directory.replace(members, syncedAt))) return;
+        const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
+        const presentSet = new Set(present.map(personKey));
+        const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(personKey(id)));
+        const outcome = await deps.identity.recordDirectorySync(removed, present);
+        const orgScope = scopeId("org", orgIdOf());
+        for (const id of outcome.deactivated) {
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId: id,
+            action: "principal.deactivate",
+            resource: "directory-sync",
+            scopeLabel: orgScope,
+          });
+        }
+        for (const id of outcome.reactivated) {
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId: id,
+            action: "principal.reactivate",
+            resource: "directory-sync",
+            scopeLabel: orgScope,
+          });
+        }
+      };
+      if (deps.advisoryLock) await deps.advisoryLock.withLock(`directory-members:${orgIdOf()}`, sync);
+      else await sync();
     },
     async upsertChannels(channels, channelMembers, syncedAt) {
       await deps.directory.replaceChannels(channels, channelMembers, syncedAt);

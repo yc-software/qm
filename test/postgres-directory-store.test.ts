@@ -100,6 +100,56 @@ test("pg directory: slackId round-trips through replace → get/list/resolve; a 
   assert.equal((await store.get("eve@acme.com"))?.slackId, "U99");
 });
 
+test("pg directory: authenticated ownership survives restart and Slack replacement", { skip }, async () => {
+  const writer = createPostgresDirectoryStore(URL!);
+  await writer.registerAuthenticated({
+    principalId: "Portal@Example.com",
+    displayName: "Portal User",
+    type: "internal",
+  });
+  await writer.replace([
+    {
+      principalId: "portal@example.com",
+      displayName: "Slack Portal",
+      type: "internal",
+      slackId: "U-PORTAL",
+    },
+    { principalId: "slack@example.com", displayName: "Slack Only", type: "internal" },
+  ]);
+
+  const reader = createPostgresDirectoryStore(URL!);
+  assert.equal((await reader.resolve("Slack Portal")).kind, "one");
+  assert.equal((await reader.get("portal@example.com"))?.slackId, "U-PORTAL");
+  assert.deepEqual(
+    (await reader.listSynced()).map((member) => member.principalId),
+    ["slack@example.com"],
+  );
+
+  await reader.replace([]);
+  assert.notEqual(await reader.get("portal@example.com"), null);
+  assert.equal((await reader.get("portal@example.com"))?.slackId, undefined);
+  assert.equal(await reader.get("slack@example.com"), null);
+  await (
+    await freshPg(URL!)
+  ).query("DELETE FROM directory_members WHERE org_id = $1 AND source = 'authenticated'", ["default-org"]);
+});
+
+test(
+  "pg directory: a repeated sync reapplies its name after authenticated ownership changes it",
+  { skip },
+  async () => {
+    const store = createPostgresDirectoryStore(URL!);
+    const principalId = "pg-auth-name@example.com";
+    const slack = { principalId, displayName: "Slack Name", type: "internal" as const };
+    await store.replace([slack]);
+    await store.registerAuthenticated({ principalId, displayName: "Portal Name", type: "internal" });
+    await store.replace([slack]);
+    assert.equal((await store.get(principalId))?.displayName, slack.displayName);
+    assert.deepEqual(await store.listSynced(), []);
+    await (await freshPg(URL!)).query("DELETE FROM directory_members WHERE principal_id = $1", [principalId]);
+  },
+);
+
 test("pg directory: get folds email case in BOTH directions; non-email ids stay byte-exact", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   await store.replace([

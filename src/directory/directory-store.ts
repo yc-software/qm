@@ -1,11 +1,17 @@
 import type { PrincipalType } from "../types.ts";
-import { samePerson } from "./person.ts";
+import { personKey, samePerson } from "./person.ts";
 
 export interface DirectoryMember {
   principalId: string;
   displayName: string;
   type: PrincipalType;
   slackId?: string;
+}
+
+export interface AuthenticatedDirectoryMember {
+  principalId: string;
+  displayName?: string;
+  type: PrincipalType;
 }
 
 export interface DirectoryChannel {
@@ -42,6 +48,8 @@ export type ChannelResolution =
 
 export interface DirectoryStore {
   replace(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
+  registerAuthenticated(member: AuthenticatedDirectoryMember): Promise<void>;
+  listSynced(): Promise<DirectoryMember[]>;
   replaceChannels(
     channels: DirectoryChannel[],
     channelMembers?: ChannelMembership[],
@@ -91,6 +99,7 @@ function pickMatch<T>(
 
 export function createDirectoryStore(): DirectoryStore {
   let members: DirectoryMember[] = [];
+  const authenticated = new Set<string>();
   let channels: DirectoryChannel[] = [];
   let channelMembers: Map<string, Set<string>> | undefined;
   let groupMembers: Map<string, Set<string>> | undefined;
@@ -118,8 +127,42 @@ export function createDirectoryStore(): DirectoryStore {
     },
     async replace(next, syncedAt) {
       if (!acceptSync("members", syncedAt)) return false;
-      members = next.filter((m) => m.principalId && m.type === "internal");
+      const merged = new Map(
+        members
+          .filter((member) => authenticated.has(personKey(member.principalId)))
+          .map((member) => {
+            const { slackId: _, ...authenticatedMember } = member;
+            return [personKey(member.principalId), authenticatedMember];
+          }),
+      );
+      for (const member of next) {
+        if (!member.principalId || member.type !== "internal") continue;
+        const key = personKey(member.principalId);
+        const existing = merged.get(key);
+        merged.set(key, existing ? { ...member, principalId: existing.principalId } : member);
+      }
+      members = [...merged.values()];
       return true;
+    },
+    async registerAuthenticated(member) {
+      if (!member.principalId || member.type !== "internal")
+        throw new Error("authenticated directory member must be internal");
+      const key = personKey(member.principalId);
+      const index = members.findIndex((existing) => personKey(existing.principalId) === key);
+      if (index < 0) members.push({ ...member, displayName: member.displayName?.trim() || member.principalId });
+      else {
+        const existing = members[index]!;
+        members[index] = {
+          ...existing,
+          ...(member.displayName?.trim() ? { displayName: member.displayName.trim() } : {}),
+          type: member.type,
+          principalId: existing.principalId,
+        };
+      }
+      authenticated.add(key);
+    },
+    async listSynced() {
+      return members.filter((member) => !authenticated.has(personKey(member.principalId)));
     },
     async replaceChannels(nextChannels, nextChannelMembers, syncedAt) {
       if (!acceptSync("channels", syncedAt)) return false;
