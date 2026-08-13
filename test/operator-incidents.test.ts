@@ -69,6 +69,8 @@ test("incident text redacts credentials, query strings, and local paths", () => 
 test("declared inability detection catches blocked work without treating a healthy statement as failure", () => {
   assert.equal(replyDeclaresInability("I can't complete this task because the publisher is unavailable."), true);
   assert.equal(replyDeclaresInability("The task is blocked by a missing OAuth grant."), true);
+  assert.equal(replyDeclaresInability("Can't find it — no test file was shared with me."), true);
+  assert.equal(replyDeclaresInability("So I can't actually attempt the read with this tool set."), true);
   assert.equal(replyDeclaresInability("I can't see any problem with the completed report."), false);
   assert.equal(replyDeclaresInability("Completed. I can send the report after approval."), false);
 });
