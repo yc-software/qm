@@ -26,7 +26,6 @@ import { hostingProvider, hostingProviderUpFlags, type DeployContext } from "./b
 import { runConformance } from "./commands/conformance.ts";
 import { renderSlackFiles, runOutputs } from "./commands/outputs.ts";
 import { cliVersion } from "./manifest.ts";
-import { renderTerraformVars } from "./terraform.ts";
 import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
 
