@@ -19,6 +19,8 @@ sandbox/
 
 The Dockerfile is optional when every declared binary is present in its tool directory. Skill assets delivered through the deployment-layer API are text in v1; binaries belong in the sandbox image.
 
+AWS Lambda MicroVM sandboxes use QM's fixed runtime image, so they do not build the deployment's Dockerfile or copy its tool executables. The CLI rejects both installation paths when the AWS sandbox backend is omitted or set to `"aws"`. Skill-only layers remain supported; deployments that need a custom sandbox image must select `sandbox.backend: "sprites"`.
+
 ## Configuration
 
 The root object requires `contract: 1`, `orgId`, `publicUrl`, `target`, and `services` including `core`. Docker and Fly also require `sandbox.app`. On AWS the sandbox substrate is an explicit choice: omitting the `sandbox` block runs named Lambda MicroVM images; declaring one requires `sandbox.backend` — `"sprites"` boots the operator-published layer image in `sandbox.app`, `"aws"` states the MicroVM default in the file. Unknown contract majors fail closed. `target` is `docker`, `fly`, or `aws`.

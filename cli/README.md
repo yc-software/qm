@@ -79,6 +79,12 @@ building anything, an existing deployment manifest and no `sandbox.image` overri
 that override only seeds the first `qm up` and must be removed afterwards. Every
 ordinary `up` also syncs the layer.
 
+AWS Lambda MicroVM sandboxes use QM's fixed runtime image. They accept skills through the
+deployment layer, but do not build `sandbox/Dockerfile` or copy tool executables. `check`,
+`sandbox build`, and `infra build-image` reject custom tools and Dockerfiles for that
+backend. Configure `sandbox.backend: "sprites"` when the deployment needs a custom sandbox
+image.
+
 Auto uses its built-in model classifier unless `qm.config.jsonc` declares one
 `securityScreen` proxy with a provider label, HTTPS endpoint, and `shadow` or
 `enforce` rollout. The proxy token is routed separately through

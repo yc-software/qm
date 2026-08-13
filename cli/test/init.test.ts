@@ -244,6 +244,11 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     assert.equal(config.sandbox, undefined);
     assert.equal(config.aws?.cluster, "acme-qm");
     assert.equal(config.aws?.imageLabel, "latest");
+    assert.equal(existsSync(join(dir, "sandbox", "tools")), false);
+    const greetSkill = readFileSync(join(dir, "sandbox", "skills", "greet", "SKILL.md"), "utf8");
+    assert.doesNotMatch(greetSkill, /example-tool/);
+    assert.deepEqual(validateSandboxLayer(join(dir, "sandbox")).errors, []);
+    assert.doesNotThrow(() => quiet(() => runChecks(config, dir, join(dir, "sandbox"), { report: false })));
     assert.deepEqual(config.aws?.services.core, {
       ecrRepository: "acme-qm-core",
       ecsService: "acme-qm-core",

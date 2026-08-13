@@ -150,3 +150,13 @@ test("a broken layer (tool with no executable and no Dockerfile) fails before bu
     rmSync(sb, { recursive: true, force: true });
   }
 });
+
+test("sandbox build rejects custom tool images for AWS Lambda MicroVM sandboxes", () => {
+  const sb = sandboxDir((s) => tool(s, "x", { id: "x", install: { binary: "x" } }));
+  const config: QmConfig = { ...CONFIG, target: "aws", sandbox: undefined };
+  try {
+    assert.throws(() => dryRun({ sandboxDir: sb, config }), /cannot be installed in AWS Lambda MicroVM sandboxes/);
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});

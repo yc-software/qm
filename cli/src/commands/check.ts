@@ -24,7 +24,7 @@ export function runChecks(
   opts: { report?: boolean } = {},
 ): ChecksResult {
   const report = opts.report ?? true;
-  const layer = validateSandboxLayer(sandboxDir);
+  const layer = validateSandboxLayer(sandboxDir, config);
   const { plugins, errors: pluginErrors } = discoverPlugins(configDir, config);
   const configErrors: Array<{ clause: string; message: string }> = [];
   const configError = (message: string, clause = "config.v1"): void => void configErrors.push({ clause, message });

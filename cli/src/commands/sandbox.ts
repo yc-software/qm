@@ -249,7 +249,7 @@ function assertPublishPlatform(body: string): void {
 
 function prepare(opts: SandboxBuildOpts): PreparedBuild {
   const sandboxDir = resolve(opts.sandboxDir);
-  const layer = validateSandboxLayer(sandboxDir);
+  const layer = validateSandboxLayer(sandboxDir, opts.config);
   if (layer.errors.length) {
     throw new CliError(`sandbox check failed:\n${layer.errors.map((error) => `  - ${error}`).join("\n")}`);
   }

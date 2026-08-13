@@ -57,10 +57,11 @@ the scaffolded \`.gitignore\`.
   \`{ "id": ..., "advertise": ..., "install": { "binary": ... } }\`, with the
   executable next to it when the binary is not already in the base image.
 - \`sandbox/Dockerfile\` is optional and only needed for system packages or
-  runtimes.
+  runtimes. AWS Lambda MicroVM sandboxes do not build this file or copy tool
+  executables; use skills only or configure the sprites backend for custom tools.
 
-The scaffold ships a working example, the \`greet\` skill and \`example-tool\`.
-Copy its shape, then replace or delete it.
+The scaffold ships a working \`greet\` skill. Targets that support custom sandbox
+images also get \`example-tool\`. Copy their shape, then replace or delete them.
 
 ## The workflow
 
@@ -94,6 +95,13 @@ description: Greet a teammate by name. Use whenever asked to say hello to someon
 Run \`example-tool <name>\` to greet someone, e.g. \`example-tool Ada\`.
 `;
 
+const AWS_GREET_SKILL = `---
+name: greet
+description: Greet a teammate by name. Use whenever asked to say hello to someone.
+---
+Reply with a friendly greeting addressed to the requested person.
+`;
+
 const EXAMPLE_TOOL_DESCRIPTOR =
   JSON.stringify({ id: "example-tool", advertise: "example-tool", install: { binary: "example-tool" } }, null, 2) +
   "\n";
@@ -116,8 +124,9 @@ function writeIfAbsent(dir: string, segments: string[], content: string, mode?: 
   ok(`wrote ${rel}`);
 }
 
-function scaffoldSandbox(dir: string): void {
-  writeIfAbsent(dir, ["sandbox", "skills", "greet", "SKILL.md"], GREET_SKILL);
+function scaffoldSandbox(dir: string, target: Target): void {
+  writeIfAbsent(dir, ["sandbox", "skills", "greet", "SKILL.md"], target === "aws" ? AWS_GREET_SKILL : GREET_SKILL);
+  if (target === "aws") return;
   writeIfAbsent(dir, ["sandbox", "tools", "example-tool", "tool.json"], EXAMPLE_TOOL_DESCRIPTOR);
   writeIfAbsent(dir, ["sandbox", "tools", "example-tool", "example-tool"], EXAMPLE_TOOL_BIN, 0o755);
 }
@@ -295,7 +304,7 @@ export function runInit(opts: {
   const manifests = renderSlackManifests(config);
   writeIfAbsent(dir, ["slack-app-manifest.yml"], manifests.bot);
   if (usesSlackOidc(config)) writeIfAbsent(dir, ["slack-sso-manifest.yml"], manifests.sso);
-  scaffoldSandbox(dir);
+  scaffoldSandbox(dir, target);
   for (const file of provider.scaffold.files(config)) writeIfAbsent(dir, file.segments, file.content);
 
   note("");

@@ -296,7 +296,7 @@ const aws: HostingProvider = {
   publishSandbox: async (ctx, opts) => {
     if (ctx.config.sandbox?.backend !== "sprites") {
       throw new CliError(
-        `this AWS deployment runs Lambda MicroVM sandboxes (sandbox.backend is not "sprites"); use \`qm sandbox build\` to validate the layer and \`qm infra build-image\` to publish the runtime — or set "sandbox.backend": "sprites" with "sandbox.app" to host sandboxes in an operator-published layer image`,
+        `this AWS deployment runs Lambda MicroVM sandboxes (sandbox.backend is not "sprites"), which do not support custom sandbox images; set "sandbox.backend": "sprites" with "sandbox.app" to host sandboxes in an operator-published layer image`,
       );
     }
     if (!opts.dryRun) assertAwsSandboxPinRecordable(ctx.config);

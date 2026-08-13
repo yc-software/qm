@@ -412,7 +412,7 @@ test("docker --only is rejected explicitly instead of silently restarting the fu
   }
 });
 
-test("sandbox publish directs MicroVM AWS deployments (no sandbox.app) to the image-build path", async () => {
+test("sandbox publish rejects custom images for MicroVM AWS deployments", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
   const configPath = join(dir, CONFIG_FILENAME);
   const raw = JSON.stringify({
@@ -439,9 +439,44 @@ test("sandbox publish directs MicroVM AWS deployments (no sandbox.app) to the im
   try {
     const result = await run(["sandbox", "publish", "--dry-run"], dir);
     assert.equal(result.exitCode, 1, result.out);
-    assert.match(result.out, /Lambda MicroVM sandboxes/);
-    assert.match(result.out, /infra build-image/);
+    assert.match(result.out, /sandbox\/Dockerfile is not built into AWS Lambda MicroVM sandboxes/);
+    assert.match(result.out, /"sandbox\.backend" to "sprites"/);
     assert.equal(readFileSync(configPath, "utf8"), raw);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("infra build-image rejects unsupported AWS sandbox customization before calling AWS", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+  writeFileSync(
+    join(dir, CONFIG_FILENAME),
+    JSON.stringify({
+      contract: 1,
+      orgId: "acme",
+      publicUrl: "https://acme.example.com",
+      target: "aws",
+      services: ["core"],
+      env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app" } },
+      aws: {
+        accountId: "123456789012",
+        region: "us-west-2",
+        cluster: "c",
+        deployRoleArn: "arn:aws:iam::123456789012:role/d",
+        secretsPrefix: "p/",
+        imageLabel: "release",
+        networking: { cloudMapNamespace: "n" },
+        services: { core: { ecrRepository: "repo", ecsService: "s", cpu: 256, memory: 512 } },
+      },
+    }),
+  );
+  mkdirSync(join(dir, "sandbox"));
+  writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM scratch\n");
+  try {
+    const result = await run(["infra", "build-image"], dir);
+    assert.equal(result.exitCode, 1, result.out);
+    assert.match(result.out, /sandbox\/Dockerfile is not built into AWS Lambda MicroVM sandboxes/);
+    assert.doesNotMatch(result.out, /missing required env|AWS account mismatch/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

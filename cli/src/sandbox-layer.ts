@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { QmConfig } from "./config.ts";
 import { JUNK_FILE, deploymentLayerBundle } from "./deployment-layer.ts";
 import { errMessage } from "./log.ts";
 
@@ -787,7 +788,8 @@ const subdirs = (dir: string): string[] => {
 const isCidr = (host: string): boolean =>
   /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(host) || /^[0-9A-Fa-f:]+\/\d{1,3}$/.test(host);
 
-export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
+export function validateSandboxLayer(sandboxDir: string, config?: QmConfig): SandboxValidation {
+  const awsMicrovm = config?.target === "aws" && config.sandbox?.backend !== "sprites";
   const out: SandboxValidation = {
     exists: existsSync(sandboxDir),
     hasDockerfile: existsSync(join(sandboxDir, "Dockerfile")),
@@ -835,7 +837,11 @@ export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
     const binaryName = descriptor.install?.binary ?? descriptor.id;
     const exePath = join(toolsDir, name, binaryName);
     const hasExe = isFile(exePath);
-    if (!hasExe && !out.hasDockerfile) {
+    if (awsMicrovm) {
+      out.errors.push(
+        `tool "${descriptor.id}" cannot be installed in AWS Lambda MicroVM sandboxes because tool executables and sandbox/Dockerfile are not included; remove it or set "sandbox.backend" to "sprites" and publish a sandbox image`,
+      );
+    } else if (!hasExe && !out.hasDockerfile) {
       out.errors.push(
         `tool "${descriptor.id}" (tools/${name}/) can't get its binary on PATH: ship an executable ` +
           `"${binaryName}" in the folder, or add a sandbox/Dockerfile that installs it`,
@@ -897,6 +903,12 @@ export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
     } catch (e) {
       out.errors.push(errMessage(e));
     }
+  }
+
+  if (awsMicrovm && out.hasDockerfile) {
+    out.errors.push(
+      'sandbox/Dockerfile is not built into AWS Lambda MicroVM sandboxes; remove it or set "sandbox.backend" to "sprites" and publish a sandbox image',
+    );
   }
 
   return out;

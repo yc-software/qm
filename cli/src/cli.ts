@@ -455,6 +455,7 @@ async function dispatch(argv: string[]): Promise<void> {
         if (operation === "delete-image") await deleteAwsMicrovmImage(ctx.config);
         else await deleteAwsTaskDefinitions(ctx.config);
       } else if (operation === "build-image") {
+        runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
         await buildAwsMicrovmImage(ctx.config, ctx.configPath);
       } else {
         runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });

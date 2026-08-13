@@ -22,6 +22,24 @@ const CONFIG: QmConfig = {
   sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
 };
 
+const AWS_CONFIG: QmConfig = {
+  ...CONFIG,
+  target: "aws",
+  publicUrl: "https://acme.example.com",
+  sandbox: undefined,
+  env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm" } },
+  aws: {
+    accountId: "123456789012",
+    region: "us-west-2",
+    cluster: "acme-qm",
+    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+    secretsPrefix: "acme/qm/",
+    imageLabel: "latest",
+    networking: { cloudMapNamespace: "acme.internal" },
+    services: { core: { ecrRepository: "core", ecsService: "core", cpu: 256, memory: 512 } },
+  },
+};
+
 function deployment(setup: (dir: string) => void, config: Partial<QmConfig> = {}): { dir: string; config: QmConfig } {
   const dir = mkdtempSync(join(tmpdir(), "qm-check-"));
   setup(dir);
@@ -129,6 +147,55 @@ test("a tool with no executable BUT a sandbox/Dockerfile passes (Dockerfile inst
     const { layer } = check(d);
     assert.equal(layer.tools.length, 1);
     assert.ok(layer.hasDockerfile);
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS Lambda MicroVM sandboxes reject every custom tool installation path", () => {
+  const d = deployment((dir) => {
+    writeTool(dir, "shipped-tool", { id: "shipped-tool", install: { binary: "shipped-tool" } });
+    writeTool(dir, "built-tool", { id: "built-tool", install: { binary: "built-tool" } }, false);
+    writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM base\nRUN install-built-tool\n");
+  }, AWS_CONFIG);
+  try {
+    assert.throws(
+      () => check(d),
+      (error) => {
+        assert.match(String(error), /sandbox\/Dockerfile is not built into AWS Lambda MicroVM sandboxes/);
+        assert.match(String(error), /tool "shipped-tool" cannot be installed/);
+        assert.match(String(error), /tool "built-tool" cannot be installed/);
+        assert.match(String(error), /"sandbox\.backend" to "sprites"/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS sprites sandboxes keep custom Dockerfile and executable tool support", () => {
+  const d = deployment(
+    (dir) => {
+      writeTool(dir, "shipped-tool", { id: "shipped-tool", install: { binary: "shipped-tool" } });
+      writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM base\n");
+    },
+    {
+      ...AWS_CONFIG,
+      sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+    },
+  );
+  try {
+    assert.doesNotThrow(() => check(d));
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS Lambda MicroVM sandboxes accept skill-only layers", () => {
+  const d = deployment((dir) => writeSkill(dir, "greet", "name: greet\ndescription: Greet a teammate."), AWS_CONFIG);
+  try {
+    assert.doesNotThrow(() => check(d));
   } finally {
     rmSync(d.dir, { recursive: true, force: true });
   }
