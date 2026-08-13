@@ -1,7 +1,7 @@
 import type { ProcessSandbox, ProcessState, SandboxHandle } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
-import { pollProcess } from "../sandbox/process-poll.ts";
+import { pollProcess, processIsGone } from "../sandbox/process-poll.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 
@@ -108,7 +108,8 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             await deps.registry.markStatus(existingProcessId, "exited");
             processId = null;
           }
-        } catch {
+        } catch (error) {
+          if (!processIsGone(error)) throw error;
           await deps.registry.delete(existingProcessId);
           processId = null;
         }

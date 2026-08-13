@@ -20,6 +20,7 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
   const starts: Array<{ command: string; opts?: StartProcessOptions }> = [];
   const signals: Array<{ id: string; signal: string }> = [];
   const writes: Array<{ id: string; data: string }> = [];
+  const readErrors = new Map<string, unknown>();
   let n = 0;
 
   const sandbox: ProcessSandbox = {
@@ -53,6 +54,11 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
       return { processId };
     },
     async readProcess(_h, id, opts) {
+      if (readErrors.has(id)) {
+        const error = readErrors.get(id);
+        readErrors.delete(id);
+        throw error;
+      }
       if (missing.has(id)) throw new Error(`no such process session: ${id}`);
       const p = procs.get(id);
       if (!p) throw new Error(`no such process session: ${id}`);
@@ -104,6 +110,7 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
       }
     },
     vanish: (id: string) => missing.add(id),
+    failNextRead: (id: string, error: unknown) => readErrors.set(id, error),
   };
 }
 
@@ -364,6 +371,17 @@ test("liveness probe: a row whose backend process is gone is deleted and a fresh
   const rows = (await registry.listByScope(SCOPE)).filter((r) => r.kind === "background");
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.processId, second.processId);
+});
+
+test("liveness probe: a transient backend error preserves the running process and registry row", async () => {
+  const { broker, registry, starts, failNextRead } = build();
+  const first = await broker.start(handle, "long-build");
+  const error = new Error("backend unavailable");
+  failNextRead(first.processId, error);
+
+  await assert.rejects(broker.start(handle, "long-build"), error);
+  assert.equal(starts.length, 1);
+  assert.equal((await registry.get(first.processId))?.status, "running");
 });
 
 test("TTL clamp: a requested lifetime above the max is clamped (mirrors PR C's ceiling clamp)", async () => {
