@@ -70,8 +70,8 @@ describe("capability-token control plane (crons + SOUL)", () => {
       config: built.config,
       admin: built.admin,
     });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
 
   after(async () => {
@@ -607,6 +607,15 @@ describe("capability-token control plane (crons + SOUL)", () => {
     assert.equal(patched.cron.id, id);
     assert.equal(patched.cron.action, "edited");
     assert.equal(patched.cron.schedule.cron, "0 9 * * *");
+    const same = (await (
+      await patch(
+        `/v1/crons/${id}`,
+        { action: "edited", schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" } },
+        { "x-agent-capability": await capFor("U1") },
+      )
+    ).json()) as any;
+    assert.equal(same.cron.id, id);
+    assert.equal(same.cron.action, "edited");
     const list = (await (await get("/v1/crons", { "x-agent-capability": await capFor("U1") })).json()) as any;
     assert.equal(list.crons.filter((c: any) => c.id === id).length, 1);
 
@@ -643,11 +652,16 @@ describe("capability-token control plane (crons + SOUL)", () => {
         { "x-agent-capability": await capFor("U1") },
       )
     ).json()) as any;
-    assert.equal(
-      (await patch(`/v1/crons/${created.cron.id}`, { nonsense: true }, { "x-agent-capability": await capFor("U1") }))
-        .status,
-      400,
+    const nonsense = await patch(
+      `/v1/crons/${created.cron.id}`,
+      { nonsense: true },
+      { "x-agent-capability": await capFor("U1") },
     );
+    assert.equal(nonsense.status, 400);
+    assert.match(((await nonsense.json()) as any).message, /nothing to change/);
+    const empty = await patch(`/v1/crons/${created.cron.id}`, {}, { "x-agent-capability": await capFor("U1") });
+    assert.equal(empty.status, 400);
+    assert.match(((await empty.json()) as any).message, /nothing to change/);
   });
 
   it("creates a scopeFloor cron when the token carries a member snapshot", async () => {
