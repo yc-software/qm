@@ -7,7 +7,7 @@ const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("a pane renders one header: the chat's own session topbar stays out of panes", () => {
-  assert.match(chat, /\$\{glanceTier \|\| ctx\.pane \? nothing : sessionTopbar\(\)\}/);
+  assert.match(chat, /\$\{glanceTier \|\| ctx\.pane \? nothing : sessionTopbar\([^)]*\)\}/);
 });
 
 test("the pane tab carries the scope / title breadcrumb", () => {
