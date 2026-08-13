@@ -95,10 +95,9 @@ else if (a.includes("lambda-microvms get-microvm-image")) {
 else if (a.includes("lambda-microvms list-microvm-image-versions")) console.log(JSON.stringify({ items: [{ imageVersion: process.env.AWS_FAKE_IMAGE_VERSION || "1", state: process.env.AWS_FAKE_IMAGE_STATE || "SUCCESSFUL", status: process.env.AWS_FAKE_IMAGE_STATUS || "ACTIVE" }] }));
 else if (a.includes("elbv2 describe-load-balancers")) console.log(JSON.stringify({ LoadBalancers: [{ LoadBalancerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/test/1", DNSName: process.env.AWS_FAKE_ALB_DNS || "agent.acme.example", State: { Code: "active" } }] }));
 else if (a.includes("elbv2 describe-listeners")) {
-  const protocol = process.env.AWS_FAKE_LISTENER_PROTOCOL || "HTTPS";
+  const protocol = process.env.AWS_FAKE_LISTENER_PROTOCOL || "HTTP";
   const defaults = process.env.AWS_FAKE_DEFAULT_FORWARD === "1" ? [{ Type: "forward", TargetGroupArn: ${JSON.stringify(targetArn)} }] : ${frontService === "portal" ? JSON.stringify([{ Type: "forward", TargetGroupArn: targetArn }]) : JSON.stringify([{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "404" } }])};
   const listeners = [{ ListenerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:listener/app/test/1/2", Protocol: protocol, Port: protocol === "HTTPS" ? 443 : 80, Certificates: protocol === "HTTPS" ? [{ CertificateArn: "arn:aws:acm:us-west-2:123456789012:certificate/test" }] : [], DefaultActions: defaults }];
-  if (process.env.AWS_FAKE_EXTRA_HTTP_LISTENER === "redirect") listeners.push({ ListenerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:listener/app/test/1/3", Protocol: "HTTP", Port: 80, Certificates: [], DefaultActions: [{ Type: "redirect", RedirectConfig: { Protocol: "HTTPS", Port: "443", StatusCode: "HTTP_301" } }] });
   if (process.env.AWS_FAKE_EXTRA_HTTP_LISTENER === "forward") listeners.push({ ListenerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:listener/app/test/1/3", Protocol: "HTTP", Port: 80, Certificates: [], DefaultActions: [{ Type: "forward", TargetGroupArn: ${JSON.stringify(targetArn)} }] });
   console.log(JSON.stringify({ Listeners: listeners }));
 }
@@ -408,7 +407,12 @@ const config: QmConfig = {
     secretEnv: ["ACME_API_KEY"],
   },
   env: {
-    core: { HARNESS: "pi", AWS_DEPLOY_IMAGE: "acme-qm-sandbox", AWS_DEPLOY_IMAGE_VERSION: "1" },
+    core: {
+      HARNESS: "pi",
+      AWS_DEPLOY_IMAGE: "acme-qm-sandbox",
+      AWS_DEPLOY_IMAGE_VERSION: "1",
+      AWS_PUBLIC_ORIGIN_URL: "http://agent.acme.example",
+    },
     admin: { ADMIN_BASE_PATH: "/admin" },
     portal: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: "T1" },
   },
@@ -766,23 +770,17 @@ test("githubTrustSubject pins the deploy branch, never the working checkout's br
   }
 });
 
-test("AWS doctor requires the public listener transport to match publicUrl", () => {
+test("AWS doctor requires an HTTP ALB origin behind CloudFront", () => {
   const httpsListener = {
     ListenerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:listener/app/acme/123/456",
     Protocol: "HTTPS",
     Port: 443,
-    Certificates: [{ CertificateArn: "arn:aws:acm:us-west-2:123456789012:certificate/abc" }],
   };
-  const httpListener = { ...httpsListener, Protocol: "HTTP", Port: 80, Certificates: [] };
+  const httpListener = { ...httpsListener, Protocol: "HTTP", Port: 80 };
 
-  assert.doesNotThrow(() => assertAwsPublicListener("https://agent.acme.example", httpsListener));
-  assert.throws(() => assertAwsPublicListener("https://agent.acme.example", httpListener), /configure certificate_arn/);
-  assert.throws(
-    () => assertAwsPublicListener("https://agent.acme.example", { ...httpsListener, Certificates: [] }),
-    /no certificate/,
-  );
   assert.doesNotThrow(() => assertAwsPublicListener("http://agent.acme.example", httpListener));
-  assert.throws(() => assertAwsPublicListener("http://agent.acme.example", httpsListener), /publicUrl is HTTP/);
+  assert.throws(() => assertAwsPublicListener("https://agent.acme.example", httpsListener), /origin must use HTTP/);
+  assert.throws(() => assertAwsPublicListener("http://agent.acme.example", httpsListener), /expected HTTP:80/);
 });
 
 test("AWS deploy refuses the HTTP bootstrap before any AWS mutation", async () => {
@@ -791,7 +789,7 @@ test("AWS deploy refuses the HTTP bootstrap before any AWS mutation", async () =
   try {
     await assert.rejects(
       () => awsUp({ ...config, publicUrl: "http://agent.acme.example" }, process.cwd(), { yes: true }),
-      /requires an HTTPS publicUrl.*ACM certificate.*update publicUrl.*rerender\/apply Terraform/,
+      /requires an HTTPS publicUrl.*CloudFront hostname/,
     );
     assert.equal(readFileSync(fake.log, "utf8"), "");
   } finally {
@@ -800,15 +798,15 @@ test("AWS deploy refuses the HTTP bootstrap before any AWS mutation", async () =
   }
 });
 
-test("AWS deploy requires the live ALB listener to match the HTTPS public URL", async () => {
+test("AWS deploy requires the live ALB listener to remain HTTP behind CloudFront", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-live-listener-"));
   const fake = fakeAws(dir, `console.log("");`);
   const prior = process.env.AWS_FAKE_LISTENER_PROTOCOL;
-  process.env.AWS_FAKE_LISTENER_PROTOCOL = "HTTP";
+  process.env.AWS_FAKE_LISTENER_PROTOCOL = "HTTPS";
   try {
     await assert.rejects(
       () => awsUp(config, process.cwd(), { yes: true }),
-      /public front door is not ready.*listener is HTTP:80.*configure certificate_arn.*apply Terraform/,
+      /public front door is not ready.*expected HTTP:80/,
     );
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /sts get-caller-identity/);
@@ -4111,14 +4109,14 @@ test("an --only deploy that skips core needs no pin source and records the pin b
   }
 });
 
-test("AWS front door tolerates exactly one extra port-80 HTTPS-redirect listener; any other extra listener still fails", async () => {
+test("AWS front door requires exactly one HTTP listener", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-front-door-listeners-"));
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
   const priorPath = process.env.PATH;
   process.env.PATH = `${dir}:${priorPath}`;
-  const run = async (mode: "redirect" | "forward" | undefined, expected?: RegExp): Promise<void> => {
+  const run = async (mode: "forward" | undefined, expected?: RegExp): Promise<void> => {
     const fake = statefulAws(dir, oneServiceConfig());
     const prior = process.env.AWS_FAKE_EXTRA_HTTP_LISTENER;
     if (mode) process.env.AWS_FAKE_EXTRA_HTTP_LISTENER = mode;
@@ -4133,10 +4131,9 @@ test("AWS front door tolerates exactly one extra port-80 HTTPS-redirect listener
   };
   try {
     await run(undefined);
-    await run("redirect");
     await run(
       "forward",
-      /expected exactly one public listener plus at most one port-80 HTTPS-redirect listener, found HTTPS:443 \(default fixed-response\), HTTP:80 \(default forward\)/,
+      /expected exactly one public listener, found HTTP:80 \(default fixed-response\), HTTP:80 \(default forward\)/,
     );
   } finally {
     process.env.PATH = priorPath;

@@ -885,7 +885,7 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
     throw new CliError(`${path}: AWS portal requires web-ui`);
   }
   if (hasPortal && protocol !== "https:") {
-    throw new CliError(`${path}: AWS portal requires an HTTPS publicUrl and ACM certificate`);
+    throw new CliError(`${path}: AWS portal requires an HTTPS publicUrl`);
   }
   const harness = config.env.core?.HARNESS?.trim() || "mock";
   if (protocol !== "https:" && harness !== "mock") {

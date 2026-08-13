@@ -37,7 +37,6 @@ test("declaredVariables reads the scaffolded variables.tf", () => {
   for (const name of [
     "org_id",
     "account_id",
-    "certificate_arn",
     "db_name",
     "db_username",
     "github_repository",
@@ -166,11 +165,11 @@ test("terraform propagates workload architecture to bootstrap task definitions",
 
 test("re-render preserves every declared operator variable, not just the github coordinates", () => {
   const first = terraformVars(config, "", declared);
-  assert.match(first, /certificate_arn\s*= ""/, "fresh tfvars select the valid HTTP listener bootstrap");
   const edited =
-    `${first}db_name             = "customdb"\ndb_username         = "customuser"\ndb_multi_az         = true\ndb_skip_final_snapshot = true\necr_force_delete = true\nobject_store_force_destroy = true\nsecret_recovery_window_days = 0\n`
-      .replace('github_repository   = "replace-me/repository"', 'github_repository   = "acme/deploy"')
-      .replace(/certificate_arn\s+= ""/, 'certificate_arn     = "arn:aws:acm:us-west-2:123456789012:certificate/abc"');
+    `${first}certificate_arn     = "arn:aws:acm:us-west-2:123456789012:certificate/abc"\ndb_name             = "customdb"\ndb_username         = "customuser"\ndb_multi_az         = true\ndb_skip_final_snapshot = true\necr_force_delete = true\nobject_store_force_destroy = true\nsecret_recovery_window_days = 0\n`.replace(
+      'github_repository   = "replace-me/repository"',
+      'github_repository   = "acme/deploy"',
+    );
   const rerendered = terraformVars({ ...config, publicUrl: "https://new.acme.example" }, edited, declared);
   assert.match(rerendered, /public_url {2,}= "https:\/\/new\.acme\.example"/, "derived vars re-render from config");
   assert.match(rerendered, /github_repository {2,}= "acme\/deploy"/, "operator github coordinate preserved");
@@ -284,7 +283,9 @@ test("AWS module keeps portal as the sole front door and preserves CLI-owned ECS
 test("AWS module terminates public TLS at CloudFront independently of the ALB origin listener", () => {
   const listener = mainTf.match(/resource "aws_lb_listener" "public" \{([\s\S]*?)\n\}/)?.[1] ?? "";
   const edge = mainTf.match(/resource "aws_cloudfront_distribution" "portal" \{([\s\S]*?)\n\}/)?.[1] ?? "";
-  assert.match(listener, /port\s*=\s*var\.certificate_arn == "" \? 80 : 443/);
+  assert.match(listener, /port\s*=\s*80/);
+  assert.match(listener, /protocol\s*=\s*"HTTP"/);
+  assert.doesNotMatch(listener, /certificate_arn|ssl_policy/);
   assert.match(edge, /domain_name\s*=\s*aws_lb\.this\.dns_name/);
   assert.match(edge, /cloudfront_default_certificate\s*=\s*true/);
 });
@@ -403,7 +404,7 @@ test("AWS ECS services wait until target groups are attached to the ALB", () => 
 test("drift check flags wrong derived values but never operator formatting", () => {
   const rendered = terraformVars(config, "", declared);
   assert.deepEqual(terraformVarsDrift(config, rendered, declared), []);
-  const reordered = `certificate_arn = "arn:x"\n# an operator comment\n${rendered}`;
+  const reordered = `operator_setting = "value"\n# an operator comment\n${rendered}`;
   assert.deepEqual(terraformVarsDrift(config, reordered, declared), [], "operator additions/formatting are not drift");
   const wrongCluster = rendered.replace('"acme-qm"', '"other-cluster"');
   assert.deepEqual(terraformVarsDrift(config, wrongCluster, declared), ["cluster_name"]);

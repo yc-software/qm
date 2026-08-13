@@ -47,10 +47,6 @@ variable "deploy_microvm_execution_role_arn" {
 variable "certificate_arn" {
   type    = string
   default = ""
-  validation {
-    condition     = var.certificate_arn == "" || can(regex("^arn:(aws|aws-us-gov|aws-cn):acm:[a-z0-9-]+:[0-9]{12}:certificate/[0-9a-f-]+$", var.certificate_arn))
-    error_message = "certificate_arn must be an ACM certificate ARN in the configured AWS partition"
-  }
 }
 variable "db_name" {
   type    = string

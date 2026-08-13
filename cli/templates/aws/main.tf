@@ -701,10 +701,8 @@ resource "aws_lb_target_group" "service" {
 
 resource "aws_lb_listener" "public" {
   load_balancer_arn = aws_lb.this.arn
-  port              = var.certificate_arn == "" ? 80 : 443
-  protocol          = var.certificate_arn == "" ? "HTTP" : "HTTPS"
-  certificate_arn   = var.certificate_arn == "" ? null : var.certificate_arn
-  ssl_policy        = var.certificate_arn == "" ? null : "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  port              = 80
+  protocol          = "HTTP"
   dynamic "default_action" {
     for_each = local.has_portal ? ["portal"] : []
     content {

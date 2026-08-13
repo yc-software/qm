@@ -258,7 +258,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     assert.match(tfvars, /cluster_name\s*= "acme-qm"/);
     assert.match(tfvars, /github_repository\s*= "replace-me\/repository"/);
     assert.match(tfvars, /deploy_microvm_image\s*= "acme-qm-sandbox"/);
-    assert.match(tfvars, /certificate_arn\s*= ""/);
+    assert.doesNotMatch(tfvars, /certificate_arn/);
     assert.match(readFileSync(join(dir, "infra", "main.tf"), "utf8"), /desired_count\s*= 0/);
     const env = readFileSync(join(dir, ".env.example"), "utf8").split("\n");
     for (const name of [
