@@ -9,15 +9,17 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createOAuthFlowStore, type OAuthFlowContext } from "../src/connectors/oauth-flow.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 function start(socketAppId = "A-ACME"): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "byo-route-")) }));
   const server = createInsecureTestServer(built.app, {
-    oauthStateSecret: "byo-route-oauth-state-secret",
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
+    oauthFlows: createOAuthFlowStore(createMemoryMap<OAuthFlowContext>()),
     slackInstallation: built.slackInstallation,
     slackInstallationFetch: (async (input: string | URL | Request) => {
       const url = String(input);

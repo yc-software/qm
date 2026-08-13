@@ -8,7 +8,9 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { PROVIDERS, openOAuthState, type FetchLike } from "../src/connectors/oauth.ts";
+import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
+import { createOAuthFlowStore, type OAuthFlowContext } from "../src/connectors/oauth-flow.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import {
   mintCapabilityToken,
@@ -32,6 +34,7 @@ function start(
     connectorTokens: built.connectorTokens,
     keychain: built.keychain,
     consentLinks: built.consentLinks,
+    oauthFlows: createOAuthFlowStore(createMemoryMap<OAuthFlowContext>()),
     auditLog: built.auditLog,
     oauthEnv,
     oauthFetch: fetchImpl,
@@ -108,9 +111,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
     const consent = new URL(decision.authorizeUrl);
     assert.equal(consent.origin + consent.pathname, PROVIDERS.google!.authUrl);
     assert.equal(consent.searchParams.get("client_id"), "gid");
-    const state = await openOAuthState(consent.searchParams.get("state") ?? "", { secret: SECRET });
-    assert.equal(state.principalId, "U1");
-    assert.equal(state.orgId, "default-org");
+    assert.match(consent.searchParams.get("state") ?? "", /^[A-Za-z0-9_-]{43}$/);
 
     const second = await redeem(srv.base, coreRedeemPath(connectPath), "U1");
     assert.equal(

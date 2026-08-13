@@ -2,9 +2,7 @@ import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
   exchangeCode,
-  openOAuthState,
   PROVIDERS,
-  sealOAuthState,
   createSecretClientResolver,
   generateCodeVerifier,
   codeChallengeS256,
@@ -14,6 +12,7 @@ import {
 import { bestOAuthTokenStatus, CONNECTOR_STATUS_ACCOUNT_TYPES } from "../../credentials/connector-status.ts";
 import type { OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
+import { OAUTH_FLOW_TTL_MS, openLegacyOAuthState, type OAuthFlowContext } from "../../connectors/oauth-flow.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -22,7 +21,8 @@ import { sendJson, sendRedirect } from "../http.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
-const OAUTH_STATE_MAX_AGE_MS = 10 * 60_000;
+const OAUTH_FLOW_HANDLE = /^[A-Za-z0-9_-]{43}$/;
+
 function oauthStateSecret(deps: ServerDeps, signingSecret: string | undefined): string {
   const value = deps.oauthStateSecret ?? signingSecret;
   if (!value) throw new Error("OAuth state secret required");
@@ -40,6 +40,7 @@ function parseAccountType(v: string | null | undefined): AccountType {
 }
 
 async function providerConfigured(deps: ServerDeps, provider: string): Promise<boolean> {
+  if (!deps.oauthFlows) return false;
   try {
     await resolverFor(deps)(provider, {});
     return true;
@@ -122,26 +123,44 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
   const providerError = url.searchParams.get("error");
-  if (providerError) return sendJson(res, 400, { error: "oauth_denied", message: providerError });
+  if (providerError) {
+    if (stateParam && OAUTH_FLOW_HANDLE.test(stateParam)) await deps.oauthFlows?.redeem(stateParam).catch(() => null);
+    return sendJson(res, 400, { error: "oauth_denied", message: providerError });
+  }
   if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
-  let state;
+  let state: OAuthFlowContext;
+  let legacyNonce: string | undefined;
   try {
-    state = await openOAuthState(stateParam, {
-      secret: oauthStateSecret(deps, secret),
-      maxAgeMs: OAUTH_STATE_MAX_AGE_MS,
-    });
+    if (OAUTH_FLOW_HANDLE.test(stateParam)) {
+      if (!deps.oauthFlows) throw new Error("OAuth flow store is unavailable");
+      const redeemed = await deps.oauthFlows.redeem(stateParam);
+      if (!redeemed.ok) {
+        throw new Error(
+          redeemed.reason === "expired" ? "expired OAuth state" : "OAuth state was already used or invalid",
+        );
+      }
+      state = redeemed.context;
+    } else {
+      const legacy = await openLegacyOAuthState(stateParam, oauthStateSecret(deps, secret));
+      const { issuedAt, nonce, ...context } = legacy;
+      state = { ...context, createdAt: issuedAt };
+      legacyNonce = nonce;
+    }
     if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
     if (state.orgId !== undefined && state.orgId !== configOrgId()) {
       throw new Error("OAuth state is for a different org");
     }
     if (
-      !deps.replayDedupe ||
-      !(await deps.replayDedupe.claim(`oauth:${state.nonce}`, state.issuedAt + OAUTH_STATE_MAX_AGE_MS))
+      legacyNonce &&
+      (!deps.replayDedupe ||
+        !(await deps.replayDedupe.claim(`oauth:${legacyNonce}`, state.createdAt + OAUTH_FLOW_TTL_MS)))
     ) {
       throw new Error("OAuth state was already used or replay protection is unavailable");
     }
     const accountType = state.accountType ?? "default";
     const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
+    if (state.clientId && state.clientId !== client.id) throw new Error("OAuth client changed during flow");
+    if (state.clientRef && state.clientRef !== client.clientRef) throw new Error("OAuth client changed during flow");
     const { hosts, token } = await exchangeCode(oauthRoute.provider, code, state.redirectUri, {
       client,
       fetchImpl: deps.oauthFetch,
@@ -188,7 +207,7 @@ async function principalHasProvider(deps: ServerDeps, provider: string, principa
 }
 
 async function consentRedeem(ctx: ApiCtx): Promise<void> {
-  const { res, deps, secret, url } = ctx;
+  const { res, deps, url } = ctx;
   if (!deps.consentLinks || !deps.connectorTokens) return sendJson(res, 404, { error: "not_found" });
   const clicker = personKey(ctx.req.headers["x-consent-clicker"] as string | undefined);
   if (!clicker) return sendJson(res, 401, { error: "unauthorized", message: "sign in to complete this connection" });
@@ -225,20 +244,18 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     }
     const returnTo = safeReturnTo(url.searchParams.get("returnTo")) ?? rec.returnTo;
     const codeVerifier = PROVIDERS[rec.provider]?.pkce ? generateCodeVerifier() : undefined;
-    const state = await sealOAuthState(
-      {
-        provider: rec.provider,
-        principalId: rec.principalId,
-        redirectUri: rec.redirectUri,
-        orgId: configOrgId(),
-        ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
-        clientRef: client.clientRef,
-        ...(returnTo ? { returnTo } : {}),
-        ...(codeVerifier ? { codeVerifier } : {}),
-        consentLinkId: linkId,
-      },
-      { secret: oauthStateSecret(deps, secret) },
-    );
+    if (!deps.oauthFlows) throw new Error("OAuth flow store is unavailable");
+    const { state } = await deps.oauthFlows.mint({
+      provider: rec.provider,
+      principalId: rec.principalId,
+      redirectUri: rec.redirectUri,
+      orgId: configOrgId(),
+      ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
+      clientId: client.id,
+      ...(returnTo ? { returnTo } : {}),
+      ...(codeVerifier ? { codeVerifier } : {}),
+      consentLinkId: linkId,
+    });
     const consentUrl = authorizeUrl(rec.provider, {
       redirectUri: rec.redirectUri,
       state,
@@ -261,6 +278,8 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
 async function consentMint(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (!deps.consentLinks) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.oauthFlows)
+    return sendJson(res, 501, { error: "not_configured", message: "durable OAuth flow store not wired" });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
   const b = body as {
@@ -338,10 +357,12 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
 }
 
 async function oauthStart(ctx: ApiCtx): Promise<void> {
-  const { res, deps, secret, url, pathname } = ctx;
+  const { res, deps, url, pathname } = ctx;
   const oauthRoute = parseOAuthRoute(pathname)!;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+  if (!deps.oauthFlows)
+    return sendJson(res, 501, { error: "not_configured", message: "durable OAuth flow store not wired" });
   const provider = PROVIDERS[oauthRoute.provider];
   if (!provider)
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${oauthRoute.provider}` });
@@ -359,21 +380,19 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       });
     }
     const codeVerifier = provider.pkce ? generateCodeVerifier() : undefined;
-    const state = await sealOAuthState(
-      {
-        provider: oauthRoute.provider,
-        principalId,
-        redirectUri,
-        orgId: configOrgId(),
-        ...(accountType !== "default" ? { accountType } : {}),
-        clientRef: client.clientRef,
-        ...(safeReturnTo(url.searchParams.get("returnTo"))
-          ? { returnTo: safeReturnTo(url.searchParams.get("returnTo")) }
-          : {}),
-        ...(codeVerifier ? { codeVerifier } : {}),
-      },
-      { secret: oauthStateSecret(deps, secret) },
-    );
+    if (!deps.oauthFlows) throw new Error("OAuth flow store is unavailable");
+    const { state } = await deps.oauthFlows.mint({
+      provider: oauthRoute.provider,
+      principalId,
+      redirectUri,
+      orgId: configOrgId(),
+      ...(accountType !== "default" ? { accountType } : {}),
+      clientId: client.id,
+      ...(safeReturnTo(url.searchParams.get("returnTo"))
+        ? { returnTo: safeReturnTo(url.searchParams.get("returnTo")) }
+        : {}),
+      ...(codeVerifier ? { codeVerifier } : {}),
+    });
     const consentUrl = authorizeUrl(oauthRoute.provider, {
       redirectUri,
       state,

@@ -9,13 +9,18 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
+import { codeChallengeS256, PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
+import { createOAuthFlowStore, type OAuthFlowContext } from "../src/connectors/oauth-flow.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
   GOOGLE_OAUTH_CLIENT_SECRET: "gsecret",
+  X_OAUTH_CLIENT_ID: "xid",
+  X_OAUTH_CLIENT_SECRET: "xsecret",
 } as NodeJS.ProcessEnv;
 
 function sign(method: string, pathWithQuery: string, body = ""): Record<string, string> {
@@ -37,6 +42,7 @@ function start(fetchImpl: FetchLike): { base: string; built: BuiltApp; close: ()
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
+    oauthFlows: createOAuthFlowStore(createMemoryMap<OAuthFlowContext>()),
     auditLog: built.auditLog,
     oauthEnv,
     oauthFetch: fetchImpl,
@@ -168,6 +174,154 @@ test("OAuth callback rejects forged state even without source-auth", async () =>
     const res = await fetch(`${srv.base}/v1/connectors/oauth/google/callback?code=abc&state=forged`);
     assert.equal(res.status, 400);
     assert.match(await res.text(), /oauth_callback_failed/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("OAuth callback accepts and replay-protects an in-flight legacy signed state", async () => {
+  const srv = start(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ access_token: "at-legacy", refresh_token: "rt-legacy", expires_in: 3600 }),
+  }));
+  try {
+    const state = await mintSignedPayload(
+      {
+        provider: "google",
+        principalId: "U-LEGACY",
+        redirectUri: `${srv.base}/v1/connectors/oauth/google/callback`,
+        orgId: "default-org",
+        clientRef: "env:google",
+        issuedAt: Date.now(),
+        nonce: "legacy-rollout-nonce",
+      },
+      SECRET,
+    );
+    const callbackPath = `/v1/connectors/oauth/google/callback?code=legacy-code&state=${encodeURIComponent(state)}`;
+    assert.equal((await fetch(`${srv.base}${callbackPath}`)).status, 200);
+    const replay = await fetch(`${srv.base}${callbackPath}`);
+    assert.equal(replay.status, 400);
+    assert.match(await replay.text(), /already used/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("provider denial consumes the durable OAuth flow", async () => {
+  const srv = start(async () => {
+    throw new Error("denied flow must not exchange");
+  });
+  try {
+    const redirectUri = `${srv.base}/v1/connectors/oauth/google/callback`;
+    const startPath = `/v1/connectors/oauth/google/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}`;
+    const started = (await (await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) })).json()) as {
+      authorizeUrl: string;
+    };
+    const state = new URL(started.authorizeUrl).searchParams.get("state") ?? "";
+    const deniedPath = `/v1/connectors/oauth/google/callback?error=access_denied&state=${encodeURIComponent(state)}`;
+    const denied = await fetch(`${srv.base}${deniedPath}`);
+    assert.equal(denied.status, 400);
+    assert.match(await denied.text(), /oauth_denied/);
+
+    const replayPath = `/v1/connectors/oauth/google/callback?code=fake&state=${encodeURIComponent(state)}`;
+    const replay = await fetch(`${srv.base}${replayPath}`);
+    assert.equal(replay.status, 400);
+    assert.match(await replay.text(), /already used/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("OAuth starts fail closed when durable flow storage is unavailable", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "oauth-no-db-")) }));
+  assert.equal(built.oauthFlows, undefined);
+  const server = createServer(built.app, {
+    signingSecret: SECRET,
+    replayDedupe: built.replayDedupe,
+    connectorTokens: built.connectorTokens,
+    oauthEnv,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  try {
+    const redirectUri = `${base}/v1/connectors/oauth/google/callback`;
+    const startPath = `/v1/connectors/oauth/google/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}`;
+    const response = await fetch(`${base}${startPath}`, { headers: sign("GET", startPath) });
+    assert.equal(response.status, 501);
+    assert.match(await response.text(), /durable OAuth flow store not wired/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("OAuth callback rejects a client ID change during the flow", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "oauth-client-change-")) }));
+  const oauthFlows = createOAuthFlowStore(createMemoryMap<OAuthFlowContext>());
+  let clientId = "client-before";
+  let exchanged = false;
+  const server = createServer(built.app, {
+    signingSecret: SECRET,
+    replayDedupe: built.replayDedupe,
+    connectorTokens: built.connectorTokens,
+    oauthFlows,
+    resolveClient: async () => ({ id: clientId, secret: "client-secret", clientRef: "org:default-org:google" }),
+    oauthFetch: async () => {
+      exchanged = true;
+      return { ok: true, status: 200, json: async () => ({ access_token: "must-not-store" }) };
+    },
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  try {
+    const redirectUri = `${base}/v1/connectors/oauth/google/callback`;
+    const startPath = `/v1/connectors/oauth/google/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}`;
+    const started = (await (await fetch(`${base}${startPath}`, { headers: sign("GET", startPath) })).json()) as {
+      authorizeUrl: string;
+    };
+    const state = new URL(started.authorizeUrl).searchParams.get("state") ?? "";
+    clientId = "client-after";
+    const callback = await fetch(
+      `${base}/v1/connectors/oauth/google/callback?code=code&state=${encodeURIComponent(state)}`,
+    );
+    assert.equal(callback.status, 400);
+    assert.match(await callback.text(), /OAuth client changed during flow/);
+    assert.equal(exchanged, false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("X receives provider-safe state while PKCE survives the server-side flow", async () => {
+  let exchangeBody = "";
+  const srv = start(async (url, init) => {
+    assert.equal(url, PROVIDERS.x!.tokenUrl);
+    exchangeBody = init.body;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "at-x", refresh_token: "rt-x", expires_in: 7200 }),
+    };
+  });
+  try {
+    const principalId = "person@example.comxx";
+    const redirectUri = "https://prefix-portal.fly.dev/v1/connectors/oauth/x/callback";
+    const startPath = `/v1/connectors/oauth/x/start?principalId=${encodeURIComponent(principalId)}&redirectUri=${encodeURIComponent(redirectUri)}&returnTo=%2Fconnectors`;
+    const startRes = await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) });
+    assert.equal(startRes.status, 200);
+    const consent = new URL(((await startRes.json()) as { authorizeUrl: string }).authorizeUrl);
+    const state = consent.searchParams.get("state") ?? "";
+    const challenge = consent.searchParams.get("code_challenge") ?? "";
+    assert.equal(state.length, 43);
+    assert.ok(state.length < 500);
+    assert.equal(consent.searchParams.get("code_challenge_method"), "S256");
+
+    const callbackPath = `/v1/connectors/oauth/x/callback?code=code-x&state=${encodeURIComponent(state)}`;
+    const callbackRes = await fetch(`${srv.base}${callbackPath}`, { redirect: "manual" });
+    assert.equal(callbackRes.status, 302);
+    const verifier = new URLSearchParams(exchangeBody).get("code_verifier") ?? "";
+    assert.equal(codeChallengeS256(verifier), challenge);
+    assert.equal(await srv.built.connectorTokens.connectorAccessToken("api.x.com", principalId), "at-x");
   } finally {
     await srv.close();
   }

@@ -4,8 +4,6 @@ import {
   authorizeUrl,
   exchangeCode,
   makeRefresh,
-  openOAuthState,
-  sealOAuthState,
   createSecretClientResolver,
   scopesFor,
   generateCodeVerifier,
@@ -328,37 +326,6 @@ test("scopesFor: BYO client scopes override the provider default", async () => {
   assert.deepEqual(scopesFor(PROVIDERS.google!, await googleClient()), PROVIDERS.google!.scopes);
 });
 
-test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", async () => {
-  const state = await sealOAuthState(
-    {
-      provider: "google",
-      principalId: "U1",
-      redirectUri: "https://app/callback",
-      returnTo: "/settings",
-      accountType: "company",
-      clientRef: "env:google",
-      issuedAt: 1_000,
-      nonce: "n1",
-    },
-    { secret: "state-secret" },
-  );
-  assert.deepEqual(await openOAuthState(state, { secret: "state-secret", now: () => 2_000 }), {
-    provider: "google",
-    principalId: "U1",
-    redirectUri: "https://app/callback",
-    returnTo: "/settings",
-    accountType: "company",
-    clientRef: "env:google",
-    issuedAt: 1_000,
-    nonce: "n1",
-  });
-  await assert.rejects(() => openOAuthState(`${state}x`, { secret: "state-secret" }), /invalid OAuth state/);
-  await assert.rejects(
-    () => openOAuthState(state, { secret: "state-secret", now: () => 900_000, maxAgeMs: 10_000 }),
-    /expired OAuth state/,
-  );
-});
-
 test("codeChallengeS256 matches the RFC 7636 test vector", () => {
   const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
   assert.equal(codeChallengeS256(verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
@@ -406,15 +373,6 @@ test("exchangeCode sends code_verifier in the token body when provided, omits it
   assert.match(bodies[0]!, /(^|&)code_verifier=the-verifier(&|$)/, "verifier is in the exchange body");
   await exchangeCode("google", "code-2", "https://app/cb", { client, fetchImpl: capture, now: 1_000 });
   assert.doesNotMatch(bodies[1]!, /code_verifier/, "no verifier when none provided");
-});
-
-test("OAuth state round-trips the PKCE verifier", async () => {
-  const sealed = await sealOAuthState(
-    { provider: "x", principalId: "U1", redirectUri: "https://app/cb", codeVerifier: "ver-abc" },
-    { secret: "state-secret" },
-  );
-  const opened = await openOAuthState(sealed, { secret: "state-secret" });
-  assert.equal(opened.codeVerifier, "ver-abc");
 });
 
 const xClient = (): Promise<ResolvedClient> => resolve("x", {});

@@ -1,8 +1,7 @@
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
 import { createEnvSecretSource, type SecretSource } from "../credentials/secret-source.ts";
-import { randomUUID, randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
-import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
 import { swallow } from "../util/errors.ts";
 
 export type AccountType = "default" | "personal" | "company";
@@ -464,70 +463,6 @@ export function createSecretClientResolver(secrets: SecretSource = createEnvSecr
     const hostedDomain = await secrets.get("GOOGLE_WORKSPACE_DOMAIN");
     return { id, secret, clientRef: `env:${providerName}`, ...(hostedDomain ? { hostedDomain } : {}) };
   };
-}
-
-export interface OAuthState {
-  provider: string;
-  principalId: string;
-  redirectUri: string;
-  issuedAt: number;
-  nonce: string;
-  returnTo?: string;
-  orgId?: string;
-  accountType?: AccountType;
-  clientRef?: string;
-  codeVerifier?: string;
-  consentLinkId?: string;
-}
-
-const ACCOUNT_TYPES: readonly AccountType[] = ["default", "personal", "company"];
-
-function isOAuthState(v: unknown): v is OAuthState {
-  if (typeof v !== "object" || v === null) return false;
-  const s = v as OAuthState;
-  return (
-    typeof s.provider === "string" &&
-    typeof s.principalId === "string" &&
-    typeof s.redirectUri === "string" &&
-    typeof s.issuedAt === "number" &&
-    typeof s.nonce === "string" &&
-    (s.returnTo === undefined || typeof s.returnTo === "string") &&
-    (s.orgId === undefined || typeof s.orgId === "string") &&
-    (s.accountType === undefined || (typeof s.accountType === "string" && ACCOUNT_TYPES.includes(s.accountType))) &&
-    (s.clientRef === undefined || typeof s.clientRef === "string") &&
-    (s.codeVerifier === undefined || typeof s.codeVerifier === "string") &&
-    (s.consentLinkId === undefined || typeof s.consentLinkId === "string")
-  );
-}
-
-export function sealOAuthState(
-  state: Omit<OAuthState, "issuedAt" | "nonce"> & { issuedAt?: number; nonce?: string },
-  opts: { secret: string; now?: () => number } = { secret: "" },
-): Promise<string> {
-  if (!opts.secret) throw new Error("OAuth state secret required");
-  return mintSignedPayload(
-    {
-      ...state,
-      issuedAt: state.issuedAt ?? (opts.now ?? Date.now)(),
-      nonce: state.nonce ?? randomUUID(),
-    },
-    opts.secret,
-  );
-}
-
-export async function openOAuthState(
-  sealed: string,
-  opts: { secret: string; now?: () => number; maxAgeMs?: number },
-): Promise<OAuthState> {
-  if (!opts.secret) throw new Error("OAuth state secret required");
-  const parsed = await verifySignedPayload(sealed, opts.secret);
-  if (!isOAuthState(parsed)) throw new Error("invalid OAuth state");
-  const now = (opts.now ?? Date.now)();
-  const maxAgeMs = opts.maxAgeMs ?? 10 * 60_000;
-  if (parsed.issuedAt > now + 60_000 || now - parsed.issuedAt > maxAgeMs) {
-    throw new Error("expired OAuth state");
-  }
-  return parsed;
 }
 
 export function scopesFor(p: OAuthProviderConfig, client: ResolvedClient): string[] {

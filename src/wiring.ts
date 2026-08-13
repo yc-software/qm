@@ -156,6 +156,12 @@ import { createPostgresCredentialUsageSink } from "./admin/postgres-credential-u
 import { createEgressAuditSink, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { createConsentLinkStore, type ConsentLinkStore, type ConsentLinkRecord } from "./connectors/consent-link.ts";
+import {
+  createOAuthFlowStore,
+  OAUTH_FLOW_TTL_MS,
+  type OAuthFlowContext,
+  type OAuthFlowStore,
+} from "./connectors/oauth-flow.ts";
 import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts";
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { setProviderBaseUrls } from "./model/provider-endpoints.ts";
@@ -318,6 +324,7 @@ export interface BuiltApp {
   slackInstallation: SlackInstallationStore;
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
+  oauthFlows?: OAuthFlowStore;
   secretDrops: SecretDropStore;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
@@ -670,6 +677,9 @@ export function buildApp(
     : undefined;
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
+  const oauthFlows = pgArtifactMap
+    ? createOAuthFlowStore(pgArtifactMap.map<OAuthFlowContext>("oauth_flows"))
+    : undefined;
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
   const modelGateway = createModelGateway();
 
@@ -1352,6 +1362,9 @@ export function buildApp(
   const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
+  const oauthFlowSweeper = oauthFlows
+    ? createSweeper(() => oauthFlows.sweep(), OAUTH_FLOW_TTL_MS, { label: "oauth-flows", immediate: true })
+    : null;
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
     .ensureExpiry?.(BLOB_TRANSFER_EXPIRY_DAYS)
@@ -1387,6 +1400,7 @@ export function buildApp(
       monitorPoller?.start(config.monitorPollMs);
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
+      oauthFlowSweeper?.start();
       idleSweeper?.start();
       deepIdleSweeper?.start();
       reachDeniedNotifier?.start(config.insightsIntervalMs);
@@ -1406,6 +1420,7 @@ export function buildApp(
       deepIdleSweeper?.stop();
       reachDeniedNotifier?.stop();
       blobSweeper.stop();
+      oauthFlowSweeper?.stop();
       wakeSweep.stop();
       orphanedSignalSweeper.stop();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
@@ -1440,6 +1455,7 @@ export function buildApp(
     slackInstallation,
     resolveClient,
     consentLinks,
+    ...(oauthFlows ? { oauthFlows } : {}),
     secretDrops,
     modelGateway,
     modelCredentials,

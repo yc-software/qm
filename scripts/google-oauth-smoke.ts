@@ -10,6 +10,8 @@ import { buildApp } from "../src/wiring.ts";
 import { loadConfig } from "../src/config.ts";
 import { createServer } from "../src/api/server.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";
+import { createOAuthFlowStore, type OAuthFlowContext } from "../src/connectors/oauth-flow.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
 import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
@@ -192,6 +194,7 @@ const built = buildApp({
 const core = createServer(built.app, {
   signingSecret: secret,
   connectorTokens: built.connectorTokens,
+  oauthFlows: built.oauthFlows ?? createOAuthFlowStore(createMemoryMap<OAuthFlowContext>()),
   auditLog: built.auditLog,
   oauthEnv: process.env,
 });

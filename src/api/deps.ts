@@ -4,6 +4,7 @@ import type { CustomProviderStore } from "../model/custom-provider-store.ts";
 import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
 import type { ConsentLinkStore } from "../connectors/consent-link.ts";
+import type { OAuthFlowStore } from "../connectors/oauth-flow.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -68,6 +69,7 @@ export interface ServerDeps {
   oauthEnv?: NodeJS.ProcessEnv;
   resolveClient?: OAuthClientResolver;
   consentLinks?: ConsentLinkStore;
+  oauthFlows?: OAuthFlowStore;
   publicUrl?: string;
   portalUrl?: string;
   config?: ScopedConfigStore;

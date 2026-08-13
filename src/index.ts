@@ -40,6 +40,7 @@ const server = createServer(built.app, {
   slackEnvironmentState,
   resolveClient: built.resolveClient,
   consentLinks: built.consentLinks,
+  ...(built.oauthFlows ? { oauthFlows: built.oauthFlows } : {}),
   secretDrops: built.secretDrops,
   ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
   ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),

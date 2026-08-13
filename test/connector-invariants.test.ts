@@ -8,7 +8,9 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { PROVIDERS, sealOAuthState } from "../src/connectors/oauth.ts";
+import { PROVIDERS } from "../src/connectors/oauth.ts";
+import { createOAuthFlowStore, type OAuthFlowContext } from "../src/connectors/oauth-flow.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { envKey } from "../src/credentials/connector-token.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
@@ -67,13 +69,15 @@ test("C3 — a catalog host wrongly listed as a service host is detectable via t
 const SECRET = "invariant-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
-test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
+test("cross-org — the callback rejects flow context minted for a different org BEFORE exchange", async () => {
   let exchanged = false;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
+  const oauthFlows = createOAuthFlowStore(createMemoryMap<OAuthFlowContext>());
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
+    oauthFlows,
     oauthEnv,
     oauthFetch: async () => {
       exchanged = true;
@@ -83,15 +87,12 @@ test("cross-org — the callback rejects sealed state minted for a different org
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const state = await sealOAuthState(
-      {
-        provider: "google",
-        principalId: "U1",
-        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
-        orgId: "other",
-      },
-      { secret: SECRET },
-    );
+    const { state } = await oauthFlows.mint({
+      provider: "google",
+      principalId: "U1",
+      redirectUri: `${base}/v1/connectors/oauth/google/callback`,
+      orgId: "other",
+    });
     const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
     assert.equal(res.status, 400);
     assert.match(await res.text(), /different org/);
@@ -104,20 +105,23 @@ test("cross-org — the callback rejects sealed state minted for a different org
 
 test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
+  const oauthFlows = createOAuthFlowStore(createMemoryMap<OAuthFlowContext>());
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
+    oauthFlows,
     oauthEnv,
     oauthFetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const state = await sealOAuthState(
-      { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
-      { secret: SECRET },
-    );
+    const { state } = await oauthFlows.mint({
+      provider: "google",
+      principalId: "U1",
+      redirectUri: `${base}/v1/connectors/oauth/google/callback`,
+    });
     const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
     assert.equal(res.status, 400);
     assert.match(await res.text(), /empty access token/);
