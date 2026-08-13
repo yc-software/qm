@@ -1,6 +1,6 @@
 {
   "name": "@yc-software/qm",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "description": "Control-plane CLI for portable QM deployments on Docker, Fly, and AWS.",
   "type": "module",
@@ -25,7 +25,8 @@
     }
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "npm": ">=11.10.0"
   },
   "files": [
     "dist",

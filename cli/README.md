@@ -6,7 +6,8 @@ security guarantees, target behavior, and lifecycle are in
 the agent-consumable package runbook into the deployment repository.
 
 ```bash
-npm exec --yes --package=@yc-software/qm@latest -- \
+node -e 'const [major, minor] = process.argv[1].split(".").map(Number); if (!(major > 11 || (major === 11 && minor >= 10))) throw Error("npm 11.10.0 or newer is required")' "$(npm --version)" &&
+npm exec --yes --min-release-age=7 --package=@yc-software/qm@latest -- \
   qm init . --org acme --target aws
 npm install
 npm exec qm -- check

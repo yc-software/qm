@@ -203,7 +203,7 @@ function packageContent(dir: string, orgId: string): string {
     conformance: "qm conformance --static",
     ...objectField("scripts"),
   };
-  const engines = { ...objectField("engines"), node: ">=24.0.0" };
+  const engines = { ...objectField("engines"), node: ">=24.0.0", npm: ">=11.10.0" };
   const packageName = cliPackageName();
   const dependencies = objectField("dependencies");
   const installedPackage = typeof dependencies[packageName] === "string" ? dependencies[packageName] : cliVersion();

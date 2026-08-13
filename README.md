@@ -102,7 +102,8 @@ known limitations.
 Create an organization-owned deployment repository that depends on `@yc-software/qm`:
 
 ```bash
-npm exec --yes --package=@yc-software/qm@latest -- \
+node -e 'const [major, minor] = process.argv[1].split(".").map(Number); if (!(major > 11 || (major === 11 && minor >= 10))) throw Error("npm 11.10.0 or newer is required")' "$(npm --version)" &&
+npm exec --yes --min-release-age=7 --package=@yc-software/qm@latest -- \
   qm init . --org <slug> --target <fly-or-aws>
 npm install
 ```

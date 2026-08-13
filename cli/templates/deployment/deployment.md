@@ -55,13 +55,14 @@ contracts are scaffolded as one unit.
 
 ## 2. Prepare the deployment repository
 
-Require Node 24+, npm, Git, Docker with Buildx, and `openssl`.
+Require Node 24+, npm 11.10+, Git, Docker with Buildx, and `openssl`.
 
 For a repository without `qm.config.jsonc`, first confirm the hosting target
 and the derived slug, then initialize its root with the current CLI:
 
 ```bash
-npm exec --yes --package=@yc-software/qm@latest -- \
+node -e 'const [major, minor] = process.argv[1].split(".").map(Number); if (!(major > 11 || (major === 11 && minor >= 10))) throw Error("npm 11.10.0 or newer is required")' "$(npm --version)" &&
+npm exec --yes --min-release-age=7 --package=@yc-software/qm@latest -- \
   qm init . --org <slug> --target <fly-or-aws> --model-provider <provider>
 npm install
 ```

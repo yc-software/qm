@@ -455,6 +455,7 @@ test("init preflights package.json and completes an install-first package manife
     };
     assert.equal(manifest.private, true);
     assert.equal(manifest.engines?.node, ">=24.0.0");
+    assert.equal(manifest.engines?.npm, ">=11.10.0");
     assert.equal(manifest.scripts?.deploy, "qm up");
     assert.equal(manifest.dependencies?.["@yc-software/qm"], cliVersion());
     assert.equal(manifest.dependencies?.["qm-cli"], undefined);
