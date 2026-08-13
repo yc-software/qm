@@ -2,6 +2,8 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
+import { CRON_FIRE_LOG_LIMIT } from "../src/cron/cron-fire-log-store.ts";
+import { createPostgresCronFireLogStore } from "../src/cron/postgres-cron-fire-log-store.ts";
 import { scopeId, type Cron } from "../src/types.ts";
 import {
   createKeychain,
@@ -20,7 +22,7 @@ before(async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query(
-    "DROP TABLE IF EXISTS map_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_widgets, map_cron_fire_log, map_cron_fire_log_state, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, instance_heartbeats, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -81,6 +83,165 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
   const got = await reader.get(c.id);
   assert.equal(got?.action, "digest");
   assert.equal(got?.lastFiredAt, 123);
+});
+
+test("pg cron fire log migrates legacy rows and bounds retained growth", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const backing = factory.map<Cron>("map_crons");
+  const legacy = createCronStore(backing);
+  const cron = await legacy.create({
+    schedule: { everyMs: 60_000 },
+    action: "legacy-fire-log",
+    ownerScopeId: scopeId("personal", "legacy-owner"),
+    owner: "legacy-owner",
+    createdBy: "legacy-owner",
+  });
+  await backing.merge(cron.id, {
+    fireLog: Array.from({ length: CRON_FIRE_LOG_LIMIT + 25 }, (_, firedAt) => ({
+      fireKey: `legacy-${firedAt}`,
+      threadRef: `cron:${cron.id}:fire:${firedAt}`,
+      firedAt,
+      status: "ok" as const,
+    })),
+  });
+  const fires = createPostgresCronFireLogStore(factory.pool, {
+    crons: "map_crons",
+    fires: "map_cron_fire_log",
+  });
+  const store = createCronStore(backing, fires);
+
+  const migrated = await store.get(cron.id);
+  assert.equal(migrated?.fireLog?.length, CRON_FIRE_LOG_LIMIT);
+  assert.equal(migrated?.fireLog?.[0]?.fireKey, "legacy-25");
+  assert.equal((await backing.get(cron.id))?.fireLog?.length, CRON_FIRE_LOG_LIMIT);
+  const rows = await factory.pool.q("SELECT COUNT(*)::int AS total FROM map_cron_fire_log WHERE cron_id = $1", [
+    cron.id,
+  ]);
+  assert.equal(Number(rows[0]?.total), CRON_FIRE_LOG_LIMIT);
+
+  await factory.pool.query(
+    `CREATE TABLE instance_heartbeats(
+       instance_id TEXT PRIMARY KEY,
+       build_sha TEXT NOT NULL,
+       started_at BIGINT NOT NULL,
+       beat_at TIMESTAMPTZ NOT NULL
+     )`,
+  );
+  await factory.pool.query(
+    "INSERT INTO instance_heartbeats(instance_id, build_sha, started_at, beat_at) VALUES ('old', 'old-build', 1, now())",
+  );
+  const mixed = createCronStore(
+    backing,
+    createPostgresCronFireLogStore(factory.pool, {
+      crons: "map_crons",
+      fires: "map_cron_fire_log",
+      buildSha: "new-build",
+    }),
+  );
+  await mixed.recordFire(cron.id, {
+    fireKey: "mixed-version",
+    threadRef: `cron:${cron.id}:fire:mixed-version`,
+    firedAt: CRON_FIRE_LOG_LIMIT + 25,
+    status: "ok",
+    reply: "new reply",
+  });
+  const oldReader = createCronStore(backing);
+  assert.equal((await oldReader.get(cron.id))?.fireLog?.at(-1)?.fireKey, "mixed-version");
+  await oldReader.recordFire(cron.id, {
+    fireKey: "mixed-version",
+    threadRef: `cron:${cron.id}:fire:mixed-version`,
+    firedAt: CRON_FIRE_LOG_LIMIT + 25,
+    note: "old note",
+  });
+  const afterOldWriter = await mixed.get(cron.id);
+  const mixedEntry = afterOldWriter?.fireLog?.at(-1);
+  assert.equal(mixedEntry?.status, "ok");
+  assert.equal(mixedEntry?.reply, "new reply");
+  assert.equal(mixedEntry?.note, "old note");
+  assert.equal((await backing.get(cron.id))?.fireLog?.length, CRON_FIRE_LOG_LIMIT);
+
+  await factory.pool.query("DELETE FROM instance_heartbeats");
+  await factory.pool.query("UPDATE map_cron_fire_log_state SET dual_write_until = now() - interval '1 second'");
+  const inlineAtCutover = (await backing.get(cron.id))!.fireLog;
+  await mixed.recordFire(cron.id, {
+    fireKey: "after-cutover",
+    threadRef: `cron:${cron.id}:fire:after-cutover`,
+    firedAt: CRON_FIRE_LOG_LIMIT + 26,
+    status: "ok",
+  });
+  assert.deepEqual((await backing.get(cron.id))?.fireLog, inlineAtCutover);
+  assert.equal((await mixed.get(cron.id))?.fireLog?.at(-1)?.fireKey, "after-cutover");
+
+  const retry = createCronStore(
+    backing,
+    createPostgresCronFireLogStore(factory.pool, {
+      crons: "map_crons",
+      fires: "map_cron_fire_log",
+      buildSha: "retry-build",
+    }),
+  );
+  await retry.recordFire(cron.id, {
+    fireKey: "retry-rollout",
+    threadRef: `cron:${cron.id}:fire:retry-rollout`,
+    firedAt: CRON_FIRE_LOG_LIMIT + 27,
+    status: "ok",
+  });
+  assert.equal((await backing.get(cron.id))?.fireLog?.at(-1)?.fireKey, "retry-rollout");
+  const rollout = await factory.pool.q(
+    "SELECT build_sha, dual_write_until > now() AS active FROM map_cron_fire_log_state",
+  );
+  assert.deepEqual(rollout[0], { build_sha: "retry-build", active: true });
+});
+
+test("pg cron fire log serializes concurrent instances, caps rows, and upserts fire keys", { skip }, async () => {
+  const first = createPostgresMapFactory(URL!);
+  const second = createPostgresMapFactory(URL!);
+  const tables = { crons: "map_crons", fires: "map_cron_fire_log" };
+  const owner = createCronStore(first.map<Cron>(tables.crons), createPostgresCronFireLogStore(first.pool, tables));
+  const peer = createCronStore(second.map<Cron>(tables.crons), createPostgresCronFireLogStore(second.pool, tables));
+  const cron = await owner.create({
+    schedule: { everyMs: 60_000 },
+    action: "concurrent-fire-log",
+    ownerScopeId: scopeId("personal", "concurrent-owner"),
+    owner: "concurrent-owner",
+    createdBy: "concurrent-owner",
+  });
+  await Promise.all(
+    Array.from({ length: CRON_FIRE_LOG_LIMIT + 25 }, (_, firedAt) =>
+      (firedAt % 2 ? owner : peer).recordFire(cron.id, {
+        fireKey: `concurrent-${firedAt}`,
+        threadRef: `cron:${cron.id}:fire:${firedAt}`,
+        firedAt,
+      }),
+    ),
+  );
+  await Promise.all([
+    owner.recordFire(cron.id, {
+      fireKey: "concurrent-124",
+      threadRef: `cron:${cron.id}:fire:124:a`,
+      firedAt: 124,
+      status: "ok",
+    }),
+    peer.recordFire(cron.id, {
+      fireKey: "concurrent-124",
+      threadRef: `cron:${cron.id}:fire:124:b`,
+      firedAt: 124,
+      reply: "done",
+    }),
+  ]);
+
+  const retained = (await owner.get(cron.id))?.fireLog ?? [];
+  assert.equal(retained.length, CRON_FIRE_LOG_LIMIT);
+  assert.equal(retained[0]?.fireKey, "concurrent-25");
+  const latest = retained.at(-1);
+  assert.equal(latest?.fireKey, "concurrent-124");
+  assert.equal(latest?.status, "ok");
+  assert.equal(latest?.reply, "done");
+  const rows = await first.pool.q(
+    "SELECT COUNT(*)::int AS total, COUNT(DISTINCT fire_key)::int AS unique_keys FROM map_cron_fire_log WHERE cron_id = $1",
+    [cron.id],
+  );
+  assert.deepEqual([Number(rows[0]?.total), Number(rows[0]?.unique_keys)], [CRON_FIRE_LOG_LIMIT, CRON_FIRE_LOG_LIMIT]);
 });
 
 test(

@@ -9,6 +9,7 @@ import {
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
+import { mergeCronFireLogs, type CronFireLogStore } from "./cron-fire-log-store.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
@@ -55,7 +56,51 @@ function normalizeTitle(title: string | undefined): string | undefined {
   return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
 }
 
-export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron>()): CronStore {
+function createBackedCronFireLogStore(backing: DurableMap<Cron>): CronFireLogStore {
+  return {
+    async list() {
+      return new Map();
+    },
+    async record(cronId, entry) {
+      const append = (cron: Cron): Cron => ({
+        ...cron,
+        fireLog: mergeCronFireLogs(cron.fireLog ?? [], [entry]),
+      });
+      if (backing.update) {
+        await backing.update(cronId, append);
+        return;
+      }
+      const cron = await backing.get(cronId);
+      if (cron) await backing.merge(cronId, { fireLog: append(cron).fireLog });
+    },
+    async delete() {},
+  };
+}
+
+export function createCronStore(
+  backing: DurableMap<Cron> = createMemoryMap<Cron>(),
+  externalFireLogs?: CronFireLogStore,
+): CronStore {
+  const fireLogs = externalFireLogs ?? createBackedCronFireLogStore(backing);
+  async function attach(crons: Cron[]): Promise<Cron[]> {
+    const stored = await fireLogs.list(crons.map((cron) => cron.id));
+    return crons.map((cron) => {
+      const {
+        fireLog: legacy = [],
+        _cronFireLogHash: _migrationHash,
+        ...rest
+      } = cron as Cron & {
+        _cronFireLogHash?: string;
+      };
+      const fireLog = mergeCronFireLogs(legacy, stored.get(cron.id) ?? []);
+      return { ...rest, ...(fireLog.length ? { fireLog } : {}) };
+    });
+  }
+
+  async function attachOne(cron: Cron | null): Promise<Cron | null> {
+    return cron ? (await attach([cron]))[0]! : null;
+  }
+
   return {
     async create(input) {
       assertNoEscalation(input);
@@ -73,7 +118,7 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
         contentPart(input.members),
         contentPart(title),
       ]);
-      return createDeduped(backing, contentId, (id) => ({
+      const cron = await createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
         schedule,
         ...(nextFireAt !== undefined ? { nextFireAt } : {}),
@@ -83,9 +128,10 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
         ...(input.runAs ? { runAs: input.runAs } : {}),
         ...(input.members ? { members: input.members } : {}),
       }));
+      return (await attachOne(cron))!;
     },
-    get: (id) => backing.get(id),
-    list: () => backing.all(),
+    get: async (id) => attachOne(await backing.get(id)),
+    list: async () => attach(await backing.all()),
     async update(id, patch) {
       const fields: Partial<Cron> = {};
       if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
@@ -102,9 +148,12 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
       if (patch.archived === true) fields.enabled = false;
       if (patch.members !== undefined) fields.members = patch.members;
       if (patch.runAs !== undefined) fields.runAs = patch.runAs;
-      return backing.merge(id, fields);
+      return attachOne(await backing.merge(id, fields));
     },
-    delete: (id) => backing.delete(id),
+    async delete(id) {
+      await fireLogs.delete(id);
+      await backing.delete(id);
+    },
     async setEnabled(id, enabled) {
       await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
     },
@@ -115,18 +164,8 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
       return setTriggerRecipientConsent(backing, id, recipientConsent);
     },
     async recordFire(id, entry) {
-      const addEntry = (cron: Cron): Cron => {
-        const byKey = new Map((cron.fireLog ?? []).map((e) => [e.fireKey, e]));
-        byKey.set(entry.fireKey, { ...byKey.get(entry.fireKey), ...entry });
-        return { ...cron, fireLog: [...byKey.values()].sort((a, b) => a.firedAt - b.firedAt) };
-      };
-      if (backing.update) {
-        await backing.update(id, addEntry);
-        return;
-      }
-      const cron = await backing.get(id);
-      if (!cron) return;
-      await backing.merge(id, { fireLog: addEntry(cron).fireLog });
+      if (!(await backing.get(id))) return;
+      await fireLogs.record(id, entry);
     },
     async markFired(id, at, scheduledAt) {
       const cron = await backing.get(id);
@@ -186,7 +225,7 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
         const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
         if (scheduledAt !== undefined && now >= scheduledAt) due.push({ ...c, nextFireAt: scheduledAt, scheduledAt });
       }
-      return due;
+      return (await attach(due)) as Array<Cron & { scheduledAt: number }>;
     },
   };
 }

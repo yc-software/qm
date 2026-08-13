@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
+import { CRON_FIRE_LOG_LIMIT } from "../src/cron/cron-fire-log-store.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type Cron } from "../src/types.ts";
 
@@ -231,6 +232,42 @@ test("recordFire appends compact durable fire log entries and replaces duplicate
   );
   assert.equal(after?.fireLog?.[1]?.threadRef, "cron:c:fire:2b");
   assert.equal(after?.fireLog?.[1]?.reply, "second updated");
+});
+
+test("recordFire retains only the newest bounded entries", async () => {
+  const backing = createMemoryMap<Cron>();
+  const store = createCronStore(backing);
+  const cron = await store.create({ ...base, schedule: { everyMs: 1000 } });
+  await Promise.all(
+    Array.from({ length: CRON_FIRE_LOG_LIMIT + 25 }, (_, firedAt) =>
+      store.recordFire(cron.id, {
+        fireKey: `f${firedAt}`,
+        threadRef: `cron:c:fire:${firedAt}`,
+        firedAt,
+        status: "ok",
+      }),
+    ),
+  );
+
+  const after = await store.get(cron.id);
+  assert.equal(after?.fireLog?.length, CRON_FIRE_LOG_LIMIT);
+  assert.equal(after?.fireLog?.[0]?.fireKey, "f25");
+  assert.equal(after?.fireLog?.at(-1)?.fireKey, `f${CRON_FIRE_LOG_LIMIT + 24}`);
+  assert.equal((await backing.get(cron.id))?.fireLog?.length, CRON_FIRE_LOG_LIMIT);
+});
+
+test("recordFire remains visible across stores that share a backing map", async () => {
+  const backing = createMemoryMap<Cron>();
+  const writer = createCronStore(backing);
+  const reader = createCronStore(backing);
+  const cron = await writer.create({ ...base, schedule: { everyMs: 1000 } });
+  await writer.recordFire(cron.id, {
+    fireKey: "shared-fire",
+    threadRef: "cron:c:fire:shared",
+    firedAt: 1,
+    status: "ok",
+  });
+  assert.equal((await reader.get(cron.id))?.fireLog?.[0]?.fireKey, "shared-fire");
 });
 
 test("create stores runAs + member snapshot for a scopeFloor cron", async () => {

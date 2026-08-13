@@ -51,6 +51,17 @@ test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
+test("build identity prefers the source revision and falls back to the Fly image", () => {
+  assert.equal(
+    loadConfig({ FLY_IMAGE_REF: "registry.fly.io/qm@sha256:image" }).buildSha,
+    "registry.fly.io/qm@sha256:image",
+  );
+  assert.equal(
+    loadConfig({ GIT_SHA: "source-revision", FLY_IMAGE_REF: "registry.fly.io/qm@sha256:image" }).buildSha,
+    "source-revision",
+  );
+});
+
 test("harness security posture defaults to auto and validates named modes", () => {
   assert.equal(loadConfig({}).securityPosture, "auto");
   assert.equal(loadConfig({}).securityScreenBackend, "model");

@@ -54,6 +54,7 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import { createBudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, type CronStore } from "./cron/cron-store.ts";
+import { createPostgresCronFireLogStore } from "./cron/postgres-cron-fire-log-store.ts";
 import { createDeliveryStore, type DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
@@ -894,7 +895,10 @@ export function buildApp(
     : createMemoryEnvironmentStore();
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
   const cronChanged: { notify?: (id: string) => void } = {};
-  const cronsBase = createCronStore(artifactMap<Cron>("crons"));
+  const cronsBase = createCronStore(
+    artifactMap<Cron>("crons"),
+    pgArtifactMap ? createPostgresCronFireLogStore(pgArtifactMap.pool, { buildSha: config.buildSha }) : undefined,
+  );
   const crons: CronStore = {
     ...cronsBase,
     async create(input) {
