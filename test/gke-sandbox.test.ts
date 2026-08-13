@@ -21,7 +21,7 @@ test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", 
     ) {
       createdVersion = version;
       created = body as Record<string, unknown>;
-      return { body: { status: { sandbox: { name: "sandbox-abc" } } } };
+      return { body: { status: { sandbox: { Name: "sandbox-abc" } } } };
     },
     async getNamespacedCustomObject() {
       if (!created) {
@@ -29,7 +29,7 @@ test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", 
         error.statusCode = 404;
         throw error;
       }
-      return { body: { status: { sandbox: { name: "sandbox-abc" } } } };
+      return { body: { status: { sandbox: { Name: "sandbox-abc" } } } };
     },
     async deleteNamespacedCustomObject(
       _group: string,

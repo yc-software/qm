@@ -29,7 +29,7 @@ const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 
 interface ClaimStatus {
-  sandbox?: { name?: string };
+  sandbox?: { Name?: string; name?: string };
   conditions?: Array<{ status?: string; type?: string; message?: string }>;
 }
 
@@ -161,7 +161,7 @@ export function createGkeSandbox(workspace: WorkspaceStore, opts: GkeSandboxOpti
         const deadline = Date.now() + (opts.claimTimeoutMs ?? 180_000);
         let last = claimStatus(value);
         while (Date.now() < deadline) {
-          const sandbox = last.sandbox?.name;
+          const sandbox = last.sandbox?.name ?? last.sandbox?.Name;
           if (sandbox) {
             claimBySandbox.set(sandbox, claim);
             await waitDaemon(sandbox);
