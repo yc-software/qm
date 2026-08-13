@@ -295,6 +295,10 @@ a.chat-row-open {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* Match the list's reserved scrollbar gutter so the Web-only toggle shares a
+     right edge with the session rows below. */
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 .web-only-toggle {
   display: inline-flex;
@@ -345,6 +349,7 @@ a.chat-row-open {
 .sidebar .list {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   gap: 1px;
