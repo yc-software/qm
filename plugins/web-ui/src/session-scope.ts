@@ -157,9 +157,9 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
           : html`<div class="session-heading" title=${headingTitle}>${heading}</div>`
       }
       <div class="topbar-actions session-tools">
-        ${tool("crons", Clock3, "Crons")} ${tool("files", Files, "Files")}
-        ${tool("apps", Rocket, "Apps")} ${tool("skills", Box, "Skills")}
-        ${tool("memory", Brain, "Memory")} ${tool("keychain", KeyRound, "Your keychain")}
+        ${tool("crons", Clock3, "Crons")} ${tool("files", Files, "Files")} ${tool("apps", Rocket, "Apps")}
+        ${tool("skills", Box, "Skills")} ${tool("memory", Brain, "Memory")}
+        ${tool("keychain", KeyRound, "Your keychain")}
       </div>
     </header>
   `;
