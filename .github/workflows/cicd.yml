@@ -138,13 +138,19 @@ jobs:
         run: |
           set -euo pipefail
           base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
-          offenders=$(git log --format=%H --regexp-ignore-case \
-            --grep='^co-authored-by:.*@users\.noreply\.github\.com' "$base..$HEAD_SHA")
+          offenders=""
+          for sha in $(git rev-list "$base..$HEAD_SHA"); do
+            if git log -1 --format='%(trailers:key=Co-authored-by,valueonly)' "$sha" \
+              | grep -qi '@users\.noreply\.github\.com'; then
+              offenders="$offenders $sha"
+            fi
+          done
           [ -n "$offenders" ] || exit 0
           echo "$offenders" | xargs git show -s --format='%h %s' >&2
           echo "Co-Authored-By trailers must not use @users.noreply.github.com addresses:" >&2
           echo "GitHub credits them to whichever account owns that username, which may be a stranger." >&2
-          echo "Use the contributor's real email, or drop the trailer." >&2
+          echo "This repo bans all such addresses, including your own privacy address;" >&2
+          echo "use the contributor's real email, or drop the trailer." >&2
           exit 1
 
   lint:
