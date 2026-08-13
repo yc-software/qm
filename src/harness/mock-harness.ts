@@ -32,6 +32,7 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!postthread ",
   "!broadcast ",
   "!post ",
+  "!postfiles ",
   "!react ",
   "!edit ",
   "!delete ",
@@ -496,6 +497,20 @@ export function createMockHarness(): Harness {
           });
           usedTool = true;
           reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
+        } else if (command0.startsWith("!postfiles ")) {
+          // !postfiles <path>[,<path>...] <message>
+          const rest = cmd.slice(cmd.indexOf("!postfiles ") + "!postfiles ".length);
+          const sp = rest.indexOf(" ");
+          const paths = (sp === -1 ? rest : rest.slice(0, sp)).split(",").filter(Boolean);
+          const msg = sp === -1 ? "" : rest.slice(sp + 1);
+          const r = await turn.tools.post(msg, undefined, paths);
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            scopeLabel: turn.scopeLabel,
+          });
+          usedTool = true;
+          reply = r.ok ? "(posted files)" : `[not sent] ${r.message ?? "failed"}`;
         } else if (command0.startsWith("!react ")) {
           const [, ts, emoji] = command0.split(/\s+/);
           const r = await turn.tools.react({ ts: ts ?? "", emoji: emoji ?? "" });
