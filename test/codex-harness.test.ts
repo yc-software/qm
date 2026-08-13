@@ -58,6 +58,12 @@ rl.on("line", (line) => {
     if (msg.params.sandbox !== "read-only" || msg.params.approvalPolicy !== "never" || !Array.isArray(msg.params.dynamicTools) ||
         !Array.isArray(msg.params.environments) || msg.params.environments.length !== 0 ||
         msg.params.config?.features?.shell_tool !== false || msg.params.config?.features?.unified_exec !== false ||
+        (process.env.OPENAI_BASE_URL &&
+          (msg.params.config?.model_provider !== "openai_compatible" ||
+           msg.params.config?.model_providers?.openai_compatible?.base_url !== process.env.OPENAI_BASE_URL ||
+           msg.params.config?.model_providers?.openai_compatible?.env_key !== "OPENAI_API_KEY" ||
+           msg.params.config?.model_providers?.openai_compatible?.wire_api !== "responses" ||
+           msg.params.config?.model_providers?.openai_compatible?.supports_websockets !== false)) ||
         process.env.CORE_SIGNING_SECRET || process.env.DATABASE_URL || process.env.HOME !== msg.params.cwd ||
         !process.env.CODEX_HOME?.startsWith(msg.params.cwd)) {
       return send({ id: msg.id, error: { code: -1, message: "unsafe or missing adapter settings" } });
@@ -176,7 +182,11 @@ test("Codex forwards external-content screening into its native tool bridge", ()
 test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-test-"));
   const tasks = createMemoryTaskStore();
-  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: process.env, tasks });
+  const harness = createCodexHarness({
+    binaryPath: fakeCodexBinary(dir),
+    env: { ...process.env, OPENAI_BASE_URL: "https://proxy.example.com/v1" },
+    tasks,
+  });
   t.after(async () => {
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });

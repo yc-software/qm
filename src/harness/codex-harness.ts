@@ -612,6 +612,20 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       environments: [],
       config: {
         web_search: "disabled",
+        ...(opts.env?.OPENAI_BASE_URL
+          ? {
+              model_provider: "openai_compatible",
+              model_providers: {
+                openai_compatible: {
+                  name: "OpenAI compatible",
+                  base_url: opts.env.OPENAI_BASE_URL,
+                  env_key: "OPENAI_API_KEY",
+                  wire_api: "responses",
+                  supports_websockets: false,
+                },
+              },
+            }
+          : {}),
         ...(codexReasoningEffort(turn.thinkingLevel)
           ? { model_reasoning_effort: codexReasoningEffort(turn.thinkingLevel) }
           : {}),
