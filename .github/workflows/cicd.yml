@@ -122,6 +122,31 @@ jobs:
             *) echo "cli/package.json version must be semver, got $head_version" >&2; exit 1 ;;
           esac
 
+  coauthor-trailers:
+    name: Co-author trailers
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reject GitHub noreply addresses in Co-Authored-By trailers
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          offenders=$(git log --format=%H --regexp-ignore-case \
+            --grep='^co-authored-by:.*@users\.noreply\.github\.com' "$base..$HEAD_SHA")
+          [ -n "$offenders" ] || exit 0
+          echo "$offenders" | xargs git show -s --format='%h %s' >&2
+          echo "Co-Authored-By trailers must not use @users.noreply.github.com addresses:" >&2
+          echo "GitHub credits them to whichever account owns that username, which may be a stranger." >&2
+          echo "Use the contributor's real email, or drop the trailer." >&2
+          exit 1
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
