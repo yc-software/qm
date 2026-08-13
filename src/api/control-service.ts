@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Cron, CronFireLogEntry, CronSchedule, Destination, Principal } from "../types.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -85,6 +86,9 @@ export interface CronRunsResult {
   total: number;
 }
 
+export const CRON_PATCH_NOTHING_TO_CHANGE =
+  "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, runAs, or unattendedGrants";
+
 export type ControlOk<T> = { ok: true } & T;
 export type ControlErr<C extends string> = { ok: false; code: C; message: string };
 
@@ -155,6 +159,26 @@ function scopeIsMembershipControlled(scope: string, cap: { scopeId: string; priv
   return cap.privateScope === true && cap.scopeId === scope;
 }
 
+function hasCronPatchField(req: CronPatchRequest): boolean {
+  return (
+    req.title !== undefined ||
+    req.action !== undefined ||
+    req.text !== undefined ||
+    req.schedule !== undefined ||
+    req.enabled !== undefined ||
+    req.archived !== undefined ||
+    req.unfurlLinks !== undefined ||
+    req.runAs !== undefined ||
+    req.unattendedGrants !== undefined
+  );
+}
+
+function cronPatchChanges(before: Cron, patch: CronPatch): boolean {
+  return (Object.entries(patch) as Array<[keyof CronPatch, unknown]>).some(
+    ([key, value]) => !isDeepStrictEqual(before[key as keyof Cron], value),
+  );
+}
+
 export async function resolveRunAsChange(
   app: Pick<App, "samePerson">,
   before: Cron,
@@ -201,27 +225,16 @@ async function patchFromCronPatchRequest(
   req: CronPatchRequest,
   capability: CapabilityClaims,
 ): Promise<CronPatch | ControlErr<"bad_request" | "forbidden">> {
-  const mode = await resolveRunAsChange(app, before, req.runAs, capability);
-  if (!mode.ok) return mode;
-  const changesMode = mode.patch.runAs !== undefined;
-  if (
-    req.title === undefined &&
-    req.action === undefined &&
-    req.text === undefined &&
-    req.schedule === undefined &&
-    req.enabled === undefined &&
-    req.archived === undefined &&
-    req.unfurlLinks === undefined &&
-    req.unattendedGrants === undefined &&
-    !changesMode
-  ) {
+  if (!hasCronPatchField(req)) {
     return {
       ok: false,
       code: "bad_request",
-      message:
-        "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, runAs, or unattendedGrants",
+      message: CRON_PATCH_NOTHING_TO_CHANGE,
     };
   }
+  const mode = await resolveRunAsChange(app, before, req.runAs, capability);
+  if (!mode.ok) return mode;
+  const changesMode = mode.patch.runAs !== undefined;
   if (req.unfurlLinks !== undefined && !before.destination) {
     return {
       ok: false,
@@ -531,6 +544,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const invalid = validateUnattendedGrants(req.unattendedGrants);
         if (invalid) return { ok: false, code: "bad_request", message: invalid };
       }
+      const patch = await patchFromCronPatchRequest(app, before, req, capability);
+      if ("ok" in patch) return patch;
+      if (req.unattendedGrants !== undefined) patch.unattendedGrants = req.unattendedGrants;
+      else if ((before.unattendedGrants?.length ?? 0) > 0) patch.unattendedGrants = before.unattendedGrants;
+      if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       if ((before.unattendedGrants?.length ?? 0) > 0 || req.unattendedGrants !== undefined) {
         const refusal = await unattendedGrantRefusal(
           app,
@@ -547,10 +565,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           return { ok: false, code, message: refusal };
         }
       }
-      const patch = await patchFromCronPatchRequest(app, before, req, capability);
-      if ("ok" in patch) return patch;
-      if (req.unattendedGrants !== undefined) patch.unattendedGrants = req.unattendedGrants;
-      else if ((before.unattendedGrants?.length ?? 0) > 0) patch.unattendedGrants = before.unattendedGrants;
       try {
         const cron = await app.updateCron(id, patch);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
