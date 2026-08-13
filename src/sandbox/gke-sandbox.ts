@@ -136,7 +136,7 @@ export function createGkeSandbox(workspace: WorkspaceStore, opts: GkeSandboxOpti
               namespace,
               labels: {
                 "app.kubernetes.io/managed-by": "qm",
-                "simplelend.io/scope-hash": shortHash(scope),
+                "qm.dev/scope-hash": shortHash(scope),
               },
             },
             spec: {

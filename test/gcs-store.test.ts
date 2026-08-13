@@ -69,11 +69,11 @@ class MemoryBucket {
 test("GCS durable byte store preserves content-addressed files", async () => {
   const bucket = new MemoryBucket();
   const store = createGcsDurableByteStore({ bucket: "test", _bucket: bucket as never });
-  const saved = await store.put(Buffer.from("simplelend"));
-  assert.equal(saved.sha256, createHash("sha256").update("simplelend").digest("hex"));
+  const saved = await store.put(Buffer.from("runtime-object"));
+  assert.equal(saved.sha256, createHash("sha256").update("runtime-object").digest("hex"));
   const opened = await store.open(saved.blobKey);
   assert.ok(opened);
-  assert.equal((await collectBlob(opened.stream)).toString(), "simplelend");
+  assert.equal((await collectBlob(opened.stream)).toString(), "runtime-object");
   await store.delete(saved.blobKey);
   assert.equal(await store.open(saved.blobKey), null);
 });
