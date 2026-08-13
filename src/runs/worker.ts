@@ -68,7 +68,9 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
       ...(queueMs !== undefined ? { queueMs } : {}),
     });
     stopBeat();
-    await deps.runs.complete(run.id, token, result);
+    if (!(await deps.runs.complete(run.id, token, result))) {
+      throw new Error(`run ${run.id} lost its lease before completion`);
+    }
     return result;
   } catch (err) {
     stopBeat();

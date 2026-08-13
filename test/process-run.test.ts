@@ -85,6 +85,31 @@ test("processRun threads runId + background into the turn and completes the run 
   assert.equal(seen[1]?.background, true, "the worker-loop flag reaches the orchestrator");
 });
 
+test("processRun rejects when a reaped attempt finishes after a retry claims the run", async () => {
+  const { runs } = createMemoryRunStore();
+  let finish = (_: TurnResult) => {};
+  const turnResult = new Promise<TurnResult>((resolve) => {
+    finish = resolve;
+  });
+  const orchestrator = fakeOrchestrator(() => turnResult);
+
+  await runs.enqueue({ sessionId: "s1", request: turn });
+  const first = await runs.claim("w1", -1);
+  const pending = processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, first!);
+
+  assert.deepEqual(await runs.reapExpired(), { requeued: 1, parked: 0 });
+  const second = await runs.claim("w2", 5_000);
+  assert.equal(second?.attempts, 2);
+
+  finish({ status: "ok", reply: "stale" });
+  await assert.rejects(pending, /lost.*lease/i);
+
+  const current = await runs.get(first!.id);
+  assert.equal(current?.status, "running");
+  assert.equal(current?.leaseToken, second?.leaseToken);
+  assert.equal(current?.result, null);
+});
+
 test("processRun upgrades legacy queued provenance before orchestration", async () => {
   const { runs } = createMemoryRunStore();
   const legacy = { ...turn, origin: undefined, liveActor: true, triggerTs: "1" } as unknown as OrchestratorInput;
