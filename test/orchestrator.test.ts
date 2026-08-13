@@ -1308,9 +1308,21 @@ test("a file posted in a GROUP conversation is granted read to the conversation 
     channelRef: "G9",
     audience: [internalActor, { externalId: "U2" }],
   };
-  await app.turn(dm('!run printf FLAG > flag.png', { surface: "slack", conversation: grp, deliveryTarget: "slack:G9:files", surfaceTools: true }));
+  await app.turn(
+    dm("!run printf FLAG > flag.png", {
+      surface: "slack",
+      conversation: grp,
+      deliveryTarget: "slack:G9:files",
+      surfaceTools: true,
+    }),
+  );
   const t = await app.turn(
-    dm("!postfiles flag.png here you go", { surface: "slack", conversation: grp, deliveryTarget: "slack:G9:files", surfaceTools: true }),
+    dm("!postfiles flag.png here you go", {
+      surface: "slack",
+      conversation: grp,
+      deliveryTarget: "slack:G9:files",
+      surfaceTools: true,
+    }),
   );
   assert.notEqual(t.status, "error");
   const handles = await acl.handlesFor([scopeId("group", "G9")]);
