@@ -85,6 +85,7 @@ export interface CustomRuntimeModel {
   id: string;
   name: string;
   provider: string;
+  protocol?: CustomProviderProtocol;
   api: "openai-completions" | "anthropic-messages";
   baseUrl: string;
   reasoning: boolean;
@@ -102,6 +103,7 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
     id: m.id,
     name: m.name?.trim() || m.id,
     provider: provider.id,
+    protocol: provider.protocol,
     api: provider.protocol === "anthropic" ? "anthropic-messages" : "openai-completions",
     baseUrl: provider.baseUrl,
     reasoning: false,

@@ -1,3 +1,4 @@
+import { customModelCatalog } from "../model/custom-providers.ts";
 import {
   DEFAULT_WEBUI_MODEL_IDS,
   THINKING_LEVELS,
@@ -49,7 +50,8 @@ export function validateWebTurnModelOptions(
   enabledModels: readonly string[] | null,
   providers: ModelProviderAvailability = ALL_PROVIDERS_AVAILABLE,
 ): string | null {
-  const enabled = enabledModels?.length ? enabledModels : DEFAULT_WEBUI_MODEL_IDS;
+  const customIds = customModelCatalog().map((m) => m.id);
+  const enabled = enabledModels?.length ? enabledModels : [...DEFAULT_WEBUI_MODEL_IDS, ...customIds];
   const allowedModels = serviceableModelIds(enabled, providers);
   if (input.model && !allowedModels.includes(input.model)) {
     return resolveModel(input.model) && !modelServiceable(input.model, providers)

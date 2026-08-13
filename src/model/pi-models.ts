@@ -175,12 +175,19 @@ export function contextTokenBudgetForModel(id: string): number | undefined {
 
 export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
   if (!id) return false;
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id))
-    return harness === "pi" || harness === "opencode" || harness === "mock";
+  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) {
+    const custom = resolveCustomModel(id);
+    if (harness === "pi" || harness === "opencode" || harness === "mock") return true;
+    if (harness === "claude") return custom?.protocol === "anthropic" || /^claude-/i.test(id);
+    if (harness === "codex") return custom?.protocol === "openai" || /^(?:gpt-|o\d|codex|openai\/)/i.test(id);
+    return true;
+  }
   if (harness === "pi" || harness === "opencode" || harness === "mock") return Boolean(resolveModel(id));
-  const provider = resolveModel(id)?.provider;
-  if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
-  if (harness === "codex") return provider === "openai" || /^(?:gpt-|o\d|codex|openai\/)/i.test(id);
+  const model = resolveModel(id);
+  const provider = model?.provider;
+  const protocol = (model as unknown as { protocol?: string })?.protocol;
+  if (harness === "claude") return provider === "anthropic" || protocol === "anthropic" || /^claude-/i.test(id);
+  if (harness === "codex") return provider === "openai" || protocol === "openai" || /^(?:gpt-|o\d|codex|openai\/)/i.test(id);
   return false;
 }
 
@@ -205,11 +212,12 @@ export interface ModelProviderAvailability {
 }
 
 export function modelServiceable(id: string, providers: ModelProviderAvailability): boolean {
-  const provider = resolveModel(id)?.provider;
-  if (!provider) return false;
+  const model = resolveModel(id);
+  if (!model) return false;
+  const provider = model.provider;
   if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return true;
-  if (provider === "openai") return providers.openai;
-  if (provider === "anthropic") return providers.anthropic;
+  if (provider === "openai") return providers.openai || Boolean(process.env.OPENAI_BASE_URL);
+  if (provider === "anthropic") return providers.anthropic || Boolean(process.env.ANTHROPIC_BASE_URL);
   if (provider === "openrouter") return providers.openrouter;
   return true;
 }
@@ -225,9 +233,20 @@ export function modelProviderAvailabilityFor(
   configKeys: ModelProviderAvailability,
   managedKeys: ModelProviderAvailability = configKeys,
 ): ModelProviderAvailability {
-  if (harness === "pi") return managedKeys;
-  if (harness === "opencode") return { ...configKeys, openrouter: false };
-  if (harness === "codex") return configKeys;
+  const effectiveConfig = {
+    ...configKeys,
+    openai: configKeys.openai || Boolean(process.env.OPENAI_BASE_URL),
+    anthropic: configKeys.anthropic || Boolean(process.env.ANTHROPIC_BASE_URL),
+  };
+  const effectiveManaged = {
+    ...managedKeys,
+    openai: managedKeys.openai || Boolean(process.env.OPENAI_BASE_URL),
+    anthropic: managedKeys.anthropic || Boolean(process.env.ANTHROPIC_BASE_URL),
+  };
+  if (harness === "pi") return effectiveManaged;
+  if (harness === "opencode") return { ...effectiveConfig, openrouter: false };
+  if (harness === "codex") return effectiveConfig;
+  if (harness === "claude") return effectiveConfig;
   return ALL_PROVIDERS_AVAILABLE;
 }
 

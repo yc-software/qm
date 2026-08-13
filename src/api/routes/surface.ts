@@ -1034,11 +1034,13 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     ...(mark ? { mark } : {}),
     ...(selfLabel ? { selfLabel } : {}),
   };
+  const customCount = deps.customProviders ? (await deps.customProviders.enabled()).length : 0;
+  const isConfigured = (managedKeys ? Object.values(managedKeys).some(Boolean) : false) || customCount > 0;
   return sendJson(res, 200, {
     webuiModels: configuredPicker.length ? configuredPicker : allowed,
     baseModel: resolvedBase,
     harnessId,
-    ...(managedKeys ? { modelProviderConfigured: Object.values(managedKeys).some(Boolean) } : {}),
+    modelProviderConfigured: isConfigured,
     externalSlackParticipants,
     ...(Object.keys(resolvedBranding).length ? { branding: resolvedBranding } : {}),
   });
