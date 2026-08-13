@@ -23,7 +23,7 @@ import type {
 } from "./sandbox.ts";
 
 const GROUP = "extensions.agents.x-k8s.io";
-const VERSION = "v1beta1";
+const VERSION = "v1alpha1";
 const PLURAL = "sandboxclaims";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
