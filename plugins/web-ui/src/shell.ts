@@ -15,7 +15,6 @@ import {
   RefreshCw,
   Rocket,
   Search,
-  ShieldCheck,
   type IconNode,
 } from "lucide";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
@@ -544,9 +543,9 @@ export function renderSidebarTop(): void {
                   type="button"
                   aria-label="Search your chats"
                   @click=${() => {
-              hideTooltip();
-              openChatSearch();
-            }}
+                    hideTooltip();
+                    openChatSearch();
+                  }}
                   @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
                   @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
                   @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
