@@ -1,6 +1,6 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { Binoculars, Cog, Expand, Maximize2, Plus, Shrink, X } from "lucide";
+import { Binoculars, Clock3, Cog, Expand, Maximize2, Plus, Shrink, X } from "lucide";
 import {
   createDockview,
   type DockviewApi,
