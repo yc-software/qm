@@ -3,6 +3,12 @@ import { cacheHitRatio, isStablePrefixMiss, type TurnMetricSample } from "../../
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import type {
+  IncidentCursor,
+  OperatorIncidentSeverity,
+  OperatorIncidentSource,
+  OperatorIncidentStatus,
+} from "../../../incidents/incident-store.ts";
 
 const METRICS_SCAN_LIMIT = 10000;
 const METRICS_RUNS_SCAN_LIMIT = 500;
@@ -11,7 +17,26 @@ const PHASE_WORST_LIMIT = 8;
 const EGRESS_LIST_LIMIT = 1000;
 const RUNS_LIST_LIMIT = 200;
 const ERRORS_LIST_LIMIT = 200;
+const INCIDENTS_LIST_LIMIT = 200;
 const AUDIT_TAIL_LIMIT = 200;
+
+const INCIDENT_STATUSES = new Set<OperatorIncidentStatus>(["open", "recovered", "acknowledged", "resolved"]);
+const INCIDENT_SEVERITIES = new Set<OperatorIncidentSeverity>(["warning", "error", "critical"]);
+const INCIDENT_SOURCES = new Set<OperatorIncidentSource>(["run", "backend"]);
+
+function incidentCursor(raw: string | null): IncidentCursor | undefined {
+  if (!raw) return undefined;
+  const split = raw.indexOf("~");
+  if (split < 1) return undefined;
+  const occurredAt = Number(raw.slice(0, split));
+  const id = raw.slice(split + 1);
+  return Number.isSafeInteger(occurredAt) && occurredAt >= 0 && id ? { occurredAt, id } : undefined;
+}
+
+function incidentLimit(raw: string | null): number {
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? Math.min(INCIDENTS_LIST_LIMIT, n) : 100;
+}
 
 function latencySummary(values: number[]): {
   count: number;
@@ -325,6 +350,42 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
     })) ?? [];
   const errors = [...fromLog].sort((a, b) => b.ts - a.ts).slice(0, ERRORS_LIST_LIMIT);
   return sendJson(res, 200, { scopeId: scope, errors });
+}
+
+export async function listAdminIncidents(ctx: ApiCtx): Promise<void> {
+  const { res, deps, url } = ctx;
+  const authz = await requireScopedAdmin(ctx);
+  if (!authz) return;
+  const { actor, scope } = authz;
+  audit(deps, { principalId: actor.id, action: "incidents.read", resource: "incidents", scopeLabel: scope });
+  const orgWide = parseScopeId(scope).kind === "org";
+  const limit = incidentLimit(url.searchParams.get("limit"));
+  const before = incidentCursor(url.searchParams.get("cursor"));
+  const sessionId = url.searchParams.get("sessionId") || undefined;
+  const statusRaw = url.searchParams.get("status") as OperatorIncidentStatus | null;
+  const severityRaw = url.searchParams.get("severity") as OperatorIncidentSeverity | null;
+  const sourceRaw = url.searchParams.get("source") as OperatorIncidentSource | null;
+  const status = statusRaw && INCIDENT_STATUSES.has(statusRaw) ? statusRaw : undefined;
+  const severity = severityRaw && INCIDENT_SEVERITIES.has(severityRaw) ? severityRaw : undefined;
+  const source = sourceRaw && INCIDENT_SOURCES.has(sourceRaw) ? sourceRaw : undefined;
+  const filter = {
+    ...(orgWide ? {} : { scopeId: scope }),
+    ...(sessionId ? { sessionId } : {}),
+    ...(status ? { status } : {}),
+    ...(severity ? { severity } : {}),
+    ...(source ? { source } : {}),
+  };
+  if (url.searchParams.get("count")) {
+    const total = (await deps.operatorIncidents?.count(filter)) ?? 0;
+    return sendJson(res, 200, { scopeId: scope, total });
+  }
+  const incidents = (await deps.operatorIncidents?.list({ ...filter, ...(before ? { before } : {}), limit })) ?? [];
+  const last = incidents.length === limit ? incidents.at(-1) : undefined;
+  return sendJson(res, 200, {
+    scopeId: scope,
+    incidents,
+    ...(last ? { nextCursor: `${last.occurredAt}~${last.id}` } : {}),
+  });
 }
 
 export async function listAdminAudit(ctx: ApiCtx): Promise<void> {

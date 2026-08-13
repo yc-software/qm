@@ -11,7 +11,7 @@ const COLUMNS: readonly EventColumn<keyof ErrorEvent & string>[] = [
 ];
 
 export function createPostgresErrorLog(connectionString: string): ErrorLog {
-  return createPostgresEventSink<ErrorEvent>({
+  const sink = createPostgresEventSink<ErrorEvent>({
     connectionString,
     table: "error_events",
     columns: COLUMNS,
@@ -24,4 +24,25 @@ export function createPostgresErrorLog(connectionString: string): ErrorLog {
     equalityFilters: { scopeId: "scope_label", sessionId: "session_id" },
     persistErrorMessage: "[errors] failed to persist error event:",
   });
+  const listeners = new Set<(event: ErrorEvent) => void>();
+  return {
+    record(input) {
+      const event = sink.record(input);
+      for (const listener of listeners) {
+        try {
+          listener(event);
+        } catch (error) {
+          console.error("[errors] record listener failed:", error);
+        }
+      }
+      return event;
+    },
+    onRecord(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    flush: sink.flush,
+    list: sink.list,
+    count: sink.count,
+  };
 }
