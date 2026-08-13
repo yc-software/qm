@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
 let whoamiProbes = 0;
 let lastConsentClicker: string | null = null;
+let lastSelfConnectIdentity: string | null = null;
 let lastImpersonateIdentity: string | null = null;
 let agentApiRequests = 0;
 const VALID_AGENT_CAPABILITY = "valid.agent.capability";
@@ -37,6 +39,10 @@ const upstream = createServer((req: IncomingMessage, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
     });
+  }
+  if (typeof req.url === "string" && req.url.startsWith("/v1/connectors/oauth/google/start")) {
+    lastSelfConnectIdentity =
+      typeof req.headers["x-portal-identity"] === "string" ? req.headers["x-portal-identity"] : null;
   }
   if (typeof req.url === "string" && req.url.startsWith("/v1/connectors/oauth/consent/redeem/")) {
     lastConsentClicker = (req.headers["x-consent-clicker"] as string | undefined) ?? null;
@@ -78,6 +84,7 @@ const PUBLIC = "http://portal.test";
 process.env.PORTAL_PUBLIC_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "router-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "router-test-core-secret";
+process.env.PORTAL_IDENTITY_SECRET = "router-test-identity-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
@@ -260,6 +267,10 @@ test("new human path /connect/:provider/self-connect: session-gated; with sessio
     r.status,
     200,
     "reaches core (the mock returns no authorizeUrl, so the portal renders a page rather than 404ing)",
+  );
+  assert.equal(
+    verifyPortalIdentity(lastSelfConnectIdentity ?? "", "router-test-identity-secret", Date.now())?.p,
+    "eve@acme",
   );
 });
 

@@ -650,8 +650,19 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
     `/v1/connectors/oauth/${encodeURIComponent(o.provider)}/start?${qs.toString()}`,
     CORE_SIGNING_SECRET,
   );
+  const headers = {
+    ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+    ...(PORTAL_IDENTITY_SECRET
+      ? {
+          [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+            { p: o.session.sub, exp: Date.now() + 60_000 },
+            PORTAL_IDENTITY_SECRET,
+          ),
+        }
+      : {}),
+  };
   try {
-    const r = await fetch(`${CORE}${path}`, { headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path) });
+    const r = await fetch(`${CORE}${path}`, { headers });
     const data = (await r.json().catch(() => ({}))) as { authorizeUrl?: string; message?: string };
     if (data.authorizeUrl) {
       res.writeHead(302, { location: data.authorizeUrl, "cache-control": "no-store" });
