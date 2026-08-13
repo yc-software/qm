@@ -50,7 +50,7 @@ export interface OperatorIncidentDeps {
 
 const FAILURE_MARKER = /^\s*\[(?:tool|publish|write|read|execute|connector)[^\]]*(?:failed|error)[^\]]*\]/i;
 const DECLARED_INABILITY =
-  /(?:^|[.!?]\s+)(?:(?:i\s+)?(?:can(?:not|'t|’t)|could(?:\s+not|n't|n’t))\s+(?:actually\s+)?(?:complete|perform|access|open|find|locate|read|write|publish|connect|send|run|proceed|continue|create|do|use|attempt|tell|verify|confirm|check)\b|i\s+am\s+unable\s+to\s+(?:complete|perform|access|open|find|locate|read|write|publish|connect|send|run|proceed|continue|create|do|use|attempt|tell|verify|confirm|check)\b|(?:this|that|the\s+task)\s+(?:is\s+)?blocked\b|unable\s+to\s+(?:complete|perform|access|open|find|locate|read|write|publish|connect|send|run|proceed|continue|create|do|use|attempt|tell|verify|confirm|check)\b)/i;
+  /(?:^|[.!?]\s+)(?:(?:so|therefore|however|but)\s+)?(?:(?:i\s+)?(?:can(?:not|'t|’t)|could(?:\s+not|n't|n’t))\s+(?:actually\s+)?(?:complete|perform|access|open|find|locate|read|write|publish|connect|send|run|proceed|continue|create|do|use|attempt|tell|verify|confirm|check)\b|i\s+am\s+unable\s+to\s+(?:complete|perform|access|open|find|locate|read|write|publish|connect|send|run|proceed|continue|create|do|use|attempt|tell|verify|confirm|check)\b|(?:this|that|the\s+task)\s+(?:is\s+)?blocked\b|unable\s+to\s+(?:complete|perform|access|open|find|locate|read|write|publish|connect|send|run|proceed|continue|create|do|use|attempt|tell|verify|confirm|check)\b)/i;
 
 function scalar(value: unknown): string | undefined {
   if (typeof value === "string") return value;
