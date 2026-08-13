@@ -1192,15 +1192,17 @@ function applyEffortAliases(model: unknown): void {
   };
 }
 
-function applyTurnEffort(session: AgentSession, level?: string): void {
+export function applyTurnEffort(session: AgentSession, level?: string): void {
   if (!level || !TURN_EFFORT_LEVELS.has(level)) return;
-  if (level === "auto") return;
+  const effectiveLevel =
+    level === "auto" && session.state.model ? defaultInteractiveThinkingLevel(session.state.model) : level;
+  const normalizedLevel = effectiveLevel === "auto" ? "medium" : effectiveLevel;
   applyEffortAliases(session.state.model);
   try {
-    if (LEGACY_THINKING_LEVELS.has(level)) {
-      session.setThinkingLevel(level as LegacyThinkingLevel);
+    if (LEGACY_THINKING_LEVELS.has(normalizedLevel)) {
+      session.setThinkingLevel(normalizedLevel as LegacyThinkingLevel);
     } else {
-      session.state.thinkingLevel = level as typeof session.state.thinkingLevel;
+      session.state.thinkingLevel = normalizedLevel as typeof session.state.thinkingLevel;
     }
   } catch (e) {
     swallow("pi: set thinking level", e);

@@ -157,6 +157,18 @@ test("governance renders simple settings as compact rows with contextual actions
   assert.match(html, /"turnWallClockSec" in r\.data/);
 });
 
+test("default runtime controls save reasoning level and fast mode", () => {
+  assert.match(html, /id="base-effort"/);
+  assert.match(html, /id="base-fast-mode"/);
+  assert.match(html, /thinkingLevelsByHarness/);
+  assert.match(html, /fastModeModelIds/);
+  assert.match(html, /fastModeHarnessIds/);
+  assert.match(
+    html,
+    /runtime: \(\) => \(\{[\s\S]*effortLevel: \$\("base-effort"\)\.value,[\s\S]*fastMode: \$\("base-fast-mode"\)\.checked/,
+  );
+});
+
 test("compact governance rows preserve policy detail and collapse before they overflow", () => {
   assert.doesNotMatch(html, /#view-governance \.setting-row > \.head p[^}]*line-clamp/);
   assert.doesNotMatch(html, /#view-governance \.setting-row > \.foot \.status[^}]*white-space:\s*nowrap/);

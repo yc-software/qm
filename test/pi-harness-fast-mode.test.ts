@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyTurnEffort,
   applyFastSpeed,
   modelSupportsFastMode,
   wantsFastMode,
@@ -69,4 +70,18 @@ test("an explicit opt-in still cannot select fast mode on a model that lacks it"
   assert.equal(wantsFastMode(true, "claude-sonnet-5"), false);
   assert.equal(wantsFastMode(true, undefined), false);
   assert.equal(wantsFastMode(true, ""), false);
+});
+
+test("auto resets a reused Anthropic session to its interactive default", () => {
+  const session = {
+    state: {
+      model: { provider: "anthropic", api: "anthropic-messages" },
+      thinkingLevel: "high",
+    },
+    setThinkingLevel(level: string) {
+      this.state.thinkingLevel = level;
+    },
+  };
+  applyTurnEffort(session as never, "auto");
+  assert.equal(session.state.thinkingLevel, "low");
 });

@@ -2,6 +2,8 @@ import { parseScopeId } from "../../../types.ts";
 import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
 import {
+  FAST_MODE_MODEL_IDS,
+  harnessSupportsFastMode,
   HARNESS_IDS,
   SELECTABLE_BASE_MODELS,
   defaultModelForHarness,
@@ -9,6 +11,7 @@ import {
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
+  thinkingLevelsForHarness,
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
@@ -328,6 +331,11 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     harnessDefault: deps.harnessId ?? "pi",
     harnessOptions: HARNESS_IDS.filter((id) => id !== "mock"),
     modelsByHarness: Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)])),
+    thinkingLevelsByHarness: Object.fromEntries(
+      HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),
+    ),
+    fastModeModelIds: FAST_MODE_MODEL_IDS,
+    fastModeHarnessIds: HARNESS_IDS.filter(harnessSupportsFastMode),
     browseModelOptions: SELECTABLE_BASE_MODELS.filter((m) =>
       modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
     ),

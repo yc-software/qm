@@ -11,6 +11,17 @@ export const THINKING_LEVELS = ["auto", "low", "medium", "high", "xhigh", "max",
 export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
+export function thinkingLevelsForHarness(harnessId: HarnessId): readonly string[] {
+  if (harnessId === "pi") return THINKING_LEVELS;
+  if (harnessId === "claude") return THINKING_LEVELS.filter((level) => level !== "ultracode");
+  if (harnessId === "codex") return THINKING_LEVELS.filter((level) => level !== "max" && level !== "ultracode");
+  return ["auto"];
+}
+
+export function harnessSupportsFastMode(harnessId: HarnessId): boolean {
+  return harnessId === "pi" || harnessId === "claude";
+}
+
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 

@@ -4379,6 +4379,15 @@
                     <select id="base-harness" style="max-width: 360px"></select>
                     <label for="base-model">Model</label>
                     <select id="base-model" style="max-width: 360px"></select>
+                    <label for="base-effort">Reasoning level</label>
+                    <select id="base-effort" style="max-width: 360px"></select>
+                    <label class="setting-toggle" style="margin-top: 10px">
+                      <input type="checkbox" id="base-fast-mode" />
+                      <span class="setting-switch" aria-hidden="true"></span>
+                      <span class="setting-copy"
+                        ><strong>Fast mode</strong><small>Only available for supported models.</small></span
+                      >
+                    </label>
                   </div>
                   <div class="foot">
                     <button class="primary" data-save="runtime">Apply</button
@@ -6386,6 +6395,38 @@
             harness.appendChild(o);
           });
           harness.value = approvedHarnesses.includes(current.harnessId) ? current.harnessId : approvedHarnesses[0];
+          const effort = $("base-effort");
+          const thinkingLevelsByHarness = r.data.thinkingLevelsByHarness || {};
+          const syncEffort = () => {
+            const thinkingLevels = thinkingLevelsByHarness[harness.value] || ["auto"];
+            const prior = effort.value || current.effortLevel || "auto";
+            effort.textContent = "";
+            thinkingLevels.forEach((level) => {
+              const o = document.createElement("option");
+              o.value = level;
+              o.textContent =
+                {
+                  auto: "Auto",
+                  low: "Low",
+                  medium: "Medium",
+                  high: "High",
+                  xhigh: "Extra high",
+                  max: "Max",
+                  ultracode: "Ultracode",
+                }[level] || level;
+              effort.appendChild(o);
+            });
+            effort.value = thinkingLevels.includes(prior) ? prior : "auto";
+          };
+          const fastMode = $("base-fast-mode");
+          fastMode.checked = current.fastMode === true;
+          const syncFastMode = () => {
+            const fastCapable =
+              (r.data.fastModeHarnessIds || []).includes(harness.value) &&
+              (r.data.fastModeModelIds || []).includes($("base-model").value);
+            fastMode.disabled = !fastCapable;
+            if (!fastCapable) fastMode.checked = false;
+          };
           const syncModels = () => {
             const selectedHarness = harness.value;
             const compatible = modelsByHarness[selectedHarness] || opts;
@@ -6399,6 +6440,9 @@
               sel.appendChild(o);
             });
             sel.value = compatible.some((m) => m.id === prior) ? prior : (compatible[0] || {}).id || "";
+            sel.oninput = syncFastMode;
+            syncEffort();
+            syncFastMode();
           };
           harness.oninput = syncModels;
           syncModels();
@@ -7984,7 +8028,12 @@
         "external-slack-participants": () => ({ on: $("external-slack-participants").checked }),
         "org-ambient": () => ({ on: $("org-ambient").checked }),
         "interactive-fast-mode": () => ({ on: $("interactive-fast-mode").checked }),
-        runtime: () => ({ harnessId: $("base-harness").value, modelId: $("base-model").value }),
+        runtime: () => ({
+          harnessId: $("base-harness").value,
+          modelId: $("base-model").value,
+          effortLevel: $("base-effort").value,
+          fastMode: $("base-fast-mode").checked,
+        }),
         "approved-harnesses": () => ({
           ids: Array.from(document.querySelectorAll("#approved-harnesses-list input[type=checkbox]:checked")).map(
             (c) => c.value,

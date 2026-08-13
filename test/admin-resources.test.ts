@@ -529,6 +529,70 @@ test("base-model is a sparse per-scope override: a channel pins its own model, e
   }
 });
 
+test("admin runtime saves reasoning level and fast mode with the default model", async () => {
+  const srv = start();
+  const url = `${srv.base}/v1/admin/scopes/org:default-org/runtime`;
+  try {
+    srv.built.config.setApprovedHarnesses(["pi", "opencode", "codex"]);
+    await srv.built.config.flushScope("org:default-org");
+    const saved = await fetch(url, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: true }),
+    });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await srv.built.config.getRuntimeSelectionDurable("org:default-org"), {
+      harnessId: "pi",
+      modelId: "claude-opus-5",
+      effortLevel: "high",
+      fastMode: true,
+      orgRevision: 1,
+      revision: 1,
+    });
+
+    const changedModel = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ modelId: "claude-fable-5" }),
+    });
+    assert.equal(changedModel.status, 200);
+    assert.deepEqual(await srv.built.config.getRuntimeSelectionDurable("org:default-org"), {
+      harnessId: "pi",
+      modelId: "claude-fable-5",
+      effortLevel: "high",
+      fastMode: false,
+      orgRevision: 2,
+      revision: 2,
+    });
+
+    const unsupported = await fetch(url, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "pi", modelId: "claude-fable-5", effortLevel: "low", fastMode: true }),
+    });
+    assert.equal(unsupported.status, 200);
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
+
+    const unsupportedHarness = await fetch(url, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "opencode", modelId: "claude-opus-5", effortLevel: "auto", fastMode: true }),
+    });
+    assert.equal(unsupportedHarness.status, 200);
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
+
+    for (const body of [
+      { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "extreme", fastMode: true },
+      { harnessId: "codex", modelId: "gpt-5.5", effortLevel: "max", fastMode: false },
+      { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: "yes" },
+    ]) {
+      assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify(body) })).status, 400);
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
 test("ambient-policy edits a channel's standing order and bot ledger through the registry", async () => {
   const srv = start();
   try {

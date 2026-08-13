@@ -51,6 +51,54 @@ test("runtime resolution uses explicit choice, then scope, then org and rejects 
   );
 });
 
+test("runtime resolution carries reasoning and fast-mode defaults into turns", () => {
+  const config = createMemoryConfigStore("default-org");
+  config.setApprovedHarnesses(["pi", "opencode", "codex"]);
+  config.setRuntimeSelection(ORG, {
+    harnessId: "pi",
+    modelId: "claude-opus-5",
+    effortLevel: "high",
+    fastMode: true,
+  });
+  assert.deepEqual(resolveRuntimeChoice(config, ORG, PERSONAL, { harnessId: "pi", modelId: "claude-fable-5" }), {
+    harnessId: "pi",
+    modelId: "claude-opus-5",
+    effortLevel: "high",
+    fastMode: true,
+  });
+  assert.deepEqual(
+    resolveRuntimeChoice(
+      config,
+      ORG,
+      PERSONAL,
+      { harnessId: "pi", modelId: "claude-fable-5" },
+      {
+        harnessId: "codex",
+        modelId: "gpt-5.5",
+      },
+    ),
+    {
+      harnessId: "codex",
+      modelId: "gpt-5.5",
+      effortLevel: "high",
+      fastMode: false,
+    },
+  );
+  assert.deepEqual(
+    resolveRuntimeChoice(
+      config,
+      ORG,
+      PERSONAL,
+      { harnessId: "pi", modelId: "claude-fable-5" },
+      {
+        harnessId: "opencode",
+        modelId: "claude-opus-5",
+      },
+    ),
+    { harnessId: "opencode", modelId: "claude-opus-5", fastMode: false },
+  );
+});
+
 test("runtime resolution falls back to the first approved harness when deployment defaults are not approved", () => {
   const config = createMemoryConfigStore("default-org");
   config.setApprovedHarnesses(["codex"]);
