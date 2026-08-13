@@ -10,6 +10,8 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 const config = loadConfig();
 
 const built = buildApp(config);
+delete config.codexOAuthBootstrap;
+delete process.env.CODEX_OAUTH_BOOTSTRAP_B64;
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;
 const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN);
@@ -91,6 +93,7 @@ const server = createServer(built.app, {
   sandboxMigration: built.sandboxMigration,
 });
 
+await built.codexOAuthReady;
 await built.config.hydrate?.();
 await built.identity.hydrate();
 await built.deploymentLayerReady;

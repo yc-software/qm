@@ -498,7 +498,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToEntry);
     },
 
-    async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
+    async recordLlmRequest(sessionId, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord> {
       const full: LlmRequestRecord = {
         id: randomUUID(),
         sessionId,
@@ -537,6 +537,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           full.transport ? JSON.stringify(full.transport) : null,
           full.gapPhases ? JSON.stringify(full.gapPhases) : null,
         ],
+        { signal },
       );
       return full;
     },

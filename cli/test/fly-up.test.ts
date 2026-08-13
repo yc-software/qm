@@ -80,11 +80,13 @@ else if (a[0] === "secrets" && a[1] === "list") {
     [
       marker,
       "CAPABILITY_SECRET",
+      "CODEX_OAUTH_BOOTSTRAP_B64",
       "CONNECTOR_SECRET_KEY",
       "CORE_SIGNING_SECRET",
       "FLY_DEPLOY_API_TOKEN",
       "FLY_API_TOKEN",
       "PORTAL_IDENTITY_SECRET",
+      "PUBLIC_API_URL",
       "SECURITY_SCREEN_PROXY_TOKEN",
       "SKILL_SIGNING_SECRET",
     ]
@@ -115,7 +117,14 @@ else console.log("ok");
     plugins: [],
     skills: [],
     env: {
-      core: { HARNESS: "mock", SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" },
+      core: {
+        HARNESS: "codex",
+        CODEX_OAUTH_DURABLE: "1",
+        SNAPSHOT_STORE: "s3",
+        TRANSFER_STORE: "s3",
+        S3_BUCKET: "acme-data",
+        S3_REGION: "auto",
+      },
     },
     imageOverrides: {},
     sandbox: { app: "acme-sandboxes", image: `registry.fly.io/acme-sandboxes@sha256:${"a".repeat(64)}` },
@@ -128,7 +137,9 @@ else console.log("ok");
     assert.match(calls, /storage create --name acme-data --app acme-core --org personal --yes/);
     assert.match(calls, /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN/);
     assert.match(calls, /secrets unset --stage -a acme-core FLY_DEPLOY_API_TOKEN/);
+    assert.match(calls, /secrets unset -a acme-core CODEX_OAUTH_BOOTSTRAP_B64/);
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
+    assert.ok(calls.lastIndexOf("CODEX_OAUTH_BOOTSTRAP_B64") > calls.indexOf("deploy"));
     assert.ok(calls.indexOf("storage create") < calls.indexOf("deploy"));
     assert.equal(
       JSON.parse(readFileSync(configPath, "utf8")).imageOverrides.core,

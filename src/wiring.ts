@@ -167,6 +167,7 @@ import type { SessionStore } from "./sessions/session-store.ts";
 import { createMockHarness } from "./harness/mock-harness.ts";
 import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "./harness/opencode-harness.ts";
 import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-harness.ts";
+import { createDurableCodexOAuthAuthBackend, type StoredCodexOAuthAuth } from "./harness/codex-oauth-store.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
@@ -321,6 +322,7 @@ export interface BuiltApp {
   secretDrops: SecretDropStore;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
+  codexOAuthReady: Promise<void>;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
   acl: AclStore;
@@ -417,6 +419,16 @@ export function buildApp(
   const advisoryLock: AdvisoryLock = pgArtifactMap
     ? createPostgresAdvisoryLock(pgArtifactMap.pool)
     : createMemoryAdvisoryLock();
+  const codexOAuthAuth = config.codexOAuthDurable
+    ? createDurableCodexOAuthAuthBackend({
+        orgId: config.orgId,
+        backing: artifactMap<StoredCodexOAuthAuth>("codex_oauth_auth"),
+        advisoryLock,
+        keyMaterial: config.connectorSecretKey!,
+        ...(config.codexOAuthBootstrap ? { bootstrapBase64: config.codexOAuthBootstrap } : {}),
+      })
+    : undefined;
+  const codexOAuthReady = codexOAuthAuth?.ready() ?? Promise.resolve();
   const configStore = createMemoryConfigStore(config.orgId, {
     connectorClients: artifactMap<StoredConnectorClient>("connector_clients"),
     souls: artifactMap<PersistedSoul>("soul_configs"),
@@ -765,7 +777,15 @@ export function buildApp(
         },
       }),
     ],
-    ["codex", createCodexHarness({ ...codexHarnessConfigOptions(config), signals: runSignals, tasks })],
+    [
+      "codex",
+      createCodexHarness({
+        ...codexHarnessConfigOptions(config),
+        ...(codexOAuthAuth ? { oauthAuth: codexOAuthAuth } : {}),
+        signals: runSignals,
+        tasks,
+      }),
+    ],
     ["claude", createClaudeHarness({ ...claudeHarnessConfigOptions(config), signals: runSignals, tasks })],
     ["mock", createMockHarness()],
   ]);
@@ -1443,6 +1463,7 @@ export function buildApp(
     secretDrops,
     modelGateway,
     modelCredentials,
+    codexOAuthReady,
     customProviders,
     refreshCustomProviders,
     acl,

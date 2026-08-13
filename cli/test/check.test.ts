@@ -262,6 +262,7 @@ test("secret-looking literals in plugin and sandbox env fail config.no-secret-va
     sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE, env: { GH_TOKEN: "ghp_x" } },
   });
   const viaKey = deployment(() => {}, { env: { core: { AWS_SECRET_ACCESS_KEY: "aws_x" } } });
+  const viaBootstrap = deployment(() => {}, { env: { core: { CODEX_OAUTH_BOOTSTRAP_B64: "encoded-auth" } } });
   const viaCred = deployment(() => {}, {
     sandbox: {
       app: "acme-sandboxes",
@@ -280,6 +281,7 @@ test("secret-looking literals in plugin and sandbox env fail config.no-secret-va
     assert.throws(() => check(viaPlugin), /plugins\.linear\.LINEAR_API_KEY belongs in the target secret store/);
     assert.throws(() => check(viaSandbox), /sandbox\.GH_TOKEN belongs in the target secret store/);
     assert.throws(() => check(viaKey), /core\.AWS_SECRET_ACCESS_KEY belongs in the target secret store/);
+    assert.throws(() => check(viaBootstrap), /core\.CODEX_OAUTH_BOOTSTRAP_B64 belongs in the target secret store/);
     assert.throws(() => check(viaCred), /sandbox\.PGPASSWORD belongs in the target secret store/);
     assert.throws(() => check(viaCred), /sandbox\.GOOGLE_CREDENTIALS belongs in the target secret store/);
     check(benign);
@@ -287,6 +289,7 @@ test("secret-looking literals in plugin and sandbox env fail config.no-secret-va
     rmSync(viaPlugin.dir, { recursive: true, force: true });
     rmSync(viaSandbox.dir, { recursive: true, force: true });
     rmSync(viaKey.dir, { recursive: true, force: true });
+    rmSync(viaBootstrap.dir, { recursive: true, force: true });
     rmSync(viaCred.dir, { recursive: true, force: true });
     rmSync(benign.dir, { recursive: true, force: true });
   }

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { providerKeysPresent } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -22,23 +23,17 @@ function start(
   built: BuiltApp;
   close: () => Promise<void>;
 } {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "model-credential-route-")),
-      ...config,
-    }),
-    { modelCredentialFetch },
-  );
+  const appConfig = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "model-credential-route-")),
+    ...config,
+  });
+  const built = buildApp(appConfig, { modelCredentialFetch });
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     modelCredentialFetch,
     harnessId: config.harness ?? "pi",
-    providerKeys: {
-      anthropic: Boolean(config.anthropicApiKey),
-      openai: Boolean(config.openaiApiKey),
-      openrouter: Boolean(config.openrouterApiKey),
-    },
+    providerKeys: providerKeysPresent(appConfig),
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -396,6 +391,34 @@ test("surface-config reports whether any model provider is configured", async ()
     await srv.built.modelCredentials.set("anthropic", "working-admin-key", "admin-alice@default-org");
     const after = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(((await after.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("surface-config respects an admin-disabled environment provider", async () => {
+  const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
+  try {
+    const before = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(((await before.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+    const disabled = await fetch(`${srv.base}/v1/admin/model-providers/anthropic`, {
+      method: "DELETE",
+      headers: ADMIN,
+    });
+    assert.equal(disabled.status, 200);
+    const after = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(((await after.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, false);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("surface-config reports Codex ChatGPT OAuth without making it a Pi credential", async () => {
+  const srv = start({ harness: "codex", codexAuthFile: "/tmp/codex-auth.json" });
+  try {
+    const surface = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(surface.status, 200);
+    assert.equal(((await surface.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
   } finally {
     await srv.close();
   }

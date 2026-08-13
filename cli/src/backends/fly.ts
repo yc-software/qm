@@ -969,6 +969,15 @@ function unsetDisabledFlyPublisherToken(config: QmConfig, appPrefix: string): vo
   note(`removed the disabled Fly app publisher token from ${app}`);
 }
 
+function retireCodexOAuthBootstrap(config: QmConfig, appPrefix: string): void {
+  const durable = config.env.core?.CODEX_OAUTH_DURABLE?.trim().toLowerCase();
+  if (!["1", "true", "yes", "on"].includes(durable ?? "")) return;
+  const app = `${appPrefix}-core`;
+  if (!secretNames(app)?.has("CODEX_OAUTH_BOOTSTRAP_B64")) return;
+  fly(["secrets", "unset", "-a", app, "CODEX_OAUTH_BOOTSTRAP_B64"]);
+  note(`removed the one-time Codex OAuth bootstrap secret from ${app}`);
+}
+
 export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts = {}): Promise<void> {
   if (opts.imageLabel && opts.imageFrom) {
     throw new CliError("--image-label and --image-from select different image sources and cannot be combined");
@@ -1112,6 +1121,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
 
     for (const phase of flyDeployPhases(services)) await deployPhase(ctx, phase, imageSource, timing);
     await deployPlugins(ctx, plugins, imageSource, timing);
+    if (services.includes("core")) retireCodexOAuthBootstrap(config, ctx.appPrefix);
     if (ctx.sourceRoot) recordServiceImages(ctx, services, opts.configPath);
 
     note("");

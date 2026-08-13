@@ -38,7 +38,7 @@ interface HarnessSecurityScreenInput {
   payload: string;
   signal: AbortSignal;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: HarnessLlmRequestRecord): void | Promise<void>;
+  recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
 }
 
 export interface HarnessTurnInput {
@@ -80,7 +80,7 @@ export interface HarnessTurnInput {
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: HarnessLlmRequestRecord): void | Promise<void>;
+  recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;

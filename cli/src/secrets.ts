@@ -4,6 +4,7 @@ import type { ModelProvider, QmConfig } from "./config.ts";
 type SecretCondition =
   | { kind: "env-equals"; service: DeclaredServiceName; name: string; value: string }
   | { kind: "env-in"; service: DeclaredServiceName; name: string; values: string[] }
+  | { kind: "env-disabled"; service: DeclaredServiceName; name: string }
   | { kind: "env-absent"; service: DeclaredServiceName; name: string }
   | { kind: "env-all-absent"; service: DeclaredServiceName; names: string[] }
   | { kind: "env-present"; service: DeclaredServiceName; name: string }
@@ -60,13 +61,52 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       when: {
         kind: "any",
         conditions: [
-          { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
-          { kind: "model-provider", provider: "openai" },
+          {
+            kind: "all",
+            conditions: [
+              { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
+              {
+                kind: "any",
+                conditions: [
+                  { kind: "env-absent", service: "core", name: "CODEX_OAUTH_DURABLE" },
+                  {
+                    kind: "env-disabled",
+                    service: "core",
+                    name: "CODEX_OAUTH_DURABLE",
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            kind: "all",
+            conditions: [
+              { kind: "model-provider", provider: "openai" },
+              {
+                kind: "any",
+                conditions: [
+                  { kind: "env-absent", service: "core", name: "CODEX_OAUTH_DURABLE" },
+                  {
+                    kind: "env-disabled",
+                    service: "core",
+                    name: "CODEX_OAUTH_DURABLE",
+                  },
+                ],
+              },
+            ],
+          },
         ],
       },
     },
     description:
-      'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), and it bills the base model when modelProvider is "openai".',
+      "OpenAI API key: bills Codex and OpenAI base models unless the Codex harness uses encrypted durable ChatGPT OAuth.",
+  },
+  {
+    name: "CODEX_OAUTH_BOOTSTRAP_B64",
+    service: "core",
+    required: false,
+    description:
+      "One-time base64 ChatGPT OAuth credential import for encrypted durable Codex auth; remove it from Fly immediately after the first healthy deployment.",
   },
   {
     name: "PUBLIC_API_URL",
@@ -382,6 +422,8 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   if (condition.kind === "env-absent") return !value;
   if (condition.kind === "env-present") return Boolean(value);
   if (condition.kind === "env-in") return value !== undefined && condition.values.includes(value);
+  if (condition.kind === "env-disabled")
+    return value !== undefined && ["0", "false", "no", "off", "none"].includes(value.toLowerCase());
   return value === condition.value;
 }
 
@@ -567,6 +609,7 @@ function conditionClause(condition: SecretCondition): string {
   if (condition.kind === "env-present") return `env.${condition.service}.${condition.name} is set`;
   if (condition.kind === "env-in")
     return `env.${condition.service}.${condition.name} is one of ${condition.values.map((value) => JSON.stringify(value)).join(", ")}`;
+  if (condition.kind === "env-disabled") return `env.${condition.service}.${condition.name} is disabled`;
   if (condition.kind === "model-provider") return `modelProvider is ${JSON.stringify(condition.provider)}`;
   return `env.${condition.service}.${condition.name} is ${JSON.stringify(condition.value)}`;
 }

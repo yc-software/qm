@@ -21,7 +21,7 @@ export type SecurityClassifier = (
   payload: string,
   actorId: string,
   scopeLabel: ScopeId,
-  recordLlmRequest?: (rec: HarnessLlmRequestRecord) => void | Promise<void>,
+  recordLlmRequest?: (rec: HarnessLlmRequestRecord, signal?: AbortSignal) => void | Promise<void>,
   context?: {
     hook?: SecurityScreenHook;
     surface?: string;

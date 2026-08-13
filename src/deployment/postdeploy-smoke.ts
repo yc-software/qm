@@ -124,9 +124,13 @@ export async function checkLiveSession(
   const root = baseUrl.replace(/\/+$/, "");
   const request = async (method: "GET" | "POST", path: string, body?: unknown, admin = false): Promise<unknown> => {
     const raw = body === undefined ? "" : JSON.stringify(body);
+    const portalIdentity = await mintSignedPayload({ p: principalId, exp: Date.now() + 60_000 }, portalIdentitySecret);
     const headers = admin
       ? await stagingApiHeaders(orgId, principalId, sourceSecret, portalIdentitySecret, path)
-      : signedRequestHeaders(sourceSecret, method, path, raw);
+      : {
+          ...signedRequestHeaders(sourceSecret, method, path, raw),
+          [PORTAL_IDENTITY_HEADER]: portalIdentity,
+        };
     const response = await fetchImpl(`${root}${path}`, {
       method,
       headers: { ...headers, ...(raw ? { "content-type": "application/json" } : {}) },

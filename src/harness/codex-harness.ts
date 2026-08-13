@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT } from "./pi-harness.ts";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -13,7 +13,18 @@ import type { ScopeId, SessionEntry } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { countTokens } from "../util/tokens.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
-import { CodexAppServer, CodexRpcError } from "./codex-app-server.ts";
+import { CodexAppServer, CodexRpcError, redactCodexDiagnostics } from "./codex-app-server.ts";
+import {
+  codexAuthFileForEnv,
+  acquireCodexOAuthAuthLock,
+  codexOAuthAccessToken,
+  codexOAuthRefreshToken,
+  readCodexOAuthAuthFile,
+  sanitizedCodexOAuthAuth,
+  syncCodexOAuthAuthFile,
+  type CodexOAuthAuthLock,
+} from "./codex-auth.ts";
+import type { CodexOAuthAuthBackend } from "./codex-oauth-store.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
 import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
 import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
@@ -34,6 +45,7 @@ export interface CodexHarnessOptions {
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   appServerStartTimeoutMs?: number;
+  oauthAuth?: CodexOAuthAuthBackend;
   signals?: RunSignalStore;
   tasks?: TaskStore;
 }
@@ -78,7 +90,59 @@ type BridgedTool = {
 
 type CodexItem = Record<string, unknown> & { type: string };
 type CodexTurn = { id: string; status: string; error?: { message?: string } | null; items?: CodexItem[] };
+const CODEX_TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted", "cancelled", "canceled"]);
+
+function isCodexThreadStart(value: unknown): value is { thread: { id: string }; model?: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const response = value as Record<string, unknown>;
+  const thread = response.thread;
+  return Boolean(
+    thread &&
+    typeof thread === "object" &&
+    !Array.isArray(thread) &&
+    typeof (thread as Record<string, unknown>).id === "string" &&
+    (!("model" in response) || typeof response.model === "string"),
+  );
+}
+
+function isCodexTurnStart(value: unknown): value is { turn: CodexTurn } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const turn = (value as Record<string, unknown>).turn;
+  if (!turn || typeof turn !== "object" || Array.isArray(turn)) return false;
+  const response = turn as Record<string, unknown>;
+  return typeof response.id === "string" && typeof response.status === "string";
+}
+
+function isCodexTurn(value: unknown): value is CodexTurn {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const turn = value as Record<string, unknown>;
+  if (typeof turn.id !== "string" || typeof turn.status !== "string") return false;
+  if (!CODEX_TERMINAL_TURN_STATUSES.has(turn.status)) return false;
+  if (
+    "items" in turn &&
+    (!Array.isArray(turn.items) ||
+      turn.items.some(
+        (item) =>
+          !item ||
+          typeof item !== "object" ||
+          Array.isArray(item) ||
+          typeof (item as Record<string, unknown>).type !== "string" ||
+          !(item as Record<string, unknown>).type,
+      ))
+  )
+    return false;
+  const error = turn.error;
+  return (
+    error === undefined ||
+    error === null ||
+    (typeof error === "object" &&
+      !Array.isArray(error) &&
+      (!("message" in error) || typeof (error as Record<string, unknown>).message === "string"))
+  );
+}
+
 type ActiveTurn = {
+  server: CodexAppServer;
   threadId: string;
   turn: HarnessTurnInput;
   tools: Map<string, BridgedTool>;
@@ -100,7 +164,21 @@ type ActiveTurn = {
   stopped: boolean;
 };
 
-type Runtime = { server: CodexAppServer; jail: string };
+type Runtime = {
+  server: CodexAppServer;
+  jail: string;
+  persistAuth(
+    expectedRefreshToken?: string,
+    expectedAccessToken?: string,
+    heldLockPath?: string,
+    expectedSourceAuth?: Record<string, unknown>,
+  ): Promise<boolean>;
+};
+type StartingRuntime = {
+  promise: Promise<Runtime>;
+  abort: AbortController;
+  waiters: number;
+};
 const CODEX_START_TIMEOUT_MS = 30_000;
 
 const CODEX_NON_RETRYABLE_PATTERN =
@@ -111,7 +189,8 @@ export function codexNonRetryable(message: string): boolean {
 }
 
 export function codexProviderFailure(message: string): Error {
-  return codexNonRetryable(message) ? new NonRetryableTurnError(message) : new Error(message);
+  const safe = redactCodexDiagnostics(message);
+  return codexNonRetryable(safe) ? new NonRetryableTurnError(safe) : new Error(safe);
 }
 const CODEX_CHILD_TOOL_NAMES = new Set(["execute", "read", "write", "publish", "memory", "history", "background"]);
 
@@ -190,7 +269,11 @@ export function codexChildEnv(source: NodeJS.ProcessEnv, jail: string): NodeJS.P
     HOME: jail,
     CODEX_HOME: join(jail, "codex-home"),
   };
+  const authPath = codexAuthFileForEnv(source, true);
+  const oauthAuth = authPath ? readCodexOAuthAuthFile(authPath) : null;
   for (const name of CODEX_ENV_PASSTHROUGH) {
+    if (oauthAuth && (name === "OPENAI_API_KEY" || name === "OPENAI_BASE_URL" || name === "CODEX_ACCESS_TOKEN"))
+      continue;
     if (source[name] !== undefined) env[name] = source[name];
   }
   return env;
@@ -199,6 +282,12 @@ export function codexChildEnv(source: NodeJS.ProcessEnv, jail: string): NodeJS.P
 export function prepareCodexHome(source: NodeJS.ProcessEnv, jail: string): string {
   const target = join(jail, "codex-home");
   mkdirSync(target, { recursive: true });
+  const authPath = codexAuthFileForEnv(source, true);
+  const oauthAuth = authPath ? readCodexOAuthAuthFile(authPath) : null;
+  if (oauthAuth) {
+    writeFileSync(join(target, "auth.json"), JSON.stringify(sanitizedCodexOAuthAuth(oauthAuth)), { mode: 0o600 });
+    return target;
+  }
   if (source.OPENAI_API_KEY) {
     writeFileSync(
       join(target, "auth.json"),
@@ -356,9 +445,53 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       DEFAULT_CODEX_MODEL_ID,
     ].find((id): id is string => modelSupportedByHarness(id, "codex"))!;
   const defaultTurnWallClockMs = opts.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
+  const authPath = opts.oauthAuth?.path ?? codexAuthFileForEnv(opts.env ?? {}, true);
+  const sourceEnv = opts.oauthAuth ? { ...opts.env, CODEX_AUTH_FILE: authPath } : (opts.env ?? {});
+  const oauthConfigured = Boolean(opts.oauthAuth || (authPath && readCodexOAuthAuthFile(authPath)));
+  const acquireAuthLock = (signal?: AbortSignal, timeoutMs?: number) =>
+    opts.oauthAuth?.acquire(signal, timeoutMs) ?? acquireCodexOAuthAuthLock(authPath!, signal, timeoutMs);
+  const closeAbort = new AbortController();
+  let activeAuthLock: CodexOAuthAuthLock | undefined;
+  let activeExpectedRefreshToken: string | undefined;
+  let activeExpectedAccessToken: string | undefined;
+  let activeExpectedSourceAuth: Record<string, unknown> | undefined;
+  const authReleases = new WeakMap<CodexOAuthAuthLock, Promise<void>>();
   let runtime: Runtime | null = null;
-  let starting: Promise<Runtime> | null = null;
+  let starting: StartingRuntime | null = null;
   let startingServer: CodexAppServer | null = null;
+  let setupUsers = 0;
+  let runtimeCleanupRequested = false;
+
+  const releaseActiveAuth = (current: Runtime, lock: CodexOAuthAuthLock): Promise<void> => {
+    const existing = authReleases.get(lock);
+    if (existing) return existing;
+    const expectedRefreshToken = activeExpectedRefreshToken;
+    const expectedAccessToken = activeExpectedAccessToken;
+    const expectedSourceAuth = activeExpectedSourceAuth;
+    const release = (async () => {
+      try {
+        if (
+          lock.isHeld() &&
+          !(await current.persistAuth(expectedRefreshToken, expectedAccessToken, lock.path, expectedSourceAuth))
+        )
+          throw new Error("Codex OAuth auth persistence failed");
+      } finally {
+        try {
+          rmSync(join(current.jail, "codex-home", "auth.json"), { force: true });
+        } finally {
+          if (activeAuthLock === lock) {
+            activeAuthLock = undefined;
+            activeExpectedRefreshToken = undefined;
+            activeExpectedAccessToken = undefined;
+            activeExpectedSourceAuth = undefined;
+          }
+          await lock.release();
+        }
+      }
+    })();
+    authReleases.set(lock, release);
+    return release;
+  };
 
   const processCollabItem = async (state: ActiveTurn, item: CodexItem): Promise<void> => {
     if (item.type !== "collabAgentToolCall") return;
@@ -421,156 +554,374 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     }
   };
 
-  const ensureRuntime = async (): Promise<Runtime> => {
+  const ensureRuntime = async (
+    registerCancel?: (release: () => void) => void,
+    startupDeadline = 0,
+  ): Promise<Runtime> => {
     if (runtime && runtime.server.process.exitCode === null) return runtime;
-    if (starting) return await starting;
-    starting = (async () => {
-      const jail = mkdtempSync(join(tmpdir(), "qm-codex-"));
-      const sourceEnv = opts.env ?? {};
-      prepareCodexHome(sourceEnv, jail);
-      const binaryPath = opts.binaryPath ?? resolve("node_modules/.bin/codex");
-      const server = new CodexAppServer({
-        binaryPath,
-        cwd: jail,
-        env: codexChildEnv(sourceEnv, jail),
-        onNotification: async (method, params) => {
-          const p = (params ?? {}) as Record<string, unknown>;
-          const threadId = typeof p.threadId === "string" ? p.threadId : "";
-          const state = active.get(threadId);
-          if (!state) return;
-          if (method === "thread/tokenUsage/updated") {
-            const totals = codexUsageTotals(p);
-            if (totals) state.usageByThread.set(threadId, totals);
-            const usage = codexTokenUsageUpdate(p, state.usageInputTotals.get(threadId));
-            if (!usage) return;
-            state.usageInputTotals.set(threadId, usage.totalInputTokens);
-            state.modelCalls++;
-            state.turn.recordModelCall({
-              model: state.model,
-              inputTokens: usage.inputTokens,
-              entryCount: state.turn.history.length,
-            });
+    if (runtime) {
+      const stale = runtime;
+      runtime = null;
+      runtimeCleanupRequested = false;
+      let persistenceFailed = false;
+      const staleError = stale.server.error() ?? new Error("Codex app-server exited during a turn");
+      for (const [threadId, state] of active) {
+        if (state.server !== stale.server) continue;
+        state.reject(staleError);
+        active.delete(threadId);
+      }
+      const lock = activeAuthLock;
+      if (lock) {
+        try {
+          await releaseActiveAuth(stale, lock);
+        } catch (error) {
+          persistenceFailed = true;
+          swallow("codex: oauth auth persistence", error);
+        }
+      }
+      await stale.server.close().catch(() => undefined);
+      rmSync(stale.jail, { recursive: true, force: true });
+      if (persistenceFailed) throw new Error("Codex OAuth auth persistence failed");
+    }
+    let startup = starting;
+    if (startup?.abort.signal.aborted) {
+      if (starting === startup) starting = null;
+      startup = null;
+    }
+    if (!startup) {
+      const startupAbort = new AbortController();
+      const promise = (async () => {
+        const jail = mkdtempSync(join(existsSync("/dev/shm") ? "/dev/shm" : tmpdir(), "qm-codex-"));
+        let sourceAuth = authPath ? readCodexOAuthAuthFile(authPath) : null;
+        let expectedRefreshToken = codexOAuthRefreshToken(sourceAuth);
+        let expectedAccessToken = codexOAuthAccessToken(sourceAuth);
+        let expectedSourceAuth = sourceAuth ?? undefined;
+        let authLock: CodexOAuthAuthLock | undefined;
+        let server!: CodexAppServer;
+        try {
+          if (oauthConfigured && !opts.oauthAuth && !sourceAuth)
+            throw new Error("Codex OAuth auth.json is unavailable");
+          if (oauthConfigured && authPath) {
+            const lockTimeout = startupDeadline
+              ? Math.min(120_000, Math.max(1, startupDeadline - Date.now()))
+              : 120_000;
+            authLock = await acquireAuthLock(AbortSignal.any([closeAbort.signal, startupAbort.signal]), lockTimeout);
+            sourceAuth = readCodexOAuthAuthFile(authPath);
+            expectedRefreshToken = codexOAuthRefreshToken(sourceAuth);
+            expectedAccessToken = codexOAuthAccessToken(sourceAuth);
+            expectedSourceAuth = sourceAuth ?? undefined;
+            if (!sourceAuth) throw new Error("Codex OAuth auth.json is unavailable");
+            if (startupAbort.signal.aborted) throw new Error("Codex app-server startup cancelled");
           }
-          if (method === "item/agentMessage/delta" && threadId === state.threadId && typeof p.delta === "string") {
-            state.firstOutputAt ??= Date.now();
-            state.turn.onDelta?.(p.delta);
-          }
-          if ((method === "item/started" || method === "item/completed") && p.item && typeof p.item === "object") {
-            const item = p.item as CodexItem;
-            if (method === "item/completed") {
-              state.completedItems.push(item);
-              if (state.turn.tape) {
-                try {
-                  await state.turn.tape({
-                    kind: "message",
-                    harness: "codex",
-                    scopeLabel: state.turn.scopeLabel,
-                    payload: item,
-                  });
-                } catch (error) {
-                  state.tapeWriteFailed = true;
-                  swallow("codex: tape append", error);
+          prepareCodexHome(sourceEnv, jail);
+          if (startupAbort.signal.aborted) throw new Error("Codex app-server startup cancelled");
+          const binaryPath = opts.binaryPath ?? resolve("node_modules/.bin/codex");
+          server = new CodexAppServer({
+            binaryPath,
+            cwd: jail,
+            env: codexChildEnv(sourceEnv, jail),
+            onNotification: async (method, params) => {
+              const p = (params ?? {}) as Record<string, unknown>;
+              const threadId = typeof p.threadId === "string" ? p.threadId : "";
+              const state = active.get(threadId);
+              if (!state || state.server !== server) return;
+              if (method === "thread/tokenUsage/updated") {
+                const totals = codexUsageTotals(p);
+                if (totals) state.usageByThread.set(threadId, totals);
+                const usage = codexTokenUsageUpdate(p, state.usageInputTotals.get(threadId));
+                if (!usage) return;
+                state.usageInputTotals.set(threadId, usage.totalInputTokens);
+                state.modelCalls++;
+                state.turn.recordModelCall({
+                  model: state.model,
+                  inputTokens: usage.inputTokens,
+                  entryCount: state.turn.history.length,
+                });
+              }
+              if (method === "item/agentMessage/delta" && threadId === state.threadId && typeof p.delta === "string") {
+                state.firstOutputAt ??= Date.now();
+                state.turn.onDelta?.(p.delta);
+              }
+              if ((method === "item/started" || method === "item/completed") && p.item && typeof p.item === "object") {
+                const item = p.item as CodexItem;
+                if (method === "item/completed") {
+                  state.completedItems.push(item);
+                  if (state.turn.tape) {
+                    try {
+                      await state.turn.tape({
+                        kind: "message",
+                        harness: "codex",
+                        scopeLabel: state.turn.scopeLabel,
+                        payload: item,
+                      });
+                    } catch (error) {
+                      state.tapeWriteFailed = true;
+                      swallow("codex: tape append", error);
+                    }
+                  }
                 }
+                await processCollabItem(state, item);
+              }
+              if (method === "turn/completed" && threadId === state.threadId) {
+                const completed = p.turn as CodexTurn | undefined;
+                if (!isCodexTurn(completed)) {
+                  state.reject(new CodexRpcError("Codex app-server sent an invalid turn/completed payload"));
+                  return;
+                }
+                state.resolve(completed.items?.length ? completed : { ...completed, items: state.completedItems });
+              }
+            },
+            onRequest: async (method, params) => {
+              if (method !== "item/tool/call") throw new Error(`unsupported Codex request ${method}`);
+              const p = (params ?? {}) as Record<string, unknown>;
+              const threadId = String(p.threadId ?? "");
+              const state = active.get(threadId);
+              if (!state || state.server !== server) throw new Error("inactive Codex thread");
+              const name = String(p.tool ?? "");
+              const callId = String(p.callId ?? "");
+              if (threadId !== state.threadId && !codexChildToolAllowed(name))
+                throw new Error(`Codex child requested unavailable tool ${name}`);
+              const tool = state.tools.get(name);
+              if (!tool) throw new Error(`Codex requested unavailable tool ${name}`);
+              state.responseItems.push({
+                type: "function_call",
+                call_id: callId,
+                name,
+                arguments: JSON.stringify(p.arguments ?? {}),
+              });
+              try {
+                const result = await tool.execute(callId, p.arguments ?? {});
+                const output = toolText(result);
+                state.responseItems.push({ type: "function_call_output", call_id: callId, output });
+                if (result.terminate || state.turn.cancel?.aborted)
+                  setImmediate(() => {
+                    const requestingTurnId = String(p.turnId ?? "");
+                    if (threadId !== state.threadId && requestingTurnId) {
+                      void server
+                        .request("turn/interrupt", { threadId, turnId: requestingTurnId })
+                        .catch(() => undefined);
+                    }
+                    void state.interrupt?.();
+                  });
+                return { contentItems: [{ type: "inputText", text: output }], success: true };
+              } catch (error) {
+                const output = error instanceof Error ? error.message : String(error);
+                state.responseItems.push({ type: "function_call_output", call_id: callId, output });
+                return { contentItems: [{ type: "inputText", text: output }], success: false };
+              }
+            },
+          });
+          startingServer = server;
+          if (startupAbort.signal.aborted) throw new Error("Codex app-server startup cancelled");
+        } catch (error) {
+          let persistenceFailed = false;
+          if (authLock) {
+            try {
+              if (
+                !(await syncCodexOAuthAuthFile(
+                  authPath,
+                  join(jail, "codex-home", "auth.json"),
+                  authLock.path,
+                  expectedRefreshToken,
+                  expectedAccessToken,
+                  expectedSourceAuth,
+                ))
+              )
+                persistenceFailed = true;
+            } catch (persistenceError) {
+              persistenceFailed = true;
+              swallow("codex: oauth auth persistence", persistenceError);
+            }
+          }
+          await server?.close().catch(() => undefined);
+          await authLock?.release();
+          rmSync(jail, { recursive: true, force: true });
+          if (persistenceFailed) throw new Error("Codex OAuth auth persistence failed", { cause: error });
+          throw error;
+        }
+        const childAuthPath = join(jail, "codex-home", "auth.json");
+        const persistAuth = async (
+          expectedRefresh = expectedRefreshToken,
+          expectedAccess = expectedAccessToken,
+          heldLockPath?: string,
+          expectedSource = expectedSourceAuth,
+        ): Promise<boolean> => {
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              if (
+                await syncCodexOAuthAuthFile(
+                  authPath,
+                  childAuthPath,
+                  heldLockPath,
+                  expectedRefresh,
+                  expectedAccess,
+                  expectedSource,
+                )
+              )
+                return true;
+              if (attempt === 2)
+                swallow("codex: oauth auth persistence", new Error("Codex OAuth auth persistence refused"));
+              else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+            } catch (error) {
+              if (attempt === 2) swallow("codex: oauth auth persistence", error);
+              else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+            }
+          }
+          return false;
+        };
+        let startTimer: NodeJS.Timeout | undefined;
+        try {
+          const initializationTimeout = startupDeadline
+            ? Math.min(
+                opts.appServerStartTimeoutMs ?? CODEX_START_TIMEOUT_MS,
+                Math.max(1, startupDeadline - Date.now()),
+              )
+            : (opts.appServerStartTimeoutMs ?? CODEX_START_TIMEOUT_MS);
+          await Promise.race([
+            server.initialize(),
+            new Promise<never>((_, reject) => {
+              startTimer = setTimeout(
+                () => reject(new Error("Codex app-server initialization timed out")),
+                initializationTimeout,
+              );
+            }),
+          ]);
+          if (
+            authLock &&
+            !(await persistAuth(expectedRefreshToken, expectedAccessToken, authLock.path, expectedSourceAuth))
+          )
+            throw new Error("Codex OAuth auth persistence failed");
+          await authLock?.release();
+          if (authLock) rmSync(childAuthPath, { force: true });
+          authLock = undefined;
+        } catch (error) {
+          const persistenceFailed = authLock
+            ? !(await persistAuth(expectedRefreshToken, expectedAccessToken, authLock.path, expectedSourceAuth))
+            : false;
+          await server.close().catch(() => undefined);
+          await authLock?.release();
+          rmSync(jail, { recursive: true, force: true });
+          if (persistenceFailed) throw new Error("Codex OAuth auth persistence failed", { cause: error });
+          throw error;
+        } finally {
+          if (startTimer) clearTimeout(startTimer);
+          if (startingServer === server) startingServer = null;
+        }
+        runtime = { server, jail, persistAuth };
+        runtimeCleanupRequested = false;
+        server.process.once("close", () => {
+          void (async () => {
+            const currentRuntime = runtime?.server === server;
+            let persistenceFailed = false;
+            const lock = currentRuntime ? activeAuthLock : undefined;
+            if (lock && !closeAbort.signal.aborted) {
+              try {
+                await releaseActiveAuth({ server, jail, persistAuth }, lock);
+              } catch (error) {
+                persistenceFailed = true;
+                swallow("codex: oauth auth persistence", error);
               }
             }
-            await processCollabItem(state, item);
-          }
-          if (method === "turn/completed" && threadId === state.threadId) {
-            const completed = p.turn as CodexTurn | undefined;
-            if (completed)
-              state.resolve(completed.items?.length ? completed : { ...completed, items: state.completedItems });
-          }
-        },
-        onRequest: async (method, params) => {
-          if (method !== "item/tool/call") throw new Error(`unsupported Codex request ${method}`);
-          const p = (params ?? {}) as Record<string, unknown>;
-          const threadId = String(p.threadId ?? "");
-          const state = active.get(threadId);
-          if (!state) throw new Error("inactive Codex thread");
-          const name = String(p.tool ?? "");
-          const callId = String(p.callId ?? "");
-          if (threadId !== state.threadId && !codexChildToolAllowed(name))
-            throw new Error(`Codex child requested unavailable tool ${name}`);
-          const tool = state.tools.get(name);
-          if (!tool) throw new Error(`Codex requested unavailable tool ${name}`);
-          state.responseItems.push({
-            type: "function_call",
-            call_id: callId,
-            name,
-            arguments: JSON.stringify(p.arguments ?? {}),
+            const closeError = persistenceFailed
+              ? new Error("Codex OAuth auth persistence failed", { cause: server.error() })
+              : (server.error() ?? new Error("Codex app-server exited during a turn"));
+            for (const [threadId, state] of active) {
+              if (state.server !== server) continue;
+              state.reject(closeError);
+              active.delete(threadId);
+            }
+            if (!currentRuntime) {
+              rmSync(jail, { recursive: true, force: true });
+              return;
+            }
+            runtime = null;
+            runtimeCleanupRequested = false;
+            if (closeAbort.signal.aborted) {
+              if (persistenceFailed) swallow("codex: oauth auth persistence", closeError);
+            }
+            if (!closeAbort.signal.aborted) rmSync(jail, { recursive: true, force: true });
+          })().catch((error) => {
+            swallow("codex: provider close cleanup", error);
+            try {
+              rmSync(jail, { recursive: true, force: true });
+            } catch (cleanupError) {
+              swallow("codex: provider close jail cleanup", cleanupError);
+            }
           });
-          try {
-            const result = await tool.execute(callId, p.arguments ?? {});
-            const output = toolText(result);
-            state.responseItems.push({ type: "function_call_output", call_id: callId, output });
-            if (result.terminate || state.turn.cancel?.aborted)
-              setImmediate(() => {
-                const requestingTurnId = String(p.turnId ?? "");
-                if (threadId !== state.threadId && requestingTurnId) {
-                  void server.request("turn/interrupt", { threadId, turnId: requestingTurnId }).catch(() => undefined);
-                }
-                void state.interrupt?.();
-              });
-            return { contentItems: [{ type: "inputText", text: output }], success: true };
-          } catch (error) {
-            const output = error instanceof Error ? error.message : String(error);
-            state.responseItems.push({ type: "function_call_output", call_id: callId, output });
-            return { contentItems: [{ type: "inputText", text: output }], success: false };
-          }
+        });
+        return runtime;
+      })();
+      startup = { promise, abort: startupAbort, waiters: 0 };
+      starting = startup;
+      const current = startup;
+      void promise.then(
+        () => {
+          if (starting === current) starting = null;
         },
-      });
-      startingServer = server;
-      let startTimer: NodeJS.Timeout | undefined;
-      try {
-        await Promise.race([
-          server.initialize(),
-          new Promise<never>((_, reject) => {
-            startTimer = setTimeout(
-              () => reject(new Error("Codex app-server initialization timed out")),
-              opts.appServerStartTimeoutMs ?? CODEX_START_TIMEOUT_MS,
-            );
-          }),
-        ]);
-      } catch (error) {
-        await server.close().catch(() => undefined);
-        rmSync(jail, { recursive: true, force: true });
-        throw error;
-      } finally {
-        if (startTimer) clearTimeout(startTimer);
-        if (startingServer === server) startingServer = null;
-      }
-      runtime = { server, jail };
-      server.process.once("close", () => {
-        if (runtime?.server !== server) return;
-        for (const state of active.values())
-          state.reject(server.error() ?? new Error("Codex app-server exited during a turn"));
-        active.clear();
-        runtime = null;
-        rmSync(jail, { recursive: true, force: true });
-      });
-      return runtime;
-    })();
-    try {
-      return await starting;
-    } finally {
-      starting = null;
+        () => {
+          if (starting === current) starting = null;
+        },
+      );
     }
+    const current = startup;
+    current.waiters += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      current.waiters -= 1;
+      if (current.waiters === 0 && starting === current) {
+        current.abort.abort();
+        void startingServer?.close().catch(() => undefined);
+      }
+    };
+    registerCancel?.(release);
+    try {
+      return await current.promise;
+    } finally {
+      release();
+    }
+  };
+
+  const closeIdleRuntime = async (): Promise<void> => {
+    const current = runtime;
+    if (!current) return;
+    if (active.size || setupUsers) {
+      runtimeCleanupRequested = true;
+      return;
+    }
+    runtimeCleanupRequested = false;
+    if (runtime === current) runtime = null;
+    await current.server.close().catch(() => undefined);
+    rmSync(current.jail, { recursive: true, force: true });
   };
 
   const runPrompt = async (turn: HarnessTurnInput, toolsEnabled = true): Promise<HarnessTurnResult> => {
     if (turn.cancel?.aborted) return { reply: "", stopped: true };
+    setupUsers += 1;
+    let setupUserReleased = false;
+    const releaseSetupUser = () => {
+      if (setupUserReleased) return;
+      setupUserReleased = true;
+      setupUsers -= 1;
+    };
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
     const deadline = wallMs > 0 ? Date.now() + wallMs : 0;
+    const runtimeRecoveryDeadline = Date.now() + Math.max(wallMs, CODEX_START_TIMEOUT_MS);
     const setupCancelled = new Error("Codex setup cancelled");
     const setupTimedOut = new NonRetryableTurnError(`Codex turn exceeded ${Math.round(wallMs / 1000)}s wall clock`);
     let rejectSetup!: (error: Error) => void;
     let setupSettled = false;
+    let releaseStartupWaiter: () => void = () => {};
+    const authAcquireAbort = new AbortController();
     const setupStop = new Promise<never>((_, reject) => {
       rejectSetup = reject;
     });
     const stopSetup = (error: Error) => {
       if (setupSettled) return;
       setupSettled = true;
+      releaseStartupWaiter();
+      authAcquireAbort.abort();
       rejectSetup(error);
     };
     const onSetupCancel = () => stopSetup(setupCancelled);
@@ -579,73 +930,220 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     const awaitSetup = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, setupStop]);
     let rt: Runtime;
     try {
-      rt = await awaitSetup(ensureRuntime());
+      rt = await awaitSetup(
+        ensureRuntime((release) => {
+          releaseStartupWaiter = release;
+        }),
+      );
     } catch (error) {
       setupSettled = true;
       if (setupTimer) clearTimeout(setupTimer);
       turn.cancel?.removeEventListener("abort", onSetupCancel);
+      releaseSetupUser();
+      await closeIdleRuntime();
+      if (error === setupCancelled) {
+        return { reply: "", stopped: true };
+      }
+      throw error;
+    }
+    let turnAuthLock: CodexOAuthAuthLock | undefined;
+    let expectedRefreshToken: string | undefined;
+    let expectedAccessToken: string | undefined;
+    let expectedSourceAuth: Record<string, unknown> | undefined;
+    let turnAuthReleased = false;
+    const releaseTurnAuth = async (): Promise<void> => {
+      if (turnAuthReleased) return;
+      turnAuthReleased = true;
+      const lock = turnAuthLock;
+      if (!lock) return;
+      if (activeAuthLock === lock) {
+        try {
+          await releaseActiveAuth(rt, lock);
+        } catch {
+          throw new NonRetryableTurnError("Codex OAuth auth persistence failed");
+        } finally {
+          turnAuthLock = undefined;
+        }
+      } else {
+        rmSync(join(rt.jail, "codex-home", "auth.json"), { force: true });
+        await lock.release();
+      }
+    };
+    const releaseTurnAuthError = async (): Promise<unknown> => {
+      try {
+        await releaseTurnAuth();
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    };
+    try {
+      if (oauthConfigured && !opts.oauthAuth && (!authPath || !readCodexOAuthAuthFile(authPath))) {
+        rmSync(join(rt.jail, "codex-home", "auth.json"), { force: true });
+        throw new NonRetryableTurnError("Codex OAuth auth.json is unavailable");
+      }
+      if (oauthConfigured && authPath) {
+        while (true) {
+          if (Date.now() >= runtimeRecoveryDeadline)
+            throw new NonRetryableTurnError("Codex OAuth runtime recovery timed out");
+          const authLockPromise = acquireAuthLock(
+            AbortSignal.any([closeAbort.signal, authAcquireAbort.signal]),
+            Math.min(120_000, Math.max(1, runtimeRecoveryDeadline - Date.now())),
+          );
+          try {
+            turnAuthLock = await awaitSetup(authLockPromise);
+          } catch (error) {
+            void authLockPromise.then(
+              (lock) => lock.release().catch((releaseError) => swallow("codex: oauth lock release", releaseError)),
+              () => undefined,
+            );
+            throw error;
+          }
+          if (runtime !== rt || rt.server.process.exitCode !== null) {
+            await turnAuthLock.release();
+            turnAuthLock = undefined;
+            if (authAcquireAbort.signal.aborted) throw setupCancelled;
+            rt = await awaitSetup(
+              ensureRuntime((release) => {
+                releaseStartupWaiter = release;
+              }, runtimeRecoveryDeadline),
+            );
+            continue;
+          }
+          const currentAuth = readCodexOAuthAuthFile(authPath);
+          if (!currentAuth) {
+            rmSync(join(rt.jail, "codex-home", "auth.json"), { force: true });
+            throw new NonRetryableTurnError("Codex OAuth auth.json is unavailable");
+          }
+          expectedRefreshToken = codexOAuthRefreshToken(currentAuth);
+          expectedAccessToken = codexOAuthAccessToken(currentAuth);
+          expectedSourceAuth = currentAuth ?? undefined;
+          prepareCodexHome(sourceEnv, rt.jail);
+          activeAuthLock = turnAuthLock;
+          activeExpectedRefreshToken = expectedRefreshToken;
+          activeExpectedAccessToken = expectedAccessToken;
+          activeExpectedSourceAuth = expectedSourceAuth;
+          break;
+        }
+      }
+    } catch (error) {
+      const releaseError = await releaseTurnAuthError();
+      setupSettled = true;
+      if (setupTimer) clearTimeout(setupTimer);
+      turn.cancel?.removeEventListener("abort", onSetupCancel);
+      releaseSetupUser();
+      await closeIdleRuntime();
+      if (releaseError) throw releaseError;
+      if (error === setupCancelled) {
+        return { reply: "", stopped: true };
+      }
+      throw error;
+    }
+    let ref!: ToolContextRef;
+    let toolAbort!: AbortController;
+    let tools!: BridgedTool[];
+    let dynamicTools!: Array<Record<string, unknown>>;
+    let model: string | undefined;
+    let threadStartRequest!: Record<string, unknown>;
+    try {
+      ref = codexToolContext(turn);
+      toolAbort = new AbortController();
+      ref.abortSignal = toolAbort.signal;
+      tools = toolsEnabled ? asTools(ref, toolOptions(opts, turn)) : [];
+      dynamicTools = tools.map((tool) => ({
+        type: "function",
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.parameters,
+      }));
+      model = modelSupportedByHarness(turn.model, "codex") ? turn.model! : resolveModelId(turn.scopeLabel);
+      threadStartRequest = {
+        ...(model ? { model } : {}),
+        cwd: rt.jail,
+        approvalPolicy: "never",
+        sandbox: "read-only",
+        ephemeral: true,
+        baseInstructions: turn.systemPrompt,
+        developerInstructions:
+          "Use the supplied dynamic QM tools for all workspace, execution, memory, history, and surface operations. The built-in working directory is an empty read-only control jail, not the user's workspace.",
+        dynamicTools,
+        experimentalRawEvents: true,
+        environments: [],
+        config: {
+          web_search: "disabled",
+          ...(codexReasoningEffort(turn.thinkingLevel)
+            ? { model_reasoning_effort: codexReasoningEffort(turn.thinkingLevel) }
+            : {}),
+          features: {
+            shell_tool: false,
+            unified_exec: false,
+            shell_snapshot: false,
+            apps: false,
+            plugins: false,
+            browser_use: false,
+            browser_use_external: false,
+            computer_use: false,
+            image_generation: false,
+            in_app_browser: false,
+            multi_agent: !turn.readOnly,
+            request_permissions_tool: false,
+            tool_suggest: false,
+          },
+        },
+      };
+    } catch (error) {
+      const releaseError = await releaseTurnAuthError();
+      setupSettled = true;
+      if (setupTimer) clearTimeout(setupTimer);
+      turn.cancel?.removeEventListener("abort", onSetupCancel);
+      releaseSetupUser();
+      await closeIdleRuntime();
+      if (releaseError) throw releaseError;
       if (error === setupCancelled) return { reply: "", stopped: true };
       throw error;
     }
-    const ref = codexToolContext(turn);
-    const toolAbort = new AbortController();
-    ref.abortSignal = toolAbort.signal;
-    const tools = toolsEnabled ? asTools(ref, toolOptions(opts, turn)) : [];
-    const dynamicTools = tools.map((tool) => ({
-      type: "function",
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.parameters,
-    }));
-    const model = modelSupportedByHarness(turn.model, "codex") ? turn.model! : resolveModelId(turn.scopeLabel);
-    const threadStartRequest = {
-      ...(model ? { model } : {}),
-      cwd: rt.jail,
-      approvalPolicy: "never",
-      sandbox: "read-only",
-      ephemeral: true,
-      baseInstructions: turn.systemPrompt,
-      developerInstructions:
-        "Use the supplied dynamic QM tools for all workspace, execution, memory, history, and surface operations. The built-in working directory is an empty read-only control jail, not the user's workspace.",
-      dynamicTools,
-      experimentalRawEvents: true,
-      environments: [],
-      config: {
-        web_search: "disabled",
-        ...(codexReasoningEffort(turn.thinkingLevel)
-          ? { model_reasoning_effort: codexReasoningEffort(turn.thinkingLevel) }
-          : {}),
-        features: {
-          shell_tool: false,
-          unified_exec: false,
-          shell_snapshot: false,
-          apps: false,
-          plugins: false,
-          browser_use: false,
-          browser_use_external: false,
-          computer_use: false,
-          image_generation: false,
-          in_app_browser: false,
-          multi_agent: !turn.readOnly,
-          request_permissions_tool: false,
-          tool_suggest: false,
-        },
-      },
-    };
     let started: { thread: { id: string }; model?: string };
     try {
-      started = await awaitSetup(rt.server.request("thread/start", threadStartRequest));
+      const requestTimeoutMs = deadline ? Math.max(1, deadline - Date.now()) : CODEX_START_TIMEOUT_MS;
+      let requestTimer: NodeJS.Timeout | undefined;
+      const requestAbort = new AbortController();
+      started = await awaitSetup(
+        Promise.race([
+          rt.server.request(
+            "thread/start",
+            threadStartRequest,
+            isCodexThreadStart,
+            AbortSignal.any([authAcquireAbort.signal, closeAbort.signal, requestAbort.signal]),
+          ),
+          new Promise<never>((_, reject) => {
+            requestTimer = setTimeout(() => {
+              requestAbort.abort();
+              reject(new NonRetryableTurnError("Codex thread/start request timed out"));
+            }, requestTimeoutMs);
+          }),
+        ]).finally(() => {
+          if (requestTimer) clearTimeout(requestTimer);
+        }),
+      );
     } catch (error) {
+      const releaseError = await releaseTurnAuthError();
       setupSettled = true;
       if (setupTimer) clearTimeout(setupTimer);
       turn.cancel?.removeEventListener("abort", onSetupCancel);
-      if (error === setupCancelled) return { reply: "", stopped: true };
+      releaseSetupUser();
+      await closeIdleRuntime();
+      if (releaseError) throw releaseError;
+      if (error === setupCancelled) {
+        return { reply: "", stopped: true };
+      }
       throw error;
     }
-    const threadId = started.thread.id;
-    const replay = replayItems(reconstructMessagesFromHistory(turn.history));
-    let userEntry: SessionEntry;
+    let threadId!: string;
+    let replay!: ReturnType<typeof replayItems>;
+    let userEntry!: SessionEntry;
     try {
+      threadId = started.thread.id;
+      replay = replayItems(reconstructMessagesFromHistory(turn.history));
       if (replay.length) await awaitSetup(rt.server.request("thread/inject_items", { threadId, items: replay }));
       userEntry = await awaitSetup(
         turn.emit({
@@ -659,51 +1157,77 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         }),
       );
     } catch (error) {
+      const releaseError = await releaseTurnAuthError();
       setupSettled = true;
       if (setupTimer) clearTimeout(setupTimer);
       turn.cancel?.removeEventListener("abort", onSetupCancel);
+      releaseSetupUser();
+      await closeIdleRuntime();
+      if (releaseError) throw releaseError;
+      if (error === setupCancelled) {
+        return { reply: "", stopped: true };
+      }
+      throw error;
+    }
+    let resolveCompleted!: (value: CodexTurn) => void;
+    let rejectCompleted!: (error: Error) => void;
+    let completed!: Promise<CodexTurn>;
+    let inputText!: string;
+    let input!: Array<Record<string, unknown>>;
+    let selectedModel!: string;
+    let state!: ActiveTurn;
+    try {
+      completed = new Promise<CodexTurn>((resolveTurn, rejectTurn) => {
+        resolveCompleted = resolveTurn;
+        rejectCompleted = rejectTurn;
+      });
+      void completed.catch(() => undefined);
+      inputText = codexTurnInputText(turn);
+      input = [
+        userInput(inputText),
+        ...(turn.images ?? []).map((image) => ({
+          type: "image",
+          url: `data:${image.mimeType};base64,${image.dataBase64}`,
+        })),
+      ];
+      selectedModel = model ?? started.model ?? "codex-default";
+      state = {
+        server: rt.server,
+        threadId,
+        turn,
+        tools: new Map(tools.map((tool) => [tool.name, tool])),
+        resolve: resolveCompleted,
+        reject: rejectCompleted,
+        responseItems: [],
+        completedItems: [],
+        taskIds: new Map(),
+        taskStatuses: new Map(),
+        taskResults: new Set(),
+        model: selectedModel,
+        modelCalls: 0,
+        usageInputTotals: new Map(),
+        usageByThread: new Map(),
+        firstOutputAt: null,
+        fallbackInputTokens: countTokens(JSON.stringify({ replay, input })),
+        tapeWriteFailed: false,
+        stopped: false,
+      };
+    } catch (error) {
+      const releaseError = await releaseTurnAuthError();
+      setupSettled = true;
+      if (setupTimer) clearTimeout(setupTimer);
+      turn.cancel?.removeEventListener("abort", onSetupCancel);
+      releaseSetupUser();
+      await closeIdleRuntime();
+      if (releaseError) throw releaseError;
       if (error === setupCancelled) return { reply: "", stopped: true };
       throw error;
     }
+    active.set(threadId, state);
     setupSettled = true;
     if (setupTimer) clearTimeout(setupTimer);
     turn.cancel?.removeEventListener("abort", onSetupCancel);
-    let resolveCompleted!: (value: CodexTurn) => void;
-    let rejectCompleted!: (error: Error) => void;
-    const completed = new Promise<CodexTurn>((resolveTurn, rejectTurn) => {
-      resolveCompleted = resolveTurn;
-      rejectCompleted = rejectTurn;
-    });
-    const inputText = codexTurnInputText(turn);
-    const input = [
-      userInput(inputText),
-      ...(turn.images ?? []).map((image) => ({
-        type: "image",
-        url: `data:${image.mimeType};base64,${image.dataBase64}`,
-      })),
-    ];
-    const selectedModel = model ?? started.model ?? "codex-default";
-    const state: ActiveTurn = {
-      threadId,
-      turn,
-      tools: new Map(tools.map((tool) => [tool.name, tool])),
-      resolve: resolveCompleted,
-      reject: rejectCompleted,
-      responseItems: [],
-      completedItems: [],
-      taskIds: new Map(),
-      taskStatuses: new Map(),
-      taskResults: new Set(),
-      model: selectedModel,
-      modelCalls: 0,
-      usageInputTotals: new Map(),
-      usageByThread: new Map(),
-      firstOutputAt: null,
-      fallbackInputTokens: countTokens(JSON.stringify({ replay, input })),
-      tapeWriteFailed: false,
-      stopped: false,
-    };
-    active.set(threadId, state);
+    releaseSetupUser();
     const requestPayload = {
       threadStart: {
         ...threadStartRequest,
@@ -715,20 +1239,35 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     const startedAt = Date.now();
     const recordRequest = async (): Promise<void> => {
       if (!turn.recordLlmRequest) return;
+      const recordAbort = new AbortController();
+      let recordTimer: NodeJS.Timeout | undefined;
       try {
-        await turn.recordLlmRequest({
-          turnSeq: userEntry.seq,
-          step: 0,
-          model: selectedModel,
-          request: requestPayload,
-          truncated: Boolean(turn.images?.length),
-          transport: { modelId: selectedModel },
-          ttftMs: state.firstOutputAt ? state.firstOutputAt - startedAt : null,
-          durationMs: Date.now() - startedAt,
-          usage: sumUsage(state.usageByThread),
-        });
+        await Promise.race([
+          turn.recordLlmRequest(
+            {
+              turnSeq: userEntry.seq,
+              step: 0,
+              model: selectedModel,
+              request: requestPayload,
+              truncated: Boolean(turn.images?.length),
+              transport: { modelId: selectedModel },
+              ttftMs: state.firstOutputAt ? state.firstOutputAt - startedAt : null,
+              durationMs: Date.now() - startedAt,
+              usage: sumUsage(state.usageByThread),
+            },
+            recordAbort.signal,
+          ),
+          new Promise<never>((_, reject) => {
+            recordTimer = setTimeout(() => {
+              recordAbort.abort();
+              reject(new Error("Codex llm request recording timed out"));
+            }, 5_000);
+          }),
+        ]);
       } catch (error) {
         swallow("codex: llm request record", error);
+      } finally {
+        if (recordTimer) clearTimeout(recordTimer);
       }
     };
     if (turn.tape) {
@@ -768,7 +1307,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     };
     state.interrupt = () => interrupt(false);
     const onCancel = () => {
-      void interrupt(false);
+      runtimeCleanupRequested = true;
+      void interrupt(true);
     };
     if (turn.cancel) {
       if (turn.cancel.aborted) onCancel();
@@ -794,10 +1334,40 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           )
         : null;
     let timer: NodeJS.Timeout | undefined;
+    const turnStartAbort = new AbortController();
+    let turnStartTimedOut = false;
+    const cleanupErrors: unknown[] = [];
+    let turnResult: HarnessTurnResult | undefined;
     try {
-      const response = await rt.server
-        .request<{ turn: CodexTurn }>("turn/start", { threadId, input, ...(model ? { model } : {}) })
+      const turnStartSignals = [closeAbort.signal, turnStartAbort.signal];
+      if (turn.cancel) turnStartSignals.push(turn.cancel);
+      const turnStartTimeoutMs = deadline ? Math.max(1, deadline - Date.now()) : CODEX_START_TIMEOUT_MS;
+      let turnStartTimer: NodeJS.Timeout | undefined;
+      const response = await Promise.race([
+        rt.server.request<{ turn: CodexTurn }>(
+          "turn/start",
+          { threadId, input, ...(model ? { model } : {}) },
+          isCodexTurnStart,
+          AbortSignal.any(turnStartSignals),
+        ),
+        new Promise<never>((_, reject) => {
+          turnStartTimer = setTimeout(() => {
+            turnStartTimedOut = true;
+            runtimeCleanupRequested = true;
+            turnStartAbort.abort();
+            reject(new NonRetryableTurnError("Codex turn/start request timed out"));
+          }, turnStartTimeoutMs);
+        }),
+      ])
+        .finally(() => {
+          if (turnStartTimer) clearTimeout(turnStartTimer);
+        })
         .catch((error: unknown) => {
+          if (turnStartTimedOut) {
+            const timeoutError = new NonRetryableTurnError("Codex turn/start request timed out");
+            timeoutError.cause = error;
+            throw timeoutError;
+          }
           throw error instanceof CodexRpcError ? codexProviderFailure(error.message) : error;
         });
       turnId = response.turn.id;
@@ -809,6 +1379,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               completed,
               new Promise<never>((_, reject) => {
                 timer = setTimeout(() => {
+                  runtimeCleanupRequested = true;
                   void interrupt(false);
                   reject(setupTimedOut);
                 }, remainingWallMs);
@@ -824,39 +1395,68 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         });
       }
       if (result.status === "failed") throw codexProviderFailure(result.error?.message ?? "Codex turn failed");
-      const terminal = ref.silentRequested || ref.pausedOnApproval;
-      const reply = terminal ? "" : textFromTurn(result);
-      for (const thinking of reasoningFromTurn(result))
-        await turn.emit({ type: "thinking", payload: { thinking }, scopeLabel: turn.scopeLabel });
-      if (reply && !terminal)
-        await turn.emit({
-          type: "assistant",
-          payload: { text: reply, stopped: state.stopped || undefined },
-          scopeLabel: turn.scopeLabel,
-        });
-      return {
-        reply,
-        ...(state.stopped ? { stopped: true as const } : {}),
-        ...(ref.silentRequested ? { silent: true } : {}),
-        ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
-        ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
-        modelCalls: state.modelCalls,
-        ...(state.tapeWriteFailed ? { tapeWriteFailed: true } : {}),
-      };
+      if (turn.cancel?.aborted) {
+        runtimeCleanupRequested = true;
+        turnResult = { reply: "", stopped: true };
+      } else {
+        const terminal = ref.silentRequested || ref.pausedOnApproval;
+        const reply = terminal ? "" : textFromTurn(result);
+        for (const thinking of reasoningFromTurn(result))
+          await turn.emit({ type: "thinking", payload: { thinking }, scopeLabel: turn.scopeLabel });
+        if (reply && !terminal)
+          await turn.emit({
+            type: "assistant",
+            payload: { text: reply, stopped: state.stopped || undefined },
+            scopeLabel: turn.scopeLabel,
+          });
+        turnResult = {
+          reply,
+          ...(state.stopped ? { stopped: true as const } : {}),
+          ...(ref.silentRequested ? { silent: true } : {}),
+          ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
+          ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
+          modelCalls: state.modelCalls,
+          ...(state.tapeWriteFailed ? { tapeWriteFailed: true } : {}),
+        };
+      }
+    } catch (error) {
+      if (turn.cancel?.aborted) {
+        runtimeCleanupRequested = true;
+        turnResult = { reply: "", stopped: true };
+      } else {
+        throw error;
+      }
     } finally {
       if (timer) clearTimeout(timer);
-      await stopSignals?.();
-      await recordRequest();
+      try {
+        await stopSignals?.();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        await releaseTurnAuth();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
       turn.cancel?.removeEventListener("abort", onCancel);
       for (const [taskId, status] of state.taskStatuses) {
         if (status === "pending" || status === "in_progress") {
-          await transitionTask(opts.tasks, taskId, status, "failed", turn.runId ?? turn.session.id);
+          try {
+            await transitionTask(opts.tasks, taskId, status, "failed", turn.runId ?? turn.session.id);
+          } catch (error) {
+            cleanupErrors.push(error);
+          }
         }
       }
       for (const [activeThreadId, activeState] of active) {
         if (activeState === state) active.delete(activeThreadId);
       }
+      if (runtimeCleanupRequested) await closeIdleRuntime();
+      await recordRequest();
     }
+    if (cleanupErrors.length) throw cleanupErrors[0];
+    if (!turnResult) throw new Error("Codex turn did not produce a result");
+    return turnResult;
   };
 
   const single = async (
@@ -910,16 +1510,31 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     {
       runTurn: runPrompt,
       close: async () => {
+        closeAbort.abort();
         await startingServer?.close().catch(() => undefined);
-        await starting?.catch(() => undefined);
+        await starting?.promise.catch(() => undefined);
         const current = runtime;
         if (current) {
           for (const state of active.values()) state.reject(new Error("Codex harness closed during a turn"));
           active.clear();
           await current.server.close();
+          const lock = activeAuthLock;
+          let persistenceFailed = false;
+          if (lock) {
+            try {
+              await releaseActiveAuth(current, lock);
+            } catch {
+              persistenceFailed = true;
+            }
+          }
           rmSync(current.jail, { recursive: true, force: true });
           if (runtime === current) runtime = null;
+          if (persistenceFailed) {
+            await opts.oauthAuth?.close();
+            throw new Error("Codex OAuth auth persistence failed");
+          }
         }
+        await opts.oauthAuth?.close();
       },
       resetSession: () => {},
       oneShot: (system, prompt) => single(system, prompt),

@@ -307,7 +307,7 @@ test("HARNESS=pi can boot before an admin configures a model provider", () => {
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi", ANTHROPIC_API_KEY: "sk-ant" }));
 });
 
-test("HARNESS=codex requires OPENAI_API_KEY: its CLI cannot do browser OAuth in a container", () => {
+test("HARNESS=codex accepts an API key or encrypted durable ChatGPT OAuth", () => {
   assert.throws(() => loadConfig({ HARNESS: "codex" }), /missing or insecure required core secrets: OPENAI_API_KEY/);
   assert.throws(() => loadConfig({ HARNESS: " codex " }), /missing or insecure required core secrets: OPENAI_API_KEY/);
   assert.doesNotThrow(() => loadConfig({ HARNESS: "codex", OPENAI_API_KEY: "sk-openai" }));
@@ -319,6 +319,40 @@ test("HARNESS=codex requires OPENAI_API_KEY: its CLI cannot do browser OAuth in 
   assert.equal(
     loadConfig({ HARNESS: "codex", OPENAI_API_KEY: "sk-openai", CODEX_MODEL: "gpt-5.4" }).codexModel,
     "gpt-5.4",
+  );
+  const durable = loadConfig({
+    ...productionEnv,
+    HARNESS: "codex",
+    MODEL_PROVIDER: "openai",
+    DATABASE_URL: "postgres://test",
+    CODEX_OAUTH_DURABLE: "1",
+    CODEX_OAUTH_BOOTSTRAP_B64: "encoded-auth",
+  });
+  assert.equal(durable.codexOAuthDurable, true);
+  assert.equal(durable.codexOAuthBootstrap, "encoded-auth");
+  assert.equal(durable.openaiApiKey, undefined);
+  assert.equal(durable.codexProcessEnv.CODEX_OAUTH_BOOTSTRAP_B64, undefined);
+  assert.throws(
+    () => loadConfig({ HARNESS: "codex", CODEX_OAUTH_DURABLE: "1", CONNECTOR_SECRET_KEY: "x".repeat(32) }),
+    /requires DATABASE_URL/,
+  );
+  assert.throws(
+    () => loadConfig({ HARNESS: "codex", CODEX_OAUTH_DURABLE: "1", DATABASE_URL: "postgres://test" }),
+    /requires CONNECTOR_SECRET_KEY/,
+  );
+  assert.throws(() => loadConfig({ HARNESS: "pi", CODEX_OAUTH_DURABLE: "1" }), /requires HARNESS=codex/);
+  assert.throws(
+    () => loadConfig({ HARNESS: "codex", CODEX_OAUTH_BOOTSTRAP_B64: "encoded-auth" }),
+    /requires CODEX_OAUTH_DURABLE=1/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        HARNESS: "codex",
+        CODEX_OAUTH_DURABLE: "1",
+        CODEX_AUTH_FILE: "/tmp/auth.json",
+      }),
+    /mutually exclusive/,
   );
 });
 

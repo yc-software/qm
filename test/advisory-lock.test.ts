@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPgPool, type PgPool, type Pool, type PoolClient } from "../src/persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -17,6 +17,57 @@ test("no-op mutex: withLock runs fn and returns its value (single-instance dev/t
   });
   assert.equal(out, 42, "returns fn's result");
   assert.equal(ran, 1, "ran fn exactly once");
+});
+
+test("pg try-lock bounds a saturated pool wait and releases a late client", async () => {
+  let resolveClient!: (client: PoolClient) => void;
+  const pendingClient = new Promise<PoolClient>((resolve) => {
+    resolveClient = resolve;
+  });
+  let released = false;
+  const pg = {
+    pool: async () => ({ connect: () => pendingClient }) as unknown as Pool,
+  } as PgPool;
+  const lock = createPostgresAdvisoryLock(pg);
+  await assert.rejects(
+    () => lock.tryWithLock!("codex-oauth:test", async () => undefined, { timeoutMs: 10 }),
+    /timed out/,
+  );
+  resolveClient({ release: () => void (released = true) } as unknown as PoolClient);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(released, true);
+});
+
+test("pg try-lock bounds a stalled lock query and destroys the uncertain session", async () => {
+  let releasedWithError = false;
+  const client = {
+    query: () => new Promise<never>(() => undefined),
+    release: (error?: Error) => void (releasedWithError = error instanceof Error),
+  } as unknown as PoolClient;
+  const pg = { pool: async () => ({ connect: async () => client }) as unknown as Pool } as PgPool;
+  const lock = createPostgresAdvisoryLock(pg);
+  await assert.rejects(
+    () => lock.tryWithLock!("codex-oauth:test", async () => undefined, { timeoutMs: 10 }),
+    /timed out/,
+  );
+  assert.equal(releasedWithError, true);
+});
+
+test("pg try-lock destroys a session when unlock fails", async () => {
+  let calls = 0;
+  let releasedWithError = false;
+  const client = {
+    query: async () => {
+      calls += 1;
+      if (calls === 1) return { rows: [{ locked: true }] };
+      throw new Error("unlock failed");
+    },
+    release: (error?: Error) => void (releasedWithError = error instanceof Error),
+  } as unknown as PoolClient;
+  const pg = { pool: async () => ({ connect: async () => client }) as unknown as Pool } as PgPool;
+  const lock = createPostgresAdvisoryLock(pg);
+  await assert.rejects(() => lock.tryWithLock!("codex-oauth:test", async () => undefined), /unlock failed/);
+  assert.equal(releasedWithError, true);
 });
 
 test(

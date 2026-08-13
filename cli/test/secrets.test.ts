@@ -222,6 +222,26 @@ test("an OpenAI base model and the Codex harness agree on one required key", () 
   assert.equal(matches[0]!.required, true);
 });
 
+test("encrypted durable Codex OAuth removes the OpenAI API key requirement", () => {
+  const config = makeConfig({
+    modelProvider: "openai",
+    env: { core: { HARNESS: "codex", CODEX_OAUTH_DURABLE: "1" } },
+  });
+  assert.ok(!computedSecrets(config).some((secret) => secret.name === "OPENAI_API_KEY"));
+  assert.equal(secretByName(config, "CODEX_OAUTH_BOOTSTRAP_B64").required, false);
+  assert.match(renderEnvExample(config), /^# CODEX_OAUTH_BOOTSTRAP_B64= {2}# optional$/m);
+});
+
+test("durable Codex OAuth disabled values match runtime boolean semantics", () => {
+  for (const value of ["False", "NO", "Off", "NONE"]) {
+    const config = makeConfig({
+      modelProvider: "openai",
+      env: { core: { HARNESS: "codex", CODEX_OAUTH_DURABLE: value } },
+    });
+    assert.equal(secretByName(config, "OPENAI_API_KEY").required, true, value);
+  }
+});
+
 test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavior", () => {
   const deferred = makeConfig();
   assert.equal(secretByName(deferred, "ANTHROPIC_API_KEY").required, false);
