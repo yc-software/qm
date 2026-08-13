@@ -543,21 +543,21 @@ export function renderSidebarTop(): void {
           ? html`
               <div class="section-label recents-label">
                 <span>Sessions</span>
-          <button
-            class="chat-search-open"
-            type="button"
-            aria-label="Search chats"
-            @click=${() => {
+                <button
+                  class="chat-search-open"
+                  type="button"
+                  aria-label="Search chats"
+                  @click=${() => {
               hideTooltip();
               openChatSearch();
             }}
-            @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search chats · ${SEARCH_HOTKEY_LABEL}`)}
-            @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
-            @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search chats · ${SEARCH_HOTKEY_LABEL}`)}
-            @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
-          >
-            ${icon(Search, 13)}
-          </button>
+                  @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search chats · ${SEARCH_HOTKEY_LABEL}`)}
+                  @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+                  @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search chats · ${SEARCH_HOTKEY_LABEL}`)}
+                  @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+                >
+                  ${icon(Search, 13)}
+                </button>
                 <button
                   class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
                   type="button"
