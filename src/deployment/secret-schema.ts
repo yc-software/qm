@@ -46,8 +46,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   codex: (env) => env.HARNESS?.trim() === "codex",
   postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
   sprites: (env) => env.SANDBOX_BACKEND === "sprites" || env.SANDBOX_SECONDARY_BACKEND === "sprites",
-  smolmachines: (env) =>
-    env.SANDBOX_BACKEND === "smolmachines" || env.SANDBOX_SECONDARY_BACKEND === "smolmachines",
+  smolmachines: (env) => env.SANDBOX_BACKEND === "smolmachines" || env.SANDBOX_SECONDARY_BACKEND === "smolmachines",
   "fly-sandbox": (env) => env.SANDBOX_BACKEND === "fly",
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
   "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN),
