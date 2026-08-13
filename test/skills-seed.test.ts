@@ -206,6 +206,15 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   } as TurnRequest);
   assert.match(drive.reply ?? "", /Google Drive \/ Docs \/ Sheets \/ Slides/);
   assert.match(drive.reply ?? "", /sheets\.googleapis\.com/);
+
+  const github = await app.turn({
+    surface: "test",
+    actor,
+    conversation: { kind: "dm", threadRef: "dm:U1:seeded-github-read" },
+    text: "!read skills/github-gitlab/SKILL.md",
+  } as TurnRequest);
+  assert.match(github.reply ?? "", /VAULT_TOKEN_API_GITHUB_COM/);
+  assert.match(github.reply ?? "", /GH_TOKEN/);
 });
 
 function fakeSandbox() {

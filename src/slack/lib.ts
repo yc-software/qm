@@ -139,4 +139,6 @@ export {
   renderTaskList,
   type TaskListPresenter,
   createTaskListPresenter,
+  type NativeAgentPresenter,
+  createNativeAgentPresenter,
 } from "./presenters.ts";

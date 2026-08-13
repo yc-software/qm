@@ -175,6 +175,181 @@ export interface TaskListPresenter {
   settle(): Promise<void>;
 }
 
+type NativeAgentChunk =
+  | { type: "markdown_text"; text: string }
+  | {
+      type: "task_update";
+      id: string;
+      title: string;
+      status: "pending" | "in_progress" | "complete" | "error";
+    };
+
+const NATIVE_STREAM_BUFFER_SIZE = 256;
+const NATIVE_STREAM_CHUNK_SIZE = 12_000;
+
+export interface NativeAgentPresenter {
+  begin(): Promise<void>;
+  onDelta(delta: string): Promise<boolean>;
+  onTasks(tasks: RunTaskView[]): Promise<boolean>;
+  finalize(): Promise<boolean>;
+  settle(): Promise<void>;
+  ownsSurface(): boolean;
+}
+
+export function createNativeAgentPresenter(deps: {
+  setStatus(status: string): Promise<void>;
+  start(chunks: NativeAgentChunk[]): Promise<string | undefined>;
+  append(ts: string, chunks: NativeAgentChunk[]): Promise<void>;
+  stop(ts: string): Promise<void>;
+  remove(ts: string): Promise<void>;
+  checkpoint(ts: string): Promise<void>;
+  onSurfacePosted(): void;
+  onError?(error: unknown): void;
+}): NativeAgentPresenter {
+  let state: "idle" | "starting" | "active" | "disabled" | "orphaned" | "stopped" = "idle";
+  let messageTs: string | undefined;
+  let chain = Promise.resolve();
+  let statusStarted = false;
+  let statusCleared = false;
+  let pendingText = "";
+  const nativeTaskStatus = (status: RunTaskStatus): "pending" | "in_progress" | "complete" | "error" => {
+    if (status === "completed" || status === "skipped") return "complete";
+    if (status === "failed") return "error";
+    return status;
+  };
+  const clearStatus = async (): Promise<void> => {
+    if (!statusStarted || statusCleared) return;
+    statusCleared = true;
+    await deps.setStatus("").catch((error) => deps.onError?.(error));
+  };
+  const enqueue = (operation: () => Promise<void>): Promise<void> => {
+    chain = chain.then(operation);
+    return chain;
+  };
+  const send = async (chunks: NativeAgentChunk[]): Promise<boolean> => {
+    if (state === "disabled" || state === "stopped") return false;
+    if (!messageTs && state === "idle") state = "starting";
+    await enqueue(async () => {
+      if (state === "disabled" || state === "stopped") return;
+      let uncheckpointedTs: string | undefined;
+      try {
+        if (!messageTs) {
+          const ts = await deps.start(chunks);
+          if (!ts) throw new Error("chat.startStream returned no message timestamp");
+          uncheckpointedTs = ts;
+          await deps.checkpoint(ts);
+          uncheckpointedTs = undefined;
+          messageTs = ts;
+          state = "active";
+          deps.onSurfacePosted();
+          return;
+        }
+        await deps.append(messageTs, chunks);
+      } catch (error) {
+        const failedStreamTs = uncheckpointedTs ?? messageTs;
+        let cleanupFailed = false;
+        if (failedStreamTs) {
+          try {
+            await deps.remove(failedStreamTs);
+            messageTs = undefined;
+          } catch (removeError) {
+            cleanupFailed = true;
+            deps.onError?.(removeError);
+          }
+        }
+        state = cleanupFailed ? "orphaned" : "disabled";
+        deps.onError?.(error);
+      }
+    });
+    return state === "active";
+  };
+  const flushPendingText = async (): Promise<boolean> => {
+    if (!pendingText) return state === "starting" || state === "active";
+    while (pendingText) {
+      const text = pendingText.slice(0, NATIVE_STREAM_CHUNK_SIZE);
+      pendingText = pendingText.slice(NATIVE_STREAM_CHUNK_SIZE);
+      if (!(await send([{ type: "markdown_text", text }]))) return false;
+    }
+    return true;
+  };
+  return {
+    async begin() {
+      statusStarted = true;
+      await enqueue(async () => {
+        try {
+          await deps.setStatus("Thinking…");
+        } catch (error) {
+          deps.onError?.(error);
+        }
+      });
+    },
+    async onDelta(delta) {
+      if (!delta) return state === "starting" || state === "active";
+      if (state === "disabled" || state === "stopped") return false;
+      pendingText += delta;
+      if (state === "idle") state = "starting";
+      if (pendingText.length < NATIVE_STREAM_BUFFER_SIZE) return true;
+      return flushPendingText();
+    },
+    async onTasks(tasks) {
+      if (!tasks.length) return state === "starting" || state === "active";
+      if (pendingText && !(await flushPendingText())) return false;
+      const chunks: NativeAgentChunk[] = tasks.slice(0, 20).map((task) => ({
+        type: "task_update",
+        id: task.id,
+        title: task.title
+          .replace(/[\r\n\t]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 120),
+        status: nativeTaskStatus(task.status),
+      }));
+      return send(chunks);
+    },
+    async finalize() {
+      if (pendingText) await flushPendingText();
+      await chain;
+      if (state === "orphaned") {
+        await clearStatus();
+        return true;
+      }
+      if (state !== "active" || !messageTs) {
+        await clearStatus();
+        return false;
+      }
+      try {
+        await deps.stop(messageTs);
+        state = "stopped";
+        await clearStatus();
+        return true;
+      } catch (error) {
+        state = "orphaned";
+        deps.onError?.(error);
+        await clearStatus();
+        return true;
+      }
+    },
+    async settle() {
+      pendingText = "";
+      await chain;
+      if (state === "active" && messageTs) {
+        try {
+          await deps.remove(messageTs);
+          messageTs = undefined;
+          state = "stopped";
+        } catch (error) {
+          state = "orphaned";
+          deps.onError?.(error);
+        }
+      }
+      await clearStatus();
+    },
+    ownsSurface() {
+      return state === "starting" || state === "active" || state === "orphaned" || state === "stopped";
+    },
+  };
+}
+
 export function createTaskListPresenter(deps: {
   post(text: string, blocks: Array<Record<string, unknown>>): Promise<string | undefined>;
   update(ts: string, text: string, blocks: Array<Record<string, unknown>>): Promise<void>;

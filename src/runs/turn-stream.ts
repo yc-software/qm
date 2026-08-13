@@ -9,6 +9,7 @@ export interface TurnStream {
   markSurfacePosted(runId: string): void;
   surfacePosted(runId: string): boolean;
   snapshot(runId: string): string | null;
+  drain(runId: string): Promise<void>;
   markReplyDone(runId: string): void;
   isReplyDone(runId: string): boolean;
   end(runId: string): void;
@@ -16,6 +17,7 @@ export interface TurnStream {
 }
 
 interface TurnStreamListener {
+  onDelta?(delta: string): void | Promise<void>;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
 }
@@ -30,6 +32,11 @@ interface Entry {
   replying: boolean;
   replyDone: boolean;
   timer: ReturnType<typeof setTimeout> | null;
+}
+
+interface ListenerDelivery {
+  tail: Promise<void>;
+  error?: unknown;
 }
 
 export interface TurnStreamOptions {
@@ -62,6 +69,19 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
   const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
   const runs = new Map<string, Entry>();
   const listeners = new Map<string, Set<TurnStreamListener>>();
+  const deliveries = new Map<string, Map<TurnStreamListener, ListenerDelivery>>();
+
+  const enqueueDelta = (runId: string, listener: TurnStreamListener, delta: string): void => {
+    const delivery = deliveries.get(runId)?.get(listener);
+    if (!delivery || !listener.onDelta) return;
+    delivery.tail = delivery.tail.then(async () => {
+      try {
+        await listener.onDelta?.(delta);
+      } catch (error) {
+        delivery.error ??= error;
+      }
+    });
+  };
 
   const ensure = (runId: string): Entry => {
     let entry = runs.get(runId);
@@ -101,6 +121,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
         entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
       if (entry.text.length < maxChars) entry.text = (entry.text + delta).slice(0, maxChars);
+      for (const l of listeners.get(runId) ?? []) enqueueDelta(runId, l, delta);
     },
 
     publishBlockStart(runId) {
@@ -143,6 +164,13 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       return text ? text : null;
     },
 
+    async drain(runId) {
+      const pending = [...(deliveries.get(runId)?.values() ?? [])];
+      await Promise.all(pending.map((delivery) => delivery.tail));
+      const failed = pending.find((delivery) => delivery.error !== undefined);
+      if (failed) throw failed.error;
+    },
+
     markReplyDone(runId) {
       const entry = runs.get(runId);
       if (entry) entry.replyDone = true;
@@ -170,9 +198,22 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
         listeners.set(runId, set);
       }
       set.add(listener);
+      let deliveryMap = deliveries.get(runId);
+      if (!deliveryMap) {
+        deliveryMap = new Map();
+        deliveries.set(runId, deliveryMap);
+      }
+      deliveryMap.set(listener, { tail: Promise.resolve() });
+      const buffered = runs.get(runId)?.text;
+      if (buffered) enqueueDelta(runId, listener, buffered);
       return () => {
         set.delete(listener);
         if (set.size === 0 && listeners.get(runId) === set) listeners.delete(runId);
+        const delivery = deliveryMap.get(listener);
+        void delivery?.tail.finally(() => {
+          if (deliveryMap.get(listener) === delivery) deliveryMap.delete(listener);
+          if (deliveryMap.size === 0 && deliveries.get(runId) === deliveryMap) deliveries.delete(runId);
+        });
       };
     },
   };

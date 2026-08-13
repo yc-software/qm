@@ -74,6 +74,64 @@ export function stripSlackDirectives(text: string): string {
   return stripAgentRequestDirectives(stripReactionDirectives(text));
 }
 
+export interface StreamingReplyFilter {
+  push(delta: string): string;
+  flush(): string;
+}
+
+export function createStreamingReplyFilter(): StreamingReplyFilter {
+  const directiveStarts = ["[[react:", "[[ask-agent:"];
+  let pending = "";
+  let insideDirective = false;
+  const take = (flush: boolean): string => {
+    let visible = "";
+    for (;;) {
+      if (insideDirective) {
+        const end = pending.indexOf("]]");
+        if (end === -1) {
+          if (flush) pending = "";
+          return visible;
+        }
+        pending = pending.slice(end + 2);
+        insideDirective = false;
+        continue;
+      }
+      const possibleStart = pending.indexOf("[[");
+      if (possibleStart === -1) {
+        const held = !flush && pending.endsWith("[") ? 1 : 0;
+        visible += pending.slice(0, pending.length - held);
+        pending = pending.slice(pending.length - held);
+        return visible;
+      }
+      visible += pending.slice(0, possibleStart);
+      pending = pending.slice(possibleStart);
+      const lower = pending.toLowerCase();
+      if (directiveStarts.some((start) => lower.startsWith(start))) {
+        insideDirective = true;
+        continue;
+      }
+      if (directiveStarts.some((start) => start.startsWith(lower))) {
+        if (flush) {
+          visible += pending;
+          pending = "";
+        }
+        return visible;
+      }
+      visible += pending[0];
+      pending = pending.slice(1);
+    }
+  };
+  return {
+    push(delta) {
+      pending += delta;
+      return take(false);
+    },
+    flush() {
+      return take(true);
+    },
+  };
+}
+
 export async function applyAndLogReactions(
   client: any,
   channel: string,

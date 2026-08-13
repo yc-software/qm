@@ -18,6 +18,10 @@ class FakeSlackClient {
   readonly deletes: any[] = [];
   readonly reactionsAdded: any[] = [];
   readonly reactionsRemoved: any[] = [];
+  readonly statuses: any[] = [];
+  readonly streamsStarted: any[] = [];
+  readonly streamsAppended: any[] = [];
+  readonly streamsStopped: any[] = [];
   readonly usersById = new Map<string, any>();
   readonly channelsById = new Map<string, any>();
   readonly membersByChannel = new Map<string, string[]>();
@@ -86,6 +90,26 @@ class FakeSlackClient {
     delete: async (body: any) => {
       this.deletes.push(body);
       return { ok: true };
+    },
+    startStream: async (body: any) => {
+      this.streamsStarted.push(body);
+      return { ok: true, ts: "stream-1" };
+    },
+    appendStream: async (body: any) => {
+      this.streamsAppended.push(body);
+      return { ok: true, ts: body.ts };
+    },
+    stopStream: async (body: any) => {
+      this.streamsStopped.push(body);
+      return { ok: true, ts: body.ts };
+    },
+  };
+  readonly assistant = {
+    threads: {
+      setStatus: async (body: any) => {
+        this.statuses.push(body);
+        return { ok: true };
+      },
     },
   };
   readonly reactions = {
@@ -199,6 +223,8 @@ class FakeCore implements SlackCoreClient {
   private runGate: Promise<void> | undefined;
   private releaseRun: (() => void) | undefined;
   readonly modelChangeListeners: Array<(scope: any) => void> = [];
+  streamDeltas: string[] = [];
+  streamTasks: Array<{ id: string; title: string; status: "pending" | "in_progress" | "completed" }> = [];
 
   async externalSlackParticipants(): Promise<boolean> {
     return this.externalParticipants;
@@ -238,9 +264,11 @@ class FakeCore implements SlackCoreClient {
     }
     return this.result;
   }
-  async waitRun(runId: string): Promise<TurnResult | null> {
+  async waitRun(runId: string, hooks: any = {}): Promise<TurnResult | null> {
     this.polled.push(runId);
     if (this.runGate) await this.runGate;
+    for (const delta of this.streamDeltas) await hooks.onDelta?.(delta);
+    if (this.streamTasks.length) await hooks.onTasks?.(this.streamTasks);
     return this.result;
   }
   /** Enqueue `runId` on the first submit and hold waitRun open; every later submit is a
@@ -367,11 +395,12 @@ test("a mid-turn message that STEERS the live run does not post the reply twice"
     f.core.finishRun({ status: "ok", reply: "agent reply" });
     await Promise.all([first, steer]);
 
-    assert.equal(
-      f.client.posts.filter((p) => p.text === "agent reply").length,
-      1,
-      "the shared run's reply is posted once, by the handler that owns it",
-    );
+    const deliveredReplies = [
+      ...f.client.posts.map((post) => post.text),
+      ...f.client.streamsStarted.flatMap((request) => request.chunks.map((chunk: { text?: string }) => chunk.text)),
+      ...f.client.streamsAppended.flatMap((request) => request.chunks.map((chunk: { text?: string }) => chunk.text)),
+    ].filter((text) => text === "agent reply");
+    assert.equal(deliveredReplies.length, 1, "the shared run's reply is delivered once, by the handler that owns it");
   } finally {
     await f.stop();
   }
@@ -396,6 +425,120 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
       f.client.posts.map((p) => p.text),
       ["agent reply"],
     );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a queued DM keeps model text private until terminal approval and uses native task updates", async () => {
+  const f = await fixture();
+  try {
+    f.core.queuedRunId = "R-stream";
+    f.core.streamDeltas = ["Checking ", "now."];
+    f.core.streamTasks = [{ id: "lookup", title: "Inspect deployment", status: "in_progress" }];
+    f.core.result = { status: "ok", reply: "Checking now." };
+
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "check it", ts: "100.9" });
+
+    assert.deepEqual(f.client.statuses, [
+      { channel_id: "D1", thread_ts: "100.9", status: "Thinking…" },
+      { channel_id: "D1", thread_ts: "100.9", status: "" },
+    ]);
+    assert.deepEqual(f.client.streamsStarted, [
+      {
+        channel: "D1",
+        thread_ts: "100.9",
+        chunks: [{ type: "task_update", id: "lookup", title: "Inspect deployment", status: "in_progress" }],
+        task_display_mode: "timeline",
+      },
+    ]);
+    assert.deepEqual(f.client.streamsAppended, [
+      {
+        channel: "D1",
+        ts: "stream-1",
+        chunks: [{ type: "markdown_text", text: "Checking now." }],
+      },
+    ]);
+    assert.deepEqual(f.client.streamsStopped, [{ channel: "D1", ts: "stream-1" }]);
+    assert.equal(f.client.posts.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a rejected queued turn deletes its provisional native task stream", async () => {
+  const f = await fixture();
+  try {
+    f.core.queuedRunId = "R-silent";
+    f.core.streamDeltas = ["must never be shown"];
+    f.core.streamTasks = [{ id: "lookup", title: "Inspect deployment", status: "in_progress" }];
+    f.core.result = { status: "silent" };
+
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "check it", ts: "100.12" });
+
+    assert.equal(
+      f.client.streamsStarted.some((request) =>
+        request.chunks.some((chunk: { type: string; text?: string }) => chunk.text === "must never be shown"),
+      ),
+      false,
+    );
+    assert.deepEqual(f.client.deletes, [{ channel: "D1", ts: "stream-1" }]);
+    assert.deepEqual(f.client.streamsStopped, []);
+    assert.equal(f.client.posts.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a task-only native stream appends the terminal reply before stopping", async () => {
+  const f = await fixture();
+  try {
+    f.core.queuedRunId = "R-task-only";
+    f.core.streamTasks = [{ id: "lookup", title: "Inspect deployment", status: "in_progress" }];
+    f.core.result = { status: "ok", reply: "The deployment is healthy." };
+
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "check it", ts: "100.10" });
+
+    assert.deepEqual(f.client.streamsStarted[0]?.chunks, [
+      { type: "task_update", id: "lookup", title: "Inspect deployment", status: "in_progress" },
+    ]);
+    assert.deepEqual(f.client.streamsAppended, [
+      {
+        channel: "D1",
+        ts: "stream-1",
+        chunks: [{ type: "markdown_text", text: "The deployment is healthy." }],
+      },
+    ]);
+    assert.deepEqual(f.client.streamsStopped, [{ channel: "D1", ts: "stream-1" }]);
+    assert.equal(f.client.posts.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("native Slack streaming splits large model deltas at the API chunk limit", async () => {
+  const f = await fixture();
+  try {
+    const reply = "x".repeat(24_001);
+    f.core.queuedRunId = "R-large-delta";
+    f.core.streamDeltas = [reply];
+    f.core.result = { status: "ok", reply };
+
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "write it", ts: "100.11" });
+
+    const texts = [
+      ...f.client.streamsStarted.flatMap((request) => request.chunks),
+      ...f.client.streamsAppended.flatMap((request) => request.chunks),
+    ]
+      .filter((chunk) => chunk.type === "markdown_text")
+      .map((chunk) => chunk.text);
+    assert.deepEqual(
+      texts.map((text) => text.length),
+      [12_000, 12_000, 1],
+    );
+    assert.equal(texts.join(""), reply);
+    assert.deepEqual(f.client.streamsStopped, [{ channel: "D1", ts: "stream-1" }]);
+    assert.equal(f.client.posts.length, 0);
   } finally {
     await f.stop();
   }

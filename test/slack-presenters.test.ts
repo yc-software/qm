@@ -1,6 +1,335 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderTaskList, createTaskListPresenter, createAckPresenter, stripAckPrefix } from "../src/slack/lib.ts";
+import {
+  renderTaskList,
+  createTaskListPresenter,
+  createAckPresenter,
+  createNativeAgentPresenter,
+  stripAckPrefix,
+} from "../src/slack/lib.ts";
+
+test("native agent presenter streams text and public task progress into one message", async () => {
+  const calls: Array<{ method: string; body: unknown }> = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push({ method: "status", body: status });
+    },
+    start: async (chunks) => {
+      calls.push({ method: "start", body: chunks });
+      return "171.1";
+    },
+    append: async (ts, chunks) => {
+      calls.push({ method: `append:${ts}`, body: chunks });
+    },
+    stop: async (ts) => {
+      calls.push({ method: `stop:${ts}`, body: null });
+    },
+    remove: async (ts) => {
+      calls.push({ method: `remove:${ts}`, body: null });
+    },
+    checkpoint: async (ts) => {
+      calls.push({ method: "checkpoint", body: ts });
+    },
+    onSurfacePosted: () => calls.push({ method: "surface", body: null }),
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("Checking "), true);
+  assert.equal(await presenter.onTasks([{ id: "lookup", title: "Inspect deployment", status: "in_progress" }]), true);
+  assert.equal(await presenter.onDelta("now."), true);
+  assert.equal(await presenter.finalize(), true);
+
+  assert.deepEqual(calls, [
+    { method: "status", body: "Thinking…" },
+    { method: "start", body: [{ type: "markdown_text", text: "Checking " }] },
+    { method: "checkpoint", body: "171.1" },
+    { method: "surface", body: null },
+    {
+      method: "append:171.1",
+      body: [{ type: "task_update", id: "lookup", title: "Inspect deployment", status: "in_progress" }],
+    },
+    { method: "append:171.1", body: [{ type: "markdown_text", text: "now." }] },
+    { method: "stop:171.1", body: null },
+    { method: "status", body: "" },
+  ]);
+});
+
+test("native agent presenter coalesces token deltas into Slack-sized stream updates", async () => {
+  const calls: Array<{ method: string; text?: string }> = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async () => {},
+    start: async (chunks) => {
+      calls.push({ method: "start", text: chunks[0]?.type === "markdown_text" ? chunks[0].text : undefined });
+      return "171.6";
+    },
+    append: async (_ts, chunks) => {
+      calls.push({ method: "append", text: chunks[0]?.type === "markdown_text" ? chunks[0].text : undefined });
+    },
+    stop: async () => {
+      calls.push({ method: "stop" });
+    },
+    remove: async () => {},
+    checkpoint: async () => {},
+    onSurfacePosted: () => {},
+  });
+
+  for (const character of "x".repeat(600)) assert.equal(await presenter.onDelta(character), true);
+  assert.equal(await presenter.finalize(), true);
+
+  assert.deepEqual(
+    calls.map(({ method, text }) => ({ method, length: text?.length })),
+    [
+      { method: "start", length: 256 },
+      { method: "append", length: 256 },
+      { method: "append", length: 88 },
+      { method: "stop", length: undefined },
+    ],
+  );
+});
+
+test("native agent presenter falls back cleanly when Slack streaming is unavailable", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      throw new Error("unknown_method");
+    },
+    append: async () => {
+      calls.push("append");
+    },
+    stop: async () => {
+      calls.push("stop");
+    },
+    remove: async () => {
+      calls.push("remove");
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+    onError: (error) => calls.push(`error:${error instanceof Error ? error.message : String(error)}`),
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("x".repeat(256)), false);
+  assert.equal(await presenter.onTasks([{ id: "lookup", title: "Inspect deployment", status: "in_progress" }]), false);
+  assert.equal(await presenter.finalize(), false);
+  assert.deepEqual(calls, ["status:Thinking…", "start", "error:unknown_method", "status:"]);
+});
+
+test("native agent presenter removes an uncheckpointed stream before falling back", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      return "171.7";
+    },
+    append: async () => {
+      calls.push("append");
+    },
+    stop: async () => {
+      calls.push("stop");
+    },
+    remove: async (ts) => {
+      calls.push(`remove:${ts}`);
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+      throw new Error("core unavailable");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+    onError: (error) => calls.push(`error:${error instanceof Error ? error.message : String(error)}`),
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("x".repeat(256)), false);
+  assert.equal(await presenter.finalize(), false);
+  assert.deepEqual(calls, [
+    "status:Thinking…",
+    "start",
+    "checkpoint",
+    "remove:171.7",
+    "error:core unavailable",
+    "status:",
+  ]);
+});
+
+test("native agent presenter deletes a partial stream before fallback after append fails", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      return "171.8";
+    },
+    append: async () => {
+      calls.push("append");
+      throw new Error("stream disconnected");
+    },
+    stop: async () => {
+      calls.push("stop");
+    },
+    remove: async (ts) => {
+      calls.push(`remove:${ts}`);
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+    onError: (error) => calls.push(`error:${error instanceof Error ? error.message : String(error)}`),
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("x".repeat(256)), true);
+  assert.equal(await presenter.onDelta("y".repeat(256)), false);
+  assert.equal(await presenter.finalize(), false);
+  assert.deepEqual(calls, [
+    "status:Thinking…",
+    "start",
+    "checkpoint",
+    "surface",
+    "append",
+    "remove:171.8",
+    "error:stream disconnected",
+    "status:",
+  ]);
+});
+
+test("native agent presenter clears status after a delayed begin", async () => {
+  const calls: string[] = [];
+  let releaseStatus: (() => void) | undefined;
+  const statusGate = new Promise<void>((resolve) => {
+    releaseStatus = resolve;
+  });
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+      if (status) await statusGate;
+    },
+    start: async () => undefined,
+    append: async () => {},
+    stop: async () => {},
+    remove: async () => {},
+    checkpoint: async () => {},
+    onSurfacePosted: () => {},
+  });
+
+  const beginning = presenter.begin();
+  const finalizing = presenter.finalize();
+  releaseStatus?.();
+  await beginning;
+  assert.equal(await finalizing, false);
+  assert.deepEqual(calls, ["status:Thinking…", "status:"]);
+});
+
+test("native agent presenter suppresses fallback when a failed partial stream cannot be removed", async () => {
+  const presenter = createNativeAgentPresenter({
+    setStatus: async () => {},
+    start: async () => "171.9",
+    append: async () => {
+      throw new Error("stream disconnected");
+    },
+    stop: async () => {},
+    remove: async () => {
+      throw new Error("delete failed");
+    },
+    checkpoint: async () => {},
+    onSurfacePosted: () => {},
+  });
+
+  await presenter.begin();
+  assert.equal(await presenter.onDelta("x".repeat(256)), true);
+  assert.equal(await presenter.onDelta("y".repeat(256)), false);
+  assert.equal(await presenter.finalize(), true);
+});
+
+test("native agent presenter preserves approved text when stopping its stream fails", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      return "171.11";
+    },
+    append: async () => {},
+    stop: async (ts) => {
+      calls.push(`stop:${ts}`);
+      throw new Error("stop failed");
+    },
+    remove: async (ts) => {
+      calls.push(`remove:${ts}`);
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+    onError: (error) => calls.push(`error:${error instanceof Error ? error.message : String(error)}`),
+  });
+
+  assert.equal(await presenter.onDelta("approved".repeat(40)), true);
+  assert.equal(await presenter.finalize(), true);
+  await presenter.settle();
+
+  assert.deepEqual(calls, [
+    "start",
+    "checkpoint",
+    "surface",
+    "stop:171.11",
+    "error:stop failed",
+  ]);
+});
+
+test("native agent presenter deletes a provisional stream when the turn is abandoned", async () => {
+  const calls: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    setStatus: async (status) => {
+      calls.push(`status:${status}`);
+    },
+    start: async () => {
+      calls.push("start");
+      return "171.10";
+    },
+    append: async () => {
+      calls.push("append");
+    },
+    stop: async () => {
+      calls.push("stop");
+    },
+    remove: async (ts) => {
+      calls.push(`remove:${ts}`);
+    },
+    checkpoint: async () => {
+      calls.push("checkpoint");
+    },
+    onSurfacePosted: () => calls.push("surface"),
+  });
+
+  await presenter.begin();
+  assert.equal(
+    await presenter.onTasks([{ id: "lookup", title: "Inspect deployment", status: "in_progress" }]),
+    true,
+  );
+  await presenter.settle();
+
+  assert.deepEqual(calls, [
+    "status:Thinking…",
+    "start",
+    "checkpoint",
+    "surface",
+    "remove:171.10",
+    "status:",
+  ]);
+});
 
 test("renderTaskList renders every terminal state", () => {
   assert.equal(

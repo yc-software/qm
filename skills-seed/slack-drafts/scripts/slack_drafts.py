@@ -15,9 +15,10 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 
 API = "https://slack.com/api"
@@ -28,18 +29,21 @@ def call(method: str, body: dict | None = None, query: dict | None = None):
     if not tok:
         sys.exit("no Slack token: ask the user to connect Slack")
     url = f"{API}/{method}" + (f"?{urllib.parse.urlencode(query, doseq=True)}" if query else "")
-    cmd = ["curl", "-sS", "--fail-with-body", "--max-time", "60",
-           "-H", f"Authorization: Bearer {tok}", url]
+    headers = {"Authorization": f"Bearer {tok}"}
+    data = None
     if body is not None:
-        cmd += ["-H", "Content-Type: application/json; charset=utf-8", "--data-binary", "@-"]
-    proc = subprocess.run(cmd, input=json.dumps(body) if body is not None else None,
-                          capture_output=True, text=True)
-    if proc.returncode != 0:
-        sys.exit(f"slack api unreachable on {method}: {proc.stderr.strip()[:300]}")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+        data = json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers)
     try:
-        payload = json.loads(proc.stdout)
+        with urllib.request.urlopen(request, timeout=60) as response:
+            response_text = response.read().decode("utf-8")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as error:
+        sys.exit(f"slack api unreachable on {method}: {str(error)[:300]}")
+    try:
+        payload = json.loads(response_text)
     except ValueError:
-        sys.exit(f"slack api returned non-JSON on {method}: {proc.stdout[:300]}")
+        sys.exit(f"slack api returned non-JSON on {method}: {response_text[:300]}")
     if not payload.get("ok"):
         err = payload.get("error")
         hints = {
