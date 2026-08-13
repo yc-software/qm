@@ -76,7 +76,7 @@ test("GKE sandbox claims a scope, routes daemon calls, and destroys the claim", 
 
   const handle = await sandbox.provision([]);
   assert.equal(handle.id, "sandbox-abc");
-  assert.equal(handle.rootDir, "/home/agent/workspace");
+  assert.equal(handle.rootDir, "/home/agent/qm-workspace");
   assert.equal(handle.backend, "gke");
   assert.ok(created);
   assert.deepEqual(createRequest, {

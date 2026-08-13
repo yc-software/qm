@@ -100,7 +100,7 @@ export function createGkeSandbox(workspace: WorkspaceStore, opts: GkeSandboxOpti
   const agentPort = opts.agentPort ?? 8080;
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const homeDir = opts.homeDir ?? "/home/agent";
-  const workspaceDir = `${homeDir}/workspace`;
+  const workspaceDir = `${homeDir}/qm-workspace`;
   const fetchImpl = opts.fetchImpl ?? fetch;
   const queue = createKeyedQueue<string>();
   const claimBySandbox = new Map<string, string>();
