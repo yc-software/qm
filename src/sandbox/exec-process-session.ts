@@ -50,7 +50,7 @@ function parseStatus(raw: string): ProcessState {
 export function redactCommand(command: string, env?: Record<string, string>): string {
   return createSecretValueMasker(env)(command)
     .replace(/(--?(?:token|password|secret|client[-_]?secret|api[-_]?key)[ =])\S+/gi, "$1<redacted>")
-    .replace(/(?:printf|echo)(?:\s+(?:-\w+|"[^"]*"|'[^']*'|\S+))+(\s*\|[^|]*--with-token\b)/gi, "echo <redacted>$1")
+    .replace(/(?:printf|echo)(?:\s+(?:"[^"]*"|'[^']*'|[^\s"']\S*))+(\s*\|[^|]*--with-token\b)/gi, "echo <redacted>$1")
     .replace(
       /(export\s+\w*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|IDENTIFIER|CREDENTIAL|PROXY_USER)\w*=')[^']*'/gi,
       "$1<redacted>'",
