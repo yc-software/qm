@@ -7134,6 +7134,7 @@
         $("onboarding-oauth-summary").textContent = configured.length
           ? configured.map((item) => connectorName(item.provider)).join(", ") + " available in the web UI."
           : "Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.";
+        await loadCustomProviders();
         viewLoadedAt.onboarding = Date.now();
       }
       $("onboarding-model-provider").onchange = () => renderOnboardingModelOptions();
@@ -7275,7 +7276,12 @@
         const saved = await api("PUT", "/api/custom-providers/" + encodeURIComponent(id), body);
         $("custom-provider-save").disabled = false;
         if (!saved.ok) {
-          setStatus("st-custom-provider", saved.data?.message || "Could not save this provider.", "err", true);
+          setStatus(
+            "st-custom-provider",
+            saved.data?.message || (saved.data?.error ? "Error: " + saved.data.error : "Could not save this provider."),
+            "err",
+            true,
+          );
           return;
         }
         $("custom-provider-key").value = "";

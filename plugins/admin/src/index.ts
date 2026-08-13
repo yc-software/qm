@@ -313,7 +313,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   res.setHeader("x-frame-options", "DENY");
   res.setHeader("content-security-policy", ADMIN_CSP);
   const url = new URL(req.url ?? "/", "http://localhost");
-  const { pathname } = url;
+  let pathname = url.pathname;
+  if (ADMIN_BASE_PATH && (pathname === ADMIN_BASE_PATH || pathname.startsWith(ADMIN_BASE_PATH + "/"))) {
+    pathname = pathname.slice(ADMIN_BASE_PATH.length) || "/";
+  }
   const method = req.method ?? "GET";
 
   const serveShell = async (): Promise<void> => {
