@@ -9,10 +9,19 @@ type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
 
 let currentScript: Script = async function* () {};
+const systemPrompts: unknown[] = [];
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
-    query: ({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+    SYSTEM_PROMPT_DYNAMIC_BOUNDARY: "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__",
+    query: ({
+      prompt,
+      options,
+    }: {
+      prompt: AsyncIterable<{ message: { content: unknown } }>;
+      options: { systemPrompt: unknown };
+    }) => {
+      systemPrompts.push(options.systemPrompt);
       const generator = currentScript(prompt);
       return {
         async initializationResult() {
@@ -104,6 +113,31 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
   };
   return { turn, entries, modelCalls, llmRequests };
 }
+
+test("Claude keeps minute-varying system context outside the stable prompt prefix", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("done");
+  };
+  systemPrompts.length = 0;
+  const harness = createClaudeHarness({});
+  const stable = "stable policy";
+
+  await harness.turns.runTurn(
+    harnessTurn({ systemPrompt: `${stable}\n\nLocal time: 1:42 PM`, systemCacheBoundary: stable.length }).turn,
+  );
+  await harness.turns.runTurn(
+    harnessTurn({ systemPrompt: `${stable}\n\nLocal time: 1:43 PM`, systemCacheBoundary: stable.length }).turn,
+  );
+
+  assert.deepEqual(
+    systemPrompts.filter((prompt) => JSON.stringify(prompt).includes(stable)),
+    [
+      [stable, "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__", "\n\nLocal time: 1:42 PM"],
+      [stable, "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__", "\n\nLocal time: 1:43 PM"],
+    ],
+  );
+});
 
 test("a steered turn persists every reply, not only the last result's", async () => {
   const signals = createMemoryRunSignalStore();

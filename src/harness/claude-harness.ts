@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   createSdkMcpServer,
   query,
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
   tool,
   type Query,
   type SDKMessage,
@@ -386,6 +387,18 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       scopeLabel: turn.scopeLabel,
     });
     const model = modelSupportedByHarness(turn.model, "claude") ? turn.model! : resolveModelId(turn.scopeLabel);
+    const cacheBoundary = turn.systemCacheBoundary;
+    const systemPrompt =
+      typeof cacheBoundary === "number" &&
+      cacheBoundary > 0 &&
+      cacheBoundary < turn.systemPrompt.length &&
+      turn.systemPrompt.slice(0, cacheBoundary).isWellFormed()
+        ? [
+            turn.systemPrompt.slice(0, cacheBoundary),
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+            turn.systemPrompt.slice(cacheBoundary),
+          ]
+        : turn.systemPrompt;
     const text = promptText(turn);
     const initial = userMessage(text, turn.images);
     let pendingPrompts = 1;
@@ -473,7 +486,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         ...(processIdentity
           ? { spawnClaudeCodeProcess: (options: SpawnOptions) => spawnClaudeProcess(options, processIdentity) }
           : {}),
-        systemPrompt: turn.systemPrompt,
+        systemPrompt,
         model,
         ...(opts.binaryPath ? { pathToClaudeCodeExecutable: opts.binaryPath } : {}),
         ...(effort(turn.thinkingLevel) ? { effort: effort(turn.thinkingLevel) } : {}),
