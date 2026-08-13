@@ -349,6 +349,31 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the secondary must be
   );
 });
 
+test("host sandbox configuration supports legacy and per-environment roots", () => {
+  const legacy = loadConfig({ HOST_WORKSPACE_ROOT: "./legacy-host" });
+  assert.equal(legacy.sandboxBackend, "host");
+  assert.equal(legacy.hostWorkspaceRoot, resolve("./legacy-host"));
+  assert.equal(legacy.hostWorkspacesRoot, undefined);
+  const scoped = loadConfig({ SANDBOX_BACKEND: "host", HOST_WORKSPACES_ROOT: "./host-workspaces" });
+  assert.equal(scoped.hostWorkspacesRoot, resolve("./host-workspaces"));
+  const legacySecondary = loadConfig({
+    SANDBOX_BACKEND: "aws",
+    SANDBOX_SECONDARY_BACKEND: "local",
+    HOST_WORKSPACE_ROOT: "./legacy-host",
+  });
+  assert.equal(legacySecondary.sandboxSecondaryBackend, "host");
+  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "host" }), /requires HOST_WORKSPACE_ROOT/);
+  assert.throws(
+    () =>
+      loadConfig({
+        SANDBOX_BACKEND: "host",
+        HOST_WORKSPACE_ROOT: "./legacy-host",
+        HOST_WORKSPACES_ROOT: "./host-workspaces",
+      }),
+    /mutually exclusive/,
+  );
+});
+
 test("Fly identity and Slack runtime settings are parsed once into Config", () => {
   const config = loadConfig({
     FLY_APP_NAME: "qm-core",

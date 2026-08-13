@@ -31,8 +31,11 @@ export interface Config {
   databaseUrl?: string;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
-  sandboxBackend: "aws" | "local" | "sprites";
-  sandboxSecondaryBackend?: "aws" | "local" | "sprites";
+  sandboxBackend: "aws" | "host" | "local" | "sprites";
+  sandboxSecondaryBackend?: "aws" | "host" | "local" | "sprites";
+  hostWorkspaceRoot?: string;
+  hostWorkspacesRoot?: string;
+  hostProcessEnv: NodeJS.ProcessEnv;
   deployProvider: "docker" | "aws";
   egressServiceHosts?: string[];
   brandingDefault?: { accent?: string; mark?: string; selfLabel?: string };
@@ -476,8 +479,8 @@ function harnessEnvStrict(value: string | undefined): Config["harness"] {
 function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): Config["sandboxBackend"] {
   if (value === undefined || value.trim() === "") return "local";
   const backend = value.trim();
-  if (backend === "aws" || backend === "local" || backend === "sprites") return backend;
-  throw new Error(`${name}=${JSON.stringify(value)} is not recognized — use aws, local, or sprites, or unset it.`);
+  if (backend === "aws" || backend === "host" || backend === "local" || backend === "sprites") return backend;
+  throw new Error(`${name}=${JSON.stringify(value)} is not recognized — use aws, host, local, or sprites, or unset it.`);
 }
 
 function secretsBackendEnvStrict(value: string | undefined, prefix: string): Config["secretsBackend"] {
@@ -579,16 +582,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const dataDir = resolve(env.DATA_DIR ?? "./data");
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
-    throw new Error("SANDBOX_BACKEND must be set explicitly in production — use sprites, aws, or local.");
+    throw new Error("SANDBOX_BACKEND must be set explicitly in production — use sprites, aws, host, or local.");
   }
-  const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
+  const selectHostWorkspace = (backend: Config["sandboxBackend"]): Config["sandboxBackend"] =>
+    env.HOST_WORKSPACE_ROOT && backend === "local" ? "host" : backend;
+  const sandboxBackend = selectHostWorkspace(sandboxBackendEnvStrict(env.SANDBOX_BACKEND));
+  if (env.HOST_WORKSPACE_ROOT && env.HOST_WORKSPACES_ROOT)
+    throw new Error("HOST_WORKSPACE_ROOT and HOST_WORKSPACES_ROOT are mutually exclusive");
   const secondaryRaw = env.SANDBOX_SECONDARY_BACKEND?.trim();
   let sandboxSecondaryBackend: Config["sandboxSecondaryBackend"];
   if (secondaryRaw) {
-    const secondary = sandboxBackendEnvStrict(secondaryRaw, "SANDBOX_SECONDARY_BACKEND");
+    const secondary = selectHostWorkspace(sandboxBackendEnvStrict(secondaryRaw, "SANDBOX_SECONDARY_BACKEND"));
     if (secondary === sandboxBackend) throw new Error("SANDBOX_SECONDARY_BACKEND must differ from SANDBOX_BACKEND.");
     sandboxSecondaryBackend = secondary;
   }
+  if (
+    (sandboxBackend === "host" || sandboxSecondaryBackend === "host") &&
+    !env.HOST_WORKSPACE_ROOT &&
+    !env.HOST_WORKSPACES_ROOT
+  )
+    throw new Error("SANDBOX_BACKEND=host requires HOST_WORKSPACE_ROOT or HOST_WORKSPACES_ROOT");
   const securityScreenBackend = securityScreenBackendEnvStrict(env.SECURITY_SCREEN_BACKEND);
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
@@ -658,6 +671,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "CODEX_HOME",
     ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
   ) as NodeJS.ProcessEnv;
+  const hostProcessEnv = Object.fromEntries(
+    ["PATH", "LANG", "LC_ALL", "SHELL", "TERM", "USER", "SSH_AUTH_SOCK"].flatMap((name) =>
+      env[name] === undefined ? [] : [[name, env[name]]],
+    ),
+  ) as NodeJS.ProcessEnv;
   const claudeProcessEnv = Object.fromEntries(
     [
       "PATH",
@@ -707,6 +725,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     sandboxBackend,
     ...(sandboxSecondaryBackend ? { sandboxSecondaryBackend } : {}),
+    ...(env.HOST_WORKSPACE_ROOT ? { hostWorkspaceRoot: resolve(env.HOST_WORKSPACE_ROOT) } : {}),
+    ...(env.HOST_WORKSPACES_ROOT ? { hostWorkspacesRoot: resolve(env.HOST_WORKSPACES_ROOT) } : {}),
+    hostProcessEnv,
     deployProvider,
     ...(env.EGRESS_SERVICE_HOSTS
       ? {
