@@ -2055,7 +2055,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         if (!keyForModel(providerKeys, model)) {
           throw new Error(`Missing ${model.provider} credential for title model ${model.id}`);
         }
-        const out = await oneShot("pi-title", model, providerKeys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript));
+        const out = await oneShot(
+          "pi-title",
+          model,
+          providerKeys,
+          TITLE_GENERATION_PROMPT,
+          titleUserPrompt(transcript),
+        );
         return sanitizeTitle(out);
       },
 
