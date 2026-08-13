@@ -5,6 +5,7 @@ import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect, formatBytes, icon, relTime } from "./ui";
 import { contextsState, ensureContexts, personalScopeId, scopeChip, scopeFilterControl } from "./contexts";
 import { appState } from "./shell";
+import { applyProjectTheme } from "./theme-presets";
 import { fileListNeedsAllPages } from "./file-list";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 
@@ -110,6 +111,8 @@ function drawFiles(loading = false): void {
               ? nothing
               : scopeFilterControl(filesScope, (s) => {
                   filesScope = s;
+                  const project = contextsState.list.find((context) => context.scopeId === s)?.project;
+                  applyProjectTheme(project ? project.themePreset : null, project?.themeMode);
                   fileRows = [];
                   filesNextCursor = null;
                   void loadFiles(appState.viewRenderSeq);
@@ -407,6 +410,10 @@ export async function renderFiles(): Promise<void> {
     filesNextCursor = null;
     contextsState.selected = null;
   }
+  await ensureContexts();
+  if (appState.currentView !== "files") return;
+  const project = contextsState.list.find((context) => context.scopeId === filesScope)?.project;
+  applyProjectTheme(project ? project.themePreset : null, project?.themeMode);
   const seq = appState.viewRenderSeq;
   filesNotice = "";
   filesNextCursor = null;

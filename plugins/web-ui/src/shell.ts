@@ -66,6 +66,7 @@ import { renderSkills } from "./skills";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
+import { applyProjectTheme } from "./theme-presets";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let authMode: AuthMode = "portal";
@@ -515,6 +516,7 @@ export function renderSidebarTop(): void {
         title=${splitState.active ? "New session" : "New chat"}
         @click=${() => {
           closeSidebarOnNarrowView();
+          applyProjectTheme(null);
           if (!addBlankPane()) mainConversation().newChat();
         }}
       >
@@ -572,6 +574,8 @@ function onNavClick(e: Event): void {
 
 export function switchView(v: View): void {
   closeSidebarOnNarrowView();
+  if (v === "contexts" && !contextsState.selected) applyProjectTheme(null);
+  else if (v !== "contexts" && v !== "chats" && v !== "files") applyProjectTheme(null);
   if (appState.currentView === v) {
     refreshActiveView(v);
     return;

@@ -161,6 +161,8 @@ export interface CoreProject {
   name: string;
   ownerId: string;
   memberIds: string[];
+  themePreset?: "graphite" | "sinora" | "grove" | "ocean" | "ember" | "orchid";
+  themeMode?: "light" | "dark";
   scopeId: string;
   members: Array<{ principalId: string; displayName: string }>;
   createdAt?: number;

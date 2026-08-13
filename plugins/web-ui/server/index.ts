@@ -873,6 +873,30 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     const addProjectMember = path.match(/^\/api\/projects\/([^/]+)\/members$/);
+    const updateProjectTheme = path.match(/^\/api\/projects\/([^/]+)\/theme$/);
+    if (method === "PUT" && updateProjectTheme) {
+      const id = decodeURIComponent(updateProjectTheme[1]!);
+      let themePreset = "";
+      let themeMode: "light" | "dark" | undefined;
+      try {
+        const payload = JSON.parse((await readBody(req)) || "{}") as { themePreset?: unknown; themeMode?: unknown };
+        if (typeof payload.themePreset === "string") themePreset = payload.themePreset;
+        if (payload.themeMode !== undefined && payload.themeMode !== null) {
+          if (payload.themeMode !== "light" && payload.themeMode !== "dark")
+            return json(res, 400, { error: "invalid_theme_mode", message: "unknown project theme mode" });
+          themeMode = payload.themeMode;
+        }
+      } catch (error) {
+        if (error instanceof PayloadTooLargeError) throw error;
+        return json(res, 400, { error: "bad_request" });
+      }
+      const response = await coreFetch(
+        "PUT",
+        `/v1/projects/${encodeURIComponent(id)}/theme`,
+        JSON.stringify({ principalId: user, themePreset, themeMode }),
+      );
+      return relay(res, response);
+    }
     if (method === "POST" && addProjectMember) {
       const id = decodeURIComponent(addProjectMember[1]!);
       let memberId = "";

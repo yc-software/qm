@@ -30,7 +30,8 @@ import {
 import { preservingFocus } from "./pane-focus";
 import { hideTooltip, showTooltip } from "./tooltip";
 import { icon } from "./ui";
-import { contextsState } from "./contexts";
+import { contextsState, ensureContexts } from "./contexts";
+import { applyProjectTheme } from "./theme-presets";
 import type { DensityTier } from "./density";
 import { appState } from "./shell-state";
 import { renderSidebarTop, switchView, syncUrlFromState } from "./shell";
@@ -157,6 +158,7 @@ function buildDock(): DockviewApi {
   });
   api.onDidActivePanelChange((e) => {
     splitState.focusedId = e.panel?.id ?? null;
+    void applyFocusedPaneTheme();
   });
   api.onDidMaximizedGroupChange(() => {
     for (const a of groupActions) a.draw();
@@ -347,7 +349,21 @@ export function mountRestoredCanvas(): boolean {
   }
   renderSidebarTop();
   renderList();
+  void applyFocusedPaneTheme();
   return true;
+}
+
+export async function applyFocusedPaneTheme(): Promise<void> {
+  if (!contextsState.loaded) await ensureContexts().catch(() => contextsState.list);
+  const panel = splitState.focusedId
+    ? dockApi?.getPanel(splitState.focusedId)
+    : (dockApi?.activePanel ?? dockApi?.panels[0]);
+  const params = panel ? panelParams(panel) : {};
+  const scopeId =
+    (params.sessionId ? sessionsState.list.find((session) => session.id === params.sessionId)?.scopeId : undefined) ??
+    params.scopeId;
+  const project = scopeId ? contextsState.list.find((context) => context.scopeId === scopeId)?.project : undefined;
+  applyProjectTheme(project ? project.themePreset : null, project?.themeMode);
 }
 
 function panelParams(panel: IDockviewPanel): PaneParams {
@@ -383,6 +399,8 @@ export function splitInterceptsOpen(s: CoreSession): boolean {
   if (!splitState.active || appState.currentView !== "chats" || !s.id) return false;
   const target = splitState.focusedId ?? dockApi?.panels[0]?.id ?? "";
   openInPane(target, s.id, s.threadRef);
+  const project = contextsState.list.find((context) => context.scopeId === s.scopeId)?.project;
+  applyProjectTheme(project ? project.themePreset : null, project?.themeMode);
   renderList();
   void refreshSessions({ silent: true });
   return true;
@@ -467,6 +485,7 @@ function reconcileAfterClose(): void {
   if (rest.length === 0) {
     exitSplitIfActive();
     mainConversation().newChat();
+    applyProjectTheme(null);
     return;
   }
   if (rest.length === 1) {
@@ -477,6 +496,7 @@ function reconcileAfterClose(): void {
     } else {
       exitSplitIfActive();
       mainConversation().newChat();
+      applyProjectTheme(null);
     }
     return;
   }

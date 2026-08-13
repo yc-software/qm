@@ -65,6 +65,21 @@ test("ProjectStore rename is owner-only and cleans the name", async () => {
   assert.ok(same.status === "ok" && !same.changed);
 });
 
+test("ProjectStore theme is durable, owner-only, and versions the project", async () => {
+  let at = 300;
+  const projects = createProjectStore(undefined, { id: () => "themed", now: () => at++ });
+  const project = await projects.create({ name: "Themed", ownerId: "owner" });
+  const versionBefore = await projects.version(projectGroupRef(project.id));
+  assert.equal((await projects.updateTheme(project.id, "member", "sinora")).status, "forbidden");
+  const updated = await projects.updateTheme(project.id, "owner", "sinora", "dark");
+  assert.ok(updated.status === "ok" && updated.changed);
+  assert.equal((await projects.get(project.id))?.themePreset, "sinora");
+  assert.equal((await projects.get(project.id))?.themeMode, "dark");
+  assert.notEqual(await projects.version(projectGroupRef(project.id)), versionBefore);
+  const same = await projects.updateTheme(project.id, "owner", "sinora", "dark");
+  assert.ok(same.status === "ok" && !same.changed);
+});
+
 test("managed groups override Slack membership and historical sessions grant no access", async () => {
   const projects = createProjectStore(undefined, { id: () => "managed" });
   const project = await projects.create({ name: "Managed", ownerId: "owner" });
@@ -117,7 +132,11 @@ async function listen(server: Server): Promise<string> {
 }
 
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
-  assert.ok(projectRoutes.every((route) => route.auth === "either"));
+  const themeRoute = projectRoutes.find(
+    (route) => "path" in route && route.method === "PUT" && route.path === "/v1/projects/:id/theme",
+  );
+  assert.equal(themeRoute?.auth, "source");
+  assert.ok(projectRoutes.filter((route) => route !== themeRoute).every((route) => route.auth === "either"));
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
@@ -224,6 +243,35 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(renamed.status, 200);
   assert.equal(((await renamed.json()) as { project: { name: string } }).project.name, "Launch Renamed");
   assert.equal(await built.projects.name(groupRef), "Launch Renamed");
+
+  const themeDenied = await fetch(`${base}/v1/projects/${project.id}/theme`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "member", themePreset: "sinora" }),
+  });
+  assert.equal(themeDenied.status, 403);
+  const themeInvalid = await fetch(`${base}/v1/projects/${project.id}/theme`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "owner", themePreset: "neon" }),
+  });
+  assert.equal(themeInvalid.status, 400);
+  const themeModeInvalid = await fetch(`${base}/v1/projects/${project.id}/theme`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "owner", themePreset: "sinora", themeMode: "sepia" }),
+  });
+  assert.equal(themeModeInvalid.status, 400);
+  const themeUpdated = await fetch(`${base}/v1/projects/${project.id}/theme`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "owner", themePreset: "ocean", themeMode: "dark" }),
+  });
+  assert.equal(themeUpdated.status, 200);
+  const themedProject = ((await themeUpdated.json()) as { project: { themePreset: string; themeMode: string } })
+    .project;
+  assert.equal(themedProject.themePreset, "ocean");
+  assert.equal(themedProject.themeMode, "dark");
 
   assert.ok((await built.app.listSessions("member")).some((session) => session.id === first.id));
   assert.equal(

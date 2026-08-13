@@ -274,6 +274,12 @@ export interface App {
   addProjectMember(id: string, principalId: string, memberId: string): Promise<ProjectViewMutation>;
   removeProjectMember(id: string, principalId: string, memberId: string): Promise<ProjectViewMutation>;
   renameProject(id: string, principalId: string, name: string): Promise<ProjectViewMutation>;
+  updateProjectTheme(
+    id: string,
+    principalId: string,
+    themePreset: import("../projects/project-store.ts").ProjectThemePreset,
+    themeMode?: import("../projects/project-store.ts").ProjectThemeMode,
+  ): Promise<ProjectViewMutation>;
   updateSession(
     sessionId: string,
     principalId: string,

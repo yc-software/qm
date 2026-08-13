@@ -39,6 +39,7 @@ import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron
 import { restoreDialogFocus } from "./dialog-focus";
 import { ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./ambient-policy";
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
+import { applyProjectTheme, THEME_PRESETS, type ThemeMode, type ThemePreset } from "./theme-presets";
 
 interface ScopeFile {
   id: string;
@@ -95,6 +96,8 @@ export const contextsState = {
   memberBusy: false,
   memberError: "",
   memberSearchedQuery: "",
+  themeSaving: false,
+  themeError: "",
 };
 
 let contextsLoading = false;
@@ -149,6 +152,8 @@ export function resetContextsState(): void {
   contextsState.memberBusy = false;
   contextsState.memberError = "";
   contextsState.memberSearchedQuery = "";
+  contextsState.themeSaving = false;
+  contextsState.themeError = "";
   cancelMemberSearchTimer();
   contextsNotice = "";
   memberSearchSeq++;
@@ -174,6 +179,10 @@ export async function renderContexts(): Promise<void> {
     contextsNotice = errMessage(e, "Failed to load contexts.");
   }
   contextsLoading = false;
+  if (contextsState.selected) {
+    const selected = contextsState.list.find((context) => context.scopeId === contextsState.selected);
+    applyProjectTheme(selected?.project ? selected.project.themePreset : null, selected?.project?.themeMode);
+  } else applyProjectTheme(null);
   if (
     contextsState.selected &&
     contextsState.list.some((c) => c.scopeId === contextsState.selected) &&
@@ -497,12 +506,96 @@ function detailTpl(c: CoreContext): TemplateResult {
           }
         </div>
         <aside class="context-settings" aria-label=${c.project ? "Project settings" : "Context settings"}>
-          ${c.project ? projectMembersSection(c) : nothing} ${contextModelSection(c.scopeId)}
-          ${ambientPolicySection(c.scopeId)}
+          ${c.project ? projectThemeSection(c) : nothing} ${c.project ? projectMembersSection(c) : nothing}
+          ${contextModelSection(c.scopeId)} ${ambientPolicySection(c.scopeId)}
         </aside>
       </div>
     </div>
   `;
+}
+
+function projectThemeSection(context: CoreContext): TemplateResult {
+  const project = context.project!;
+  const selected = project.themePreset ?? "graphite";
+  const selectedMode = project.themeMode ?? "personal";
+  return html`
+    <section class="context-panel project-theme-panel" aria-labelledby="project-theme-title">
+      <div class="context-panel-heading">
+        <h2 class="context-panel-title" id="project-theme-title">Theme</h2>
+      </div>
+      <div class="theme-preset-options project-theme-options" role="group" aria-label="Project theme">
+        ${THEME_PRESETS.map(
+          (preset) => html`
+            <button
+              class="theme-preset-button ${selected === preset.id ? "selected" : ""}"
+              type="button"
+              aria-pressed=${selected === preset.id ? "true" : "false"}
+              ?disabled=${!isProjectOwner(context) || contextsState.themeSaving}
+              @click=${() => void saveProjectTheme(context, preset.id, project.themeMode)}
+            >
+              <span class="theme-swatches" aria-hidden="true">
+                ${preset.colors.map((color) => html`<span style=${`background:${color}`}></span>`)}
+              </span>
+              <span>${preset.label}</span>
+            </button>
+          `,
+        )}
+      </div>
+      <div class="project-theme-mode-options" role="group" aria-label="Project color mode">
+        ${(["personal", "light", "dark"] as const).map(
+          (mode) => html`
+            <button
+              class="theme-mode-button ${selectedMode === mode ? "selected" : ""}"
+              type="button"
+              aria-pressed=${selectedMode === mode ? "true" : "false"}
+              ?disabled=${!isProjectOwner(context) || contextsState.themeSaving}
+              @click=${() => void saveProjectTheme(context, selected, mode === "personal" ? undefined : mode)}
+            >
+              ${projectThemeModeLabel(mode)}
+            </button>
+          `,
+        )}
+      </div>
+      ${
+        contextsState.themeError
+          ? html`<div class="form-error" aria-live="polite">${contextsState.themeError}</div>`
+          : nothing
+      }
+    </section>
+  `;
+}
+
+function projectThemeModeLabel(mode: "personal" | ThemeMode): string {
+  if (mode === "personal") return "Personal";
+  return mode === "light" ? "Light" : "Dark";
+}
+
+async function saveProjectTheme(context: CoreContext, themePreset: ThemePreset, themeMode?: ThemeMode): Promise<void> {
+  if (
+    !isProjectOwner(context) ||
+    contextsState.themeSaving ||
+    (context.project?.themePreset === themePreset && context.project?.themeMode === themeMode)
+  )
+    return;
+  contextsState.themeSaving = true;
+  contextsState.themeError = "";
+  applyProjectTheme(themePreset, themeMode);
+  drawContexts();
+  try {
+    const response = await api(`/api/projects/${encodeURIComponent(context.project!.id)}/theme`, {
+      method: "PUT",
+      body: JSON.stringify({ themePreset, themeMode }),
+    });
+    const project = projectFromResponse(response);
+    if (!project) throw new Error("Project theme response was invalid");
+    upsertProject(project);
+  } catch (error) {
+    contextsState.themeError = errMessage(error, "Could not save the project theme.");
+    applyProjectTheme(context.project?.themePreset, context.project?.themeMode);
+  } finally {
+    contextsState.themeSaving = false;
+    drawContexts();
+  }
 }
 
 function scopeResourcesEmpty(scopeId: string): boolean {
@@ -1215,6 +1308,8 @@ function selectContext(scopeId: string | null): void {
   contextsState.memberError = "";
   contextsState.memberSearchedQuery = "";
   contextsState.selected = scopeId;
+  const selected = contextsState.list.find((context) => context.scopeId === scopeId);
+  applyProjectTheme(selected?.project ? selected.project.themePreset : null, selected?.project?.themeMode);
   contextsState.resources = null;
   contextsState.resourcesScope = null;
   contextsState.resourcesNotice = "";

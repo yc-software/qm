@@ -1,6 +1,7 @@
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { isProjectThemeMode, isProjectThemePreset } from "../../projects/project-store.ts";
 
 function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
   if (!ctx.capability) return requested;
@@ -66,6 +67,21 @@ async function renameProject(ctx: ApiCtx): Promise<void> {
   return mutationResponse(ctx, await ctx.app.renameProject(ctx.params.id!, principalId, name));
 }
 
+async function updateProjectTheme(ctx: ApiCtx): Promise<void> {
+  if (ctx.capability) return sendJson(ctx.res, 404, { error: "not_found" });
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const principalId = typeof body.principalId === "string" ? body.principalId.trim() : "";
+  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
+  if (!isProjectThemePreset(body.themePreset))
+    return sendJson(ctx.res, 400, { error: "invalid_theme", message: "unknown project theme" });
+  if (body.themeMode !== undefined && body.themeMode !== null && !isProjectThemeMode(body.themeMode))
+    return sendJson(ctx.res, 400, { error: "invalid_theme_mode", message: "unknown project theme mode" });
+  return mutationResponse(
+    ctx,
+    await ctx.app.updateProjectTheme(ctx.params.id!, principalId, body.themePreset, body.themeMode ?? undefined),
+  );
+}
+
 async function removeProjectMember(ctx: ApiCtx): Promise<void> {
   const body = isObj(ctx.body) ? ctx.body : {};
   const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
@@ -81,6 +97,7 @@ export const projectRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/projects", auth: "either", handle: listProjects },
   { method: "POST", path: "/v1/projects", auth: "either", handle: createProject },
   { method: "PATCH", path: "/v1/projects/:id", auth: "either", handle: renameProject },
+  { method: "PUT", path: "/v1/projects/:id/theme", auth: "source", handle: updateProjectTheme },
   { method: "POST", path: "/v1/projects/:id/members", auth: "either", handle: addProjectMember },
   { method: "DELETE", path: "/v1/projects/:id/members/:memberId", auth: "either", handle: removeProjectMember },
 ];

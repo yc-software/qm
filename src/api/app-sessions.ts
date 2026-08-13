@@ -37,6 +37,7 @@ export function createSessionMethods(
   | "addProjectMember"
   | "removeProjectMember"
   | "renameProject"
+  | "updateProjectTheme"
   | "listScopeResources"
   | "managesScope"
   | "membershipControlsScope"
@@ -331,6 +332,31 @@ export function createSessionMethods(
       if (result.status === "ok") {
         return { ...result, project: await projectView(result.project) };
       }
+      return result;
+    },
+
+    async updateProjectTheme(id, principalId, themePreset, themeMode) {
+      if (!deps.projects) return { status: "not_found" };
+      if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
+      const existing = await deps.projects.get(id);
+      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      const result = await deps.projects.updateTheme(
+        id,
+        principalId,
+        themePreset,
+        themeMode,
+        async ({ project, changed }) => {
+          if (changed)
+            deps.auditLog.record({
+              at: Date.now(),
+              principalId,
+              action: "project.theme.update",
+              resource: project.id,
+              scopeLabel: projectScopeId(project.id),
+            });
+        },
+      );
+      if (result.status === "ok") return { ...result, project: await projectView(result.project) };
       return result;
     },
 

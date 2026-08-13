@@ -14,9 +14,14 @@ export interface Project {
   name: string;
   ownerId: string;
   memberIds: string[];
+  themePreset?: ProjectThemePreset;
+  themeMode?: ProjectThemeMode;
   createdAt: number;
   updatedAt: number;
 }
+
+export type ProjectThemePreset = "graphite" | "sinora" | "grove" | "ocean" | "ember" | "orchid";
+export type ProjectThemeMode = "light" | "dark";
 
 type ProjectMutation =
   | { status: "ok"; project: Project; changed: boolean }
@@ -31,6 +36,13 @@ export interface ProjectStore {
   addMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   removeMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   rename(id: string, ownerId: string, name: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
+  updateTheme(
+    id: string,
+    ownerId: string,
+    themePreset: ProjectThemePreset,
+    themeMode?: ProjectThemeMode,
+    effect?: ProjectMutationEffect,
+  ): Promise<ProjectMutation>;
   recognizes(groupRef: string): boolean;
   membership(groupRef: string, principalId: string): Promise<boolean | undefined>;
   members(groupRef: string): Promise<string[] | undefined>;
@@ -60,6 +72,21 @@ export function isProjectGroupRef(ref: string): boolean {
 
 function cleanName(name: string): string {
   return name.trim().replace(/\s+/g, " ").slice(0, 200);
+}
+
+export function isProjectThemePreset(value: unknown): value is ProjectThemePreset {
+  return (
+    value === "graphite" ||
+    value === "sinora" ||
+    value === "grove" ||
+    value === "ocean" ||
+    value === "ember" ||
+    value === "orchid"
+  );
+}
+
+export function isProjectThemeMode(value: unknown): value is ProjectThemeMode {
+  return value === "light" || value === "dark";
 }
 
 function visible(project: Project): Project {
@@ -187,6 +214,28 @@ export function createProjectStore(
           if (project.name === clean) return project;
           changed = true;
           return { ...project, name: clean };
+        });
+        if (!updated) return { status: "not_found" };
+        if (outcome.status !== "ok") return { status: outcome.status };
+        const result = { status: "ok" as const, project: visible(updated), changed };
+        await effect?.(result);
+        return result;
+      });
+    },
+    async updateTheme(id, ownerId, themePreset, themeMode, effect) {
+      return withLock(id, async () => {
+        if (!backing.update) throw new Error("project store requires DurableMap.update");
+        const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
+        let changed = false;
+        const updated = await backing.update(id, (project) => {
+          if (project.ownerId !== ownerId || !isActiveMember(ownerId)) {
+            outcome.status = "forbidden";
+            return project;
+          }
+          outcome.status = "ok";
+          if (project.themePreset === themePreset && project.themeMode === themeMode) return project;
+          changed = true;
+          return { ...project, themePreset, themeMode, updatedAt: Math.max(now(), project.updatedAt + 1) };
         });
         if (!updated) return { status: "not_found" };
         if (outcome.status !== "ok") return { status: outcome.status };
