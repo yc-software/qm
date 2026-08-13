@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { baseModelProviders, configuredModelForHarness, providerKeysPresent, type Config } from "./config.ts";
+import type { ServerDeps } from "./api/deps.ts";
 import { createIdentityService, type DeactivationRecord, type IdentityService } from "./identity/identity-service.ts";
 import {
   createMemoryConfigStore,
@@ -112,7 +113,7 @@ import {
   type SandboxRoute,
 } from "./sandbox/sandbox-routing.ts";
 import { createSandboxMigrationRunner, type SandboxMigrationRunner } from "./sandbox/sandbox-migration-runner.ts";
-import type { Sandbox } from "./sandbox/sandbox.ts";
+import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
 import {
   createAwsSecretsManagerSource,
@@ -797,11 +798,13 @@ export function buildApp(
   const fallbackHarness = config.harness as HarnessId;
   const fallback = {
     harnessId: fallbackHarness,
-    modelId: defaultModelForHarness(
-      fallbackHarness,
-      configuredModelForHarness(config, fallbackHarness),
-      baseModelProviders(config),
-    ),
+    get modelId() {
+      return defaultModelForHarness(
+        fallbackHarness,
+        configuredModelForHarness(config, fallbackHarness),
+        baseModelProviders(config),
+      );
+    },
   };
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) =>
@@ -1519,5 +1522,90 @@ export function buildApp(
     uiState: artifactMap<PersistedUiState>("web_ui_state"),
     skillSyncEngine,
     slackCore,
+  };
+}
+
+export function serverDeps(
+  config: Config,
+  built: BuiltApp,
+  slackEnvironmentState: "absent" | "configured" | "partial" = "absent",
+): Omit<ServerDeps, "control"> {
+  const configuredModel = configuredModelForHarness(config, config.harness);
+  return {
+    production: config.production,
+    allowUnauthenticatedCore: config.allowUnauthenticatedCore,
+    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+    ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
+    ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
+    ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
+    config: built.config,
+    ...(configuredModel ? { baseModelDefault: configuredModel } : {}),
+    modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
+    providerKeys: providerKeysPresent(config),
+    modelCredentials: built.modelCredentials,
+    customProviders: built.customProviders,
+    refreshCustomProviders: built.refreshCustomProviders,
+    mcpServers: built.mcpServers,
+    mcpToolService: built.mcpToolService,
+    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
+    harnessId: config.harness,
+    connectorTokens: built.connectorTokens,
+    slackInstallation: built.slackInstallation,
+    slackEnvironmentState,
+    resolveClient: built.resolveClient,
+    consentLinks: built.consentLinks,
+    secretDrops: built.secretDrops,
+    ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
+    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
+    ...(config.publicWebUrl ? { portalUrl: config.publicWebUrl } : {}),
+    admin: built.admin,
+    rateLimiter: built.rateLimiter,
+    acl: built.acl,
+    credentialUsage: built.credentialUsage,
+    deviceFlowCutover: built.deviceFlowCutover,
+    egressAudit: built.egressAudit,
+    sessions: built.sessions,
+    auditLog: built.auditLog,
+    errors: built.errors,
+    metrics: built.metrics,
+    crons: built.crons,
+    brokeredServices: () => built.brokeredTools.map((tool) => tool.service),
+    deploymentLayer: built.deploymentLayerStore,
+    deployDialTimeoutMs: config.deployDialTimeoutMs,
+    ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
+    ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
+    ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
+    ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
+    scheduler: built.scheduler,
+    identity: built.identity,
+    ...(built.keychain ? { keychain: built.keychain } : {}),
+    serviceCreds: built.serviceCreds,
+    deliveries: built.deliveries,
+    ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
+    runs: built.runs,
+    workspace: built.workspace,
+    files: built.files,
+    memory: built.memory,
+    blobTransfer: built.blobTransfer,
+    sandboxBackend: built.sandbox.profile.backend,
+    egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
+    egressEnforcement: effectiveEgressEnforcement(built.sandbox.profile, {
+      signingSecret: config.signingSecret,
+      apiBaseUrl: config.apiBaseUrl,
+    }),
+    egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
+    sandbox: built.sandbox,
+    advisoryLock: built.advisoryLock,
+    ...(built.processes ? { processes: built.processes } : {}),
+    ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),
+    directory: built.directory,
+    ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
+    ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),
+    channelPolicy: built.channelPolicy,
+    uiState: built.uiState,
+    environments: built.environments,
+    sandboxMigration: built.sandboxMigration,
   };
 }

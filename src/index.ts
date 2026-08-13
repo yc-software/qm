@@ -1,9 +1,7 @@
-import { baseModelProviders, configuredModelForHarness, loadConfig, providerKeysPresent } from "./config.ts";
-import { buildApp, stopWithBackstop } from "./wiring.ts";
+import { loadConfig } from "./config.ts";
+import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { errMessage } from "./util/errors.ts";
-import { defaultModelForHarness, modelProviderAvailabilityFor } from "./model/pi-models.ts";
-import { effectiveEgressEnforcement } from "./sandbox/sandbox.ts";
 import { slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 
@@ -16,87 +14,10 @@ const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLA
 let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
 if (slackConfig) slackEnvironmentState = "configured";
 else if (envSlackAttempted) slackEnvironmentState = "partial";
-const server = createServer(built.app, {
-  production: config.production,
-  allowUnauthenticatedCore: config.allowUnauthenticatedCore,
-  ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-  ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-  ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
-  ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
-  ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
-  config: built.config,
-  baseModelDefault: defaultModelForHarness(
-    config.harness,
-    configuredModelForHarness(config, config.harness),
-    baseModelProviders(config),
-  ),
-  modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
-  providerKeys: providerKeysPresent(config),
-  modelCredentials: built.modelCredentials,
-  mcpServers: built.mcpServers,
-  mcpToolService: built.mcpToolService,
-  ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-  harnessId: config.harness,
-  connectorTokens: built.connectorTokens,
-  slackInstallation: built.slackInstallation,
-  slackEnvironmentState,
-  resolveClient: built.resolveClient,
-  consentLinks: built.consentLinks,
-  secretDrops: built.secretDrops,
-  ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
-  ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-  ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
-  ...(config.publicWebUrl ? { portalUrl: config.publicWebUrl } : {}),
-  admin: built.admin,
-  rateLimiter: built.rateLimiter,
-  acl: built.acl,
-  credentialUsage: built.credentialUsage,
-  deviceFlowCutover: built.deviceFlowCutover,
-  egressAudit: built.egressAudit,
-  sessions: built.sessions,
-  auditLog: built.auditLog,
-  errors: built.errors,
-  metrics: built.metrics,
-  crons: built.crons,
-  brokeredServices: () => built.brokeredTools.map((tool) => tool.service),
-  deploymentLayer: built.deploymentLayerStore,
-  deployDialTimeoutMs: config.deployDialTimeoutMs,
-  ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
-  ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
-  ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
-  ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
-  scheduler: built.scheduler,
-  identity: built.identity,
-  ...(built.keychain ? { keychain: built.keychain } : {}),
-  serviceCreds: built.serviceCreds,
-  deliveries: built.deliveries,
-  ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
-  runs: built.runs,
-  workspace: built.workspace,
-  files: built.files,
-  memory: built.memory,
-  blobTransfer: built.blobTransfer,
-  sandboxBackend: built.sandbox.profile.backend,
-  egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
-  egressEnforcement: effectiveEgressEnforcement(built.sandbox.profile, {
-    signingSecret: config.signingSecret,
-    apiBaseUrl: config.apiBaseUrl,
-  }),
-  egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
-  sandbox: built.sandbox,
-  advisoryLock: built.advisoryLock,
-  ...(built.processes ? { processes: built.processes } : {}),
-  ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),
-  directory: built.directory,
-  ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
-  ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),
-  channelPolicy: built.channelPolicy,
-  uiState: built.uiState,
-  environments: built.environments,
-  sandboxMigration: built.sandboxMigration,
-});
+const server = createServer(built.app, serverDeps(config, built, slackEnvironmentState));
 
 await built.config.hydrate?.();
+await built.refreshCustomProviders();
 await built.identity.hydrate();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
