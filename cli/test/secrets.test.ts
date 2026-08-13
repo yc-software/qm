@@ -190,6 +190,12 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
       (secret) => secret.name === "SPRITES_TOKEN",
     ),
   );
+  for (const target of ["docker", "fly"] as const) {
+    assert.ok(
+      secretByName(makeConfig({ target, sandbox: { app: "acme-sb" } }), "SPRITES_TOKEN").required,
+      `${target} sandbox.app defaults to sprites and requires its token`,
+    );
+  }
 });
 
 test("naming a base model provider makes that provider's key a required deployment secret", () => {
@@ -366,7 +372,7 @@ test("an explicit sandbox.backend wins, and non-fly targets keep their own defau
       image: "registry.fly.io/acme-sb@sha256:3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
     },
   });
-  assert.equal(sandboxCoreEnv(docker).env.SANDBOX_BACKEND, undefined);
+  assert.equal(sandboxCoreEnv(docker).env.SANDBOX_BACKEND, "sprites");
 });
 
 test("the .env.example catalog names every secret exactly once", () => {

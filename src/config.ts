@@ -34,6 +34,9 @@ export interface Config {
   sandboxBackend: "aws" | "local" | "sprites";
   sandboxSecondaryBackend?: "aws" | "local" | "sprites";
   deployProvider: "docker" | "aws";
+  dockerCoreContainer?: string;
+  dockerCoreDataVolume?: string;
+  dockerDeployNetwork?: string;
   egressServiceHosts?: string[];
   brandingDefault?: { accent?: string; mark?: string; selfLabel?: string };
   modelId?: string;
@@ -245,12 +248,14 @@ interface LocalSandboxEnv {
   cpus?: number;
   memoryMb?: number;
   defaultTimeoutSec?: number;
+  coreContainer?: string;
 }
 
 function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
   return {
     ...(env.LOCAL_SANDBOX_IMAGE ? { image: env.LOCAL_SANDBOX_IMAGE } : {}),
     ...(env.LOCAL_SANDBOX_DOCKER_BIN ? { dockerBin: env.LOCAL_SANDBOX_DOCKER_BIN } : {}),
+    ...(env.DOCKER_CORE_CONTAINER ? { coreContainer: env.DOCKER_CORE_CONTAINER } : {}),
     ...(numEnvStrict("LOCAL_SANDBOX_CPUS", env.LOCAL_SANDBOX_CPUS) !== undefined
       ? { cpus: numEnvStrict("LOCAL_SANDBOX_CPUS", env.LOCAL_SANDBOX_CPUS) }
       : {}),
@@ -553,6 +558,7 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const deployProvider: Config["deployProvider"] = env.DEPLOY_PROVIDER?.trim() === "aws" ? "aws" : "docker";
   const missingSecrets = validateCoreSecretEnv(env);
   if (missingSecrets.length) {
     throw new Error(`missing or insecure required core secrets: ${missingSecrets.join(", ")}`);
@@ -635,7 +641,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL ?? publicApiUrl;
-  const deployProvider: "aws" | "docker" = env.DEPLOY_PROVIDER === "aws" ? "aws" : "docker";
+  if (Boolean(env.DOCKER_CORE_CONTAINER) !== Boolean(env.DOCKER_CORE_DATA_VOLUME)) {
+    throw new Error("DOCKER_CORE_CONTAINER and DOCKER_CORE_DATA_VOLUME must be set together");
+  }
+  if (env.DOCKER_CORE_CONTAINER && !env.DOCKER_DEPLOY_NETWORK) {
+    throw new Error("DOCKER_DEPLOY_NETWORK is required with DOCKER_CORE_CONTAINER");
+  }
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
   if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
@@ -708,6 +719,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sandboxBackend,
     ...(sandboxSecondaryBackend ? { sandboxSecondaryBackend } : {}),
     deployProvider,
+    ...(env.DOCKER_CORE_CONTAINER ? { dockerCoreContainer: env.DOCKER_CORE_CONTAINER } : {}),
+    ...(env.DOCKER_CORE_DATA_VOLUME ? { dockerCoreDataVolume: env.DOCKER_CORE_DATA_VOLUME } : {}),
+    ...(env.DOCKER_DEPLOY_NETWORK ? { dockerDeployNetwork: env.DOCKER_DEPLOY_NETWORK } : {}),
     ...(env.EGRESS_SERVICE_HOSTS
       ? {
           egressServiceHosts: env.EGRESS_SERVICE_HOSTS.split(",")

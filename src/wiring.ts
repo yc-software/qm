@@ -572,6 +572,7 @@ export function buildApp(
   const buildLocal = (): Sandbox =>
     createLocalSandbox(workspace, {
       ...config.localSandbox,
+      orgId: config.orgId,
       onError: sandboxOnError,
     });
   const buildSprites = (): Sandbox =>
@@ -842,7 +843,14 @@ export function buildApp(
           advisoryLock,
           store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
         })
-      : createDockerDeployProvider();
+      : createDockerDeployProvider({
+          ...(config.dockerCoreContainer ? { coreContainer: config.dockerCoreContainer } : {}),
+          ...(config.dockerCoreDataVolume
+            ? { coreDataVolume: config.dockerCoreDataVolume, coreDataDir: config.dataDir }
+            : {}),
+          ...(config.dockerDeployNetwork ? { network: config.dockerDeployNetwork } : {}),
+          orgId: config.orgId,
+        });
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
     console.warn(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",

@@ -276,6 +276,42 @@ test("deploy proxy dial timeout is parsed once from config", () => {
   assert.throws(() => loadConfig({ DEPLOY_DIAL_TIMEOUT_MS: "soon" }), /DEPLOY_DIAL_TIMEOUT_MS="soon" is not a number/);
 });
 
+test("containerized Docker topology is parsed as one complete contract", () => {
+  const topology = loadConfig({
+    ...productionEnv,
+    DOCKER_CORE_CONTAINER: "qm-acme-core",
+    DOCKER_CORE_DATA_VOLUME: "qm-acme-coredata",
+    DOCKER_DEPLOY_NETWORK: "qm-acme-deployments",
+  });
+  assert.equal(topology.dockerCoreContainer, "qm-acme-core");
+  assert.equal(topology.dockerCoreDataVolume, "qm-acme-coredata");
+  assert.equal(topology.dockerDeployNetwork, "qm-acme-deployments");
+  assert.equal(topology.localSandbox.coreContainer, "qm-acme-core");
+  assert.throws(
+    () =>
+      loadConfig({
+        ...productionEnv,
+        DOCKER_CORE_CONTAINER: "qm-acme-core",
+        DOCKER_DEPLOY_NETWORK: "qm-acme-deployments",
+      }),
+    /DOCKER_CORE_CONTAINER and DOCKER_CORE_DATA_VOLUME must be set together/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        ...productionEnv,
+        DOCKER_CORE_CONTAINER: "qm-acme-core",
+        DOCKER_CORE_DATA_VOLUME: "qm-acme-coredata",
+      }),
+    /DOCKER_DEPLOY_NETWORK is required with DOCKER_CORE_CONTAINER/,
+  );
+});
+
+test("deploy provider parsing trims known values", () => {
+  assert.equal(loadConfig({ DEPLOY_PROVIDER: " aws " }).deployProvider, "aws");
+  assert.equal(loadConfig({ DEPLOY_PROVIDER: " docker " }).deployProvider, "docker");
+});
+
 test("PUBLIC_API_URL is not treated as the human-facing web URL", () => {
   const apiOnly = loadConfig({ PUBLIC_API_URL: "https://agent-api.example" });
   assert.equal(apiOnly.apiBaseUrl, "https://agent-api.example");

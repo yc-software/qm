@@ -394,6 +394,9 @@ const AWS_RENDER_ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, s
 };
 
 function targetEnvDefault(config: QmConfig, service: string, name: string): string | undefined {
+  if (service === "core" && name === "SANDBOX_BACKEND" && config.sandbox?.app) {
+    return config.sandbox.backend ?? (config.target === "aws" ? "aws" : "sprites");
+  }
   if (config.target === "fly") return FLY_TEMPLATE_ENV_DEFAULTS[service]?.[name];
   if (config.target !== "aws") return undefined;
   const rendered = AWS_RENDER_ENV_DEFAULTS[service]?.[name];

@@ -28,9 +28,11 @@ stops the release rather than moving. The checked-in image manifest is a sentine
 a deployment overrides with real digests. The packed-artifact test exercises the consumer
 path locally.
 
-The CLI deploys long-running QM services; it is not the runtime. Docker runs
+The CLI deploys long-running QM services; it is not the runtime. The Docker target requires Docker Engine 26 or newer through a local Unix socket. Docker Desktop installations with Enhanced Container Isolation must allow the trusted core image to mount that socket. Docker runs
 them locally, Fly runs them as Fly apps with Fly Machines for agent computers, and AWS
 runs digest-pinned ARM64 tasks on ECS Fargate with Lambda MicroVM agent computers.
+
+Local sandbox homes created before org-scoped volume names are migrated automatically while their labeled legacy container still proves ownership. If that container was already removed, startup fails closed and names the legacy source and org-scoped recovery target. Copy the volume deliberately into that target with the reported `qm.org` and `qm.scope` labels, then retry.
 
 ## Deployment directory
 

@@ -8,12 +8,14 @@ import { join } from "node:path";
 import {
   createLocalSandbox,
   localContainerName,
+  localMigrationOwnerName,
   localNetworkName,
   localVolumeName,
 } from "../src/sandbox/local-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
+import { shortHash } from "../src/util/crypto.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
 
@@ -64,6 +66,24 @@ function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
   });
 }
 const rw = (scope: string) => [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
+const legacySlug = (id: string): string => {
+  const cleaned = id
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
+};
+
+function seedMigrationOwner(fake: FakeDocker, scope: string, volume: string, orgId = "acme"): void {
+  const name = localMigrationOwnerName(scope, orgId);
+  fake.containers.set(name, {
+    name,
+    imageId: fake.imageId,
+    running: true,
+    labels: { "qm.volume-owner": "1", "qm.volume-org": orgId, "qm.scope": scope },
+    volume,
+  });
+}
 
 test("profile declares the local Docker substrate honestly", () => {
   const sb = makeSandbox(installFakeDocker(daemonPort));
@@ -116,6 +136,279 @@ test("cold provision creates volume + container, run() execs over the daemon, by
   await sb.writeFileBytes(h, "bin/blob.dat", payload);
   assert.deepEqual(Uint8Array.from((await sb.readFileBytes(h, "bin/blob.dat"))!), payload);
   assert.equal(await sb.readFileBytes(h, "bin/missing.dat"), null);
+});
+
+test("a containerized core reaches the sandbox by name without publishing a host port", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const urls: string[] = [];
+  const sb = makeSandbox(fake, {
+    coreContainer: "qm-acme-core",
+    fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      urls.push(url.toString());
+      url.hostname = "127.0.0.1";
+      url.port = String(daemonPort);
+      return fetch(url, init);
+    },
+  });
+  const h = await sb.provision(rw(scopeId("personal", "container-core")));
+  const run = fake.commands.find((args) => args[0] === "run")!;
+  assert.equal(run.includes("-p"), false);
+  assert.ok(
+    fake.commands.some(
+      (args) =>
+        args[0] === "network" &&
+        args[1] === "connect" &&
+        args.at(-2) === localNetworkName(h.id) &&
+        args.at(-1) === "qm-acme-core",
+    ),
+  );
+  assert.ok(urls.some((url) => url.startsWith(`http://${h.id}:8080/`)));
+});
+
+test("a replacement core reconnects before using a warm sandbox", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const core = "qm-acme-core";
+  const sb = makeSandbox(fake, {
+    coreContainer: core,
+    orgId: "acme",
+    fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      url.hostname = "127.0.0.1";
+      url.port = String(daemonPort);
+      return fetch(url, init);
+    },
+  });
+  const handle = await sb.provision(rw(scopeId("personal", "warm-core")));
+  const network = localNetworkName(handle.id);
+  fake.networkMembers.get(network)?.delete(core);
+  await sb.run(handle, "echo reconnected");
+  assert.equal(fake.networkMembers.get(network)?.has(core), true);
+});
+
+test("sandbox resources are org-scoped and routed names stay within one DNS label", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const scope = scopeId("personal", "shared-user");
+  const first = await makeSandbox(fake, { orgId: "org-a" }).provision(rw(scope));
+  const second = await makeSandbox(fake, { orgId: "org-b" }).provision(rw(scope));
+  assert.notEqual(first.id, second.id);
+  assert.notEqual(localVolumeName(scope, "org-a"), localVolumeName(scope, "org-b"));
+  assert.ok(localContainerName("s".repeat(200), "o".repeat(200)).length <= 63);
+  const scratch = await makeSandbox(fake, { orgId: "o".repeat(200) }).provision(rw(scope), {
+    scratch: { key: "k".repeat(200) },
+  });
+  assert.ok(scratch.id.length <= 63);
+});
+
+test("an owned legacy container and home migrate to org-scoped storage", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const scope = scopeId("personal", "legacy-running");
+  const slug = legacySlug(scope);
+  const name = `qm-sbx-${slug}`;
+  const volume = `qm-home-${slug}`;
+  fake.volumes.add(volume);
+  fake.containers.set(name, {
+    name,
+    imageId: fake.imageId,
+    running: true,
+    labels: { "qm.org": "acme", "qm.scope": scope },
+    volume,
+  });
+  const handle = await makeSandbox(fake, { orgId: "acme" }).provision(rw(scope));
+  assert.equal(handle.id, localContainerName(scope, "acme"));
+  assert.equal(fake.containers.get(handle.id)?.volume, localVolumeName(scope, "acme"));
+  assert.equal(handle.coldStart, false);
+  assert.equal(fake.containers.get(localMigrationOwnerName(scope, "acme"))?.running, true);
+  assert.equal(
+    fake.commands.some((args) => args.some((arg) => arg.includes("rm -rf /to/.qm-local-volume-migrated-v1"))),
+    false,
+  );
+});
+
+test("legacy migration resumes after target creation or completed copy", async () => {
+  for (const completed of [false, true]) {
+    const fake = installFakeDocker(daemonPort);
+    const scope = scopeId("personal", completed ? "legacy-copied" : "legacy-created");
+    const slug = legacySlug(scope);
+    const name = `qm-sbx-${slug}`;
+    const source = `qm-home-${slug}`;
+    const target = localVolumeName(scope, "acme");
+    fake.volumes.add(source);
+    fake.volumes.add(target);
+    fake.volumeLabels.set(target, {
+      "qm.org": "acme",
+      "qm.scope": scope,
+      "qm.migration": "legacy-v1",
+    });
+    if (completed) seedMigrationOwner(fake, scope, target);
+    fake.containers.set(name, {
+      name,
+      imageId: fake.imageId,
+      running: false,
+      labels: { "qm.org": "acme", "qm.scope": scope },
+      volume: source,
+    });
+    const handle = await makeSandbox(fake, { orgId: "acme" }).provision(rw(scope));
+    assert.equal(handle.id, localContainerName(scope, "acme"));
+    assert.equal(fake.containers.get(handle.id)?.volume, target);
+    assert.equal(fake.containers.has(localMigrationOwnerName(scope, "acme")), true);
+  }
+});
+
+test("legacy migration resumes after the old container was removed", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const scope = scopeId("personal", "legacy-removed");
+  const source = `qm-home-${legacySlug(scope)}`;
+  const target = localVolumeName(scope, "acme");
+  fake.volumes.add(source);
+  fake.volumes.add(target);
+  fake.volumeLabels.set(target, {
+    "qm.org": "acme",
+    "qm.scope": scope,
+    "qm.migration": "legacy-v1",
+  });
+  seedMigrationOwner(fake, scope, target);
+  fake.containers.get(localMigrationOwnerName(scope, "acme"))!.running = false;
+  const handle = await makeSandbox(fake, { orgId: "acme" }).provision(rw(scope));
+  assert.equal(fake.containers.get(handle.id)?.volume, target);
+  assert.equal(fake.containers.get(localMigrationOwnerName(scope, "acme"))?.running, true);
+  assert.equal(handle.coldStart, false);
+});
+
+test("a migration target without its source requires the external ownership record", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const scope = scopeId("personal", "legacy-incomplete-no-source");
+  const target = localVolumeName(scope, "acme");
+  fake.volumes.add(target);
+  fake.volumeLabels.set(target, {
+    "qm.org": "acme",
+    "qm.scope": scope,
+    "qm.migration": "legacy-v1",
+  });
+  await assert.rejects(makeSandbox(fake, { orgId: "acme" }).provision(rw(scope)), /migration target .* is incomplete/);
+});
+
+test("legacy migration refuses to copy a live home when stop fails", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const scope = scopeId("personal", "legacy-stop-fails");
+  const slug = legacySlug(scope);
+  const name = `qm-sbx-${slug}`;
+  const source = `qm-home-${slug}`;
+  fake.volumes.add(source);
+  fake.containers.set(name, {
+    name,
+    imageId: fake.imageId,
+    running: true,
+    labels: { "qm.org": "acme", "qm.scope": scope },
+    volume: source,
+  });
+  fake.failStop = true;
+  await assert.rejects(makeSandbox(fake, { orgId: "acme" }).provision(rw(scope)), /migration stop failed/);
+  assert.equal(fake.volumes.has(localVolumeName(scope, "acme")), false);
+});
+
+test("an orphaned legacy home fails closed without durable ownership evidence", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const scope = scopeId("personal", "legacy-orphan");
+  fake.volumes.add(`qm-home-${legacySlug(scope)}`);
+  await assert.rejects(
+    makeSandbox(fake, { orgId: "acme" }).provision(rw(scope)),
+    /has no owning container; copy it into .* labeled qm.org=acme and qm.scope=/,
+  );
+});
+
+test("an operator-labeled recovery target restores an orphaned legacy home", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const scope = scopeId("personal", "legacy-recovered");
+  const source = `qm-home-${legacySlug(scope)}`;
+  const target = localVolumeName(scope, "acme");
+  fake.volumes.add(source);
+  fake.volumes.add(target);
+  fake.volumeLabels.set(target, { "qm.org": "acme", "qm.scope": scope });
+  const handle = await makeSandbox(fake, { orgId: "acme" }).provision(rw(scope));
+  assert.equal(fake.containers.get(handle.id)?.volume, target);
+  assert.equal(handle.coldStart, false);
+});
+
+test("destroy disconnects the core and removes the isolated sandbox network", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const core = "qm-acme-core";
+  const sb = makeSandbox(fake, {
+    coreContainer: core,
+    orgId: "acme",
+    fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      url.hostname = "127.0.0.1";
+      url.port = String(daemonPort);
+      return fetch(url, init);
+    },
+  });
+  const handle = await sb.provision(rw(scopeId("personal", "destroy-network")));
+  const network = localNetworkName(handle.id);
+  await sb.teardown(handle, { destroy: true });
+  assert.equal(fake.networks.has(network), false);
+});
+
+test("a failed sandbox run removes its container and core-attached network", async () => {
+  const fake = installFakeDocker(daemonPort);
+  fake.failRun = true;
+  const sb = makeSandbox(fake, { coreContainer: "qm-acme-core", orgId: "acme" });
+  await assert.rejects(sb.provision(rw(scopeId("personal", "run-fails"))), /Created state/);
+  assert.equal(fake.containers.size, 0);
+  assert.equal(fake.networks.size, 0);
+});
+
+test("a losing sandbox run never removes the winning concurrent container", async () => {
+  const fake = installFakeDocker(daemonPort);
+  fake.conflictOnRun = true;
+  const scope = scopeId("personal", "run-race");
+  const name = localContainerName(scope, "acme");
+  await assert.rejects(
+    makeSandbox(fake, { coreContainer: "qm-acme-core", orgId: "acme" }).provision(rw(scope)),
+    /already in use/,
+  );
+  assert.equal(fake.containers.get(name)?.labels["qm.provision"], "winning-provision");
+  assert.equal(fake.networks.has(localNetworkName(name)), true);
+});
+
+test("existing sandbox resources must match their organization, scope, and mount", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const scope = scopeId("personal", "owned-resource");
+  const name = localContainerName(scope, "acme");
+  const volume = localVolumeName(scope, "acme");
+  fake.volumes.add(volume);
+  fake.volumeLabels.set(volume, { "qm.org": "other", "qm.scope": scope });
+  fake.containers.set(name, {
+    name,
+    imageId: fake.imageId,
+    running: false,
+    labels: { "qm.org": "acme", "qm.scope": scope },
+    volume,
+  });
+  await assert.rejects(makeSandbox(fake, { orgId: "acme" }).provision(rw(scope)), /volume .* is not owned/);
+});
+
+test("parking removes the isolated bridge and warm reuse rebuilds both attachments", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const core = "qm-acme-core";
+  const scope = scopeId("personal", "park-network");
+  const sb = makeSandbox(fake, {
+    coreContainer: core,
+    orgId: "acme",
+    fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      url.hostname = "127.0.0.1";
+      url.port = String(daemonPort);
+      return fetch(url, init);
+    },
+  });
+  const first = await sb.provision(rw(scope));
+  const network = localNetworkName(first.id);
+  await sb.teardown(first);
+  assert.equal(fake.networks.has(network), false);
+  const second = await sb.provision(rw(scope));
+  assert.equal(second.coldStart, false);
+  assert.deepEqual(fake.networkMembers.get(network), new Set([core, first.id]));
 });
 
 test("teardown parks the container and the next provision restarts it warm", async () => {

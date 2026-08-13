@@ -96,12 +96,17 @@ ARG WEB_UI_BASE
 CMD ["sh","-c","echo 'listening on :8080'; echo 'connected as @e2ebot'; echo 'surface on http://localhost'; echo '[admin-plugin] http'; echo 'public front door on'; echo 'tail sentinel'; while true; do sleep 3600; done"]
 `;
 
+const STANDIN_CORE_DOCKERFILE = `FROM alpine:latest
+RUN apk add --no-cache docker-cli
+CMD ["sh","-c","echo 'listening on :8080'; echo 'tail sentinel'; while true; do sleep 3600; done"]
+`;
+
 export function standInCheckout(services: readonly string[]): string {
   const root = tmp("checkout");
   for (const svc of services) {
     const dir = join(root, "deploy", svc);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "Dockerfile"), STANDIN_DOCKERFILE);
+    writeFileSync(join(dir, "Dockerfile"), svc === "core" ? STANDIN_CORE_DOCKERFILE : STANDIN_DOCKERFILE);
   }
   return root;
 }
@@ -149,9 +154,33 @@ const existingDockerNames = (kind: "volume" | "network", candidates: string[]): 
     return [];
   }
 };
-export const deploymentVolumes = (orgId: string): string[] =>
-  existingDockerNames("volume", [`qm-${orgId}-pgdata`, `qm-${orgId}-coredata`]);
-export const deploymentNetworks = (orgId: string): string[] => existingDockerNames("network", [`qm-${orgId}`]);
+export const deploymentVolumes = (orgId: string): string[] => {
+  try {
+    const labeled = execFileSync(
+      "docker",
+      ["volume", "ls", "--filter", `label=qm.org=${orgId}`, "--format", "{{.Name}}"],
+      { encoding: "utf8" },
+    )
+      .split("\n")
+      .map((name) => name.trim())
+      .filter(Boolean);
+    return [...new Set([...labeled, ...existingDockerNames("volume", [`qm-${orgId}-pgdata`, `qm-${orgId}-coredata`])])];
+  } catch {
+    return existingDockerNames("volume", [`qm-${orgId}-pgdata`, `qm-${orgId}-coredata`]);
+  }
+};
+export const deploymentNetworks = (orgId: string): string[] => {
+  try {
+    return execFileSync("docker", ["network", "ls", "--filter", `label=qm.org=${orgId}`, "--format", "{{.Name}}"], {
+      encoding: "utf8",
+    })
+      .split("\n")
+      .map((name) => name.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+};
 
 export function preexistingServiceImages(services: readonly string[]): string[] {
   try {

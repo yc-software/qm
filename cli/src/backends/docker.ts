@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { isIP } from "node:net";
 import { CliError, bold, die, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
   capture,
@@ -52,6 +53,7 @@ interface DockerCtx {
   missingSandboxSecrets: string[];
   buildFrom: boolean;
   repoRoot?: string;
+  dockerSocketPath?: string;
 }
 
 const dockerPrefix = (config: QmConfig): string => `qm-${safe(config.orgId)}`;
@@ -112,6 +114,10 @@ function volumeExists(name: string): boolean {
   return inspectExists(["volume", "inspect", "-f", "{{.Name}}", name], /No such volume|not found/i);
 }
 
+function ensureVolume(ctx: DockerCtx, name: string): void {
+  if (!volumeExists(name)) docker(["volume", "create", ...orgLabelArgs(ctx), name]);
+}
+
 function pgContainerPassword(ctx: DockerCtx): string | undefined {
   if (!containerExists(cname(ctx, "pg"))) return undefined;
   try {
@@ -164,7 +170,31 @@ function resolvePluginImage(ctx: DockerCtx, p: ResolvedPlugin): string {
 }
 
 function ensureNetwork(ctx: DockerCtx): void {
-  docker(["network", "create", ctx.network], /already exists/);
+  docker(["network", "create", ...orgLabelArgs(ctx), ctx.network], /already exists/);
+}
+
+function effectiveDockerSocket(): string {
+  const context = process.env.DOCKER_CONTEXT?.trim();
+  const endpoint = context
+    ? docker(["context", "inspect", context, "--format", "{{.Endpoints.docker.Host}}"]).trim()
+    : process.env.DOCKER_HOST?.trim() ||
+      docker(["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"]).trim();
+  if (!endpoint.startsWith("unix://")) {
+    throw new CliError(
+      `the Docker target requires a local Unix socket context; active endpoint is ${endpoint || "unset"}`,
+    );
+  }
+  const path = decodeURIComponent(new URL(endpoint).pathname);
+  if (!path.startsWith("/")) throw new CliError(`the Docker target cannot resolve the active Unix socket: ${endpoint}`);
+  return path;
+}
+
+function requireVolumeSubpathSupport(): void {
+  const version = docker(["version", "-f", "{{.Server.Version}}"]).trim();
+  const major = Number(version.match(/^(\d+)/)?.[1]);
+  if (!Number.isFinite(major) || major < 26) {
+    throw new CliError("Docker Engine 26 or newer is required for containerized core deployments");
+  }
 }
 
 function persistRestart(name: string): void {
@@ -212,6 +242,7 @@ function ensurePostgres(ctx: DockerCtx, dryRun: boolean): string {
 
     if (!containerRunning(pgName)) {
       step(`Postgres: starting ${pgName}`);
+      ensureVolume(ctx, pgVolume(ctx));
       docker(["rm", "-f", pgName], /No such container|is not running/);
       const secretFile = writeSecretEnvFile({ POSTGRES_PASSWORD: password });
       try {
@@ -331,6 +362,26 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
   if (ctx.signingSecret) env.CORE_SIGNING_SECRET = ctx.signingSecret;
   if (service === "core") {
     env.DATABASE_URL = ctx.databaseUrl;
+    const sandboxBackend = env.SANDBOX_BACKEND?.trim();
+    const secondarySandboxBackend = env.SANDBOX_SECONDARY_BACKEND?.trim();
+    const deployProvider = env.DEPLOY_PROVIDER?.trim();
+    const localSandbox = sandboxBackend === "local" || secondarySandboxBackend === "local";
+    const localSandboxOnly =
+      sandboxBackend === "local" && (!secondarySandboxBackend || secondarySandboxBackend === "local");
+    if (localSandbox || deployProvider !== "aws") {
+      env.DOCKER_CORE_CONTAINER = cname(ctx, "core");
+      env.DOCKER_CORE_DATA_VOLUME = `${ctx.prefix}-coredata`;
+      env.DOCKER_DEPLOY_NETWORK = `${ctx.prefix}-deployments`;
+      env.DATA_DIR = "/data";
+    }
+    if (localSandbox && !localSandboxOnly) {
+      if (!env.PUBLIC_API_URL) {
+        throw new CliError("mixed local and remote sandbox backends require an externally reachable PUBLIC_API_URL");
+      }
+      requireExternalApiUrl(env.PUBLIC_API_URL);
+    } else if (localSandbox && !env.PUBLIC_API_URL) {
+      env.PUBLIC_API_URL = "http://core:8080";
+    }
     for (const key of ctx.sandboxSecretKeys) {
       const value = out[key];
       if (value !== undefined) env[key] = value;
@@ -338,6 +389,56 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     }
   }
   return env;
+}
+
+function requireExternalApiUrl(value: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new CliError("mixed local and remote sandbox backends require PUBLIC_API_URL to be a valid HTTPS URL");
+  }
+  const host = parsed.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.+$/, "");
+  const ipv4 = isIP(host) === 4 ? host.split(".").map(Number) : [];
+  const privateIpv4 =
+    ipv4.length === 4 &&
+    (ipv4[0] === 0 ||
+      ipv4[0] === 10 ||
+      ipv4[0] === 127 ||
+      (ipv4[0] === 100 && ipv4[1]! >= 64 && ipv4[1]! <= 127) ||
+      (ipv4[0] === 169 && ipv4[1] === 254) ||
+      (ipv4[0] === 172 && ipv4[1]! >= 16 && ipv4[1]! <= 31) ||
+      (ipv4[0] === 192 && (ipv4[1] === 0 || ipv4[1] === 168)) ||
+      (ipv4[0] === 198 && (ipv4[1] === 18 || ipv4[1] === 19 || (ipv4[1] === 51 && ipv4[2] === 100))) ||
+      (ipv4[0] === 203 && ipv4[1] === 0 && ipv4[2] === 113) ||
+      ipv4[0]! >= 224);
+  const privateIpv6 =
+    isIP(host) === 6 &&
+    (/^::$/.test(host) ||
+      /^::1$/.test(host) ||
+      /^::ffff:/i.test(host) ||
+      /^(fc|fd|fe8|fe9|fea|feb)/i.test(host) ||
+      /^ff/i.test(host) ||
+      /^2001:db8:/i.test(host));
+  const reservedName =
+    !isIP(host) &&
+    (!host.includes(".") ||
+      ["localhost", "local", "internal", "home", "lan", "test", "invalid", "example"].some(
+        (suffix) => host === suffix || host.endsWith(`.${suffix}`),
+      ));
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    reservedName ||
+    privateIpv4 ||
+    privateIpv6
+  ) {
+    throw new CliError("mixed local and remote sandbox backends require an externally reachable HTTPS PUBLIC_API_URL");
+  }
 }
 
 function secretEnvKeys(ctx: DockerCtx, service: string): Set<string> {
@@ -398,15 +499,40 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     "--restart",
     "no",
   ];
-  const cleanup = pushEnvArgs(args, serviceEnv(ctx, service), secretEnvKeys(ctx, service));
+  const env = serviceEnv(ctx, service);
   if (service === "core") {
     args.push("-v", `${ctx.prefix}-coredata:/data`);
+    if (env.DOCKER_CORE_CONTAINER) {
+      if (!ctx.dockerSocketPath) throw new CliError("the active Docker socket was not resolved");
+      let socketGroup: string;
+      try {
+        socketGroup = docker([
+          "run",
+          "--rm",
+          "-v",
+          `${ctx.dockerSocketPath}:/var/run/docker.sock`,
+          "--entrypoint",
+          "stat",
+          image,
+          "-c",
+          "%g",
+          "/var/run/docker.sock",
+        ]).trim();
+      } catch {
+        throw new CliError(
+          "the core cannot mount the active Docker socket; allow this image when Docker Desktop Enhanced Container Isolation is enabled",
+        );
+      }
+      if (!/^\d+$/.test(socketGroup)) throw new CliError(`could not resolve the Docker socket group from ${image}`);
+      args.push("--group-add", socketGroup, "-v", `${ctx.dockerSocketPath}:/var/run/docker.sock`);
+    }
     for (const m of layerMounts(ctx)) args.push("-v", m);
     for (const m of skillMounts(ctx)) args.push("-v", m);
   }
   if (def.docker.hostPortOffset !== undefined) {
     args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
   }
+  const cleanup = pushEnvArgs(args, env, secretEnvKeys(ctx, service));
   args.push(image);
   return { args, cleanup };
 }
@@ -571,16 +697,20 @@ export async function dockerUp(
     );
   }
 
+  const coreEnv = serviceEnv(ctx, "core");
+  if (coreEnv.DOCKER_CORE_CONTAINER) ctx.dockerSocketPath = effectiveDockerSocket();
+  if (coreEnv.DEPLOY_PROVIDER?.trim() !== "aws") requireVolumeSubpathSupport();
   ensureNetwork(ctx);
+  ensureVolume(ctx, `${ctx.prefix}-coredata`);
   ctx.databaseUrl = ensurePostgres(ctx, false);
   if (!externalDatabaseUrl(ctx)) await waitPostgres(ctx);
 
   for (const def of ordered(runnableServices(config.services))) {
     const image = resolveImage(ctx, def.name);
-    docker(["rm", "-f", cname(ctx, def.name)], /No such container|is not running/);
-    step(`starting ${def.name}`);
     const run = runArgs(ctx, def.name, image);
     try {
+      docker(["rm", "-f", cname(ctx, def.name)], /No such container|is not running/);
+      step(`starting ${def.name}`);
       docker(run.args);
     } finally {
       run.cleanup();
@@ -671,6 +801,51 @@ function listDeploymentContainers(orgId: string): string[] {
   return psNames(["-a", "--filter", `label=${ORG_LABEL_KEY}=${orgId}`]);
 }
 
+function listMigrationOwnerContainers(orgId: string): string[] {
+  return psNames(["-a", "--filter", `label=qm.volume-org=${orgId}`]);
+}
+
+function listDeploymentNetworks(orgId: string): string[] {
+  return docker(["network", "ls", "--filter", `label=${ORG_LABEL_KEY}=${orgId}`, "--format", "{{.Name}}"])
+    .split("\n")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+function listDeploymentVolumes(orgId: string): string[] {
+  return docker(["volume", "ls", "--filter", `label=${ORG_LABEL_KEY}=${orgId}`, "--format", "{{.Name}}"])
+    .split("\n")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+function legacySandboxResources(name: string): { networks: string[]; volumes: string[] } | null {
+  if (docker(["inspect", "-f", '{{index .Config.Labels "qm.sandbox"}}', name]).trim() !== "1") return null;
+  const volumes = docker([
+    "inspect",
+    "-f",
+    '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}',
+    name,
+  ])
+    .split("\n")
+    .map((volume) => volume.trim())
+    .filter((volume) => volume.startsWith("qm-home-"))
+    .filter(
+      (volume) => docker(["volume", "inspect", "-f", `{{index .Labels "${ORG_LABEL_KEY}"}}`, volume]).trim() === "",
+    );
+  const networks = docker([
+    "inspect",
+    "-f",
+    "{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}",
+    name,
+  ])
+    .split("\n")
+    .map((network) => network.trim())
+    .filter((network) => network.startsWith("qm-net-"));
+  if (!volumes.length && !networks.length) return null;
+  return { networks, volumes };
+}
+
 export async function dockerLogs(config: QmConfig, service: string | undefined, opts: LogOpts = {}): Promise<void> {
   requireDocker();
   const prefix = dockerPrefix(config);
@@ -696,7 +871,7 @@ export async function dockerLogs(config: QmConfig, service: string | undefined, 
 function streamPrefixedLogs(names: string[], prefix: string, opts: { follow: boolean; tail: string }): Promise<void> {
   return streamLabeled(
     names.map((name) => ({
-      label: name.slice(prefix.length + 1),
+      label: name.startsWith(`${prefix}-`) ? name.slice(prefix.length + 1) : name,
       command: "docker",
       args: ["logs", "--tail", opts.tail, ...(opts.follow ? ["-f"] : []), name],
     })),
@@ -711,23 +886,50 @@ export async function dockerDown(config: QmConfig, opts: { purge?: boolean } = {
   const serviceNames = teardownOrdered(runnableServices(config.services)).map((d) => `${prefix}-${d.name}`);
   const pgName = `${prefix}-pg`;
   const known = new Set([...serviceNames, pgName]);
+  const migrationOwners = new Set(listMigrationOwnerContainers(config.orgId));
   const pluginNames = [
     ...new Set([
       ...config.plugins.map((p) => `${prefix}-${p.name}`),
       ...listDeploymentContainers(config.orgId).filter((n) => !known.has(n)),
+      ...migrationOwners,
     ]),
   ];
   const candidates = [...pluginNames, ...serviceNames, pgName];
   const present = new Set(psNames(["-a"]));
+  const legacyNetworks = new Set<string>();
+  const legacyVolumes = new Set<string>();
   for (const name of candidates) {
     if (!present.has(name)) continue;
+    const legacy = legacySandboxResources(name);
+    for (const network of legacy?.networks ?? []) legacyNetworks.add(network);
+    for (const volume of legacy?.volumes ?? []) legacyVolumes.add(volume);
+    if (migrationOwners.has(name) && !opts.purge) continue;
+    if (legacy?.volumes.length && !opts.purge) {
+      step(`stopping ${name}`);
+      docker(["stop", "-t", "2", name], /is not running/);
+      continue;
+    }
     step(`removing ${name}`);
     docker(["rm", "-f", name], /No such container/);
   }
   if (opts.purge) {
-    warn("purging the network and Postgres volume (durable data will be lost)");
-    docker(["network", "rm", prefix], /not found|No such/);
-    docker(["volume", "rm", `${prefix}-pgdata`, `${prefix}-coredata`], /No such volume|not found|in use/);
+    warn("purging Docker networks and volumes (durable data will be lost)");
+    for (const network of new Set([
+      ...listDeploymentNetworks(config.orgId),
+      ...legacyNetworks,
+      prefix,
+      `${prefix}-deployments`,
+    ])) {
+      docker(["network", "rm", network], /not found|No such/);
+    }
+    for (const volume of new Set([
+      ...listDeploymentVolumes(config.orgId),
+      ...legacyVolumes,
+      `${prefix}-pgdata`,
+      `${prefix}-coredata`,
+    ])) {
+      docker(["volume", "rm", volume], /No such volume|not found/);
+    }
   }
   ok("down.");
 }
