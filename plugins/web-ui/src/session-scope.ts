@@ -56,7 +56,7 @@ export function scopeCronCount(scope: string, onReady: () => void): number | nul
   return hit?.count ?? null;
 }
 
-export type SessionTool = "crons" | "files" | "memory";
+export type SessionTool = "crons" | "files" | "memory" | "apps" | "skills" | "keychain";
 
 export interface SessionTopbarOpts {
   crumb: string | null;
@@ -159,7 +159,7 @@ export function scopedViewTopbar(current: SessionTool, redraw: () => void): Temp
     },
     onTool: (t) => {
       if (t === current) return;
-      void import("./shell").then(({ switchView }) => switchView(t));
+      void import("./shell").then(({ switchView }) => switchView(t === "apps" ? "deploys" : t));
     },
   });
 }

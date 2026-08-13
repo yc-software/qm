@@ -1156,7 +1156,7 @@ export function createChatSurface(
           crumb,
         });
         if (scope && tool !== "memory") contextsState.selected = scope;
-        switchView(tool);
+        switchView(tool === "apps" ? "deploys" : tool);
       },
     });
   }
