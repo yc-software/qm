@@ -14,6 +14,7 @@ import type { AdminService } from "../admin/admin-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
+import type { OperatorIncidentStore } from "../incidents/incident-store.ts";
 import type { MetricsSink } from "../admin/metrics-sink.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -91,6 +92,7 @@ export interface ServerDeps {
   sessions?: SessionStore;
   auditLog?: AuditLog;
   errors?: ErrorLog;
+  operatorIncidents?: OperatorIncidentStore;
   metrics?: MetricsSink;
   crons?: CronStore;
   runs?: RunStore;

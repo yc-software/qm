@@ -12,7 +12,7 @@ interface ScopedEventQuery<E> {
 }
 
 export interface ScopedEventSink<E extends ScopedEvent, In> {
-  record(input: In): void;
+  record(input: In): E;
   list(opts?: ScopedEventQuery<E>): E[];
   all(): readonly E[];
 }
@@ -29,8 +29,10 @@ export function createScopedEventSink<E extends ScopedEvent, In>(
   const events: E[] = [];
   return {
     record(input) {
-      events.push(opts.stamp(input));
+      const event = opts.stamp(input);
+      events.push(event);
       if (events.length > opts.max) events.splice(0, events.length - opts.max);
+      return event;
     },
     list(query = {}) {
       const limit = query.limit ?? opts.defaultLimit;
@@ -47,7 +49,7 @@ export function createScopedEventSink<E extends ScopedEvent, In>(
 type TimestampedQuery = { scopeId?: string; since?: number; limit?: number; [k: string]: unknown };
 
 export interface TimestampedEventSink<E extends ScopedEvent & { ts: number }> {
-  record(input: Omit<E, "ts">): void;
+  record(input: Omit<E, "ts">): E;
   list(opts?: TimestampedQuery): Promise<E[]>;
   all(): readonly E[];
 }
@@ -101,7 +103,7 @@ export interface PostgresEventSinkConfig<E> {
 
 export interface PostgresEventSink<E> {
   q: PgPool["q"];
-  record(input: Omit<E, "ts">): void;
+  record(input: Omit<E, "ts">): E;
   flush(): Promise<void>;
   list(opts?: object): Promise<E[]>;
   count(opts?: object): Promise<number>;
@@ -159,12 +161,14 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
   return {
     q,
     record(input) {
-      const s = input as Record<string, unknown>;
-      const values = cfg.columns.map(([, js]) => (js === "ts" ? Date.now() : (s[js] ?? null)));
+      const event = { ...input, ts: Date.now() } as E;
+      const s = event as Record<string, unknown>;
+      const values = cfg.columns.map(([, js]) => s[js] ?? null);
       const write = q(insertSql, values)
         .catch((err) => console.error(cfg.persistErrorMessage, err))
         .finally(() => pendingWrites.delete(write));
       pendingWrites.add(write);
+      return event;
     },
     async flush() {
       await settleWrites();

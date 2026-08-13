@@ -255,6 +255,23 @@ test("defaults come from CONFIG_DEFAULTS, set exactly once", () => {
   assert.equal(def.turnWallClockMs, 0);
   assert.equal(def.runMaxAgeMs, 24 * 60 * 60_000);
   assert.equal(def.runWaitMs, def.runMaxAgeMs + 60_000);
+  assert.equal(def.operatorIncidentRecipient, undefined);
+  assert.equal(def.operatorIncidentIntervalMs, CONFIG_DEFAULTS.operatorIncidentIntervalMs);
+});
+
+test("operator incident notification config trims the recipient and bounds its poll interval", () => {
+  const config = loadConfig({
+    OPERATOR_INCIDENT_RECIPIENT: "  ahmad@chirocandy.com  ",
+    OPERATOR_INCIDENT_INTERVAL_MS: "15000",
+    CONNECTOR_API_KEY: "private-test-value",
+    PUBLIC_API_URL: "https://core.example.test",
+  });
+  assert.equal(config.operatorIncidentRecipient, "ahmad@chirocandy.com");
+  assert.equal(config.operatorIncidentIntervalMs, 15_000);
+  assert.deepEqual(config.operatorIncidentSecretEnv, { CONNECTOR_API_KEY: "private-test-value" });
+  assert.equal(loadConfig({ OPERATOR_INCIDENT_RECIPIENT: "  " }).operatorIncidentRecipient, undefined);
+  assert.throws(() => loadConfig({ OPERATOR_INCIDENT_INTERVAL_MS: "999" }), /must be an integer/);
+  assert.throws(() => loadConfig({ OPERATOR_INCIDENT_INTERVAL_MS: "3600001" }), /must be an integer/);
 });
 
 test("turn wall clock config drives run bounds only when capped", () => {

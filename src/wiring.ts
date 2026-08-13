@@ -195,6 +195,9 @@ import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper, type Sweeper } from "./util/sweeper.ts";
 import { createReachDeniedNotifier, type ReachDeniedCursor } from "./insights/reach-denied-notifier.ts";
+import { createOperatorIncidentStore, type OperatorIncidentStore } from "./incidents/incident-store.ts";
+import { createPostgresOperatorIncidentStore } from "./incidents/postgres-incident-store.ts";
+import { createOperatorIncidentRuntime, type OperatorIncidentCursor } from "./incidents/operator-incidents.ts";
 import {
   createMemoryProcessRegistry,
   createPostgresProcessRegistry,
@@ -268,6 +271,7 @@ import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
 import { errMessage, swallowAs } from "./util/errors.ts";
 import { sleep } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import { createSecretValueMasker } from "./security/secret-masking.ts";
 
 export interface Runtime {
   start(): void;
@@ -332,6 +336,7 @@ export interface BuiltApp {
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
+  operatorIncidents: OperatorIncidentStore;
   metrics: MetricsSink;
   crons: CronStore;
   credentialUsage: CredentialUsageSink;
@@ -560,6 +565,9 @@ export function buildApp(
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
   const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
+  const operatorIncidents = config.databaseUrl
+    ? createPostgresOperatorIncidentStore(config.databaseUrl)
+    : createOperatorIncidentStore();
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
     errors.record({
       category: e.category,
@@ -1315,6 +1323,27 @@ export function buildApp(
         },
       })
     : undefined;
+  const incidentLayerEnv = Object.entries(config.layerEnv ?? {}).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string",
+  );
+  const incidentEnv = Object.fromEntries([...Object.entries(config.operatorIncidentSecretEnv), ...incidentLayerEnv]);
+  const operatorIncidentRuntime: Sweeper | undefined = config.operatorIncidentRecipient
+    ? createOperatorIncidentRuntime({
+        incidents: operatorIncidents,
+        errors,
+        runs,
+        runActivity,
+        sessions,
+        deliveries,
+        directory,
+        recipient: config.operatorIncidentRecipient,
+        orgScopeId: orgScope,
+        intervalMs: config.operatorIncidentIntervalMs,
+        cursors: artifactMap<OperatorIncidentCursor>("operator_incident_cursors"),
+        maskSecrets: createSecretValueMasker(incidentEnv),
+        leaderLease,
+      })
+    : undefined;
   const instanceRegistry: InstanceRegistry =
     config.buildSha && pgArtifactMap
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
@@ -1390,6 +1419,7 @@ export function buildApp(
       idleSweeper?.start();
       deepIdleSweeper?.start();
       reachDeniedNotifier?.start(config.insightsIntervalMs);
+      operatorIncidentRuntime?.start(config.operatorIncidentIntervalMs);
       wakeSweep.start();
       orphanedSignalSweeper.start();
       drain.start();
@@ -1405,6 +1435,7 @@ export function buildApp(
       idleSweeper?.stop();
       deepIdleSweeper?.stop();
       reachDeniedNotifier?.stop();
+      operatorIncidentRuntime?.stop();
       blobSweeper.stop();
       wakeSweep.stop();
       orphanedSignalSweeper.stop();
@@ -1417,6 +1448,7 @@ export function buildApp(
       void runSignals.close?.();
       void sessionStateBus.close?.();
       void runActivity.close?.();
+      void operatorIncidents.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
     },
@@ -1454,6 +1486,7 @@ export function buildApp(
     admin,
     rateLimiter,
     errors,
+    operatorIncidents,
     metrics,
     crons,
     credentialUsage,

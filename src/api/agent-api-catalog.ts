@@ -551,8 +551,9 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/admin/audit|errors|metrics|egress?scope=",
-        summary: "observability: audit log, error telemetry, turn metrics, outbound-destination log (logs: DM only)",
+        path: "/v1/admin/audit|errors|incidents|metrics|egress?scope=",
+        summary:
+          "observability: audit log, raw error telemetry, paginated redacted incident logbook, turn metrics, outbound-destination log (logs: DM only)",
       },
       { method: "GET", path: "/v1/admin/retention", summary: "org-wide usage and retention report" },
       {

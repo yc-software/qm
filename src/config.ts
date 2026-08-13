@@ -134,6 +134,9 @@ export interface Config {
   };
   insightsIntervalMs: number;
   reachDeniedNotifyChannel?: string;
+  operatorIncidentRecipient?: string;
+  operatorIncidentIntervalMs: number;
+  operatorIncidentSecretEnv: Record<string, string>;
   scratchExecEnabled: boolean;
   reachExecEnabled: boolean;
   sharedOwnerAuthIsolation: boolean;
@@ -405,6 +408,7 @@ export const CONFIG_DEFAULTS = {
   approvalSummaryTimeoutMs: 6_000,
   securityScreenTimeoutMs: 15_000,
   insightsIntervalMs: 5 * 60_000,
+  operatorIncidentIntervalMs: 30_000,
   workers: 16,
   leaseTtlMs: 120_000,
   heartbeatIntervalMs: 10_000,
@@ -683,6 +687,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const runMaxAgeMs =
     numEnvStrict("RUN_MAX_AGE_MS", env.RUN_MAX_AGE_MS) ??
     (turnWallClockMs > 0 ? 2 * turnWallClockMs : CONFIG_DEFAULTS.runMaxAgeMs);
+  const operatorIncidentRecipient = env.OPERATOR_INCIDENT_RECIPIENT?.trim() || undefined;
+  const operatorIncidentSecretEnv = Object.fromEntries(
+    Object.entries(env).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[1] === "string" &&
+        /(?:API_KEY|CREDENTIAL|DATABASE_URL|PASSWORD|PRIVATE_KEY|SECRET|TOKEN)/i.test(entry[0]),
+    ),
+  );
+  const operatorIncidentIntervalMs =
+    numEnvStrict("OPERATOR_INCIDENT_INTERVAL_MS", env.OPERATOR_INCIDENT_INTERVAL_MS) ??
+    CONFIG_DEFAULTS.operatorIncidentIntervalMs;
+  if (
+    !Number.isSafeInteger(operatorIncidentIntervalMs) ||
+    operatorIncidentIntervalMs < 1_000 ||
+    operatorIncidentIntervalMs > 3_600_000
+  ) {
+    throw new Error("OPERATOR_INCIDENT_INTERVAL_MS must be an integer from 1000 through 3600000");
+  }
   const slack = slackPluginConfigFromEnv(env);
   return {
     production: env.NODE_ENV === "production",
@@ -846,6 +868,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     insightsIntervalMs:
       numEnvStrict("INSIGHTS_INTERVAL_MS", env.INSIGHTS_INTERVAL_MS) ?? CONFIG_DEFAULTS.insightsIntervalMs,
     ...(env.REACH_DENIED_NOTIFY_CHANNEL ? { reachDeniedNotifyChannel: env.REACH_DENIED_NOTIFY_CHANNEL.trim() } : {}),
+    ...(operatorIncidentRecipient ? { operatorIncidentRecipient } : {}),
+    operatorIncidentIntervalMs,
+    operatorIncidentSecretEnv,
     scratchExecEnabled: boolEnvStrict("EXECUTE_SCRATCH", env.EXECUTE_SCRATCH) ?? false,
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     sharedOwnerAuthIsolation: boolEnvStrict("SHARED_OWNER_AUTH_ISOLATION", env.SHARED_OWNER_AUTH_ISOLATION) ?? false,

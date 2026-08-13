@@ -7,7 +7,14 @@ import {
   retention,
   whoami,
 } from "./admin/scope-config.ts";
-import { egress, listAdminAudit, listAdminErrors, listAdminRuns, metrics } from "./admin/observability.ts";
+import {
+  egress,
+  listAdminAudit,
+  listAdminErrors,
+  listAdminIncidents,
+  listAdminRuns,
+  metrics,
+} from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
 import { archiveAdminSkill, getAdminSkill, listAdminArtifacts, putAdminCronDestination } from "./admin/artifacts.ts";
@@ -84,6 +91,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/admin/files/upload", auth: "either", handle: uploadAdminFile },
   { method: "GET", path: "/v1/admin/files", auth: "either", handle: listAdminFiles },
   { method: "GET", path: "/v1/admin/errors", auth: "either", handle: listAdminErrors },
+  { method: "GET", path: "/v1/admin/incidents", auth: "either", handle: listAdminIncidents },
   { method: "GET", path: "/v1/admin/audit", auth: "either", handle: listAdminAudit },
   {
     match: (m, p) =>
