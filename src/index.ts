@@ -1,8 +1,8 @@
-import { baseModelProviders, configuredModelForHarness, loadConfig, providerKeysPresent } from "./config.ts";
+import { loadConfig, providerKeysPresent } from "./config.ts";
 import { buildApp, stopWithBackstop } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { errMessage } from "./util/errors.ts";
-import { defaultModelForHarness, modelProviderAvailabilityFor } from "./model/pi-models.ts";
+import { modelProviderAvailabilityFor } from "./model/pi-models.ts";
 import { effectiveEgressEnforcement } from "./sandbox/sandbox.ts";
 import { slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
@@ -10,6 +10,7 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 const config = loadConfig();
 
 const built = buildApp(config);
+await built.customProvidersReady;
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;
 const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN);
@@ -25,11 +26,7 @@ const server = createServer(built.app, {
   ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
   ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
   config: built.config,
-  baseModelDefault: defaultModelForHarness(
-    config.harness,
-    configuredModelForHarness(config, config.harness),
-    baseModelProviders(config),
-  ),
+  baseModelDefault: built.runtimeFallback.modelId,
   modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
   providerKeys: providerKeysPresent(config),
   modelCredentials: built.modelCredentials,

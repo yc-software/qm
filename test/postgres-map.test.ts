@@ -11,6 +11,10 @@ import {
   type KeychainGrant,
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
+import { createCustomProviderStore, type StoredCustomProvider } from "../src/model/custom-provider-store.ts";
+import { buildApp } from "../src/wiring.ts";
+import { testConfig } from "./support/test-config.ts";
+import { setCustomProviders } from "../src/model/custom-providers.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -65,6 +69,38 @@ test("pg map: a value persists across map instances (no per-process cache to div
   await writer.put("shared", { name: "shared", tags: ["s"], nested: { n: 9 } });
   const reader = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   assert.equal((await reader.get("shared"))!.nested.n, 9);
+});
+
+test("boot hydrates a durable custom provider before resolving the runtime fallback", { skip }, async () => {
+  const providerId = "boot-provider";
+  const modelId = "boot-provider-model";
+  const keyMaterial = "postgres-provider-boot-test-connector-key";
+  const factory = createPostgresMapFactory(URL!);
+  const backing = factory.map<StoredCustomProvider>("custom_model_providers");
+  const providers = createCustomProviderStore({ backing, keyMaterial });
+  await providers.upsert(
+    {
+      id: providerId,
+      name: "Boot Provider",
+      protocol: "openai",
+      baseUrl: "https://models.example.test/v1",
+      models: [{ id: modelId, name: "Boot Provider Model" }],
+    },
+    "sk-boot-provider",
+    "postgres-test",
+  );
+  setCustomProviders([]);
+  const config = testConfig({ databaseUrl: URL!, connectorSecretKey: keyMaterial, harness: "pi", modelId });
+  const built = buildApp(config);
+  try {
+    await built.customProvidersReady;
+    assert.equal(built.runtimeFallback.modelId, modelId);
+    assert.equal((await built.slackCore.surfaceHeaderFacts(scopeId("org", config.orgId))).modelName, modelId);
+  } finally {
+    await backing.delete(providerId);
+    await factory.pool.close();
+    setCustomProviders([]);
+  }
 });
 
 test("pg map: an artifact store rides the map (a cron round-trips through Postgres)", { skip }, async () => {

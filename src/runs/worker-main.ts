@@ -3,6 +3,7 @@ import { buildApp, stopWithBackstop } from "../wiring.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
+await built.customProvidersReady;
 await built.config.hydrate?.();
 await built.identity.hydrate();
 const { runtime } = built;

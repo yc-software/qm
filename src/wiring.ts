@@ -169,7 +169,7 @@ import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "./harness/o
 import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-harness.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
-import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
+import { createHarnessRouter, resolveRuntimeChoiceDurable, type RuntimeChoice } from "./harness/harness-router.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryTaskStore } from "./tasks/memory-task-store.ts";
@@ -323,6 +323,8 @@ export interface BuiltApp {
   modelCredentials: ModelCredentialStore;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
+  customProvidersReady: Promise<void>;
+  runtimeFallback: RuntimeChoice;
   acl: AclStore;
   skills: SkillStore;
   skillBundles: SkillBundleStore;
@@ -694,9 +696,8 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
-  void refreshCustomProviders().catch((e) =>
-    console.error("[wiring] custom provider hydration failed:", errMessage(e)),
-  );
+  const customProvidersReady = refreshCustomProviders();
+  void customProvidersReady.catch((e) => console.error("[wiring] custom provider hydration failed:", errMessage(e)));
   const resolveModelProviderKeys = async () => {
     const [anthropic, openai, openrouter, enabledCustom] = await Promise.all([
       modelCredentials.resolve("anthropic"),
@@ -772,19 +773,22 @@ export function buildApp(
   const fallbackHarness = config.harness as HarnessId;
   const fallback = {
     harnessId: fallbackHarness,
-    modelId: defaultModelForHarness(
-      fallbackHarness,
-      configuredModelForHarness(config, fallbackHarness),
-      baseModelProviders(config),
-    ),
+    get modelId(): string {
+      return defaultModelForHarness(
+        fallbackHarness,
+        configuredModelForHarness(config, fallbackHarness),
+        baseModelProviders(config),
+      );
+    },
   };
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
-  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) =>
-    resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, input.scopeLabel, fallback, {
+  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input) => {
+    await customProvidersReady;
+    return resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, input.scopeLabel, fallback, {
       ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
       ...(input.model ? { modelId: input.model } : {}),
-    }),
-  );
+    });
+  });
 
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
@@ -1445,6 +1449,8 @@ export function buildApp(
     modelCredentials,
     customProviders,
     refreshCustomProviders,
+    customProvidersReady,
+    runtimeFallback: fallback,
     acl,
     skills,
     skillBundles,
