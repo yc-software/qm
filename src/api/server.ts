@@ -452,7 +452,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", err));
-  server.requestTimeout = 30_000;
+  server.requestTimeout = 300_000;
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5_000;
   server.maxConnections = 1024;
