@@ -1,0 +1,37 @@
+{
+  // argentic platform QM deployment
+  contract: 1,
+  orgId: "argentic",
+  publicUrl: "https://qm.integritasmrv.com",
+  target: "docker",
+  appPrefix: "qm",
+  region: "docker",
+  sandbox: {
+    backend: "local",
+    image: "node:24-alpine",
+  },
+  services: ["core", "web-ui", "portal", "admin"],
+  env: {
+    core: {
+      HARNESS: "opencode",
+      SESSION_STORE: "postgres",
+      RUN_STORE: "postgres",
+      SNAPSHOT_STORE: "local",
+      TRANSFER_STORE: "local",
+      SANDBOX_BACKEND: "local",
+      DEPLOY_PROVIDER: "docker",
+      PI_MODEL: "deepseek-v4-flash",
+      OPENCODE_MODEL: "deepseek-v4-flash",
+      HARNESS_SECURITY_POSTURE: "strict",
+    },
+    portal: {
+      // no OIDC for pilot — use self-hosted auth
+    },
+  },
+  layerEnv: {
+    // LiteLLM proxy as OpenAI-compatible gateway
+    OPENAI_API_BASE_URL: "http://144.91.126.111:3037/v1",
+    OPENAI_API_KEY: "sk-litellm-aifabric-secret",
+    MODEL_PROVIDER: "openai",
+  },
+}

@@ -770,13 +770,17 @@ export function buildApp(
     ["mock", createMockHarness()],
   ]);
   const fallbackHarness = config.harness as HarnessId;
-  const fallback = {
-    harnessId: fallbackHarness,
-    modelId: defaultModelForHarness(
+  const resolveFallbackModelId = (): string =>
+    defaultModelForHarness(
       fallbackHarness,
       configuredModelForHarness(config, fallbackHarness),
       baseModelProviders(config),
-    ),
+    );
+  const fallback = {
+    harnessId: fallbackHarness,
+    get modelId(): string {
+      return resolveFallbackModelId();
+    },
   };
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) =>

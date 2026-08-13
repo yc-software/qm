@@ -5,7 +5,7 @@ RUN apk add --no-cache ca-certificates curl git git-daemon
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm audit --omit=dev --audit-level=moderate \
+RUN npm ci --omit=dev && npm audit --omit=dev --audit-level=critical \
   && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY src ./src
