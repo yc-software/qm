@@ -217,6 +217,7 @@ export interface CronFireLogEntry {
 export interface Cron extends TriggerBase {
   schedule: CronSchedule;
   nextFireAt?: number;
+  lastAttemptAt?: number;
   title?: string;
   archived?: boolean;
   action?: string;

@@ -43,6 +43,7 @@ export interface CronStore {
   setRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
+  markAttempted(id: string, at: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
   due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
@@ -174,6 +175,9 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
       const cron = await backing.get(id);
       if (!cron || cron.lastFiredAt !== at) return;
       await backing.merge(id, { lastFiredAt: priorLastFiredAt, nextFireAt: scheduledAt });
+    },
+    async markAttempted(id, at) {
+      await backing.merge(id, { lastAttemptAt: at });
     },
     async due(now) {
       const due: Array<Cron & { scheduledAt: number }> = [];

@@ -174,13 +174,28 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   const fireDue = async (t: number): Promise<void> => {
     const due = await deps.crons.due(t);
-    const batch = due.slice(0, maxFiresPerTick);
-    if (due.length > batch.length) {
+    let batch = due;
+    if (due.length > maxFiresPerTick) {
+      const ordered = [...due].sort((a, b) => (a.lastAttemptAt ?? 0) - (b.lastAttemptAt ?? 0));
+      batch = [];
+      for (const cron of ordered) {
+        if (batch.length >= maxFiresPerTick) break;
+        try {
+          await deps.crons.markAttempted(cron.id, t);
+          batch.push(cron);
+        } catch (e) {
+          console.error("[scheduler] attempt mark failed, holding this cron back:", errMessage(e));
+        }
+      }
       console.warn(`[scheduler] fan-out capped: firing ${batch.length}/${due.length} due crons this tick`);
     }
     for (const cron of batch) {
-      const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
-      if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+      try {
+        const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
+        if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+      } catch (e) {
+        console.error("[scheduler] fire failed:", errMessage(e));
+      }
     }
   };
 

@@ -10,6 +10,8 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { isPollSurface, isSilentPollReply } from "../src/triggers/run-trigger.ts";
 import { createDirectoryStore, type DirectoryStore } from "../src/directory/directory-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import type { Cron } from "../src/types.ts";
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
   return {
@@ -22,6 +24,7 @@ function fakeLease(isLeader: () => boolean): LeaderLease {
 function harness(
   reply: string | ((req: TurnRequest) => Promise<TurnResult>) = "CRON-OUTPUT-XYZ",
   directory?: DirectoryStore,
+  maxFiresPerTick?: number,
 ) {
   const crons = createCronStore();
   const deliveries = createDeliveryStore();
@@ -42,6 +45,7 @@ function harness(
     identity,
     run,
     ...(directory ? { directory } : {}),
+    ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
   });
   return { crons, deliveries, calls, scheduler, identity };
 }
@@ -481,6 +485,191 @@ test("the default (no-op) lease ticks exactly as before — memory-mode behavior
   assert.equal(calls.length, 1, "without a lease, the tick fires due crons as before");
 });
 
+test("a failing interval cron does not starve later due crons across ticks", async () => {
+  const { crons, calls, scheduler } = harness(async (req) => {
+    if (req.text.includes("fail first")) throw new Error("cron failed");
+    return { status: "ok", reply: "OUT" };
+  });
+  const failing = await crons.create({
+    schedule: { everyMs: 1000, firstFireAt: 1 },
+    action: "fail first",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const succeeding = await crons.create({
+    schedule: { everyMs: 1000, firstFireAt: 1 },
+    action: "succeed second",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  await scheduler.tick(2000);
+  await scheduler.tick(3500);
+
+  assert.deepEqual(
+    calls.map((call) => call.idempotencyKey),
+    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${failing.id}:1`, `cron:${succeeding.id}:3000`],
+  );
+});
+
+test("a capped batch of persistent failures rotates — later due crons still get their turn", async () => {
+  const { crons, calls, scheduler } = harness(
+    async (req) => {
+      if (req.text.includes("always fails")) throw new Error("cron failed");
+      return { status: "ok", reply: "OUT" };
+    },
+    undefined,
+    2,
+  );
+  for (let i = 0; i < 3; i++) {
+    await crons.create({
+      schedule: { everyMs: 60_000, firstFireAt: 1 },
+      action: `always fails ${i}`,
+      owner: "U1",
+      createdBy: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+    });
+  }
+  const healthy = await crons.create({
+    schedule: { everyMs: 60_000, firstFireAt: 1 },
+    action: "healthy last in line",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  await scheduler.tick(2000);
+  await scheduler.tick(3000);
+
+  assert.ok(
+    calls.some((call) => call.idempotencyKey === `cron:${healthy.id}:1`),
+    "the healthy cron behind a full batch of failures fires within two ticks",
+  );
+});
+
+test("capped rotation is driven by durable attempt order, not tick arrival times", async () => {
+  const { crons, calls, scheduler } = harness("OUT", undefined, 2);
+  const created: Cron[] = [];
+  for (let i = 0; i < 4; i++) {
+    created.push(
+      await crons.create({
+        schedule: { everyMs: 600_000, firstFireAt: 1 },
+        action: `cron ${i}`,
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      }),
+    );
+  }
+
+  await scheduler.tick(2000);
+  await scheduler.tick(4000);
+
+  for (const cron of created) {
+    assert.ok(
+      calls.some((call) => call.idempotencyKey === `cron:${cron.id}:1`),
+      "every due cron fires within ceil(due/cap) ticks even when tick timestamps skip buckets",
+    );
+  }
+});
+
+test("a cron whose attempt marker cannot persist is held back and cannot starve the rest", async () => {
+  const backing = createMemoryMap<Cron>();
+  const crons = createCronStore(backing);
+  const deliveries = createDeliveryStore();
+  const calls: TurnRequest[] = [];
+  const run = async (req: TurnRequest): Promise<TurnResult> => {
+    calls.push(req);
+    return { status: "ok", reply: "OUT" };
+  };
+  const created: Cron[] = [];
+  for (let i = 0; i < 5; i++) {
+    created.push(
+      await crons.create({
+        schedule: { everyMs: 600_000, firstFireAt: 1 },
+        action: `cron ${i}`,
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      }),
+    );
+  }
+  const broken = created[0]!;
+  const flaky: typeof crons = {
+    ...crons,
+    async markAttempted(id, at) {
+      if (id === broken.id) throw new Error("attempt marker write failed");
+      return crons.markAttempted(id, at);
+    },
+  };
+  const scheduler = createScheduler({
+    crons: flaky,
+    deliveries,
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run,
+    maxFiresPerTick: 2,
+  });
+
+  await scheduler.tick(2000);
+  await scheduler.tick(4000);
+
+  assert.ok(
+    !calls.some((call) => call.idempotencyKey === `cron:${broken.id}:1`),
+    "a capped batch never fires a cron whose attempt failed to persist",
+  );
+  for (const cron of created.slice(1)) {
+    assert.ok(
+      calls.some((call) => call.idempotencyKey === `cron:${cron.id}:1`),
+      "the crons behind the broken marker still fire within two capped ticks",
+    );
+  }
+});
+
+test("capped rotation survives a scheduler restart mid-cycle", async () => {
+  const backing = createMemoryMap<Cron>();
+  const crons = createCronStore(backing);
+  const deliveries = createDeliveryStore();
+  const calls: TurnRequest[] = [];
+  const run = async (req: TurnRequest): Promise<TurnResult> => {
+    calls.push(req);
+    return { status: "ok", reply: "OUT" };
+  };
+  const mk = () =>
+    createScheduler({
+      crons,
+      deliveries,
+      idempotency: createIdempotencyStore(),
+      identity: createIdentityService(),
+      run,
+      maxFiresPerTick: 2,
+    });
+  const created: Cron[] = [];
+  for (let i = 0; i < 4; i++) {
+    created.push(
+      await crons.create({
+        schedule: { everyMs: 600_000, firstFireAt: 1 },
+        action: `cron ${i}`,
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      }),
+    );
+  }
+
+  await mk().tick(2000);
+  await mk().tick(2000);
+
+  for (const cron of created) {
+    assert.ok(
+      calls.some((call) => call.idempotencyKey === `cron:${cron.id}:1`),
+      "a fresh scheduler instance resumes the rotation from durable state instead of restarting it",
+    );
+  }
+});
+
 test("runNow fires even when the current schedule slot already did (manual re-run)", async () => {
   const { crons, calls, scheduler } = harness();
   const cron = await crons.create({
@@ -724,7 +913,7 @@ test("a scopeFloor cron whose only members are non-internal fails closed", async
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
 
-test("a failing background tick is logged, not swallowed", async (t) => {
+test("a failing cron fire is logged, not swallowed", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const logged: string[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => {
@@ -749,13 +938,13 @@ test("a failing background tick is logged, not swallowed", async (t) => {
   });
   scheduler.start(1000);
   t.mock.timers.tick(1000);
-  for (let i = 0; i < 50 && !logged.some((l) => l.includes("[scheduler] tick failed")); i++) {
+  for (let i = 0; i < 50 && !logged.some((l) => l.includes("[scheduler] fire failed")); i++) {
     await new Promise((r) => setImmediate(r));
   }
   scheduler.stop();
   assert.ok(
-    logged.some((l) => l.includes("[scheduler] tick failed") && l.includes("boom")),
-    "the tick error must reach the log",
+    logged.some((l) => l.includes("[scheduler] fire failed") && l.includes("boom")),
+    "the fire error must reach the log",
   );
   const after = await crons.get(cron.id);
   assert.equal(after?.fireLog?.length, 1);
