@@ -29,7 +29,7 @@ function resolveView(pathname: string, search: string): string {
 }
 
 test("onboarding is a navigable view", () => {
-  assert.match(html, /\{ label: "Admin", views: \["onboarding",/);
+  assert.match(html, /\{\s*label: "Admin",\s*views: \["onboarding",/);
 });
 
 test("/admin/onboarding resolves to the onboarding view", () => {

@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { QmConfig } from "./config.ts";
@@ -135,7 +135,7 @@ function signingHeaders(secret: string, method: string, path: string, body: stri
 }
 
 function defaultCoreUrl(config: QmConfig): URL {
-  const url = new URL(config.publicUrl);
+  const url = new URL(config.apiUrl ?? config.publicUrl);
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
   return url;
 }
@@ -166,11 +166,12 @@ function isCoreUnreachable(error: unknown): boolean {
   return false;
 }
 
-interface DeploymentLayerTransportOpts {
+export interface CoreRequestTransportOpts {
   config: QmConfig;
   configDir: string;
-  method: "GET" | "PUT";
+  method: "GET" | "PUT" | "POST";
   body: string;
+  path?: string;
   envFile?: string;
 }
 
@@ -178,9 +179,7 @@ interface DeploymentLayerTransportOpts {
  * How a hosting target reaches its core's /v1/deployment-layer endpoint.
  * Each HostingProvider supplies one; nothing in this file knows about targets.
  */
-export type DeploymentLayerTransport = (
-  opts: DeploymentLayerTransportOpts,
-) => Promise<{ status: number; body: string }>;
+export type DeploymentLayerTransport = (opts: CoreRequestTransportOpts) => Promise<{ status: number; body: string }>;
 
 /** Signed-HTTP transport used by providers whose core is reachable over plain HTTPS. */
 export function httpDeploymentLayerTransport(
@@ -197,14 +196,39 @@ export function httpDeploymentLayerTransport(
     if (!secret && o.secretFallback) secret = o.secretFallback(opts.config);
     if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
     const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
+    if (opts.path) {
+      const target = new URL(opts.path, "http://core.local");
+      url.pathname = target.pathname;
+      url.search = target.search;
+    }
     const response = await fetch(url, {
       method: opts.method,
       headers: signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
-      ...(opts.method === "PUT" ? { body: opts.body } : {}),
+      ...(opts.method !== "GET" ? { body: opts.body } : {}),
       ...(o.timeoutMs ? { signal: AbortSignal.timeout(o.timeoutMs) } : {}),
     });
     return { status: response.status, body: await response.text() };
   };
+}
+
+export async function coreRequest(opts: {
+  config: QmConfig;
+  configDir: string;
+  method: "GET" | "POST";
+  path: string;
+  body?: string;
+  envFile?: string;
+  transport: DeploymentLayerTransport;
+}): Promise<{ status: number; body: string }> {
+  const separator = opts.path.includes("?") ? "&" : "?";
+  return opts.transport({
+    config: opts.config,
+    configDir: opts.configDir,
+    method: opts.method,
+    path: `${opts.path}${separator}nonce=${randomUUID()}`,
+    body: opts.body ?? "",
+    ...(opts.envFile ? { envFile: opts.envFile } : {}),
+  });
 }
 
 export async function deploymentLayerRequest(opts: {

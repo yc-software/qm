@@ -90,14 +90,18 @@ test("the Resend transport reports the provider's message id and surfaces refusa
   const refused = resendMailer(
     cfg,
     (async () =>
-      new Response(JSON.stringify({ message: "domain not verified" }), {
+      new Response(JSON.stringify({ message: "re_test_key t secret message body" }), {
         status: 403,
         headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch,
   );
   await assert.rejects(
     () => refused.send({ to: "a@b.test", subject: "s", text: "t", html: "h" }),
-    /domain not verified/,
+    (error) => {
+      assert.match(String(error), /HTTP 403/);
+      assert.doesNotMatch(String(error), /re_test_key|secret message body/);
+      return true;
+    },
   );
 
   const badKey = resendMailer(cfg, (async () => new Response("{}", { status: 401 })) as unknown as typeof fetch);

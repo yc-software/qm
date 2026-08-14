@@ -4755,6 +4755,108 @@
             </div>
           </div>
 
+          <div id="view-sign-in" class="hidden">
+            <section class="card" id="card-auth-email-settings">
+              <div class="head">
+                <h2>Sign-in email</h2>
+                <p>
+                  Configure the built-in email broker. Saving verifies the credentials, sends a real test message to
+                  your administrator address, and activates the new settings without a restart.
+                </p>
+              </div>
+              <div class="body">
+                <p class="hint" id="auth-email-state">Loading sign-in email status…</p>
+                <div class="editor-grid">
+                  <div>
+                    <label style="display: block; margin-bottom: 8px"
+                      >Delivery service
+                      <select id="auth-email-transport" style="width: 100%">
+                        <option value="smtp">SMTP</option>
+                        <option value="resend">Resend</option>
+                      </select></label
+                    >
+                    <label style="display: block; margin-bottom: 8px"
+                      >From
+                      <input
+                        type="text"
+                        id="auth-email-from"
+                        autocomplete="off"
+                        placeholder="QM &lt;no-reply@example.com&gt;"
+                        style="width: 100%"
+                    /></label>
+                    <label style="display: block; margin-bottom: 8px"
+                      >Who may sign in
+                      <select id="auth-email-access-mode" style="width: 100%">
+                        <option value="emails">Named email addresses</option>
+                        <option value="domain">An email domain</option>
+                      </select></label
+                    >
+                    <label id="auth-email-emails-row" style="display: block; margin-bottom: 8px"
+                      >Allowed email addresses
+                      <textarea id="auth-email-emails" placeholder="admin@example.com&#10;ops@example.com"></textarea>
+                    </label>
+                    <label id="auth-email-domain-row" class="hidden" style="margin-bottom: 8px"
+                      >Allowed email domain
+                      <input type="text" id="auth-email-domain" placeholder="example.com" style="width: 100%"
+                    /></label>
+                  </div>
+                  <aside class="editor-panel">
+                    <div id="auth-email-smtp">
+                      <label style="display: block; margin-bottom: 8px"
+                        >SMTP host <input type="text" id="auth-email-smtp-host" autocomplete="off" style="width: 100%"
+                      /></label>
+                      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
+                        <label style="display: block; margin-bottom: 8px"
+                          >Port <input type="number" id="auth-email-smtp-port" min="1" max="65535" value="587"
+                        /></label>
+                        <label style="display: block; margin-bottom: 8px"
+                          >TLS
+                          <select id="auth-email-smtp-tls" style="width: 100%">
+                            <option value="starttls">STARTTLS</option>
+                            <option value="implicit">Implicit TLS</option>
+                            <option value="none">None</option>
+                          </select></label
+                        >
+                      </div>
+                      <label style="display: block; margin-bottom: 8px"
+                        >Username
+                        <input type="text" id="auth-email-smtp-username" autocomplete="off" style="width: 100%"
+                      /></label>
+                      <label style="display: block; margin-bottom: 8px"
+                        >Password
+                        <input
+                          type="password"
+                          id="auth-email-smtp-password"
+                          autocomplete="new-password"
+                          placeholder="Write-only password"
+                          style="width: 100%"
+                      /></label>
+                    </div>
+                    <div id="auth-email-resend" class="hidden">
+                      <label style="display: block; margin-bottom: 8px"
+                        >Resend API key
+                        <input
+                          type="password"
+                          id="auth-email-resend-key"
+                          autocomplete="new-password"
+                          placeholder="Write-only API key"
+                          style="width: 100%"
+                      /></label>
+                    </div>
+                    <p class="field-hint">
+                      Existing secrets are never displayed. A blank SMTP password is retained only while its host, port,
+                      TLS mode, and username stay unchanged.
+                    </p>
+                  </aside>
+                </div>
+              </div>
+              <div class="foot">
+                <button class="primary" id="auth-email-save">Validate, test, and save</button
+                ><span class="status" id="st-auth-email-settings"></span>
+              </div>
+            </section>
+          </div>
+
           <div id="view-connectors" class="hidden">
             <section class="card" id="card-connectors">
               <div class="head">
@@ -4885,7 +4987,10 @@
         { views: ["history", "slack", "judgments"] },
         { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
         { label: "System", views: ["metrics"] },
-        { label: "Admin", views: ["onboarding", "governance", "connectors", "users", "keychain", "egress", "audit"] },
+        {
+          label: "Admin",
+          views: ["onboarding", "sign-in", "governance", "connectors", "users", "keychain", "egress", "audit"],
+        },
         { label: "Insights", views: ["retention"] },
       ];
 
@@ -4897,6 +5002,7 @@
       };
       const VIEW_TITLE = {
         onboarding: "Onboarding",
+        "sign-in": "Sign-in",
         governance: "Governance",
         connectors: "Connectors",
         users: "Users",
@@ -4930,7 +5036,7 @@
         "crons",
         "deployments",
       ]);
-      const ORG_WIDE = new Set(["retention", "users", "keychain", "connectors", "judgments", "ackemoji"]);
+      const ORG_WIDE = new Set(["retention", "users", "keychain", "connectors", "sign-in", "judgments", "ackemoji"]);
       const ENDPOINT = { history: "sessions", files: "files", live: "runs" };
       const HISTORY_PAGE_SIZE = 50;
 
@@ -5638,12 +5744,14 @@
         renderTabs();
         $("view-governance").classList.toggle("hidden", view !== "governance");
         $("view-onboarding").classList.toggle("hidden", view !== "onboarding");
+        $("view-sign-in").classList.toggle("hidden", view !== "sign-in");
         $("view-connectors").classList.toggle("hidden", view !== "connectors");
         $("view-data").classList.toggle(
           "hidden",
-          view === "onboarding" || view === "governance" || view === "connectors",
+          view === "onboarding" || view === "sign-in" || view === "governance" || view === "connectors",
         );
         if (view === "onboarding") return void loadOnboarding();
+        if (view === "sign-in") return void loadAuthEmailSettings();
         if (view === "governance") return void loadScope();
         if (view === "connectors") return void loadConnectors();
         if (view === "user") return void showUserDetail(st.principal);
@@ -7051,6 +7159,136 @@
           setStatus("st-service-credentials", message, "err");
         }
       };
+
+      let authEmailVersion = null;
+      function syncAuthEmailForm() {
+        const smtp = $("auth-email-transport").value === "smtp";
+        $("auth-email-smtp").classList.toggle("hidden", !smtp);
+        $("auth-email-resend").classList.toggle("hidden", smtp);
+        const domain = $("auth-email-access-mode").value === "domain";
+        $("auth-email-emails-row").classList.toggle("hidden", domain);
+        $("auth-email-domain-row").classList.toggle("hidden", !domain);
+      }
+      function authEmailBody() {
+        const transport = $("auth-email-transport").value;
+        const mode = $("auth-email-access-mode").value;
+        const access =
+          mode === "domain"
+            ? { mode, domain: $("auth-email-domain").value.trim() }
+            : {
+                mode,
+                emails: $("auth-email-emails")
+                  .value.split(/[\n,]/)
+                  .map((email) => email.trim())
+                  .filter(Boolean),
+              };
+        return {
+          expectedVersion: authEmailVersion,
+          transport,
+          from: $("auth-email-from").value.trim(),
+          access,
+          ...(transport === "smtp"
+            ? {
+                smtp: {
+                  host: $("auth-email-smtp-host").value.trim(),
+                  port: Number($("auth-email-smtp-port").value),
+                  tls: $("auth-email-smtp-tls").value,
+                  username: $("auth-email-smtp-username").value.trim(),
+                  password: $("auth-email-smtp-password").value,
+                },
+              }
+            : { resend: { apiKey: $("auth-email-resend-key").value } }),
+        };
+      }
+      function renderAuthEmailStatus(data) {
+        authEmailVersion = data.version || null;
+        const runtime = data.runtime || { state: "unreachable", source: "absent" };
+        const ready =
+          runtime.state === "ready" &&
+          (data.source !== "admin" || !data.version || runtime.activeVersion === data.version);
+        const activeSource =
+          runtime.state === "unreachable" || runtime.source === "absent" ? data.source : runtime.source;
+        const source =
+          activeSource === "admin" ? "Admin-managed" : activeSource === "environment" ? "Deployment" : "None";
+        const details = [
+          ready ? "Ready" : runtime.state === "unreachable" ? "Auth service unavailable" : "Not ready",
+          source,
+          data.transport ? data.transport.toUpperCase() : "",
+          data.updatedBy ? "updated by " + data.updatedBy : "",
+          data.updatedAt ? new Date(data.updatedAt).toLocaleString() : "",
+        ].filter(Boolean);
+        $("auth-email-state").textContent = details.join(" · ");
+        setStatus(
+          "st-auth-email-settings",
+          ready
+            ? "Active"
+            : runtime.message || (data.configured ? "Waiting for activation…" : "Configuration required"),
+          ready ? "ok" : runtime.state === "degraded" || runtime.state === "unreachable" ? "err" : "muted",
+        );
+      }
+      async function loadAuthEmailSettings() {
+        const response = await api("GET", "/api/auth-email-settings");
+        if (!response.ok) {
+          setStatus(
+            "st-auth-email-settings",
+            response.data?.message || "Could not load sign-in email settings.",
+            "err",
+          );
+          return;
+        }
+        const data = response.data || {};
+        if (data.transport) $("auth-email-transport").value = data.transport;
+        if (data.from) $("auth-email-from").value = data.from;
+        if (data.access?.mode === "emails") {
+          $("auth-email-access-mode").value = "emails";
+          $("auth-email-emails").value = (data.access.emails || []).join("\n");
+        } else if (data.access?.mode === "domain") {
+          $("auth-email-access-mode").value = "domain";
+          $("auth-email-domain").value = data.access.domain || "";
+        }
+        if (data.smtp) {
+          $("auth-email-smtp-host").value = data.smtp.host || "";
+          $("auth-email-smtp-port").value = String(data.smtp.port || 587);
+          $("auth-email-smtp-tls").value = data.smtp.tls || "starttls";
+          $("auth-email-smtp-username").value = data.smtp.username || "";
+          $("auth-email-smtp-password").placeholder = "•••• set — leave blank to retain";
+        }
+        if (data.resend?.apiKeySet) $("auth-email-resend-key").placeholder = "•••• set — leave blank to retain";
+        syncAuthEmailForm();
+        renderAuthEmailStatus(data);
+      }
+      $("auth-email-transport").onchange = syncAuthEmailForm;
+      $("auth-email-access-mode").onchange = syncAuthEmailForm;
+      $("auth-email-save").onclick = async () => {
+        $("auth-email-save").disabled = true;
+        setStatus("st-auth-email-settings", "Validating credentials and sending a test email…", "saving", true);
+        let response;
+        try {
+          response = await api("PUT", "/api/auth-email-settings", authEmailBody());
+        } catch {
+          $("auth-email-save").disabled = false;
+          return setStatus(
+            "st-auth-email-settings",
+            "Admin could not be reached. Your draft is preserved.",
+            "err",
+            true,
+          );
+        }
+        $("auth-email-save").disabled = false;
+        if (!response.ok) {
+          const message =
+            response.status === 409
+              ? "Settings changed elsewhere. Reload this page before saving."
+              : response.data?.message || "Validation or test delivery failed. Your draft is preserved.";
+          return setStatus("st-auth-email-settings", message, "err", true);
+        }
+        $("auth-email-smtp-password").value = "";
+        $("auth-email-resend-key").value = "";
+        renderAuthEmailStatus(response.data || {});
+        setStatus("st-auth-email-settings", "Saved. Activating…", "saving", true);
+        setTimeout(() => void loadAuthEmailSettings(), 2500);
+      };
+      syncAuthEmailForm();
 
       let onboardingModels = {};
       let onboardingModelStatuses = [];

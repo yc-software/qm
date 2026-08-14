@@ -1,6 +1,11 @@
 import { existsSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { assertNodeEngine, emailTransportPreflight, flySandboxTokenPreflight } from "../preflight.ts";
+import {
+  adminEmailSetupDeferred,
+  assertNodeEngine,
+  emailTransportPreflight,
+  flySandboxTokenPreflight,
+} from "../preflight.ts";
 import { readEnvFile } from "../util.ts";
 import { CliError, errMessage, header, note, ok, step, warn } from "../log.ts";
 import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.ts";
@@ -181,4 +186,7 @@ export async function runCheckCommand(
   await emailTransportPreflight(config, secrets);
   note("");
   ok("check passed — config, sandbox layer, and plugins are valid.");
+  if (adminEmailSetupDeferred(config, secrets)) {
+    note("sign-in email is deferred — after the first up, run `qm auth bootstrap` and finish Admin → Sign-in");
+  }
 }

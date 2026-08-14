@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,6 +51,22 @@ test("child starts, reports ready via log pattern, and stops with the port relea
   await child.stop();
   assert.equal(child.state, "stopped");
   assert.equal(await tcpPortOpen(port), false);
+  rmSync(lock, { recursive: true, force: true });
+});
+
+test("log readiness offsets remain byte-accurate after multibyte output", async () => {
+  const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
+  const port = await freeTcpPort();
+  writeFileSync(join(lock, "web.log"), `${"→".repeat(100)}\n`);
+  const child = new Child(
+    spec(lock, port),
+    lock,
+    () => {},
+    () => {},
+  );
+  const res = await child.start();
+  assert.equal(res.ok, true, res.detail);
+  await child.stop();
   rmSync(lock, { recursive: true, force: true });
 });
 

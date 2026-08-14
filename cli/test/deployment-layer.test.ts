@@ -132,6 +132,7 @@ test("a missing sandbox directory skips sync instead of replacing the deployed l
 
 interface CapturedRequest {
   method: string;
+  origin: string;
   url: string;
   timestamp: string;
   signature: string;
@@ -152,6 +153,7 @@ function startCoreStub(
     const headers = new Headers(init?.headers);
     captured.push({
       method: init?.method ?? "GET",
+      origin: url.origin,
       url: url.pathname + url.search,
       timestamp: headers.get("x-timestamp") ?? "",
       signature: headers.get("x-signature") ?? "",
@@ -447,6 +449,34 @@ test("a publicUrl with a base path keeps it in the request path and the signed c
     assert.equal(request.url, "/base/v1/deployment-layer");
     const expected = createHmac("sha256", SECRET)
       .update(`v0:${request.timestamp}:PUT\n/base/v1/deployment-layer\n${request.body}`)
+      .digest("hex");
+    assert.equal(request.signature, `v0=${expected}`);
+  } finally {
+    await new Promise<void>((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the AWS transport sends signed operator requests to apiUrl when it differs from publicUrl", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-api-url-"));
+  const captured: CapturedRequest[] = [];
+  const { server } = await startCoreStub(() => ({ body: "{}" }), captured);
+  try {
+    writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${SECRET}\n`);
+    const config = makeConfig("https://portal.agent.example");
+    config.apiUrl = "https://api.agent.example";
+    await awsDeploymentLayerTransport({
+      config,
+      configDir: dir,
+      method: "POST",
+      path: "/v1/admin/auth-email-settings/fallback?nonce=fixed",
+      body: JSON.stringify({ principal: "admin@example.com" }),
+    });
+    const request = captured[0]!;
+    assert.equal(request.origin, "https://api.agent.example");
+    assert.equal(request.url, "/v1/admin/auth-email-settings/fallback?nonce=fixed");
+    const expected = createHmac("sha256", SECRET)
+      .update(`v0:${request.timestamp}:POST\n${request.url}\n${request.body}`)
       .digest("hex");
     assert.equal(request.signature, `v0=${expected}`);
   } finally {

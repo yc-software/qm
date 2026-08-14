@@ -11,7 +11,13 @@ interface FakeSmtp {
 }
 
 async function fakeSmtp(
-  options: { offerStartTls?: boolean; rejectAuth?: boolean; rejectRecipient?: boolean } = {},
+  options: {
+    offerStartTls?: boolean;
+    stallStartTls?: boolean;
+    rejectAuth?: boolean;
+    rejectAuthText?: string;
+    rejectRecipient?: boolean;
+  } = {},
 ): Promise<FakeSmtp> {
   const transcript: string[] = [];
   const messages: string[] = [];
@@ -43,8 +49,13 @@ async function fakeSmtp(
           socket.write(
             `250-fake.smtp.test\r\n${options.offerStartTls ? "250-STARTTLS\r\n" : ""}250 AUTH PLAIN LOGIN\r\n`,
           );
+        else if (verb === "STARTTLS" && options.stallStartTls) socket.write("220 2.0.0 Ready to start TLS\r\n");
         else if (verb === "AUTH")
-          socket.write(options.rejectAuth ? "535 5.7.8 bad credentials\r\n" : "235 2.7.0 Accepted\r\n");
+          socket.write(
+            options.rejectAuth
+              ? `535 5.7.8 ${options.rejectAuthText ?? "bad credentials"}\r\n`
+              : "235 2.7.0 Accepted\r\n",
+          );
         else if (verb === "MAIL") socket.write("250 2.1.0 Ok\r\n");
         else if (verb === "RCPT")
           socket.write(options.rejectRecipient ? "550 5.1.1 no such user\r\n" : "250 2.1.5 Ok\r\n");
@@ -126,9 +137,16 @@ test("a rejected recipient and rejected credentials both surface as errors", asy
     /SMTP RCPT rejected: 550/,
   );
 
-  const unauthorized = await fakeSmtp({ rejectAuth: true });
+  const unauthorized = await fakeSmtp({ rejectAuth: true, rejectAuthText: "s3cret" });
   t.after(() => unauthorized.close());
-  await assert.rejects(() => smtpDeliver(options(unauthorized.port), null), /SMTP AUTH rejected: 535/);
+  await assert.rejects(
+    () => smtpDeliver(options(unauthorized.port), null),
+    (error) => {
+      assert.match(String(error), /SMTP AUTH rejected: 535/);
+      assert.doesNotMatch(String(error), /s3cret/);
+      return true;
+    },
+  );
 });
 
 test("verification authenticates without sending a message", async (t) => {
@@ -146,6 +164,15 @@ test("STARTTLS mode refuses a server that does not advertise STARTTLS", async (t
   const server = await fakeSmtp({ offerStartTls: false });
   t.after(() => server.close());
   await assert.rejects(() => smtpDeliver(options(server.port, { tls: "starttls" }), null), /does not offer STARTTLS/);
+});
+
+test("a stalled STARTTLS handshake times out", async (t) => {
+  const server = await fakeSmtp({ offerStartTls: true, stallStartTls: true });
+  t.after(() => server.close());
+  await assert.rejects(
+    () => smtpDeliver(options(server.port, { tls: "starttls", timeoutMs: 50 }), null),
+    /SMTP (?:TLS handshake|operation) timed out/,
+  );
 });
 
 test("a connection refusal is reported rather than hanging", async () => {

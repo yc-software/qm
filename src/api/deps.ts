@@ -51,6 +51,7 @@ import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
+import type { AuthEmailSettingsStore } from "../auth/email-settings.ts";
 
 export interface ServerDeps {
   production?: boolean;
@@ -66,6 +67,9 @@ export interface ServerDeps {
   slackInstallationFetch?: typeof fetch;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
+  authEmailSettings?: AuthEmailSettingsStore;
+  authServiceUrl?: string;
+  authServiceFetch?: typeof fetch;
   oauthStateSecret?: string;
   oauthFetch?: FetchLike;
   oauthEnv?: NodeJS.ProcessEnv;

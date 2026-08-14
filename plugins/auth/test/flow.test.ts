@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JWK } from "jose";
@@ -96,6 +96,20 @@ async function verifyIdTokenLikePortal(h: Harness, idToken: string, nonce: strin
   assert.equal(payload.azp, CLIENT_ID);
   return payload as Record<string, unknown>;
 }
+
+test("successful delivery logs no provider-controlled receipt", async (t) => {
+  const h = await startHarness();
+  t.after(() => h.close());
+  const lines: string[] = [];
+  const log = mock.method(console, "log", (...values: unknown[]) => lines.push(values.join(" ")));
+  try {
+    await requestLink(h);
+  } finally {
+    log.mock.restore();
+  }
+  assert.ok(lines.includes("[auth] sign-in link sent"));
+  assert.doesNotMatch(lines.join("\n"), /test-message-id/);
+});
 
 test("the whole authorization-code flow the portal drives succeeds", async (t) => {
   const h = await startHarness();
@@ -415,6 +429,16 @@ test("discovery, JWKS, and health answer without credentials", async (t) => {
   assert.deepEqual(discovery.code_challenge_methods_supported, ["S256"]);
 });
 
+test("unconfigured email leaves discovery and keys available but sign-in returns a clear 503", async (t) => {
+  const h = await startHarness({ emailConfigured: false });
+  t.after(() => h.close());
+  assert.equal((await fetch(`${h.base}/.well-known/openid-configuration`)).status, 200);
+  assert.equal((await fetch(`${h.base}/.well-known/jwks.json`)).status, 200);
+  const authorize = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
+  assert.equal(authorize.status, 503);
+  assert.match(await authorize.text(), /Sign-in email is not configured/);
+});
+
 test("sign-in pages never cache and never leak a referrer", async (t) => {
   const h = await startHarness();
   t.after(() => h.close());
@@ -422,6 +446,7 @@ test("sign-in pages never cache and never leak a referrer", async (t) => {
   assert.equal(page.headers.get("cache-control"), "no-store");
   assert.equal(page.headers.get("referrer-policy"), "no-referrer");
   assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self'/);
+  assert.match(page.headers.get("content-security-policy") ?? "", /img-src 'self' data:/);
   await requestLink(h);
   const redirect = await fetch(`${h.base}/verify`, {
     ...form({ token: tokenOf(linkFrom(h.mailer)) }),

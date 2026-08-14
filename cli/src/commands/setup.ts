@@ -9,6 +9,7 @@ import { HOSTING_PROVIDER_IDS, isTarget } from "../providers.ts";
 import { computedSecrets, MINT_JWK, MINT_LOCALLY, type ComputedSecret } from "../secrets.ts";
 import { isInvalidSecret, readEnvFile } from "../util.ts";
 import { runInit } from "./init.ts";
+import { adminEmailSetupDeferred } from "../preflight.ts";
 
 export function adminGrantEmails(adminGrants: string | undefined): string {
   return (adminGrants ?? "")
@@ -302,6 +303,10 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
     if (config.target === "aws")
       stepLine(n++, "see AGENTS.md", "the AWS bootstrap order (Terraform, TLS, portal) before up");
     else stepLine(n++, "qm up", "bring the deployment up and print the URLs");
+    const resultingEnv = new Map(env);
+    for (const [name, value] of collected) resultingEnv.set(name, value);
+    if (adminEmailSetupDeferred(config, resultingEnv))
+      stepLine(n++, "qm auth bootstrap", "open Admin and finish sign-in email after the deployment is up");
     if (skipped.length > 0 && remainingRequired.length === 0) note(dim(`  (optional skipped: ${skipped.join(", ")})`));
   } finally {
     rl.close();

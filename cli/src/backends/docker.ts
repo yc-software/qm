@@ -293,15 +293,13 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
     if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
     if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://admin:8080";
   }
+  if (service === "core" && config.services.includes("auth")) out.AUTH_SERVICE_URL = "http://auth:8080";
   if (config.services.includes("auth")) {
     Object.assign(
       out,
       brokerWiring(service, {
         publicUrl: config.publicUrl,
         authBaseUrl: "http://auth:8080",
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
       }),
     );
   }
@@ -319,6 +317,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     out.SESSION_STORE = "postgres";
     out.RUN_STORE = "postgres";
     out.DATABASE_URL = ctx.databaseUrl;
+    if (config.services.includes("auth")) out.AUTH_SERVICE_URL = "http://auth:8080";
     if (config.model) out.PI_MODEL = config.model;
     if (config.modelProvider) out.MODEL_PROVIDER = config.modelProvider;
     const layerSubs = existingLayerSubdirs(ctx);

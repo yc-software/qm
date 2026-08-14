@@ -54,6 +54,8 @@ test("the auth service is a first-class, privately addressed service with its ow
 });
 
 test("fly derives the portal's whole OIDC block from the broker, over the private network", () => {
+  const core = derivedTomlFor(brokerConfig(), "core", repoRoot);
+  assert.match(core, /AUTH_SERVICE_URL = "http:\/\/qm-auth\.flycast"/);
   const portal = derivedTomlFor(brokerConfig(), "portal", repoRoot);
   assert.match(portal, /OIDC_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
   assert.match(portal, /OIDC_AUTH_ENDPOINT = "https:\/\/agent\.example\.com\/idp\/authorize"/);
@@ -63,7 +65,7 @@ test("fly derives the portal's whole OIDC block from the broker, over the privat
   assert.match(portal, /AUTH_BROKER_UPSTREAM = "http:\/\/qm-auth\.flycast"/);
   assert.match(portal, /AUTH_BROKER_PREFIX = "\/idp"/);
   assert.match(portal, /OIDC_PRINCIPAL_CLAIM = "email"/);
-  assert.match(portal, /OIDC_ALLOWED_EMAIL_DOMAIN = "example\.com"/);
+  assert.doesNotMatch(portal, /OIDC_ALLOWED_EMAIL_DOMAIN/);
   assert.doesNotMatch(portal, /accounts\.google\.com|slack\.com/, "the template's external-IdP defaults are replaced");
 
   const auth = derivedTomlFor(brokerConfig(), "auth", repoRoot);
@@ -83,6 +85,7 @@ test("the external-IdP stack keeps its own OIDC endpoints and gains no broker wi
 test("docker and AWS wire the broker with parity", () => {
   const docker = configWith(configText());
   const dockerPortal = dockerServiceEnv(docker, "portal");
+  assert.equal(dockerServiceEnv(docker, "core").AUTH_SERVICE_URL, "http://auth:8080");
   assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://auth:8080");
   assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://auth:8080/token");
   assert.equal(dockerPortal.OIDC_ISSUER, "https://agent.example.com/idp");
@@ -108,9 +111,10 @@ test("docker and AWS wire the broker with parity", () => {
     }
   }`);
   const awsPortal = serviceEnvironment(aws, "portal");
+  assert.equal(serviceEnvironment(aws, "core").AUTH_SERVICE_URL, "http://auth.acme.internal:8080");
   assert.equal(awsPortal.AUTH_BROKER_UPSTREAM, "http://auth.acme.internal:8080");
   assert.equal(awsPortal.OIDC_JWKS_URI, "http://auth.acme.internal:8080/.well-known/jwks.json");
-  assert.equal(awsPortal.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
+  assert.equal(awsPortal.OIDC_ALLOWED_EMAIL_DOMAIN, undefined);
   assert.equal(
     awsPortal.PORTAL_XFF_TRUSTED_HOPS,
     "1",
@@ -120,7 +124,7 @@ test("docker and AWS wire the broker with parity", () => {
   assert.equal(serviceEnvironment(aws, "auth").PORT, "8080");
 });
 
-test("the broker's generated secrets reach both sides under the right names", () => {
+test("the broker's generated identity secrets reach both sides while Admin setup defers email credentials", () => {
   const config = brokerConfig();
   const secrets = computedSecrets(config);
   const clientSecret = secrets.find((secret) => secret.name === "AUTH_CLIENT_SECRET")!;
@@ -137,21 +141,26 @@ test("the broker's generated secrets reach both sides under the right names", ()
   assert.ok(!names.has("OIDC_CLIENT_SECRET"), "the operator is never asked for an OIDC client secret in broker mode");
   assert.ok(!names.has("OIDC_CLIENT_ID"));
   assert.ok(!names.has("PORTAL_EXPECTED_TEAM_ID"));
-  assert.ok(!names.has("AUTH_ALLOWED_EMAILS"), "a configured domain removes the per-address allowlist requirement");
-  assert.ok(names.has("RESEND_API_KEY"));
-  assert.ok(!names.has("SMTP_HOST"), "only the configured transport's credentials are collected");
+  for (const name of ["AUTH_ALLOWED_EMAILS", "AUTH_EMAIL_FROM", "RESEND_API_KEY"]) {
+    assert.equal(secrets.find((secret) => secret.name === name)?.required, false, name);
+  }
+  assert.equal(
+    secrets.find((secret) => secret.name === "SMTP_HOST"),
+    undefined,
+  );
   assert.ok(secretsForService(config, "auth").some((secret) => secret.name === "CORE_SIGNING_SECRET"));
 });
 
-test("without a configured domain the allowlist becomes a required secret on both services", () => {
+test("Admin and Portal defer the allowlist and transport credentials until sign-in setup", () => {
   const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }));
-  const allowed = computedSecrets(config).find((secret) => secret.name === "AUTH_ALLOWED_EMAILS")!;
-  assert.ok(allowed.required);
-  assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS"]);
-  assert.deepEqual(runtimeSecretNames("portal", allowed), ["OIDC_ALLOWED_EMAILS"]);
-  const names = new Set(computedSecrets(config).map((secret) => secret.name));
-  for (const name of ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) assert.ok(names.has(name), name);
-  assert.ok(!names.has("RESEND_API_KEY"));
+  const secrets = computedSecrets(config);
+  for (const name of ["AUTH_ALLOWED_EMAILS", "AUTH_EMAIL_FROM", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) {
+    assert.equal(secrets.find((secret) => secret.name === name)?.required, false, name);
+  }
+  assert.equal(
+    secrets.find((secret) => secret.name === "RESEND_API_KEY"),
+    undefined,
+  );
 });
 
 test("the config refuses a broker without a portal, a bad transport, and hand-set derived env", () => {
@@ -188,18 +197,15 @@ test("the config refuses a broker without a portal, a bad transport, and hand-se
   );
 });
 
-test("a broker deployment with no allowlist at all is refused once secret values are known", () => {
+test("a broker deployment defers the allowlist only when both management surfaces are present", () => {
   const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }` }));
-  assert.throws(
-    () => validatePortalTrust(config, "config", new Map()),
-    /requires env\.auth\.AUTH_ALLOWED_EMAIL_DOMAIN or a valid AUTH_ALLOWED_EMAILS/,
+  assert.doesNotThrow(() => validatePortalTrust(config, "config", new Map()));
+  const unmanaged = configWith(
+    configText({ services: '["core", "portal", "auth"]', env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }` }),
   );
-  assert.throws(
-    () => validatePortalTrust(config, "config", new Map([["AUTH_ALLOWED_EMAILS", "replace-me"]])),
-    /requires env\.auth\.AUTH_ALLOWED_EMAIL_DOMAIN or a valid AUTH_ALLOWED_EMAILS/,
-  );
+  assert.throws(() => validatePortalTrust(unmanaged, "config", new Map()), /requires .*AUTH_ALLOWED_EMAILS/);
   assert.doesNotThrow(() =>
-    validatePortalTrust(config, "config", new Map([["AUTH_ALLOWED_EMAILS", "admin@example.com"]])),
+    validatePortalTrust(unmanaged, "config", new Map([["AUTH_ALLOWED_EMAILS", "admin@example.com"]])),
   );
   assert.doesNotThrow(() => validatePortalTrust(brokerConfig(), "config", new Map()));
 });

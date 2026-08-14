@@ -20,14 +20,15 @@ import { runInit } from "./commands/init.ts";
 import { runSetup } from "./commands/setup.ts";
 import { runSandboxBuild } from "./commands/sandbox.ts";
 import { runChecks, runCheckCommand } from "./commands/check.ts";
-import { assertNodeEngine } from "./preflight.ts";
+import { adminEmailSetupDeferred, assertNodeEngine } from "./preflight.ts";
 import { devCiDown, devCiUp } from "./backends/dev-ci.ts";
 import { hostingProvider, hostingProviderUpFlags, type DeployContext } from "./backends/registry.ts";
 import { runConformance } from "./commands/conformance.ts";
 import { renderSlackFiles, runOutputs } from "./commands/outputs.ts";
 import { cliVersion } from "./manifest.ts";
-import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
+import { gitTopLevel, promptHidden, readEnvFile, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
+import { runAuthBootstrap, runAuthFallback } from "./commands/auth.ts";
 
 interface Parsed {
   positionals: string[];
@@ -131,6 +132,9 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   config get <dot.path>                    print one config value (raw scalar, JSON otherwise)
   slack render                             render the bot manifest (+ SSO manifest for Slack OIDC)
   outputs [--json]                         print the Web UI, health, and Slack app creation links
+  auth bootstrap [--principal <email>]     print a ten-minute, single-use first-admin link
+  auth fallback --yes [--principal <email>]
+                                           validate and restore deployment email settings
   proof scope-key <scope-id>               derive the provider snapshot key for an exact scope
   infra render                             re-derive infra/terraform.tfvars from config
   infra build-image                        build the AWS deploy MicroVM image and record its pin
@@ -425,6 +429,29 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
+    case "auth": {
+      rejectUnknownFlags(flags, ["principal", "yes", "config", "env-file", "sandbox-dir", "target"]);
+      rejectExtraPositionals(positionals, 1);
+      const operation = positionals[0];
+      if (operation !== "bootstrap" && operation !== "fallback") {
+        throw new CliError(`usage: ${CLI_NAME} auth bootstrap|fallback`);
+      }
+      const ctx = deployContext(flags);
+      const command = {
+        config: ctx.config,
+        configDir: ctx.configDir,
+        ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
+        transport: hostingProvider(ctx.target).deploymentLayerTransport,
+      };
+      const principal = strFlag(flags, "principal");
+      if (operation === "bootstrap") {
+        if (boolFlag(flags, "yes")) throw new CliError("--yes only applies to auth fallback");
+        return runAuthBootstrap(command, principal);
+      }
+      if (!boolFlag(flags, "yes")) throw new CliError("auth fallback changes live sign-in; pass --yes to confirm");
+      return runAuthFallback(command, principal);
+    }
+
     case "conformance": {
       rejectUnknownFlags(flags, ["static", "config", "env-file", "sandbox-dir", "target"]);
       rejectExtraPositionals(positionals, 1);
@@ -469,6 +496,12 @@ async function dispatch(argv: string[]): Promise<void> {
       const upOptions = provider.upOptions(ctx, flags, dryRun);
       runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
       await provider.createBackend(ctx).up(upOptions);
+      if (
+        cmd === "up" &&
+        adminEmailSetupDeferred(ctx.config, readEnvFile(ctx.envFile ?? join(ctx.configDir, ".env")))
+      ) {
+        note("next, if sign-in email is not already configured: run `qm auth bootstrap` and finish Admin → Sign-in");
+      }
       return;
     }
 

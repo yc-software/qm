@@ -1,7 +1,6 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import {
@@ -14,18 +13,38 @@ import {
   writeState,
 } from "../lib/lease.ts";
 import { slotPorts, slotTokens, poolStore } from "../lib/pool.ts";
-import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEnvFromMain } from "../lib/envctx.ts";
+import {
+  assembleEnv,
+  completeDevSecuritySecrets,
+  configuredDatabaseUrl,
+  currentBranch,
+  devEnvironmentSha,
+  gitHead,
+  seedEnvFromMain,
+  type DevDatabaseSource,
+} from "../lib/envctx.ts";
 import { ensureDeps } from "../lib/deps.ts";
 import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
-import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
+import {
+  adminGrantCount,
+  checkPostgres,
+  ensureLocalPostgres,
+  firstAdminPrincipal,
+  emailAdminPrincipals,
+  localPostgresUrl,
+} from "../lib/postgres.ts";
+import { DEFAULT_DEV_ADMIN_PRINCIPAL, emailAdminsFromSeed, selectEmailAdmin } from "../lib/admin.ts";
 import { killTree } from "../lib/proc.ts";
 import { envFileGet } from "../lib/envctx.ts";
-import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/util.ts";
+import { errMessage, nowEpoch, sleep } from "../lib/util.ts";
 import { discoverCanaryChannel } from "../lib/canary.ts";
 import { buildChildSpecs, type SpecInputs } from "./specs.ts";
 import { Child } from "./children.ts";
 import type { BootPhaseEvent, BootResult, BootSpec, ChildName, SlackHealth, StatusReport } from "../lib/types.ts";
 import { CHILD_ORDER, EXIT } from "../lib/types.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../../plugins/chassis/src/core-client.ts";
+import { restrictSupervisorSocket, supervisorSocketLocation } from "../lib/socket.ts";
+import { createKeyedQueue } from "../../../src/util/async.ts";
 
 const HEALTH_INTERVAL_MS = 10_000;
 const HEALTH_FAIL_THRESHOLD = 3;
@@ -69,12 +88,19 @@ let shuttingDown = false;
 
 const children = new Map<ChildName, Child>();
 const healthFails = new Map<ChildName, number>();
-let specInputs: SpecInputs | null = null;
+interface PreparedInputs extends SpecInputs {
+  adminEmailPrincipal: string;
+  databaseSource: DevDatabaseSource;
+  environmentSha: string;
+}
+
+let specInputs: PreparedInputs | null = null;
 let currentEnvSha = "";
 let currentGitSha = "";
 let handle = "";
 let sandbox: SandboxResolution | null = null;
 let durability = { sessionStore: "memory", runStore: "memory", databaseUrl: "" };
+let databaseSource: DevDatabaseSource = "memory";
 let harness = "mock";
 let watch = true;
 let bootId = "";
@@ -84,6 +110,7 @@ let canaryChannel = "";
 let canaryChannelSource = "";
 let lastControlAt = nowEpoch();
 let lastSlackActivitySec = 0;
+const queueControlMutation = createKeyedQueue<"control">();
 
 function log(msg: string): void {
   console.log(`[supervisor:${slot}] ${msg}`);
@@ -270,6 +297,7 @@ function writeLegacyMeta(booting: boolean): void {
     web_port: String(ports.web),
     admin_port: String(ports.admin),
     portal_port: String(ports.portal),
+    auth_port: String(ports.auth),
     handle,
     supervisor_pid: String(process.pid),
     session_store: durability.sessionStore,
@@ -304,7 +332,7 @@ function persistState(): void {
   });
 }
 
-async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
+async function assembleAndPrepare(spec: BootSpec): Promise<PreparedInputs> {
   phase("env", "start");
   seedEnvFromMain(worktree, log);
   const assembled = await assembleEnv({
@@ -339,17 +367,21 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   phase("sandbox", "ok", sandbox.detail);
 
   phase("durability", "start");
-  let databaseUrl = assembled.env.DATABASE_URL || envFileGet(join(worktree, ".env"), "DATABASE_URL");
+  let databaseUrl = configuredDatabaseUrl(worktree, assembled.env);
+  let preparedDatabaseSource: DevDatabaseSource = databaseUrl ? "configured" : "memory";
   let adminGrantsSeed = assembled.env.ADMIN_GRANTS || envFileGet(join(worktree, ".env"), "ADMIN_GRANTS");
   let sessionStore = "memory";
   let runStore = "memory";
   let localPg = false;
   let durableAdminPrincipal = "";
+  let durableEmailAdminPrincipals: string[] = [];
+  let durableGrantCount = 0;
   if (!databaseUrl) {
     try {
-      const pg = await ensureLocalPostgres(worktree, log);
+      const pg = await ensureLocalPostgres(worktree, log, assembled.env);
       databaseUrl = pg.url;
       localPg = true;
+      preparedDatabaseSource = "local";
     } catch (err) {
       if (assembled.env.DEV_INSTANCE_ALLOW_MEMORY === "1") {
         phase("durability", "warn", "memory stores explicitly allowed by DEV_INSTANCE_ALLOW_MEMORY=1");
@@ -367,10 +399,10 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     await checkPostgres(worktree, databaseUrl).catch((err) => {
       throw new Error(`could not connect to DATABASE_URL: ${errMessage(err)}`, { cause: err });
     });
-    const grants = await adminGrantCount(worktree, databaseUrl);
-    if (grants === 0 && !adminGrantsSeed) {
+    durableGrantCount = await adminGrantCount(worktree, databaseUrl);
+    if (durableGrantCount === 0 && !adminGrantsSeed) {
       if (localPg) {
-        const principal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || assembled.env.USER || "dev-admin";
+        const principal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || DEFAULT_DEV_ADMIN_PRINCIPAL;
         adminGrantsSeed = `${principal}:org_admin`;
         log(`admin grants: local Postgres will seed ${principal}:org_admin if the store is empty`);
       } else {
@@ -380,14 +412,24 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
       }
     }
     durableAdminPrincipal = await firstAdminPrincipal(worktree, databaseUrl).catch(() => "");
-    phase("durability", "ok", `SESSION_STORE=postgres RUN_STORE=postgres (${grants} durable grant(s))`);
+    durableEmailAdminPrincipals = await emailAdminPrincipals(worktree, databaseUrl).catch(() => []);
+    phase("durability", "ok", `SESSION_STORE=postgres RUN_STORE=postgres (${durableGrantCount} durable grant(s))`);
   } else {
     phase("durability", "ok", "memory stores");
   }
   durability = { sessionStore, runStore, databaseUrl };
 
   completeDevSecuritySecrets(assembled.env, databaseUrl || worktree);
+  const environmentSha = devEnvironmentSha(assembled.env, databaseUrl, preparedDatabaseSource);
   const portalSessionSecret = assembled.env.PORTAL_SESSION_SECRET!;
+  const candidateEmailAdmins =
+    durableGrantCount === 0 ? emailAdminsFromSeed(adminGrantsSeed) : durableEmailAdminPrincipals;
+  const adminEmailPrincipal = selectEmailAdmin(candidateEmailAdmins, assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL);
+  if ((assembled.env.DEV_INSTANCE_PORTAL_AUTH_BYPASS ?? "1") === "0" && !adminEmailPrincipal) {
+    throw new Error(
+      "real email sign-in requires exactly one email org_admin or DEV_INSTANCE_ADMIN_PRINCIPAL naming an existing email org_admin. Start once with the localhost bypass, add the email administrator in Admin -> Users, then retry",
+    );
+  }
   let portalDevPrincipal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || "";
   if (!portalDevPrincipal && adminGrantsSeed) portalDevPrincipal = adminGrantsSeed.split(":")[0] ?? "";
   if (!portalDevPrincipal && durableAdminPrincipal) portalDevPrincipal = durableAdminPrincipal;
@@ -406,12 +448,33 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     sessionStore,
     runStore,
     databaseUrl,
+    databaseSource: preparedDatabaseSource,
     adminGrantsSeed,
+    adminEmailPrincipal,
+    environmentSha,
     coreSigningSecret: assembled.env.CORE_SIGNING_SECRET || "",
     portalSessionSecret,
     portalDevPrincipal,
     sandboxEnv: sandbox.env,
   };
+}
+
+async function adminBootstrapUrl(inputs: PreparedInputs): Promise<string | undefined> {
+  if (!inputs.adminEmailPrincipal) return undefined;
+  const path = withSourceAuthNonce("/v1/operator/auth-email-settings/bootstrap", inputs.coreSigningSecret);
+  const body = JSON.stringify({ principal: inputs.adminEmailPrincipal });
+  const response = await fetch(`http://localhost:${inputs.ports.core}${path}`, {
+    method: "POST",
+    headers: signedHeaders(inputs.coreSigningSecret, "POST", path, body),
+    body,
+    signal: AbortSignal.timeout(4_000),
+  });
+  const payload = (await response.json().catch(() => ({}))) as { error?: string; token?: string };
+  if (response.status === 403 && payload.error === "bootstrap_disabled") return undefined;
+  if (!response.ok || !payload.token) {
+    throw new Error(`could not create the dev Admin bootstrap link (Core returned HTTP ${response.status})`);
+  }
+  return `http://localhost:${inputs.ports.portal}/auth/bootstrap#token=${encodeURIComponent(payload.token)}`;
 }
 
 async function startChildren(inputs: SpecInputs): Promise<{ ok: boolean; failedChild?: ChildName; detail?: string }> {
@@ -442,7 +505,8 @@ async function boot(): Promise<void> {
     writeLegacyMeta(true);
     persistState();
     specInputs = await assembleAndPrepare(spec);
-    currentEnvSha = computeEnvSha(specInputs.baseEnv);
+    databaseSource = specInputs.databaseSource;
+    currentEnvSha = specInputs.environmentSha;
     currentGitSha = gitHead(worktree);
     const started = await startChildren(specInputs);
     if (!started.ok) {
@@ -480,7 +544,13 @@ async function boot(): Promise<void> {
       phase("verify", "ok", "Slack off -- nothing to verify");
     }
     bootedAt = nowEpoch();
-    bootResult = { ok: true, slackEnabled: slackOn(spec), slot, handle, ...verified.result } as BootResult;
+    bootResult = {
+      ok: true,
+      slackEnabled: slackOn(spec),
+      slot,
+      handle,
+      ...verified.result,
+    } as BootResult;
     writeLegacyMeta(false);
     persistState();
     finishBoot();
@@ -586,8 +656,8 @@ async function shutdownSelf(removeLock: boolean): Promise<void> {
   process.exit(EXIT.ok);
 }
 
-let socketPathResolved = join(lock, "supervisor.sock");
-if (socketPathResolved.length > 100) socketPathResolved = join(tmpdir(), `qm-dev-${slot}.sock`);
+const socketLocation = supervisorSocketLocation(lock, slot);
+const socketPathResolved = socketLocation.path;
 
 function serveApi(): Server {
   const server = createServer(async (req, res) => {
@@ -621,16 +691,19 @@ function serveApi(): Server {
       const body = await readBody(req);
       if (req.method === "POST") lastControlAt = nowEpoch();
       if (req.method === "POST" && req.url === "/reload") {
-        respond(200, await reload(body));
+        respond(200, await queueControlMutation("control", () => reload(body)));
         return;
       }
       if (req.method === "POST" && req.url === "/restart") {
-        const names = (body.children as ChildName[] | undefined) ?? [...children.keys()];
-        const results: Record<string, unknown> = {};
-        for (const name of CHILD_ORDER.filter((n) => names.includes(n))) {
-          const child = children.get(name);
-          results[name] = child ? await child.restart() : { ok: false, detail: "unknown child" };
-        }
+        const results = await queueControlMutation("control", async () => {
+          const names = (body.children as ChildName[] | undefined) ?? [...children.keys()];
+          const restarted: Record<string, unknown> = {};
+          for (const name of CHILD_ORDER.filter((n) => names.includes(n))) {
+            const child = children.get(name);
+            restarted[name] = child ? await child.restart() : { ok: false, detail: "unknown child" };
+          }
+          return restarted;
+        });
         respond(200, { ok: Object.values(results).every((r) => (r as { ok: boolean }).ok), results });
         return;
       }
@@ -639,6 +712,15 @@ function serveApi(): Server {
         const channel = String(body.channel || canaryChannel || "");
         respond(200, channel ? await runCanary(channel) : { ok: false, reason: "no canary channel configured" });
         return;
+      }
+      if (req.method === "POST" && req.url === "/auth-bootstrap") {
+        const url = await queueControlMutation("control", async () =>
+          specInputs ? adminBootstrapUrl(specInputs) : undefined,
+        );
+        return respond(
+          url ? 200 : 409,
+          url ? { ok: true, url } : { ok: false, reason: "no unconfigured email administrator is available" },
+        );
       }
       if (req.method === "POST" && req.url === "/shutdown") {
         respond(200, { ok: true });
@@ -651,7 +733,14 @@ function serveApi(): Server {
     }
   });
   rmSync(socketPathResolved, { force: true });
-  server.listen(socketPathResolved);
+  server.listen(socketPathResolved, () => {
+    try {
+      restrictSupervisorSocket(socketPathResolved);
+    } catch (error) {
+      log(`could not secure supervisor socket: ${errMessage(error)}`);
+      void shutdownSelf(true);
+    }
+  });
   return server;
 }
 
@@ -682,7 +771,14 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
       allowMock: callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
       log,
     });
-    const dryEnvSha = computeEnvSha(assembled.env);
+    const configuredUrl = configuredDatabaseUrl(worktree, assembled.env);
+    let dryDatabaseSource: DevDatabaseSource = "local";
+    if (configuredUrl) dryDatabaseSource = "configured";
+    else if (databaseSource === "memory") dryDatabaseSource = "memory";
+    const databaseUrl =
+      configuredUrl || (dryDatabaseSource === "local" ? localPostgresUrl(worktree, assembled.env) : "");
+    completeDevSecuritySecrets(assembled.env, databaseUrl || worktree);
+    const dryEnvSha = devEnvironmentSha(assembled.env, databaseUrl, dryDatabaseSource);
     const allHealthy =
       children.size === CHILD_ORDER.length && [...children.values()].every((c) => c.state === "healthy");
     return {
@@ -694,14 +790,19 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
       dryRun: true,
     };
   }
-  writeFileSync(join(lock, "boot-spec.json"), JSON.stringify(newSpec, null, 2), { mode: 0o600 });
   const inputs = await assembleAndPrepare(newSpec);
-  const newEnvSha = computeEnvSha(inputs.baseEnv);
+  const bootSpecPath = join(lock, "boot-spec.json");
+  const bootSpecNext = `${bootSpecPath}.${randomUUID()}.next`;
+  writeFileSync(bootSpecNext, JSON.stringify(newSpec, null, 2), { mode: 0o600 });
+  renameSync(bootSpecNext, bootSpecPath);
+  const newEnvSha = inputs.environmentSha;
   const newGitSha = gitHead(worktree);
   const noopEligible =
     newEnvSha === currentEnvSha &&
     children.size === CHILD_ORDER.length &&
     [...children.values()].every((c) => c.state === "healthy");
+  specInputs = inputs;
+  databaseSource = inputs.databaseSource;
   if (!force && noopEligible) {
     return {
       ok: true,
@@ -712,7 +813,6 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
       detail: "env unchanged and all children healthy -- nothing restarted (use --force to restart anyway)",
     };
   }
-  specInputs = inputs;
   currentEnvSha = newEnvSha;
   currentGitSha = newGitSha;
   bootId = randomUUID();
@@ -808,6 +908,9 @@ process.on("uncaughtException", (err) => {
 });
 process.on("unhandledRejection", (err) => {
   log(`unhandled rejection: ${errMessage(err)}`);
+});
+process.on("exit", () => {
+  if (socketLocation.tempDir) rmSync(socketLocation.tempDir, { recursive: true, force: true });
 });
 
 writePidFile(lock, "supervisor.pid", process.pid);

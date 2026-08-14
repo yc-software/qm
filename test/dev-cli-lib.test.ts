@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { envSha, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
@@ -21,6 +21,7 @@ import {
   leaseOrgId,
   leaseReclaimReason,
   leaseStale,
+  LEGACY_TEARDOWN_PID_FILES,
   listLeases,
   lockDir,
   readMeta,
@@ -28,8 +29,17 @@ import {
   writeHeartbeat,
   writeMeta,
 } from "../scripts/dev/lib/lease.ts";
-import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
+import {
+  assembleEnv,
+  completeDevSecuritySecrets,
+  configuredDatabaseUrl,
+  devEnvironmentSha,
+} from "../scripts/dev/lib/envctx.ts";
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
+import { DEFAULT_DEV_ADMIN_PRINCIPAL, emailAdminsFromSeed, selectEmailAdmin } from "../scripts/dev/lib/admin.ts";
+import { restrictSupervisorSocket, supervisorSocketLocation } from "../scripts/dev/lib/socket.ts";
+import { waitForSupervisor } from "../scripts/dev/lib/client.ts";
+import { localPostgresUrl } from "../scripts/dev/lib/postgres.ts";
 import { loadConfig, OPENCODE_RUNTIME_VERSION } from "../src/config.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
 
@@ -56,7 +66,55 @@ test("slotPorts derive the full port block from the slot number", () => {
     prodProxy: 8147,
     slackHealth: 8163,
     supervisor: 8179,
+    auth: 8195,
   });
+});
+
+test("legacy teardown covers every supervised service, including Auth", () => {
+  assert.deepEqual(
+    ["core", "auth", "web", "admin", "portal"].filter((name) => !LEGACY_TEARDOWN_PID_FILES.includes(`${name}.pid`)),
+    [],
+  );
+});
+
+test("real email dev setup selects only email-shaped administrator seeds", () => {
+  assert.equal(DEFAULT_DEV_ADMIN_PRINCIPAL, "dev-admin@example.test");
+  assert.deepEqual(emailAdminsFromSeed("root:org_admin,Admin@Example.com:org_admin"), ["admin@example.com"]);
+  assert.deepEqual(emailAdminsFromSeed("a@example.com:org_admin,b@example.com:org_admin"), [
+    "a@example.com",
+    "b@example.com",
+  ]);
+  assert.deepEqual(emailAdminsFromSeed("slack:U123:org_admin,viewer@example.com:viewer"), []);
+  assert.equal(selectEmailAdmin(["a@example.com"], undefined), "a@example.com");
+  assert.equal(selectEmailAdmin(["a@example.com", "b@example.com"], undefined), "");
+  assert.equal(selectEmailAdmin(["a@example.com", "b@example.com"], "B@Example.com"), "b@example.com");
+  assert.equal(selectEmailAdmin(["a@example.com"], "missing@example.com"), "");
+});
+
+test("long supervisor socket paths use a private directory and a restricted socket", () => {
+  const root = mkdtempSync("/tmp/qm-dev-socket-");
+  const prior = process.umask(0);
+  try {
+    const location = supervisorSocketLocation(`${root}/${"x".repeat(120)}`, "pool9", root);
+    assert.ok(location.tempDir);
+    assert.equal(statSync(location.tempDir).mode & 0o777, 0o700);
+    writeFileSync(location.path, "");
+    restrictSupervisorSocket(location.path);
+    assert.equal(statSync(location.path).mode & 0o777, 0o600);
+  } finally {
+    process.umask(prior);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("supervisor readiness re-resolves a socket path while state is appearing", async () => {
+  let resolutions = 0;
+  const ready = await waitForSupervisor(() => {
+    resolutions += 1;
+    return `/tmp/qm-dev-missing-${process.pid}-${resolutions}.sock`;
+  }, 650);
+  assert.equal(ready, false);
+  assert.ok(resolutions >= 2);
 });
 
 test("pool listing, token parsing, and validity", () => {
@@ -293,11 +351,43 @@ test("dev security secrets are stable, complete, and distinct", () => {
   completeDevSecuritySecrets(first, "postgres://dev");
   completeDevSecuritySecrets(second, "postgres://dev");
   assert.deepEqual(first, second);
-  assert.equal(new Set(Object.values(first)).size, 5);
+  assert.equal(new Set(Object.values(first)).size, 8);
+  const jwk = JSON.parse(first.AUTH_SIGNING_JWK!) as Record<string, unknown>;
+  assert.deepEqual({ kty: jwk.kty, crv: jwk.crv }, { kty: "EC", crv: "P-256" });
+  for (const name of ["d", "x", "y"]) assert.equal(typeof jwk[name], "string");
   assert.throws(
     () => completeDevSecuritySecrets({ CORE_SIGNING_SECRET: "same", CAPABILITY_SECRET: "same" }, "postgres://dev"),
     /must be distinct/,
   );
+});
+
+test("dev environment fingerprints include the resolved database across source changes", () => {
+  const root = mkdtempSync(join(tmpdir(), "qm-dev-database-"));
+  const explicitSecrets = {
+    CORE_SIGNING_SECRET: "core",
+    CAPABILITY_SECRET: "capability",
+    PORTAL_IDENTITY_SECRET: "identity",
+    CONNECTOR_SECRET_KEY: "connector",
+    PORTAL_SESSION_SECRET: "session",
+    AUTH_TOKEN_SECRET: "token",
+    AUTH_CLIENT_SECRET: "client",
+    AUTH_SIGNING_JWK: "jwk",
+  };
+  try {
+    writeFileSync(join(root, ".env"), "DATABASE_URL=postgres://external-a/qm\n");
+    const firstUrl = configuredDatabaseUrl(root, explicitSecrets);
+    const firstHash = devEnvironmentSha(explicitSecrets, firstUrl, "configured");
+
+    writeFileSync(join(root, ".env"), "");
+    const localUrl = localPostgresUrl(root, explicitSecrets);
+    assert.notEqual(devEnvironmentSha(explicitSecrets, localUrl, "local"), firstHash);
+
+    writeFileSync(join(root, ".env"), "DATABASE_URL=postgres://external-b/qm\n");
+    const secondUrl = configuredDatabaseUrl(root, explicitSecrets);
+    assert.notEqual(devEnvironmentSha(explicitSecrets, secondUrl, "configured"), firstHash);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("OpenCode config is strict, pinned, and inherits the Pi model", () => {
@@ -363,10 +453,20 @@ test("supervised children share the selected dev org", () => {
     sandboxEnv: {},
   };
   const specs = buildChildSpecs(inputs);
+  assert.deepEqual(
+    specs.map((spec) => spec.name),
+    ["core", "auth", "web", "admin", "portal"],
+  );
   assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
+  assert.equal(specs.find((spec) => spec.name === "core")!.env.AUTH_SERVICE_URL, "http://localhost:8193");
+  assert.equal(specs.find((spec) => spec.name === "auth")!.env.AUTH_ISSUER, "http://localhost:8129/idp");
+  assert.equal(specs.find((spec) => spec.name === "portal")!.env.AUTH_BROKER_UPSTREAM, "http://localhost:8193");
+  assert.equal(specs.find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
   for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
   inputs.baseEnv = {};
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
+  inputs.baseEnv = { DEV_INSTANCE_PORTAL_AUTH_BYPASS: "0" };
+  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
 });
 
 test("child specs omit Slack env when no Slack tokens are supplied", () => {

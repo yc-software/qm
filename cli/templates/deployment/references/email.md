@@ -5,21 +5,29 @@ one transport. SMTP is the default recommendation: any existing mail account or
 relay works and there is no DNS wait. Pick Resend only when the operator
 prefers it and has DNS control over a domain they are happy to send from.
 
-Set `env.auth.AUTH_EMAIL_TRANSPORT` to `resend` or `smtp` before collecting
-secrets, then run `npm exec qm -- setup`, which prompts for exactly the
-credentials that choice needs and generates every key itself.
+The normal managed-deployment path is to bring up `core`, `auth`, `portal`,
+`admin`, and Postgres without email credentials, run `npm exec qm -- auth
+bootstrap`, and configure delivery in **Admin → Sign-in**. The page verifies
+the credentials and sends a real message to the current administrator before
+it saves anything.
+
+Deployment environment settings are optional but recommended as a recovery
+source. Set `env.auth.AUTH_EMAIL_TRANSPORT` to `resend` or `smtp`, put the
+matching secrets in the private `.env`, and use `npm exec qm -- auth fallback
+--yes` only when the Admin-managed source must be replaced. That command sends
+its own test message before activating the deployment settings.
 
 ## What you can do, and what only the operator can
 
-| Step                                                | Who                                              |
-| --------------------------------------------------- | ------------------------------------------------ |
-| Choose the transport and set `AUTH_EMAIL_TRANSPORT` | you                                              |
-| Create the Resend account                           | operator (it is their billing relationship)      |
-| Mint the Resend API key                             | operator, or you if they hand you console access |
-| **Add the domain's DNS records**                    | **operator — needs DNS control**                 |
-| Obtain SMTP host, username, password                | operator                                         |
-| Enter the values into `.env` through `qm setup`     | you                                              |
-| Confirm a real sign-in link arrives                 | operator, in their inbox                         |
+| Step                                             | Who                                              |
+| ------------------------------------------------ | ------------------------------------------------ |
+| Choose the transport in Admin or fallback config | you                                              |
+| Create the Resend account                        | operator (it is their billing relationship)      |
+| Mint the Resend API key                          | operator, or you if they hand you console access |
+| **Add the domain's DNS records**                 | **operator — needs DNS control**                 |
+| Obtain SMTP host, username, password             | operator                                         |
+| Enter Admin values or optional `.env` fallback   | you                                              |
+| Confirm a real sign-in link arrives              | operator, in their inbox                         |
 
 Domain verification is the step most likely to stall an otherwise-autonomous
 deploy: it needs registrar or DNS-provider access you will not have. Raise it
@@ -35,27 +43,29 @@ discovering it at `qm doctor`.
    `qm doctor`.
 3. Under **API keys** (<https://resend.com/api-keys>), create a key with send
    access. It starts with `re_`.
-4. `qm setup` collects it as `RESEND_API_KEY` and the verified sender as
-   `AUTH_EMAIL_FROM` (for example `Acme <no-reply@acme.com>`).
+4. Enter it in **Admin → Sign-in**. For a deployment fallback, store it as
+   `RESEND_API_KEY` and set the verified sender as `AUTH_EMAIL_FROM` (for
+   example `Acme <no-reply@acme.com>`).
 
-`qm doctor` calls the Resend API to prove the key is accepted. It cannot prove
-the domain is verified — check the Domains page.
+The Admin save and CLI fallback both call Resend and send a real test message.
+They do not alter the active settings when that delivery fails.
 
 ## SMTP
 
 Any relay works: Postmark, Amazon SES, SendGrid, Fastmail, Google Workspace, or
 the operator's own mail server. Collect the host, username, and password.
 
-`qm setup` collects `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`. Two
-optional settings live in `env.auth`:
+Admin collects the host, username, password, port, and TLS mode. For the
+deployment fallback, use `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD` in
+`.env`; two non-secret settings live in `env.auth`:
 
 - `SMTP_PORT` defaults to `587`.
 - `SMTP_TLS` defaults to `implicit` when the port is `465` and `starttls`
   otherwise. `none` is refused in production, and a relay that does not
   advertise STARTTLS is refused rather than sent credentials in cleartext.
 
-`qm doctor` proves the relay is reachable and answers. It does not authenticate;
-wrong credentials surface on the first real send.
+Saving from Admin or running fallback authenticates and sends a real test
+message. A failure leaves the previous live source unchanged.
 
 ### Gmail / Google Workspace app password
 
@@ -66,7 +76,7 @@ account, no DNS wait.
    passwords with it on.
 2. Operator visits <https://myaccount.google.com/apppasswords>, creates an app
    password, and hands you the 16-character value.
-3. `qm setup` values: `SMTP_HOST` is `smtp.gmail.com`, `SMTP_USERNAME` is the
+3. Admin or fallback values: `SMTP_HOST` is `smtp.gmail.com`, `SMTP_USERNAME` is the
    full address of the account that minted the app password, `SMTP_PASSWORD` is
    the app password (spaces optional).
 4. Set `AUTH_EMAIL_FROM` to that same address — Gmail rewrites the From header
@@ -86,7 +96,7 @@ SES works without owning a domain: verify a single email address instead.
    and click the verification link SES sends to it.
 2. Under **SMTP settings**, create SMTP credentials (an IAM user with a
    generated SMTP password — not the AWS access key itself).
-3. `qm setup` values: `SMTP_HOST` is the region endpoint (for example
+3. Admin or fallback values: `SMTP_HOST` is the region endpoint (for example
    `email-smtp.us-east-1.amazonaws.com`), `SMTP_USERNAME` and `SMTP_PASSWORD`
    are the generated SMTP credentials, and `AUTH_EMAIL_FROM` is the verified
    address.
@@ -99,11 +109,14 @@ recipient.
 
 ## Who may sign in
 
-Set one of these, or the broker refuses to start:
+Set one of these in Admin. The broker starts in an explicit unconfigured state
+until the first successful test:
 
-- `env.auth.AUTH_ALLOWED_EMAIL_DOMAIN` for a whole domain, or
-- `AUTH_ALLOWED_EMAILS` in `.env` for named addresses — `qm setup` derives it
-  from `ADMIN_GRANTS` so the administrator's address is typed once.
+- a single email domain, or
+- named email addresses, including the current administrator.
+
+For the optional deployment fallback, use
+`env.auth.AUTH_ALLOWED_EMAIL_DOMAIN` or `AUTH_ALLOWED_EMAILS` in `.env`.
 
 ## Using an external identity provider instead
 

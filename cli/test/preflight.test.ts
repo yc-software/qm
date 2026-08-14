@@ -4,6 +4,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import type { QmConfig } from "../src/config.ts";
 import { CliError } from "../src/log.ts";
 import {
+  adminEmailSetupDeferred,
   emailTransportPreflight,
   flySandboxTokenPreflight,
   nodeEngineProblem,
@@ -46,6 +47,35 @@ test("nodeEngineProblem accepts a satisfying version and rejects an older one", 
   assert.ok(problem?.includes("v24.13.0"));
   assert.ok(problem?.includes(">=24.15.0"));
   assert.ok(problem?.includes("the repo package.json"));
+});
+
+test("Admin email setup remains deferred until the selected deployment fallback is complete", () => {
+  const managed = { ...CONFIG, services: ["core", "auth", "admin", "portal"] } as QmConfig;
+  const resend = new Map([
+    ["AUTH_ALLOWED_EMAILS", "admin@example.com"],
+    ["AUTH_EMAIL_FROM", "QM <no-reply@example.com>"],
+    ["RESEND_API_KEY", "re_live"],
+  ]);
+  assert.equal(adminEmailSetupDeferred(managed, new Map()), true);
+  assert.equal(adminEmailSetupDeferred(managed, resend), false);
+  const smtp = {
+    ...managed,
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } },
+  } as QmConfig;
+  assert.equal(adminEmailSetupDeferred(smtp, new Map([["AUTH_EMAIL_FROM", "no-reply@example.com"]])), true);
+  assert.equal(
+    adminEmailSetupDeferred(
+      smtp,
+      new Map([
+        ["AUTH_EMAIL_FROM", "no-reply@example.com"],
+        ["SMTP_HOST", "smtp.example.com"],
+        ["SMTP_USERNAME", "mailer"],
+        ["SMTP_PASSWORD", "secret"],
+      ]),
+    ),
+    false,
+  );
+  assert.equal(adminEmailSetupDeferred({ ...managed, services: ["core", "auth"] }, new Map()), false);
 });
 
 test("fly sandbox preflight fails with the exact fix when the token cannot reach the app", async () => {

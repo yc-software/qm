@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createHash } from "node:crypto";
+import { mintAdminBootstrapToken } from "../../chassis/src/admin-bootstrap.ts";
 
 let whoamiProbes = 0;
 let lastConsentClicker: string | null = null;
@@ -9,11 +11,37 @@ let lastImpersonateIdentity: string | null = null;
 let agentApiRequests = 0;
 const VALID_AGENT_CAPABILITY = "valid.agent.capability";
 let deploymentLayerRequests = 0;
+let authOperatorRequests = 0;
+const consumedBootstrapIds = new Set<string>();
 const VALID_SOURCE_SIGNATURE = "v0=valid-source-signature";
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (req.url?.startsWith("/v1/auth/bootstrap/consume")) {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    return void req.on("end", () => {
+      const parsed = JSON.parse(body) as { jti: string };
+      const duplicate = consumedBootstrapIds.has(parsed.jti);
+      consumedBootstrapIds.add(parsed.jti);
+      res.writeHead(duplicate ? 409 : 200, { "content-type": "application/json" });
+      res.end(JSON.stringify(duplicate ? { error: "already_used" } : { ok: true }));
+    });
+  }
   if (req.url?.startsWith("/v1/deployment-layer")) {
     deploymentLayerRequests++;
+    if (req.headers["x-timestamp"] !== "123" || req.headers["x-signature"] !== VALID_SOURCE_SIGNATURE) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return void res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    return void req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+  }
+  if (req.url?.startsWith("/v1/operator/auth-email-settings/")) {
+    authOperatorRequests++;
     if (req.headers["x-timestamp"] !== "123" || req.headers["x-signature"] !== VALID_SOURCE_SIGNATURE) {
       res.writeHead(401, { "content-type": "application/json" });
       return void res.end(JSON.stringify({ error: "unauthorized" }));
@@ -111,6 +139,66 @@ test("favicon: served unauthenticated as an SVG of the pirate-flag emoji", async
     assert.equal(r.headers.get("content-type"), "image/svg+xml; charset=utf-8");
     assert.match(await r.text(), /\u{1F3F4}\u{200D}☠️/u);
   }
+});
+
+test("the bootstrap link keeps its token in the fragment, consumes it once, and leaves a normal session", async () => {
+  const { token } = mintAdminBootstrapToken({ org: "acme", principal: "admin@example.com" }, "router-test-core-secret");
+  const page = await fetch(`${base}/auth/bootstrap#token=${encodeURIComponent(token)}`);
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get("cache-control"), "no-store");
+  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+  assert.doesNotMatch(html, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(html, /history\.replaceState\(null,"",location\.pathname\)/);
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script);
+  const hash = createHash("sha256").update(script).digest("base64");
+  assert.ok((page.headers.get("content-security-policy") ?? "").includes(`script-src 'sha256-${hash}'`));
+
+  const consume = () =>
+    fetch(`${base}/auth/bootstrap`, {
+      method: "POST",
+      headers: { origin: PUBLIC, "content-type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+  const first = await consume();
+  assert.equal(first.status, 200);
+  assert.match(first.headers.get("set-cookie") ?? "", /portal_session=/);
+  assert.deepEqual(await first.json(), { ok: true, redirect: "/admin/sign-in" });
+  const replay = await consume();
+  assert.equal(replay.status, 409);
+  assert.deepEqual(await replay.json(), {
+    error: "already_used",
+    message: "This bootstrap link was already used.",
+  });
+});
+
+test("bootstrap rejects cross-origin, expired, tampered, and cross-organization tokens", async () => {
+  const valid = mintAdminBootstrapToken(
+    { org: "acme", principal: "admin@example.com" },
+    "router-test-core-secret",
+  ).token;
+  const post = (token: string, origin = PUBLIC) =>
+    fetch(`${base}/auth/bootstrap`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+  assert.equal((await post(valid, "https://evil.example")).status, 403);
+  const separator = valid.indexOf(".") + 1;
+  const replacement = valid[separator] === "A" ? "B" : "A";
+  assert.equal((await post(`${valid.slice(0, separator)}${replacement}${valid.slice(separator + 1)}`)).status, 400);
+  const expired = mintAdminBootstrapToken(
+    { org: "acme", principal: "admin@example.com", ttlSeconds: 1 },
+    "router-test-core-secret",
+    Date.now() - 10_000,
+  ).token;
+  assert.equal((await post(expired)).status, 400);
+  const foreign = mintAdminBootstrapToken(
+    { org: "other-org", principal: "admin@example.com" },
+    "router-test-core-secret",
+  ).token;
+  assert.equal((await post(foreign)).status, 400);
 });
 
 test("no session: JSON request is 401, HTML navigation is 302 to login", async () => {
@@ -491,6 +579,40 @@ test("the exact deployment-layer route carries source auth to core without widen
     404,
   );
   assert.equal(deploymentLayerRequests, before + 2, "nearby source-auth paths never reach core");
+});
+
+test("only the two auth operator commands carry source auth through the Portal", async () => {
+  const before = authOperatorRequests;
+  for (const operation of ["bootstrap", "fallback"]) {
+    const payload = JSON.stringify({ principal: "admin@example.com" });
+    const response = await fetch(`${base}/v1/operator/auth-email-settings/${operation}?nonce=one`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-timestamp": "123",
+        "x-signature": VALID_SOURCE_SIGNATURE,
+        cookie: "portal_session=must-not-cross",
+      },
+      body: payload,
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { url: string; headers: Record<string, string>; body: string };
+    assert.equal(body.url, `/v1/operator/auth-email-settings/${operation}?nonce=one`);
+    assert.equal(body.body, payload);
+    assert.equal(body.headers["x-signature"], VALID_SOURCE_SIGNATURE);
+    assert.equal(body.headers.cookie, undefined);
+  }
+  assert.equal(authOperatorRequests, before + 2);
+  assert.equal(
+    (
+      await fetch(`${base}/v1/operator/auth-email-settings/other`, {
+        method: "POST",
+        headers: { "x-timestamp": "123", "x-signature": VALID_SOURCE_SIGNATURE },
+      })
+    ).status,
+    404,
+  );
+  assert.equal(authOperatorRequests, before + 2);
 });
 
 test("agent capabilities do not bypass the connect/drop browser session gates", async () => {

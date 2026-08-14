@@ -47,6 +47,27 @@ test("temporary onboarding covers model credentials, Slack, and OAuth setup", ()
   assert.match(html, /data-onboarding-target="oauth"/);
 });
 
+test("sign-in email is an Admin view with mutually exclusive transports and write-only credentials", () => {
+  assert.match(html, /\{\s*label: "Admin",\s*views: \["onboarding", "sign-in"/);
+  assert.match(html, /id="view-sign-in"/);
+  assert.match(html, /id="auth-email-transport"/);
+  assert.match(html, /<option value="smtp">SMTP<\/option>/);
+  assert.match(html, /<option value="resend">Resend<\/option>/);
+  assert.match(html, /id="auth-email-smtp-password"[\s\S]*autocomplete="new-password"/);
+  assert.match(html, /id="auth-email-resend-key"[\s\S]*autocomplete="new-password"/);
+  assert.match(html, /Existing secrets are never displayed/);
+  assert.match(html, /blank SMTP password is retained only while its host/);
+  assert.match(html, /expectedVersion: authEmailVersion/);
+  assert.match(html, /new Date\(data\.updatedAt\)\.toLocaleString\(\)/);
+  assert.match(html, /runtime\.state === "unreachable" \|\| runtime\.source === "absent"/);
+  assert.match(html, /response\.status === 409/);
+  assert.match(html, /Your draft is preserved/);
+  assert.match(html, /Validating credentials and sending a test email/);
+  assert.match(html, /classList\.toggle\("hidden", !smtp\)/);
+  assert.match(html, /classList\.toggle\("hidden", !domain\)/);
+  assert.doesNotMatch(html, /auth-email-delete|bypass.*test/i);
+});
+
 test("admin shell addresses views by path, not a ?view= query param", () => {
   assert.match(html, /const path = API_BASE \+ "\/" \+ encodeURIComponent\(st\.view \|\| DEFAULT_VIEW\);/);
   assert.doesNotMatch(html, /p\.set\("view", st\.view\)/);

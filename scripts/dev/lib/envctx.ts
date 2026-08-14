@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
+import { createECDH } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { liveEnvPath } from "./pool.ts";
-import { bestEffort, readEnvFile, sha256Hex } from "./util.ts";
+import { bestEffort, envSha, readEnvFile, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
 
 export interface AssembledEnv {
@@ -14,18 +15,55 @@ export interface AssembledEnv {
   warnings: string[];
 }
 
+export type DevDatabaseSource = "configured" | "local" | "memory";
+
+export function configuredDatabaseUrl(worktree: string, env: Record<string, string>): string {
+  return env.DATABASE_URL || envFileGet(join(worktree, ".env"), "DATABASE_URL");
+}
+
+export function devEnvironmentSha(
+  env: Record<string, string>,
+  databaseUrl: string,
+  databaseSource: DevDatabaseSource,
+): string {
+  return envSha({
+    ...env,
+    "\0qm-dev-database-url": databaseUrl,
+    "\0qm-dev-database-source": databaseSource,
+  });
+}
+
 const DEV_SECURITY_SECRET_KEYS = [
   "CORE_SIGNING_SECRET",
   "CAPABILITY_SECRET",
   "PORTAL_IDENTITY_SECRET",
   "CONNECTOR_SECRET_KEY",
   "PORTAL_SESSION_SECRET",
+  "AUTH_TOKEN_SECRET",
+  "AUTH_CLIENT_SECRET",
 ] as const;
+
+function deterministicAuthSigningJwk(seed: string): string {
+  const order = BigInt("0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
+  const scalar = (BigInt(`0x${sha256Hex(`qm-dev\0${seed}\0AUTH_SIGNING_JWK`)}`) % (order - 1n)) + 1n;
+  const d = Buffer.from(scalar.toString(16).padStart(64, "0"), "hex");
+  const ecdh = createECDH("prime256v1");
+  ecdh.setPrivateKey(d);
+  const publicKey = ecdh.getPublicKey(undefined, "uncompressed");
+  return JSON.stringify({
+    kty: "EC",
+    crv: "P-256",
+    d: d.toString("base64url"),
+    x: publicKey.subarray(1, 33).toString("base64url"),
+    y: publicKey.subarray(33, 65).toString("base64url"),
+  });
+}
 
 export function completeDevSecuritySecrets(env: Record<string, string>, seed: string): void {
   for (const key of DEV_SECURITY_SECRET_KEYS) {
     if (!env[key]) env[key] = sha256Hex(`qm-dev\0${seed}\0${key}`);
   }
+  if (!env.AUTH_SIGNING_JWK) env.AUTH_SIGNING_JWK = deterministicAuthSigningJwk(seed);
   const seen = new Set(DEV_SECURITY_SECRET_KEYS.map((key) => env[key]));
   if (seen.size !== DEV_SECURITY_SECRET_KEYS.length) {
     throw new Error(`${DEV_SECURITY_SECRET_KEYS.join(", ")} must be distinct`);

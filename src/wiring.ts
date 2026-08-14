@@ -254,6 +254,7 @@ import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-stor
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
 import { createErrorLog, type ErrorLog } from "./admin/error-log.ts";
 import { createMemoryReplayDedupe, createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
+import { createAuthEmailSettingsStore, type AuthEmailSettingsStore } from "./auth/email-settings.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import {
   emptyDeploymentLayer,
@@ -322,6 +323,7 @@ export interface BuiltApp {
   config: ScopedConfigStore;
   connectorTokens: ConnectorTokenStore;
   slackInstallation: SlackInstallationStore;
+  authEmailSettings: AuthEmailSettingsStore;
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
   secretDrops: SecretDropStore;
@@ -472,6 +474,11 @@ export function buildApp(
     artifactMap("slack_installation"),
     config.connectorSecretKey ?? randomBytes(32),
   );
+  const authEmailSettings = createAuthEmailSettingsStore({
+    orgId: config.orgId,
+    backing: artifactMap("auth_email_settings"),
+    keyMaterial: config.connectorSecretKey ?? randomBytes(32),
+  });
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
@@ -1476,6 +1483,7 @@ export function buildApp(
     config: configStore,
     connectorTokens,
     slackInstallation,
+    authEmailSettings,
     resolveClient,
     consentLinks,
     secretDrops,
@@ -1557,6 +1565,8 @@ export function serverDeps(
     harnessId: config.harness,
     connectorTokens: built.connectorTokens,
     slackInstallation: built.slackInstallation,
+    authEmailSettings: built.authEmailSettings,
+    ...(config.authServiceUrl ? { authServiceUrl: config.authServiceUrl } : {}),
     slackEnvironmentState,
     resolveClient: built.resolveClient,
     consentLinks: built.consentLinks,

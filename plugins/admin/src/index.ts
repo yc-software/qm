@@ -271,6 +271,7 @@ const WRITES = new Map<string, string[]>([
   ["slack-installation", ["PUT", "DELETE"]],
   ["model-providers", ["PUT", "DELETE"]],
   ["custom-providers", ["PUT", "DELETE"]],
+  ["auth-email-settings", ["PUT"]],
 ]);
 
 const READS = [
@@ -296,6 +297,7 @@ const READS = [
   "slack-installation",
   "model-providers",
   "custom-providers",
+  "auth-email-settings",
 ];
 
 const server = createServer((req, res) => {

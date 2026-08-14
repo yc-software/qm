@@ -23,6 +23,8 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
   const base = { ...i.baseEnv, ...i.sandboxEnv };
   const orgId = i.baseEnv.DEV_INSTANCE_ORG_ID || "acme";
   const signing: Record<string, string> = i.coreSigningSecret ? { CORE_SIGNING_SECRET: i.coreSigningSecret } : {};
+  const portalUrl = `http://localhost:${i.ports.portal}`;
+  const authUrl = `http://localhost:${i.ports.auth}`;
   return [
     {
       name: "core",
@@ -37,6 +39,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         ...(i.databaseUrl ? { DATABASE_URL: i.databaseUrl } : {}),
         ...(i.adminGrantsSeed ? { ADMIN_GRANTS: i.adminGrantsSeed } : {}),
         PUBLIC_WEB_URL: `http://localhost:${i.ports.portal}`,
+        AUTH_SERVICE_URL: authUrl,
         ...(i.slack
           ? {
               SLACK_BOT_TOKEN: i.slack.botToken,
@@ -52,6 +55,29 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
       readiness: { kind: "log", pattern: `listening on :${i.ports.core}` },
       health: { kind: "tcp", port: i.ports.core },
       stopGraceMs: 15_000,
+    },
+    {
+      name: "auth",
+      cwd: join(i.worktree, "plugins/auth"),
+      argv: ["node", ...watchArgs, "src/index.ts"],
+      env: {
+        ...base,
+        ...signing,
+        PORT: String(i.ports.auth),
+        CORE_API_URL: `http://localhost:${i.ports.core}`,
+        CORE_ORG_ID: orgId,
+        AUTH_ISSUER: `${portalUrl}/idp`,
+        AUTH_CLIENT_ID: "qm-portal",
+        AUTH_CLIENT_SECRET: i.baseEnv.AUTH_CLIENT_SECRET ?? "",
+        AUTH_REDIRECT_URI: `${portalUrl}/auth/callback`,
+        AUTH_SIGNING_JWK: i.baseEnv.AUTH_SIGNING_JWK ?? "",
+        AUTH_TOKEN_SECRET: i.baseEnv.AUTH_TOKEN_SECRET ?? "",
+        NODE_ENV: "development",
+      },
+      port: i.ports.auth,
+      readiness: { kind: "log", pattern: `http://localhost:${i.ports.auth}` },
+      health: { kind: "healthz", url: `${authUrl}/healthz` },
+      stopGraceMs: 5_000,
     },
     {
       name: "web",
@@ -105,8 +131,19 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         ADMIN_UPSTREAM: `http://localhost:${i.ports.admin}`,
         PORTAL_SESSION_SECRET: i.portalSessionSecret,
         NODE_ENV: "development",
-        PORTAL_LOCAL_AUTH_BYPASS: "1",
+        PORTAL_LOCAL_AUTH_BYPASS: i.baseEnv.DEV_INSTANCE_PORTAL_AUTH_BYPASS ?? "1",
         PORTAL_DEV_PRINCIPAL: i.portalDevPrincipal,
+        AUTH_BROKER_UPSTREAM: authUrl,
+        AUTH_BROKER_PREFIX: "/idp",
+        OIDC_CLIENT_ID: "qm-portal",
+        OIDC_CLIENT_SECRET: i.baseEnv.AUTH_CLIENT_SECRET ?? "",
+        OIDC_ISSUER: `${portalUrl}/idp`,
+        OIDC_AUTH_ENDPOINT: `${portalUrl}/idp/authorize`,
+        OIDC_TOKEN_ENDPOINT: `${authUrl}/token`,
+        OIDC_USERINFO_ENDPOINT: `${authUrl}/userinfo`,
+        OIDC_JWKS_URI: `${authUrl}/.well-known/jwks.json`,
+        OIDC_SCOPES: "openid email",
+        OIDC_PRINCIPAL_CLAIM: "email",
       },
       port: i.ports.portal,
       readiness: { kind: "log", pattern: `public front door on http://localhost:${i.ports.portal}` },

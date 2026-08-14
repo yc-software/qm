@@ -82,6 +82,26 @@ test("GET /api/keychain forwards to /v1/admin/keychain", async () => {
   assert.equal(c.signed, true);
 });
 
+test("sign-in email reads and writes proxy to the scoped Core Admin endpoint", async () => {
+  const read = await fetch(`${base}/api/auth-email-settings`, { headers: { cookie: ADMIN } });
+  assert.equal(read.status, 200);
+  assert.equal(calls.at(-1)?.url, "/v1/admin/auth-email-settings");
+  assert.equal(calls.at(-1)?.method, "GET");
+
+  const body = { expectedVersion: null, transport: "resend", resend: { apiKey: "write-only" } };
+  const write = await fetch(`${base}/api/auth-email-settings`, {
+    method: "PUT",
+    headers: { cookie: ADMIN, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  assert.equal(write.status, 200);
+  assert.equal(calls.at(-1)?.url, "/v1/admin/auth-email-settings");
+  assert.equal(calls.at(-1)?.method, "PUT");
+  assert.deepEqual(JSON.parse(calls.at(-1)?.body ?? "{}"), body);
+  assert.equal(calls.at(-1)?.actor, "U-admin@acme");
+  assert.equal(calls.at(-1)?.signed, true);
+});
+
 test("grants/users require a signed-in cookie → 401 when absent (no core hop)", async () => {
   const before = calls.length;
   assert.equal(
@@ -92,5 +112,6 @@ test("grants/users require a signed-in cookie → 401 when absent (no core hop)"
   assert.equal((await fetch(`${base}/api/grants/U1?scope=org:acme&role=org_admin`, { method: "DELETE" })).status, 401);
   assert.equal((await fetch(`${base}/api/users`)).status, 401);
   assert.equal((await fetch(`${base}/api/keychain`)).status, 401);
+  assert.equal((await fetch(`${base}/api/auth-email-settings`)).status, 401);
   assert.equal(calls.length, before, "a signed-out request is rejected at the surface, never forwarded");
 });

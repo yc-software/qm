@@ -304,3 +304,17 @@ export async function emailTransportPreflight(config: QmConfig, secrets: Readonl
   }
   step(`SMTP relay ${host}:${port}: credentials accepted`);
 }
+
+export function adminEmailSetupDeferred(config: QmConfig, secrets: ReadonlyMap<string, string>): boolean {
+  if (!config.services.includes("auth") || !config.services.includes("admin") || !config.services.includes("portal")) {
+    return false;
+  }
+  const value = (name: string): string => deploymentSecretValue(name, secrets.get(name))?.trim() ?? "";
+  const access = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN?.trim() || value("AUTH_ALLOWED_EMAILS");
+  const sender = value("AUTH_EMAIL_FROM");
+  if (!access || !sender) return true;
+  if (config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp") {
+    return !value("SMTP_HOST") || !value("SMTP_USERNAME") || !value("SMTP_PASSWORD");
+  }
+  return !value("RESEND_API_KEY");
+}

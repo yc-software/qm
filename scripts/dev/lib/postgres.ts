@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import { run } from "./proc.ts";
 import { sleep } from "./util.ts";
+import { validEmail } from "../../../plugins/chassis/src/auth-email.ts";
 
 const POSTGRES_IMAGE = "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777";
 
@@ -63,16 +64,47 @@ export const firstAdminPrincipal = async (_worktree: string, url: string): Promi
   return String(row?.principal_id ?? "");
 };
 
+export const emailAdminPrincipals = async (_worktree: string, url: string): Promise<string[]> => {
+  const [table] = await pgQuery(url, "SELECT to_regclass($1) AS name", ["public.admin_grants"]);
+  if (!table?.name) return [];
+  const rows = await pgQuery(
+    url,
+    "SELECT principal_id FROM admin_grants WHERE role = $1 ORDER BY created_at NULLS LAST, principal_id",
+    ["org_admin"],
+  );
+  return [
+    ...new Set(
+      rows
+        .map((row) =>
+          String(row.principal_id ?? "")
+            .trim()
+            .toLowerCase(),
+        )
+        .filter(validEmail),
+    ),
+  ];
+};
+
 export interface LocalPostgres {
   url: string;
 }
 
-export async function ensureLocalPostgres(worktree: string, log: (msg: string) => void): Promise<LocalPostgres> {
-  const container = process.env.DEV_INSTANCE_POSTGRES_CONTAINER || "qm-dev-postgres";
-  const port = process.env.DEV_INSTANCE_POSTGRES_PORT || "55432";
-  const image = process.env.DEV_INSTANCE_POSTGRES_IMAGE || POSTGRES_IMAGE;
-  const password = process.env.DEV_INSTANCE_POSTGRES_PASSWORD || "qm-dev";
-  const volume = process.env.DEV_INSTANCE_POSTGRES_VOLUME || "qm-dev-postgres-data";
+export function localPostgresUrl(worktree: string, env: NodeJS.ProcessEnv = process.env): string {
+  const port = env.DEV_INSTANCE_POSTGRES_PORT || "55432";
+  const password = env.DEV_INSTANCE_POSTGRES_PASSWORD || "qm-dev";
+  return `postgres://postgres:${password}@127.0.0.1:${port}/${worktreeDbName(worktree)}`;
+}
+
+export async function ensureLocalPostgres(
+  worktree: string,
+  log: (msg: string) => void,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<LocalPostgres> {
+  const container = env.DEV_INSTANCE_POSTGRES_CONTAINER || "qm-dev-postgres";
+  const port = env.DEV_INSTANCE_POSTGRES_PORT || "55432";
+  const image = env.DEV_INSTANCE_POSTGRES_IMAGE || POSTGRES_IMAGE;
+  const password = env.DEV_INSTANCE_POSTGRES_PASSWORD || "qm-dev";
+  const volume = env.DEV_INSTANCE_POSTGRES_VOLUME || "qm-dev-postgres-data";
   const dbName = worktreeDbName(worktree);
 
   if (!(await ensureDockerDaemon(log))) throw new Error("docker daemon unavailable");
@@ -130,5 +162,5 @@ export async function ensureLocalPostgres(worktree: string, log: (msg: string) =
     throw new Error(`createdb ${dbName} failed`);
   }
   log(`durability: using local Postgres container ${container} database ${dbName}`);
-  return { url: `postgres://postgres:${password}@127.0.0.1:${port}/${dbName}` };
+  return { url: localPostgresUrl(worktree, env) };
 }

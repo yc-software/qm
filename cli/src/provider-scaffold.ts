@@ -109,12 +109,12 @@ const AWS_AGENTS_APPENDIX = `
    and the MicroVM roles. Set \`publicUrl\` to
    \`https://<cloudfront_hostname>\` and
    \`env.core.AWS_PUBLIC_ORIGIN_URL\` to \`http://<alb_hostname>\`.
-3. Sign-in is handled by the built-in \`auth\` broker: set
-   \`env.auth.AUTH_ALLOWED_EMAIL_DOMAIN\` (or leave it out and supply
-   \`AUTH_ALLOWED_EMAILS\`), then run \`npm exec qm -- setup\` for the sender address
-   and the Resend or SMTP credentials; the CLI generates the broker's keys and the
-   portal's client credentials and wires \`OIDC_*\` itself. To use an external
-   identity provider instead, drop \`"auth"\` from \`services\`, configure
+3. Sign-in is handled by the built-in \`auth\` broker. After the services are up,
+   run \`npm exec qm -- auth bootstrap\` and configure the sender, login scope, and
+   Resend or SMTP credentials in Admin. The CLI generates the broker's keys and the
+   portal's client credentials and wires \`OIDC_*\` itself. Deployment email
+   variables are optional and provide the tested \`qm auth fallback --yes\` path.
+   To use an external identity provider instead, drop \`"auth"\` from \`services\`, configure
    \`env.portal\` with the provider's OIDC endpoints and an \`OIDC_ALLOWED_EMAILS\`
    or \`OIDC_ALLOWED_EMAIL_DOMAIN\` tenant gate, and register
    \`<publicUrl>/auth/callback\` with the provider. Add optional services and their

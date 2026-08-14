@@ -833,6 +833,7 @@ function validateBrokerTrust(config: QmConfig, path: string, secrets?: ReadonlyM
     !allowed.length ||
     allowed.some((email) => isMissingOrPlaceholder(email) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
   ) {
+    if (config.services.includes("admin") && config.services.includes("portal")) return;
     throw new CliError(
       `${path}: the built-in auth broker requires env.auth.AUTH_ALLOWED_EMAIL_DOMAIN or a valid AUTH_ALLOWED_EMAILS in the target secret store — without one, anybody with an inbox could sign in`,
     );

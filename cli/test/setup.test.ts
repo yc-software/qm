@@ -137,7 +137,7 @@ test("the broker signing key is a fresh P-256 private JWK", () => {
   assert.notEqual(mintSigningJwk(), JSON.stringify(first), "every deployment gets its own key");
 });
 
-test("the broker's operator secrets replace the external-IdP ones", () => {
+test("the broker defers email setup while retaining generated identity secrets", () => {
   const external = configFor(["core", "web-ui", "admin", "portal"]);
   const externalNames = pendingSecrets(external, new Map()).todo.map((secret) => secret.name);
   assert.ok(externalNames.includes("OIDC_CLIENT_SECRET"));
@@ -152,14 +152,11 @@ test("the broker's operator secrets replace the external-IdP ones", () => {
   assert.ok(!brokerNames.includes("OIDC_CLIENT_SECRET"), "the broker mints the portal's client secret");
   assert.ok(!brokerNames.includes("OIDC_CLIENT_ID"));
   assert.ok(!brokerNames.includes("PORTAL_EXPECTED_TEAM_ID"));
-  for (const name of [
-    "AUTH_ALLOWED_EMAILS",
-    "AUTH_EMAIL_FROM",
-    "AUTH_SIGNING_JWK",
-    "AUTH_TOKEN_SECRET",
-    "AUTH_CLIENT_SECRET",
-  ]) {
+  for (const name of ["AUTH_SIGNING_JWK", "AUTH_TOKEN_SECRET", "AUTH_CLIENT_SECRET"]) {
     assert.ok(brokerNames.includes(name), `broker mode should collect ${name}`);
+  }
+  for (const name of ["AUTH_ALLOWED_EMAILS", "AUTH_EMAIL_FROM", "RESEND_API_KEY"]) {
+    assert.ok(!brokerNames.includes(name), `broker setup should defer ${name}`);
   }
   assert.match(playbookFor("AUTH_EMAIL_FROM", broker).join("\n"), /verified sender/);
   assert.match(playbookFor("OIDC_CLIENT_ID", broker).join("\n"), /external identity provider/);

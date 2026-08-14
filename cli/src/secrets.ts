@@ -331,7 +331,22 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AUTH_ALLOWED_EMAILS",
     service: "auth",
-    required: { when: { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" } },
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
+          {
+            kind: "any",
+            conditions: [
+              { kind: "service-absent", service: "admin" },
+              { kind: "service-absent", service: "portal" },
+            ],
+          },
+        ],
+      },
+      optionalOtherwise: true,
+    },
     description: "Comma-separated email addresses allowed to sign in through the built-in broker.",
   },
   {
@@ -344,6 +359,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
         conditions: [
           { kind: "service-enabled", service: "auth" },
           { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
+          {
+            kind: "any",
+            conditions: [
+              { kind: "service-absent", service: "admin" },
+              { kind: "service-absent", service: "portal" },
+            ],
+          },
         ],
       },
     },
@@ -352,31 +374,100 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AUTH_EMAIL_FROM",
     service: "auth",
-    required: true,
+    required: {
+      when: {
+        kind: "any",
+        conditions: [
+          { kind: "service-absent", service: "admin" },
+          { kind: "service-absent", service: "portal" },
+        ],
+      },
+      optionalOtherwise: true,
+    },
     description: 'Verified sender for sign-in links, e.g. "Acme <no-reply@acme.com>".',
   },
   {
     name: "RESEND_API_KEY",
     service: "auth",
-    required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "resend" } },
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "resend" },
+          {
+            kind: "any",
+            conditions: [
+              { kind: "service-absent", service: "admin" },
+              { kind: "service-absent", service: "portal" },
+            ],
+          },
+        ],
+      },
+      optionalOtherwise: true,
+    },
     description: "Resend API key used to deliver sign-in links.",
   },
   {
     name: "SMTP_HOST",
     service: "auth",
-    required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" } },
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" },
+          {
+            kind: "any",
+            conditions: [
+              { kind: "service-absent", service: "admin" },
+              { kind: "service-absent", service: "portal" },
+            ],
+          },
+        ],
+      },
+      optionalOtherwise: true,
+    },
     description: "SMTP relay hostname used to deliver sign-in links.",
   },
   {
     name: "SMTP_USERNAME",
     service: "auth",
-    required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" } },
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" },
+          {
+            kind: "any",
+            conditions: [
+              { kind: "service-absent", service: "admin" },
+              { kind: "service-absent", service: "portal" },
+            ],
+          },
+        ],
+      },
+      optionalOtherwise: true,
+    },
     description: "SMTP username for the sign-in-link relay.",
   },
   {
     name: "SMTP_PASSWORD",
     service: "auth",
-    required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" } },
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" },
+          {
+            kind: "any",
+            conditions: [
+              { kind: "service-absent", service: "admin" },
+              { kind: "service-absent", service: "portal" },
+            ],
+          },
+        ],
+      },
+      optionalOtherwise: true,
+    },
     description: "SMTP password for the sign-in-link relay.",
   },
 ];
@@ -407,6 +498,7 @@ function targetEnvDefault(config: QmConfig, service: string, name: string): stri
 function requirementFor(config: QmConfig, spec: SecretSpec): boolean | null {
   if (typeof spec.required === "boolean") return spec.required;
   if (conditionMatches(config, spec.required.when)) return true;
+  if (requiresOtherEmailTransport(config, spec.required.when)) return null;
   return spec.required.optionalOtherwise ? false : null;
 }
 

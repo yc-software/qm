@@ -112,12 +112,22 @@ What the operator supplies is a way to send those emails. Do not ask them to
 pick a transport by name; ask what they already use for email. An existing
 mail account or relay (Google Workspace, Postmark, SES, Fastmail) means SMTP —
 recommend it, since it needs no DNS work — and only an operator who prefers
-Resend and controls DNS for a sending domain should pick `resend`. Set
-`env.auth.AUTH_EMAIL_TRANSPORT` accordingly, optionally set
-`env.auth.AUTH_ALLOWED_EMAIL_DOMAIN` to admit a whole domain, then read
-`.codex/skills/deploy-qm/references/email.md` before collecting secrets — the
-Resend path needs DNS control you will not have, so raise it with the operator
-early. Configure services, model, and the final public origin in the same pass.
+Resend and controls DNS for a sending domain should pick it. Read
+`.codex/skills/deploy-qm/references/email.md` before deployment — the Resend
+path needs DNS control you will not have, so raise it with the operator early.
+
+With `core`, `auth`, `portal`, `admin`, and Postgres enabled, email credentials
+may be configured after the services are up. Run `qm auth bootstrap`; open the
+ten-minute, single-use fragment link locally; then use **Admin → Sign-in** to
+choose SMTP or Resend, set the sender and login scope, and send the mandatory
+test message. The candidate becomes active only after that delivery succeeds.
+
+Deployment email variables remain an optional recovery path. Set
+`env.auth.AUTH_EMAIL_TRANSPORT`, optionally set
+`env.auth.AUTH_ALLOWED_EMAIL_DOMAIN`, and provision the matching values from
+the email reference when the operator wants `qm auth fallback --yes` to be
+available. The fallback command tests delivery to an administrator before it
+changes the live source.
 
 ### Slack sign-in
 

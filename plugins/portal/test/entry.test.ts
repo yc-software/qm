@@ -161,6 +161,11 @@ test("production accepts cleartext OIDC only on private-network hosts, and only 
   const wired = boot(brokerEnv);
   assert.equal(wired.status, 0, wired.stderr);
 
+  const dynamicEmailGate = { ...brokerEnv };
+  delete dynamicEmailGate.OIDC_ALLOWED_EMAILS;
+  const dynamic = boot(dynamicEmailGate);
+  assert.equal(dynamic.status, 0, dynamic.stderr);
+
   for (const [override, pattern] of [
     [
       { OIDC_TOKEN_ENDPOINT: "http://tokens.example.com/token" },

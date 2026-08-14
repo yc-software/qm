@@ -45,7 +45,6 @@ export interface ServiceCtx {
   publicUrl: string;
   hasPortal: boolean;
   hasAuth: boolean;
-  authAllowedEmailDomain?: string;
   /** Provider-supplied internal URL other services use to reach core. */
   coreUrl: string;
   /** Provider-supplied internal base URL of the auth service. */
@@ -103,13 +102,11 @@ export const AUTH_BROKER_ENV_KEYS = [
   "OIDC_JWKS_URI",
   "OIDC_SCOPES",
   "OIDC_PRINCIPAL_CLAIM",
+  "OIDC_ALLOWED_EMAILS",
   "OIDC_ALLOWED_EMAIL_DOMAIN",
 ] as const;
 
-export function brokerWiring(
-  service: string,
-  o: { publicUrl: string; authBaseUrl: string; allowedEmailDomain?: string },
-): Record<string, string> {
+export function brokerWiring(service: string, o: { publicUrl: string; authBaseUrl: string }): Record<string, string> {
   const base = o.publicUrl.replace(/\/$/, "");
   const internal = o.authBaseUrl.replace(/\/$/, "");
   const issuer = `${base}${AUTH_PATH_PREFIX}`;
@@ -125,7 +122,6 @@ export function brokerWiring(
       OIDC_JWKS_URI: `${internal}/.well-known/jwks.json`,
       OIDC_SCOPES: "openid email",
       OIDC_PRINCIPAL_CLAIM: "email",
-      ...(o.allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {}),
     };
   }
   if (service === "auth") {
@@ -145,10 +141,11 @@ const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> =>
     ? brokerWiring(service, {
         publicUrl: s.publicUrl,
         authBaseUrl: s.authUrl,
-        ...(s.authAllowedEmailDomain ? { allowedEmailDomain: s.authAllowedEmailDomain } : {}),
       })
     : {}),
 });
+
+const coreAuthWiring = (s: ServiceCtx): Record<string, string> => (s.hasAuth ? { AUTH_SERVICE_URL: s.authUrl } : {});
 
 const CATALOG: Record<ServiceName, ServiceDef> = {
   core: {
@@ -160,9 +157,11 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     fly: {
       managed: (s) => ({
         ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal),
+        ...coreAuthWiring(s),
         FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix,
       }),
       stackKeys: [
+        "AUTH_SERVICE_URL",
         "SNAPSHOT_STORE",
         "TRANSFER_STORE",
         "S3_BUCKET",

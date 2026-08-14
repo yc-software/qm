@@ -18,7 +18,7 @@ const CONFIRM_SCRIPT = `(function () {
 const CONFIRM_SCRIPT_HASH = `sha256-${createHash("sha256").update(CONFIRM_SCRIPT, "utf8").digest("base64")}`;
 
 export const PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 export const CONFIRM_PAGE_CSP = PAGE_CSP.replace(
   "default-src 'none';",

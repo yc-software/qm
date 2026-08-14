@@ -292,11 +292,9 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       brokerWiring(service, {
         publicUrl: config.publicUrl,
         authBaseUrl: `http://auth.${aws.networking.cloudMapNamespace}:8080`,
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
       }),
     );
+    if (service === "core") env.AUTH_SERVICE_URL = `http://auth.${aws.networking.cloudMapNamespace}:8080`;
   }
   if (config.services.includes("portal") && (service === "web-ui" || service === "admin")) {
     env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";

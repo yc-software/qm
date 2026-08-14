@@ -10,6 +10,7 @@ import {
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
 import { computedSecrets } from "../secrets.ts";
+import { adminEmailSetupDeferred } from "../preflight.ts";
 
 export function slackManifestBotScopes(manifest: string): string[] {
   try {
@@ -280,6 +281,10 @@ async function smtpReachable(host: string, port: number): Promise<string> {
 }
 
 async function authBrokerCheck(config: QmConfig, secrets: Map<string, string>, haveValues: boolean): Promise<void> {
+  if (adminEmailSetupDeferred(config, secrets)) {
+    step("sign-in email: deferred to Admin after `qm auth bootstrap`");
+    return;
+  }
   const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   const sender = deploymentSecretValue("AUTH_EMAIL_FROM", secrets.get("AUTH_EMAIL_FROM"));
   if (haveValues) {

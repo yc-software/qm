@@ -1,12 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, PayloadTooLargeError, serveEmojiFavicon } from "../../chassis/src/http.ts";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { emailAllowed } from "../../chassis/src/auth-email.ts";
 import type { AuthConfig } from "./config.ts";
-import { validEmail } from "./config.ts";
+import { environmentEmailSettings, validEmail } from "./config.ts";
 import { claimOnce, withinRateLimit, type ClaimStore } from "../../chassis/src/claims.ts";
 import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type AuthRequest } from "./tokens.ts";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
-import { renderSignInEmail, type Mailer } from "./email.ts";
+import { renderSignInEmail } from "./email.ts";
+import type { Mailer } from "./email.ts";
+import { redactAuthEmailError, type ActiveAuthEmail } from "./runtime-email.ts";
 import { confirmSignInPage, emailFormPage, linkSentPage, problemPage, CONFIRM_PAGE_CSP, PAGE_CSP } from "./pages.ts";
 
 const MAX_FORM_BYTES = 8 * 1024;
@@ -18,14 +20,10 @@ export interface AuthDeps {
   signingKey: SigningKey;
   signer: TokenSigner;
   claims: ClaimStore;
-  mailer: Mailer;
+  email?: () => ActiveAuthEmail | null;
+  mailer?: Mailer;
   now?: () => number;
   onBackgroundTask?: (task: Promise<void>) => void;
-}
-
-function emailAllowed(cfg: AuthConfig, email: string): boolean {
-  if (cfg.allowedEmails.includes(email)) return true;
-  return Boolean(cfg.allowedEmailDomain) && email.endsWith(`@${cfg.allowedEmailDomain}`);
 }
 
 function normalizeEmail(raw: string): string {
@@ -101,7 +99,14 @@ function readAuthorizeRequest(
 }
 
 export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const { cfg, signer, claims, mailer, signingKey } = deps;
+  const { cfg, signer, claims, signingKey } = deps;
+  const environment = environmentEmailSettings(cfg);
+  const currentEmail =
+    deps.email ??
+    (() =>
+      environment && deps.mailer
+        ? { settings: environment, mailer: deps.mailer, source: "environment" as const, version: "environment" }
+        : null);
   const now = deps.now ?? Date.now;
   const notify = deps.onBackgroundTask ?? ((task: Promise<void>) => void task.catch(() => undefined));
   const formAction = `${cfg.publicPath}/authorize`;
@@ -144,6 +149,14 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     );
 
   async function authorizeForm(res: ServerResponse, params: URLSearchParams): Promise<void> {
+    if (!currentEmail()) {
+      return problem(
+        res,
+        503,
+        "Sign-in email is not configured",
+        "An administrator needs to finish email delivery setup before sign-in is available.",
+      );
+    }
     const parsed = readAuthorizeRequest(cfg, params);
     if ("problem" in parsed)
       return problem(
@@ -162,11 +175,13 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   }
 
   async function sendLink(request: AuthRequest, email: string, ip: string): Promise<void> {
+    const active = currentEmail();
+    if (!active) return;
     const nowMs = now();
     const within = async (kind: string, value: string, limit: number): Promise<boolean> =>
       withinRateLimit(claims, { secret: cfg.tokenSecret, kind, value, limit, windowS: cfg.sendWindowS, nowMs });
-    if (!emailAllowed(cfg, email)) {
-      console.warn(`[auth] sign-in link suppressed: ${email} is not on the permitted list`);
+    if (!emailAllowed(active.settings, email)) {
+      console.warn("[auth] sign-in link suppressed: address is not on the permitted list");
       return;
     }
     if (!(await within("ip", ip, cfg.sendLimitPerIp))) {
@@ -180,16 +195,24 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     const sealed = await signer.sealLink({ ...request, email }, cfg.linkTtlS, nowMs);
     const link = `${cfg.issuer}/verify#token=${encodeURIComponent(sealed.token)}`;
     try {
-      const receipt = await mailer.send(
+      await active.mailer.send(
         renderSignInEmail({ to: email, brandName: cfg.brandName, link, ttlMinutes: linkTtlMinutes }),
       );
-      console.log(`[auth] sign-in link sent to ${email} (${receipt})`);
+      console.log("[auth] sign-in link sent");
     } catch (e) {
-      console.error(`[auth] sign-in link to ${email} could not be delivered: ${errMessage(e)}`);
+      console.error(`[auth] sign-in link could not be delivered: ${redactAuthEmailError(e, active.settings)}`);
     }
   }
 
   async function authorizeSubmit(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!currentEmail()) {
+      return problem(
+        res,
+        503,
+        "Sign-in email is not configured",
+        "An administrator needs to finish email delivery setup before sign-in is available.",
+      );
+    }
     let raw: string;
     try {
       raw = await readBody(req, MAX_FORM_BYTES);
@@ -255,7 +278,11 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         "The sign-in configuration changed after this link was sent. Start again.",
       );
     }
-    if (!emailAllowed(cfg, link.email)) {
+    const active = currentEmail();
+    if (!active) {
+      return problem(res, 503, "Sign-in email is not configured", "Ask an administrator to finish email setup.");
+    }
+    if (!emailAllowed(active.settings, link.email)) {
       return problem(res, 403, "This address can't sign in", "Your administrator has not allowed this email address.");
     }
     const code = await signer.sealCode(
@@ -307,7 +334,10 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       return sendJson(res, 400, { error: "invalid_grant" });
     if (!pkceMatches(form.get("code_verifier") ?? "", granted.codeChallenge))
       return sendJson(res, 400, { error: "invalid_grant" });
-    if (!emailAllowed(cfg, granted.email)) return sendJson(res, 400, { error: "invalid_grant" });
+    const active = currentEmail();
+    if (!active || !emailAllowed(active.settings, granted.email)) {
+      return sendJson(res, 400, { error: "invalid_grant" });
+    }
 
     const nowMs = now();
     const sub = subjectFor(cfg.issuer, granted.email);

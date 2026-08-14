@@ -94,8 +94,7 @@ class SmtpSession {
 
   async expect(expected: readonly number[], what: string): Promise<SmtpReply> {
     const reply = await this.read();
-    if (!expected.includes(reply.code))
-      throw new Error(`SMTP ${what} rejected: ${reply.code} ${reply.text.split("\n")[0] ?? ""}`);
+    if (!expected.includes(reply.code)) throw new Error(`SMTP ${what} rejected: ${reply.code}`);
     return reply;
   }
 
@@ -120,8 +119,21 @@ class SmtpSession {
     const secure = tlsConnect({ socket: plain, servername: host }) as unknown as Socket;
     secure.on("error", () => undefined);
     await new Promise<void>((resolve, reject) => {
-      secure.once("secureConnect", () => resolve());
-      secure.once("error", reject);
+      let settled = false;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        secure.off("secureConnect", connected);
+        secure.off("error", failed);
+        if (error) reject(error);
+        else resolve();
+      };
+      const connected = () => finish();
+      const failed = (error: Error) => finish(error);
+      const timer = setTimeout(() => finish(new Error("SMTP TLS handshake timed out")), this.timeoutMs);
+      secure.once("secureConnect", connected);
+      secure.once("error", failed);
     });
     this.socket = secure;
     this.attach(secure);
@@ -132,6 +144,11 @@ class SmtpSession {
     this.socket.on("error", () => undefined);
     this.socket.destroy();
   }
+
+  abort(error: Error): void {
+    this.fail(error);
+    this.close();
+  }
 }
 
 async function openSocket(options: SmtpOptions, timeoutMs: number): Promise<Socket> {
@@ -141,10 +158,10 @@ async function openSocket(options: SmtpOptions, timeoutMs: number): Promise<Sock
       : netConnect({ host: options.host, port: options.port });
   socket.on("error", () => undefined);
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`SMTP connect to ${options.host}:${options.port} timed out`)),
-      timeoutMs,
-    );
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`SMTP connect to ${options.host}:${options.port} timed out`));
+    }, timeoutMs);
     socket.once(options.tls === "implicit" ? "secureConnect" : "connect", () => {
       clearTimeout(timer);
       resolve();
@@ -174,7 +191,15 @@ function clientName(host: string): string {
 
 export async function smtpDeliver(options: SmtpOptions, delivery: SmtpDelivery | null): Promise<string> {
   const timeoutMs = options.timeoutMs ?? 15_000;
-  const session = new SmtpSession(await openSocket(options, timeoutMs), timeoutMs);
+  const startedAt = Date.now();
+  const socket = await openSocket(options, timeoutMs);
+  const remainingMs = timeoutMs - (Date.now() - startedAt);
+  if (remainingMs <= 0) {
+    socket.destroy();
+    throw new Error("SMTP operation timed out");
+  }
+  const session = new SmtpSession(socket, remainingMs);
+  const timer = setTimeout(() => session.abort(new Error("SMTP operation timed out")), remainingMs);
   try {
     await session.expect([220], "greeting");
     let ehlo = await session.command(`EHLO ${clientName(options.host)}`, [250]);
@@ -203,6 +228,7 @@ export async function smtpDeliver(options: SmtpOptions, delivery: SmtpDelivery |
     await session.command("QUIT", [221]).catch(() => undefined);
     return accepted.text.split("\n")[0] ?? "accepted";
   } finally {
+    clearTimeout(timer);
     session.close();
   }
 }

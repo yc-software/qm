@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { escapeHtml } from "../../chassis/src/http.ts";
-import { senderAddress, type AuthConfig } from "./config.ts";
+import { senderAddress } from "./config.ts";
+import type { AuthConfig } from "./config.ts";
+import type { AuthEmailSettings } from "../../chassis/src/auth-email.ts";
 import { smtpDeliver } from "./smtp.ts";
 
 export interface OutgoingEmail {
@@ -19,15 +21,20 @@ const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const RESEND_VERIFY_ENDPOINT = "https://api.resend.com/domains";
 const RESEND_TIMEOUT_MS = 15_000;
 
-export function resendMailer(cfg: AuthConfig, fetchImpl: typeof fetch = fetch): Mailer {
-  const authorization = `Bearer ${cfg.resendApiKey}`;
+export function resendMailer(
+  cfg: Extract<AuthEmailSettings, { transport: "resend" }> | AuthConfig,
+  fetchImpl: typeof fetch = fetch,
+): Mailer {
+  const apiKey = "resend" in cfg ? cfg.resend.apiKey : cfg.resendApiKey;
+  const from = "from" in cfg ? cfg.from : cfg.emailFrom;
+  const authorization = `Bearer ${apiKey}`;
   return {
     async send(message) {
       const r = await fetchImpl(RESEND_ENDPOINT, {
         method: "POST",
         headers: { authorization, "content-type": "application/json" },
         body: JSON.stringify({
-          from: cfg.emailFrom,
+          from,
           to: [message.to],
           subject: message.subject,
           text: message.text,
@@ -35,9 +42,8 @@ export function resendMailer(cfg: AuthConfig, fetchImpl: typeof fetch = fetch): 
         }),
         signal: AbortSignal.timeout(RESEND_TIMEOUT_MS),
       });
-      const body = (await r.json().catch(() => ({}))) as { id?: string; message?: string; name?: string };
-      if (!r.ok)
-        throw new Error(`Resend rejected the message: HTTP ${r.status} ${body.message ?? body.name ?? ""}`.trim());
+      const body = (await r.json().catch(() => ({}))) as { id?: string };
+      if (!r.ok) throw new Error(`Resend rejected the message: HTTP ${r.status}`);
       return body.id ?? "accepted";
     },
     async verify() {
@@ -52,9 +58,9 @@ export function resendMailer(cfg: AuthConfig, fetchImpl: typeof fetch = fetch): 
   };
 }
 
-function smtpMailer(cfg: AuthConfig): Mailer {
+function smtpMailer(cfg: Extract<AuthEmailSettings, { transport: "smtp" }>): Mailer {
   const options = { ...cfg.smtp };
-  const from = senderAddress(cfg.emailFrom);
+  const from = senderAddress(cfg.from);
   return {
     async send(message) {
       return smtpDeliver(options, { from, to: message.to, data: renderMessage(cfg, message) });
@@ -65,7 +71,7 @@ function smtpMailer(cfg: AuthConfig): Mailer {
   };
 }
 
-export function mailerFor(cfg: AuthConfig): Mailer {
+export function mailerFor(cfg: AuthEmailSettings): Mailer {
   return cfg.transport === "smtp" ? smtpMailer(cfg) : resendMailer(cfg);
 }
 
@@ -82,11 +88,16 @@ function base64Body(value: string): string {
   ).join("\r\n");
 }
 
-export function renderMessage(cfg: AuthConfig, message: OutgoingEmail, nowMs = Date.now()): string {
+export function renderMessage(
+  cfg: Pick<AuthEmailSettings, "from"> | Pick<AuthConfig, "emailFrom">,
+  message: OutgoingEmail,
+  nowMs = Date.now(),
+): string {
   const boundary = `qm-${randomBytes(12).toString("hex")}`;
-  const domain = senderAddress(cfg.emailFrom).split("@")[1] ?? "localhost";
+  const from = "from" in cfg ? cfg.from : cfg.emailFrom;
+  const domain = senderAddress(from).split("@")[1] ?? "localhost";
   const headers = [
-    `From: ${encodeHeader(cfg.emailFrom)}`,
+    `From: ${encodeHeader(from)}`,
     `To: ${encodeHeader(message.to)}`,
     `Subject: ${encodeHeader(message.subject)}`,
     `Date: ${new Date(nowMs).toUTCString()}`,

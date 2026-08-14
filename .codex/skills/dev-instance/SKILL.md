@@ -1,6 +1,6 @@
 ---
 name: dev-instance
-description: Run the current worktree as a production-shaped local dev instance — core, Slack, web UI, admin, portal, on a real Pi LLM + Postgres — reachable in Slack as your own bot. Each developer uses their own set of Slack apps from their own machine's pool store, so many worktrees (yours and a teammate's) can run reachable at once without colliding. Use when asked to /dev-instance, "spin this up so I can QA it in Slack", or "let me test your branch end to end".
+description: Run the current worktree as a production-shaped local dev instance — core, Auth, Slack, web UI, admin, portal, on a real Pi LLM + Postgres — reachable in Slack as your own bot. Each developer uses their own set of Slack apps from their own machine's pool store, so many worktrees (yours and a teammate's) can run reachable at once without colliding. Use when asked to /dev-instance, "spin this up so I can QA it in Slack", or "let me test your branch end to end".
 ---
 
 # dev-instance
@@ -8,7 +8,7 @@ description: Run the current worktree as a production-shaped local dev instance 
 `dev-instance` runs the current worktree as a full, production-shaped stack on your
 machine and makes it reachable in Slack as one of _your_ bots. It is the way to QA a
 branch end to end: real LLM turns, a real sandbox, a real local Postgres (empty by
-default; opt in to prod data), and the real Slack/web/admin surfaces.
+default; opt in to prod data), and the real Auth/Slack/web/admin surfaces.
 
 Use the repo-root launcher (a thin wrapper over the TypeScript CLI in `scripts/dev/`;
 every command accepts `--json` for machine-readable output):
@@ -33,10 +33,11 @@ bash scripts/dev-instance.sh logs [child] [-f]
 below), then spawns a **per-slot supervisor daemon** that owns the production-shaped stack:
 
 - core API + workers
+- built-in Auth broker with dynamically managed sign-in email settings
 - Slack Socket Mode plugin (connected as the claimed app's bot)
 - web UI surface
 - admin surface
-- portal front door proxying `/web-ui/` and `/admin/`
+- portal front door proxying `/web-ui/`, `/admin/`, and `/idp/`
 
 The supervisor restarts crashed children with backoff, waits for a port to actually free
 before respawning (no more EADDRINUSE), health-probes everything every 10s, and writes a
@@ -57,6 +58,20 @@ restart + re-verification when anything changed (`--force` to restart regardless
 
 Open the portal URL printed by the CLI. Direct web/admin URLs are also printed for
 debugging, but the portal URL is the prod-like path.
+
+Set an email administrator and disable the local bypass when QA must exercise the real
+built-in sign-in flow. On a fresh local database, `up` seeds this principal. Then ask the
+supervisor for a ten-minute Admin bootstrap link:
+
+```bash
+DEV_INSTANCE_ADMIN_PRINCIPAL=dev-admin@example.test \
+DEV_INSTANCE_PORTAL_AUTH_BYPASS=0 \
+node scripts/dev/cli.ts up --no-slack --sandbox local
+node scripts/dev/cli.ts bootstrap
+```
+
+If an existing database has only a non-email administrator, start once with the default
+localhost bypass, add the email principal under Admin → Users, then rerun the command.
 
 ## Sandbox: local Docker by default
 
@@ -131,7 +146,7 @@ The dev instance should exercise the real system:
 - stale pool recovery: `status` shows each deploy's start time and age; if all pool
   apps are taken, `up` reclaims a slot not started today or older than 4 hours
 - local admin seed: for a self-provisioned local DB, empty `admin_grants` are seeded
-  from `DEV_INSTANCE_ADMIN_PRINCIPAL` or the local OS user; explicit `ADMIN_GRANTS`
+  from `DEV_INSTANCE_ADMIN_PRINCIPAL` or `dev-admin@example.test`; explicit `ADMIN_GRANTS`
   still wins
 - local portal auth: the launcher sets a localhost-only portal auth bypass, signing in
   as `DEV_INSTANCE_ADMIN_PRINCIPAL`, the first `ADMIN_GRANTS` principal, the first

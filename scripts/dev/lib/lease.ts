@@ -8,7 +8,18 @@ import type { LeaseInfo } from "./types.ts";
 
 export const HEARTBEAT_INTERVAL_MS = 15_000;
 const HEARTBEAT_STALE_SEC = 90;
-const CHILD_PID_FILES = ["core.pid", "slack.pid", "web.pid", "admin.pid", "portal.pid"];
+const CHILD_PID_FILES = ["core.pid", "slack.pid", "auth.pid", "web.pid", "admin.pid", "portal.pid"];
+export const LEGACY_TEARDOWN_PID_FILES = [
+  "portal.pid",
+  "admin.pid",
+  "web.pid",
+  "auth.pid",
+  "web-build.pid",
+  "slack.pid",
+  "core.pid",
+  "tunnel.pid",
+  "supervisor.pid",
+];
 
 export function lockDir(slot: string, store = poolStore()): string {
   return join(leasesDir(store), `${slot}.lock`);

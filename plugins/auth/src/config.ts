@@ -1,4 +1,5 @@
 import type { SmtpTlsMode } from "./smtp.ts";
+import { authEmailProblems, normalizeAuthEmailSettings, type AuthEmailSettings } from "../../chassis/src/auth-email.ts";
 
 type EmailTransportKind = "resend" | "smtp";
 
@@ -230,4 +231,43 @@ export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
 export function senderAddress(from: string): string {
   const angled = /<([^>]+)>\s*$/.exec(from.trim());
   return (angled?.[1] ?? from).trim();
+}
+
+export function environmentEmailSettings(cfg: AuthConfig): AuthEmailSettings | null {
+  let access: AuthEmailSettings["access"] | null = null;
+  if (cfg.allowedEmails.length) access = { mode: "emails", emails: [...cfg.allowedEmails] };
+  else if (cfg.allowedEmailDomain) access = { mode: "domain", domain: cfg.allowedEmailDomain };
+  if (!access) return null;
+  const settings: AuthEmailSettings =
+    cfg.transport === "smtp"
+      ? {
+          transport: "smtp",
+          from: cfg.emailFrom,
+          access,
+          smtp: cfg.smtp,
+        }
+      : {
+          transport: "resend",
+          from: cfg.emailFrom,
+          access,
+          resend: { apiKey: cfg.resendApiKey },
+        };
+  return normalizeAuthEmailSettings(settings);
+}
+
+export function staticBootProblems(cfg: AuthConfig, isProd: boolean): string[] {
+  const candidate: AuthConfig = {
+    ...cfg,
+    allowedEmails: ["admin@example.com"],
+    allowedEmailDomain: undefined,
+    emailFrom: "admin@example.com",
+    transport: "resend",
+    resendApiKey: "runtime-email-settings",
+  };
+  return bootProblems(candidate, isProd).filter((problem) => !problem.startsWith("RESEND_API_KEY"));
+}
+
+export function environmentEmailProblems(cfg: AuthConfig, isProd: boolean): string[] {
+  const settings = environmentEmailSettings(cfg);
+  return settings ? authEmailProblems(settings, isProd) : ["email delivery is not configured"];
 }

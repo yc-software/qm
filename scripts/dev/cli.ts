@@ -19,6 +19,7 @@ import {
   leaseReclaimReason,
   leaseStale,
   leaseStartedEpoch,
+  LEGACY_TEARDOWN_PID_FILES,
   listLeases,
   lockDir,
   myLease,
@@ -80,6 +81,7 @@ const commandOptions: Record<string, readonly string[]> = {
   status: ["json"],
   restart: ["json"],
   canary: ["json"],
+  bootstrap: ["json"],
   logs: ["follow"],
   doctor: ["json", "fix", "no-slack"],
 };
@@ -120,8 +122,8 @@ const withSlack = !opts["no-slack"] && process.env.DEV_INSTANCE_NO_SLACK !== "1"
 const devCallerEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
 
 async function legacyTeardown(lease: LeaseInfo): Promise<void> {
-  for (const name of ["portal", "admin", "web", "web-build", "slack", "core", "tunnel", "supervisor"]) {
-    const pid = readPidFile(lease.lockDir, `${name}.pid`);
+  for (const file of LEGACY_TEARDOWN_PID_FILES) {
+    const pid = readPidFile(lease.lockDir, file);
     if (pid) await killTree(pid, 5000);
   }
   await destroyLocalDevSandboxes((m) => out(m)).catch(() => undefined);
@@ -218,6 +220,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       `web_port=${ports.web}`,
       `admin_port=${ports.admin}`,
       `portal_port=${ports.portal}`,
+      `auth_port=${ports.auth}`,
       `slack=${withSlack ? "1" : "0"}`,
       "booting=1",
       `owner_pid=${process.pid}`,
@@ -264,8 +267,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
     env: callerEnv,
   });
 
-  const sock = resolveSocketPath(lock);
-  if (!(await waitForSupervisor(sock, 60_000))) {
+  if (!(await waitForSupervisor(() => resolveSocketPath(lock), 60_000))) {
     let tail: string[] = [];
     bestEffort(() => {
       tail = readFileSync(join(lock, "supervisor.log"), "utf8").trimEnd().split("\n").slice(-15);
@@ -279,6 +281,8 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       logTail: tail,
     };
   }
+
+  const sock = resolveSocketPath(lock);
 
   out(
     tokens
@@ -312,7 +316,8 @@ function printSuccess(result: BootResult, branch: string): void {
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
   out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
   out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.admin})`);
-  out(`   logs   : ${lock}/{core,web,admin,portal,supervisor}.log`);
+  out(`   auth   : http://localhost:${ports.auth}/healthz   (brokered publicly at /idp)`);
+  out(`   logs   : ${lock}/{core,auth,web,admin,portal,supervisor}.log`);
   out(`   status : dev status   |   diagnose: dev doctor   |   apply env/code changes: dev up (reloads in place)`);
   out(`   down   : dev down   (auto-reaped if this worktree is removed)`);
 }
@@ -526,7 +531,7 @@ async function cmdStatus(): Promise<number> {
     [
       "SLOT".padEnd(7),
       "STATE".padEnd(18),
-      "PORTS".padEnd(21),
+      "PORTS".padEnd(27),
       "AGE".padEnd(8),
       "MINE".padEnd(5),
       "BRANCH".padEnd(28),
@@ -545,7 +550,7 @@ async function cmdStatus(): Promise<number> {
       [
         String(r.slot).padEnd(7),
         state.padEnd(18),
-        `${ports.core}/${ports.web}/${ports.admin}/${ports.portal}`.padEnd(21),
+        `${ports.core}/${ports.auth}/${ports.web}/${ports.admin}/${ports.portal}`.padEnd(27),
         age.padEnd(8),
         (r.mine ? "this" : "").padEnd(5),
         String(r.branch ?? "-").padEnd(28),
@@ -622,6 +627,28 @@ async function cmdLogs(): Promise<number> {
   return EXIT.ok;
 }
 
+async function cmdBootstrap(): Promise<number> {
+  const worktree = repoRoot();
+  const mine = myLease(worktree, store);
+  if (!mine) {
+    out("no dev instance for this worktree.");
+    return EXIT.supervisorUnreachable;
+  }
+  const sock = resolveSocketPath(mine.lockDir);
+  if (!(await supervisorReachable(sock))) {
+    out("the dev supervisor is not reachable.");
+    return EXIT.supervisorUnreachable;
+  }
+  const res = await supervisorRequest(sock, "POST", "/auth-bootstrap", {});
+  emitJson(res.body);
+  if (res.body.ok && typeof res.body.url === "string") {
+    out(`Admin bootstrap: ${res.body.url}`);
+    return EXIT.ok;
+  }
+  out(`[fail] bootstrap: ${res.body.reason ?? "unavailable"}`);
+  return EXIT.verificationFailed;
+}
+
 async function main(): Promise<number> {
   if (!validOrgId(orgId)) {
     console.error("dev: --org must be a lowercase DNS label (a-z, 0-9, and hyphens between)");
@@ -638,13 +665,15 @@ async function main(): Promise<number> {
       return await cmdRestart();
     case "canary":
       return await cmdCanary();
+    case "bootstrap":
+      return await cmdBootstrap();
     case "logs":
       return await cmdLogs();
     case "doctor":
       return await runDoctor({ json: opts.json, fix: opts.fix, store, slack: withSlack });
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|auto] [--no-slack] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|bootstrap|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|auto] [--no-slack] [--no-watch] [--org id] [--fix]",
       );
       return EXIT.usage;
   }

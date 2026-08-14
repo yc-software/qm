@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { LRUCache } from "lru-cache";
 import {
@@ -40,7 +41,8 @@ import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-clien
 import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
-import { json, escapeHtml, serveEmojiFavicon } from "../../chassis/src/http.ts";
+import { json, escapeHtml, readBody, serveEmojiFavicon } from "../../chassis/src/http.ts";
+import { openAdminBootstrapToken } from "../../chassis/src/admin-bootstrap.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -176,10 +178,14 @@ export function clientIpOf(req: IncomingMessage): string {
 
 const PRINCIPAL_RULE: PrincipalRule = {
   claim: (process.env.OIDC_PRINCIPAL_CLAIM ?? "email") as PrincipalRule["claim"],
-  allowedEmailDomain: process.env.OIDC_ALLOWED_EMAIL_DOMAIN || undefined,
-  allowedEmails: process.env.OIDC_ALLOWED_EMAILS?.split(",")
-    .map((email) => email.trim())
-    .filter(Boolean),
+  ...(!AUTH_BROKER_UPSTREAM
+    ? {
+        allowedEmailDomain: process.env.OIDC_ALLOWED_EMAIL_DOMAIN || undefined,
+        allowedEmails: process.env.OIDC_ALLOWED_EMAILS?.split(",")
+          .map((email) => email.trim())
+          .filter(Boolean),
+      }
+    : {}),
 };
 
 const DEV_SECRET = "dev-only-insecure-portal-session-secret";
@@ -187,6 +193,25 @@ const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
 const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
+const BOOTSTRAP_SCRIPT = `
+const status=document.getElementById("bootstrap-status");
+const token=new URLSearchParams(location.hash.slice(1)).get("token")||"";
+history.replaceState(null,"",location.pathname);
+if(!token){status.textContent="This bootstrap link is missing or invalid.";}else{
+fetch("/auth/bootstrap",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token})})
+.then(async response=>({ok:response.ok,body:await response.json().catch(()=>({}))}))
+.then(result=>{if(!result.ok)throw new Error(result.body.message||"This bootstrap link could not be used.");location.replace(result.body.redirect||"/admin/sign-in");})
+.catch(error=>{status.textContent=error.message;});
+}`.trim();
+const BOOTSTRAP_CSP = [
+  "default-src 'none'",
+  `script-src 'sha256-${createHash("sha256").update(BOOTSTRAP_SCRIPT).digest("base64")}'`,
+  "style-src 'unsafe-inline'",
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
 
 const TMP_TTL_S = 600;
 const LOCAL_LOGOUT_COOKIE = "portal_local_logout";
@@ -237,10 +262,10 @@ async function isAdmin(sub: string): Promise<boolean> {
 const PAGE_CSP =
   "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
-function sendHtml(res: ServerResponse, status: number, html: string): void {
+function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_CSP): void {
   res.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
-    "content-security-policy": PAGE_CSP,
+    "content-security-policy": csp,
     "x-content-type-options": "nosniff",
     "cache-control": "no-store",
   });
@@ -718,6 +743,13 @@ function isDeploymentLayerPassthrough(method: string, pathname: string): boolean
   return (method === "GET" || method === "PUT") && pathname === "/v1/deployment-layer";
 }
 
+function isAuthOperatorPassthrough(method: string, pathname: string): boolean {
+  return (
+    (method === "POST" && pathname === "/v1/operator/auth-email-settings/bootstrap") ||
+    (method === "POST" && pathname === "/v1/operator/auth-email-settings/fallback")
+  );
+}
+
 function sessionCookieSet(value: string): string[] {
   const set = setCookie("portal_session", value, {
     path: "/",
@@ -733,6 +765,72 @@ function setSession(res: ServerResponse, headers: string[]): void {
 }
 
 const playgroundClaims = PLAYGROUND ? coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal") : null;
+
+function adminBootstrapPage(): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin bootstrap</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f5f5;color:#171717;font:15px/1.5 system-ui}.card{width:min(420px,calc(100% - 40px));box-sizing:border-box;background:#fff;border:1px solid #ddd;border-radius:16px;padding:32px;box-shadow:0 8px 30px #0001}h1{font-size:22px;margin:0 0 10px}p{margin:0;color:#525252}</style></head><body><main class="card"><h1>Preparing Admin access</h1><p id="bootstrap-status">Verifying this one-time link…</p></main><script>${BOOTSTRAP_SCRIPT}</script></body></html>`;
+}
+
+async function consumeAdminBootstrap(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
+  let raw: string;
+  try {
+    raw = await readBody(req, 16 * 1024);
+  } catch {
+    return json(res, 400, { error: "bad_request" });
+  }
+  let parsed: { token?: unknown };
+  try {
+    parsed = JSON.parse(raw) as { token?: unknown };
+  } catch {
+    return json(res, 400, { error: "bad_request" });
+  }
+  const claims = openAdminBootstrapToken(
+    typeof parsed.token === "string" ? parsed.token : null,
+    CORE_SIGNING_SECRET ?? DEV_SECRET,
+  );
+  if (!claims || claims.org !== ORG) {
+    return json(res, 400, { error: "invalid_bootstrap", message: "This bootstrap link is invalid or expired." });
+  }
+  const path = withSourceAuthNonce("/v1/auth/bootstrap/consume", CORE_SIGNING_SECRET);
+  const body = JSON.stringify({
+    principal: claims.principal,
+    org: claims.org,
+    jti: claims.jti,
+    expiresAtMs: claims.exp * 1000,
+  });
+  let response: Response;
+  try {
+    response = await fetch(`${CORE}${path}`, {
+      method: "POST",
+      headers: signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
+      body,
+      signal: AbortSignal.timeout(4_000),
+    });
+  } catch {
+    return json(res, 502, { error: "core_unreachable", message: "Core could not verify this bootstrap link." });
+  }
+  if (!response.ok) {
+    const failure = (await response.json().catch(() => ({}))) as { error?: string };
+    let message = "This bootstrap link was refused.";
+    if (failure.error === "already_used") message = "This bootstrap link was already used.";
+    else if (failure.error === "bootstrap_disabled") {
+      message = "Bootstrap access is disabled after email settings have been managed.";
+    }
+    return json(res, response.status, { error: failure.error ?? "bootstrap_refused", message });
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const session: SessionClaims = {
+    k: "session",
+    sub: claims.principal,
+    org: ORG,
+    auth: now,
+    iat: now,
+    exp: now + SESSION_TTL_S,
+  };
+  setSession(res, sessionCookieSet(seal(session, sessionKey)));
+  adminCache.set(claims.principal, true);
+  return json(res, 200, { ok: true, redirect: "/admin/sign-in" });
+}
 
 export function mintBucketOf(ip: string): string {
   if (!ip.includes(":")) return ip;
@@ -845,6 +943,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
     return serveEmojiFavicon(res, process.env.PORTAL_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "max-age=86400");
   }
+
+  if (pathname === "/auth/bootstrap" && method === "GET") {
+    return sendHtml(res, 200, adminBootstrapPage(), BOOTSTRAP_CSP);
+  }
+  if (pathname === "/auth/bootstrap" && method === "POST") return consumeAdminBootstrap(req, res);
 
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
@@ -984,6 +1087,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   if (isDeploymentLayerPassthrough(method, pathname)) {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: url.search },
+      FORWARD_DEPLOYMENT_LAYER_HEADERS,
+    );
+  }
+
+  if (isAuthOperatorPassthrough(method, pathname)) {
     return proxyToUpstream(
       req,
       res,
@@ -1260,7 +1372,8 @@ export function bootChecks(): void {
     if (
       !PRINCIPAL_RULE.allowedEmailDomain &&
       !PRINCIPAL_RULE.allowedEmails?.length &&
-      isMissingOrPlaceholder(OIDC.expectedTeamId)
+      isMissingOrPlaceholder(OIDC.expectedTeamId) &&
+      !AUTH_BROKER_UPSTREAM
     ) {
       problems.push(
         "production requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or PORTAL_EXPECTED_TEAM_ID as an identity-provider trust boundary",
@@ -1287,6 +1400,9 @@ export function bootChecks(): void {
       }
     }
     if (AUTH_BROKER_UPSTREAM) {
+      if (PRINCIPAL_RULE.claim !== "email") {
+        problems.push("OIDC_PRINCIPAL_CLAIM must be email when the built-in broker is wired");
+      }
       if (!isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM)) {
         problems.push(
           "AUTH_BROKER_UPSTREAM must address a private-network host — the broker is never exposed directly",

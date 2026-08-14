@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { listSlots, readSlotFlag, slotFlagged, slotPorts } from "../lib/pool.ts";
-import { heartbeatFresh, leaseStale, listLeases, myLease, supervisorAlive } from "../lib/lease.ts";
+import { heartbeatFresh, leaseOrgId, leaseStale, listLeases, myLease, supervisorAlive } from "../lib/lease.ts";
 import { callerEnvSnapshot, gitHead, repoRoot } from "../lib/envctx.ts";
 import { portHolders } from "../lib/proc.ts";
 import { resolveSocketPath, supervisorReachable, supervisorRequest } from "../lib/client.ts";
@@ -134,11 +134,13 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
             : `booted at ${status.gitSha}, HEAD is ${gitNow}${status.watch ? " (watch mode reloads code live)" : ""}`,
         remedy: status.gitSha === gitNow || status.watch ? undefined : "dev up  (reloads with current code)",
       });
+      const callerEnv = callerEnvSnapshot();
+      callerEnv.DEV_INSTANCE_ORG_ID = leaseOrgId(mine);
       const reload = await supervisorRequest(
         sock,
         "POST",
         "/reload",
-        { callerEnv: callerEnvSnapshot(), force: false, dryRun: true },
+        { callerEnv, force: false, dryRun: true },
         60_000,
       ).catch(() => null);
       checks.push({

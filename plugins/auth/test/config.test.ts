@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { bootProblems, readConfig, senderAddress } from "../src/config.ts";
+import { bootProblems, readConfig, senderAddress, staticBootProblems } from "../src/config.ts";
 import { testEnv } from "./helpers.ts";
 
 const problemsFor = (over: Record<string, string | undefined>, isProd = true): string =>
@@ -22,6 +22,20 @@ test("a complete broker configuration boots", () => {
 test("production refuses to start without a trust boundary", () => {
   const problems = problemsFor({ AUTH_ALLOWED_EMAILS: undefined, AUTH_ALLOWED_EMAIL_DOMAIN: undefined });
   assert.match(problems, /AUTH_ALLOWED_EMAILS or AUTH_ALLOWED_EMAIL_DOMAIN is required/);
+});
+
+test("static broker services boot without email credentials so Admin can complete setup", () => {
+  const cfg = readConfig(
+    testEnv({
+      CORE_SIGNING_SECRET: "a".repeat(48),
+      AUTH_ALLOWED_EMAILS: undefined,
+      AUTH_ALLOWED_EMAIL_DOMAIN: undefined,
+      AUTH_EMAIL_FROM: undefined,
+      RESEND_API_KEY: undefined,
+    }),
+  );
+  assert.deepEqual(staticBootProblems(cfg, true), []);
+  assert.match(bootProblems(cfg, true).join(" | "), /AUTH_ALLOWED_EMAILS|AUTH_EMAIL_FROM|RESEND_API_KEY/);
 });
 
 test("production refuses missing or placeholder credentials and keys", () => {
