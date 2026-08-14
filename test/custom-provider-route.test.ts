@@ -210,3 +210,49 @@ test("a colliding custom model stays selectable and can be set as the org base m
     await srv.close();
   }
 });
+
+test("two custom providers that share a wire id stay namespaced on the org picker", async () => {
+  const srv = start();
+  try {
+    for (const [id, name] of [
+      ["acme-gateway", "Acme"],
+      ["other-gw", "Other"],
+    ] as const) {
+      const put = await fetch(`${srv.base}/v1/admin/custom-providers/${id}`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({
+          name,
+          protocol: "openai",
+          baseUrl: `https://${id}.example.com/v1`,
+          models: [{ id: "shared-chat", name: `${name} Shared` }],
+          apiKey: `sk-${id}`,
+          validate: false,
+        }),
+      });
+      assert.equal(put.status, 200);
+    }
+
+    const selected = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ modelId: "acme-gateway/shared-chat" }),
+    });
+    assert.equal(selected.status, 200);
+
+    const after = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    assert.equal(after.status, 200);
+    const body = (await after.json()) as {
+      baseModel: string | null;
+      runtime: { modelId: string } | null;
+      baseModelOptions: Array<{ id: string; provider: string }>;
+    };
+    assert.equal(body.baseModel, "acme-gateway/shared-chat");
+    assert.equal(body.runtime?.modelId, "acme-gateway/shared-chat");
+    assert.ok(body.baseModelOptions.some((m) => m.id === "acme-gateway/shared-chat" && m.provider === "acme-gateway"));
+    assert.ok(body.baseModelOptions.some((m) => m.id === "other-gw/shared-chat" && m.provider === "other-gw"));
+    assert.ok(!body.baseModelOptions.some((m) => m.id === "shared-chat"));
+  } finally {
+    await srv.close();
+  }
+});

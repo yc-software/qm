@@ -7129,6 +7129,7 @@
           api("GET", "/api/connector-catalog"),
           api("GET", "/api/scopes/" + encodeURIComponent(orgScope())),
         ]);
+        await loadCustomProviders();
         if (!models.ok || !slack.ok || !catalog.ok || !config.ok) {
           setStatus("st-onboarding-model", "Setup status could not be loaded. Try again.", "err", true);
           renderOnboardingProviderOptions();
@@ -7139,7 +7140,6 @@
         (models.data.models || []).forEach((model) => {
           (onboardingModels[model.provider] ||= []).push(model);
         });
-        await loadCustomProviders();
         customProvidersLoaded.forEach((provider) => {
           if (!onboardingModelStatuses.some((status) => status.provider === provider.id)) {
             onboardingModelStatuses.push({

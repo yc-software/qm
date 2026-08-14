@@ -185,6 +185,57 @@ test("catalog namespaces a wire id shared by two custom providers", () => {
   assert.ok(catalog.some((m) => m.id === "acme-gateway/shared-chat" && m.provider === "acme-gateway"));
   assert.ok(catalog.some((m) => m.id === "other-gw/shared-chat" && m.provider === "other-gw"));
   assert.ok(!catalog.some((m) => m.id === "shared-chat"));
+  assert.equal(selectableModelId("acme-gateway/shared-chat"), "acme-gateway/shared-chat");
+  assert.equal(selectableModelId("other-gw/shared-chat"), "other-gw/shared-chat");
+  assert.equal(winningCustomModel("shared-chat"), undefined);
+  assert.equal(resolveModel("shared-chat"), undefined);
+  assert.equal(resolveModel("acme-gateway/shared-chat")?.provider, "acme-gateway");
+  assert.equal(resolveModel("other-gw/shared-chat")?.provider, "other-gw");
+});
+
+test("a slashed custom wire id does not collide with another provider's namespaced id", () => {
+  setCustomProviders([
+    {
+      id: "litellm",
+      name: "LiteLLM",
+      protocol: "openai",
+      baseUrl: "https://litellm.example.com/v1",
+      models: [{ id: "bedrock/claude-opus-5", name: "Bedrock Opus via LiteLLM" }],
+    },
+    {
+      id: "bedrock",
+      name: "Bedrock",
+      protocol: "openai",
+      baseUrl: "https://bedrock.example.com/v1",
+      models: [{ id: "claude-opus-5", name: "Bedrock Opus" }],
+    },
+  ]);
+  assert.equal(resolveModel("litellm/bedrock/claude-opus-5")?.provider, "litellm");
+  assert.equal(resolveModel("litellm/bedrock/claude-opus-5")?.id, "bedrock/claude-opus-5");
+  assert.equal(resolveModel("bedrock/claude-opus-5")?.provider, "bedrock");
+  assert.equal(resolveModel("bedrock/claude-opus-5")?.id, "claude-opus-5");
+  assert.equal(String(resolveModel("claude-opus-5")?.provider), "anthropic");
+  const catalog = builtInModelCatalog();
+  assert.ok(catalog.some((m) => m.id === "litellm/bedrock/claude-opus-5" && m.provider === "litellm"));
+  assert.ok(catalog.some((m) => m.id === "bedrock/claude-opus-5" && m.provider === "bedrock"));
+  assert.equal(catalog.filter((m) => m.id === "bedrock/claude-opus-5").length, 1);
+});
+
+test("a custom model that matches a non-selectable built-in is still namespaced", () => {
+  setCustomProviders([
+    {
+      id: "shadow-gw",
+      name: "Shadow",
+      protocol: "openai",
+      baseUrl: "https://shadow.example.com/v1",
+      models: [{ id: "claude-opus-4-7", name: "Impostor Opus 4.7" }],
+    },
+  ]);
+  const catalog = builtInModelCatalog();
+  assert.ok(catalog.some((m) => m.id === "shadow-gw/claude-opus-4-7" && m.provider === "shadow-gw"));
+  assert.ok(!catalog.some((m) => m.id === "claude-opus-4-7" && m.provider === "shadow-gw"));
+  assert.equal(String(resolveModel("claude-opus-4-7")?.provider), "anthropic");
+  assert.equal(resolveModel("shadow-gw/claude-opus-4-7")?.provider, "shadow-gw");
 });
 
 test("registered models surface in the catalog and vanish on unregister", () => {

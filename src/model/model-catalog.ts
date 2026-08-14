@@ -1,5 +1,10 @@
-import { modelSupportedByHarness, resolveModel, SELECTABLE_BASE_MODELS } from "./pi-models.ts";
-import { customModelCatalog, customModelSelectionId, customProvidersVersion } from "./custom-providers.ts";
+import {
+  customCatalogSelectionId,
+  modelSupportedByHarness,
+  resolveModel,
+  SELECTABLE_BASE_MODELS,
+} from "./pi-models.ts";
+import { customModelCatalog, customProvidersVersion } from "./custom-providers.ts";
 
 export interface ModelCatalogEntry {
   id: string;
@@ -31,17 +36,13 @@ export function builtInModelCatalog(): ModelCatalogEntry[] {
       ? [{ ...model, provider: provider as string }]
       : [];
   });
-  const known = new Set(builtIns.map((model) => model.id));
   const custom = customModelCatalog();
-  const wireCounts = new Map<string, number>();
-  for (const model of custom) wireCounts.set(model.id, (wireCounts.get(model.id) ?? 0) + 1);
   return [
     ...builtIns,
-    ...custom.map((model) =>
-      known.has(model.id) || (wireCounts.get(model.id) ?? 0) > 1
-        ? { ...model, id: customModelSelectionId(model.provider, model.id) }
-        : model,
-    ),
+    ...custom.map((model) => ({
+      ...model,
+      id: customCatalogSelectionId(model.provider, model.id),
+    })),
   ];
 }
 

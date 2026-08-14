@@ -159,12 +159,16 @@ export function winningCustomModel(id: string): CustomRuntimeModel | undefined {
   return custom;
 }
 
+export function customCatalogSelectionId(provider: string, wireId: string): string {
+  const resolved = resolveModel(wireId);
+  if (!resolved || String(resolved.provider) !== provider) return customModelSelectionId(provider, wireId);
+  return wireId;
+}
+
 export function selectableModelId(id: string): string {
   const custom = winningCustomModel(id);
   if (!custom) return id;
-  const wire = custom.id;
-  if (REGISTRY_BY_ID.has(wire) || builtinModel(wire)) return customModelSelectionId(custom.provider, wire);
-  return wire;
+  return customCatalogSelectionId(custom.provider, custom.id);
 }
 
 export function auxiliaryModelForProvider(provider: string): string | undefined {
