@@ -202,11 +202,10 @@ export function consumeState(state: string): boolean {
 
 const ADMIN_TTL_MS = 60_000;
 const ADMIN_PROBE_TIMEOUT_MS = 1500;
+const ADMIN_PROBE_ATTEMPTS = 2;
 const adminCache = new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_MS });
 
-async function adminProbe(sub: string): Promise<{ isAdmin: boolean; failed: boolean }> {
-  const hit = adminCache.get(sub);
-  if (hit !== undefined) return { isAdmin: hit, failed: false };
+async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ADMIN_PROBE_TIMEOUT_MS);
   try {
@@ -218,16 +217,26 @@ async function adminProbe(sub: string): Promise<{ isAdmin: boolean; failed: bool
       );
     }
     const r = await fetch(`${UPSTREAMS.admin}/api/whoami`, { headers, signal: ctrl.signal });
-    if (!r.ok) return { isAdmin: false, failed: true };
+    if (!r.ok) return null;
     const j = (await r.json()) as { isAdmin?: boolean };
-    const v = j.isAdmin === true;
-    adminCache.set(sub, v);
-    return { isAdmin: v, failed: false };
+    return j.isAdmin === true;
   } catch {
-    return { isAdmin: false, failed: true };
+    return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function adminProbe(sub: string): Promise<{ isAdmin: boolean; failed: boolean }> {
+  const hit = adminCache.get(sub);
+  if (hit !== undefined) return { isAdmin: hit, failed: false };
+  for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
+    const isAdmin = await adminProbeAttempt(sub);
+    if (isAdmin === null) continue;
+    adminCache.set(sub, isAdmin);
+    return { isAdmin, failed: false };
+  }
+  return { isAdmin: false, failed: true };
 }
 
 async function isAdmin(sub: string): Promise<boolean> {
