@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity } from "../../chassis/src/portal-identity.ts";
@@ -27,7 +28,7 @@ const corePort = (core.address() as AddressInfo).port;
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = "admin-whoami-test-secret";
 
-const { server } = await import("../src/index.ts");
+const { normalizeAdminHtml, server } = await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
@@ -38,11 +39,20 @@ test.after(() => {
 
 const api = (path: string, cookie?: string) => fetch(`${base}${path}`, cookie ? { headers: { cookie } } : {});
 
+test("admin HTML normalizes every line ending to LF", () => {
+  assert.equal(normalizeAdminHtml("alpha\r\nbeta\rgamma\ndelta"), "alpha\nbeta\ngamma\ndelta");
+});
+
 test("admin HTML ships a hash-only script policy and transport/browser isolation headers", async () => {
   const r = await api("/");
   assert.equal(r.status, 200);
   const csp = r.headers.get("content-security-policy") ?? "";
-  assert.match(csp, /script-src 'sha256-/);
+  const html = await r.text();
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script);
+  const expectedHash = `sha256-${createHash("sha256").update(script).digest("base64")}`;
+  assert.equal(csp.match(/script-src '([^']+)'/)?.[1], expectedHash);
+  assert.doesNotMatch(html, /\r/);
   assert.doesNotMatch(csp, /script-src[^;]*'unsafe-inline'/);
   assert.equal(r.headers.get("strict-transport-security"), "max-age=63072000; includeSubDomains");
   assert.equal(r.headers.get("referrer-policy"), "no-referrer");

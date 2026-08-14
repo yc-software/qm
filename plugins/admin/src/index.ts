@@ -24,9 +24,12 @@ function signedHeaders(method: string, corePath: string, rawBody: string): Recor
   return signedRequestHeaders(CORE_SIGNING_SECRET, method, corePath, rawBody, { "content-type": "application/json" });
 }
 
-const BASE_HTML = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"),
-  "utf8",
+export function normalizeAdminHtml(html: string): string {
+  return html.replace(/\r\n?/g, "\n");
+}
+
+const BASE_HTML = normalizeAdminHtml(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8"),
 ).replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH);
 const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
 const ADMIN_CSP = [
