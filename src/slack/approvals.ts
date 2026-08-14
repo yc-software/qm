@@ -29,7 +29,7 @@ import { resolveAgentRequestTarget } from "./approval-context.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnResult } from "../types.ts";
 import type { CoreBridge, CoreTurnBody } from "./core-bridge.ts";
-import type { Directory } from "./directory.ts";
+import type { BotIdentity, Directory } from "./directory.ts";
 import {
   type SlackConversationKind,
   applyAndLogReactions,
@@ -122,8 +122,9 @@ export function createApprovals(deps: {
   bridge: CoreBridge;
   directory: Directory;
   threads: ReturnType<typeof createThreadTracker>;
+  ids: BotIdentity;
 }): Approvals {
-  const { core, bridge, directory, threads } = deps;
+  const { core, bridge, directory, threads, ids } = deps;
   const { callCore, fetchBlobFromCore, fetchFileArtifactFromCore } = bridge;
 
   const pendingSlackApprovals = createApprovalRegistry<SlackApprovalContext>();
@@ -838,6 +839,7 @@ export function createApprovals(deps: {
           },
           instructions:
             "You are answering an agent-to-agent handoff. Work only with this user's personal context and return a concise result safe to share back to the originating Slack thread.",
+          ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
         },
         ...(classified.timezone ? { timezone: classified.timezone } : {}),
       };

@@ -46,7 +46,7 @@ import {
   uploadAttachments,
   uploadFailureNote,
 } from "./lib.ts";
-import type { TurnResult } from "../types.ts";
+import type { GatewayContext, TurnResult } from "../types.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import type { CoreBridge, CoreTurnBody } from "./core-bridge.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -314,18 +314,14 @@ export function createTurnHandler(deps: {
       if (conversationKind === "group") channelName = groupDmDisplayName(audience) ?? channelName;
     }
 
-    const gatewayContext: {
-      location?: string;
-      details?: Record<string, string>;
-      instructions?: string;
-      reactionGuidance?: string;
-    } =
+    const gatewayContext: GatewayContext =
       inc.kind === "dm"
         ? {
             location: "a direct message with the user",
             details: { channel: inc.channel, ...(inc.threadTs ? { thread_ts: inc.threadTs } : {}) },
             instructions: slackSurfaceInstructions(inc.kind),
             reactionGuidance: REACTION_DETECT_GUIDANCE,
+            ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           }
         : {
             location: channelLocation(conversationKind, channelName, inc.channel),
@@ -338,6 +334,7 @@ export function createTurnHandler(deps: {
             },
             instructions: slackSurfaceInstructions(inc.kind),
             reactionGuidance: REACTION_DETECT_GUIDANCE,
+            ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           };
 
     if (audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) {

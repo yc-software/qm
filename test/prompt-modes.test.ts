@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
+import { createMemoryConfigStore, type OrgBranding } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
@@ -76,10 +76,16 @@ const skills = {
 } as unknown as SkillStore;
 
 function buildOrchestrator(
-  opts: { orgSoul?: string; scopeSoulFor?: { conversation: Conversation; soul: string } } = {},
+  opts: {
+    orgSoul?: string;
+    scopeSoulFor?: { conversation: Conversation; soul: string };
+    branding?: OrgBranding;
+    brandingDefault?: OrgBranding;
+  } = {},
 ) {
   const config = createMemoryConfigStore(ORG);
   if (opts.orgSoul !== undefined) config.setSoul(scopeId("org", ORG), opts.orgSoul);
+  if (opts.branding) config.setBranding(scopeId("org", ORG), opts.branding);
 
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -114,6 +120,7 @@ function buildOrchestrator(
     deploy,
     acl,
     config,
+    ...(opts.brandingDefault ? { brandingDefault: opts.brandingDefault } : {}),
     skills,
     livenessCache,
     connectorTokens,
@@ -186,7 +193,7 @@ test("Mode 1 (DM): live-conversation frame, org policy once, no template leaks, 
 
   assert.match(
     prompt,
-    /You are in a live, private 1:1 with Alice(?: \([^)]+\))? over Slack\./,
+    /You are QM, in a live, private 1:1 with Alice(?: \([^)]+\))? over Slack\./,
     "expected the mode-conversation.md opening sentence, vars filled in for this DM turn",
   );
 
@@ -282,6 +289,113 @@ test("shared-core platform guidance reaches both the DM and the spine prompt", a
     assert.match(prompt, /## Using skills/);
     assert.doesNotMatch(prompt, /## Scheduling & self-configuration/);
   }
+});
+
+test("identity defaults to QM and 'this organization' when no branding is configured", async () => {
+  const prompt = await sysprompt(buildOrchestrator(), slackDm(""));
+  assert.match(prompt, /# QM\n/);
+  assert.match(prompt, /You are QM — the shared assistant platform for this organization\./);
+});
+
+test("org branding renames the assistant and the organization across both modes", async () => {
+  const branding: OrgBranding = { selfLabel: "straylight", orgName: "Straylight Industries" };
+  const dmPrompt = await sysprompt(buildOrchestrator({ branding }), slackDm(""));
+  assert.match(dmPrompt, /# straylight\n/);
+  assert.match(dmPrompt, /You are straylight — the shared assistant platform for Straylight Industries\./);
+  assert.match(dmPrompt, /You are straylight, in a live, private 1:1 with Alice/);
+  assert.doesNotMatch(dmPrompt, /You are QM/);
+
+  const spinePrompt = await sysprompt(buildOrchestrator({ branding }), spineChannelTurn(""));
+  assert.match(spinePrompt, /You are straylight, present in this conversation on its own/);
+  assert.doesNotMatch(spinePrompt, /You are QM/);
+});
+
+test("web conversation surface label carries the configured name", async () => {
+  const branding: OrgBranding = { selfLabel: "straylight" };
+  const webPrompt = await sysprompt(buildOrchestrator({ branding }), {
+    surface: "web",
+    actor,
+    conversation: dmConversation,
+    text: "",
+    origin: { kind: "direct" },
+  });
+  assert.match(webPrompt, /over the straylight web app\./);
+});
+
+test("a Slack handle differing from the identity name appears as a mention adjunct in every mode", async () => {
+  const branding: OrgBranding = { selfLabel: "straylight" };
+  const withHandle = await sysprompt(
+    buildOrchestrator({ branding }),
+    spineChannelTurn("", { gatewayContext: { botHandle: "qm-bot" } }),
+  );
+  assert.match(withHandle, /You are straylight \(@qm-bot in Slack\) — the shared assistant platform/);
+
+  const dmWithHandle = await sysprompt(
+    buildOrchestrator({ branding }),
+    slackDm("", { gatewayContext: { botHandle: "qm-bot" } }),
+  );
+  assert.match(dmWithHandle, /You are straylight \(@qm-bot in Slack\) — the shared assistant platform/);
+
+  const matchingHandle = await sysprompt(
+    buildOrchestrator({ branding }),
+    spineChannelTurn("", { gatewayContext: { botHandle: "Straylight" } }),
+  );
+  assert.match(matchingHandle, /You are straylight — the shared assistant platform/);
+  assert.doesNotMatch(matchingHandle, /in Slack\)/);
+
+  const atHandle = await sysprompt(
+    buildOrchestrator({ branding }),
+    spineChannelTurn("", { gatewayContext: { botHandle: "@qm-bot" } }),
+  );
+  assert.match(atHandle, /\(@qm-bot in Slack\)/);
+  assert.doesNotMatch(atHandle, /@@/);
+
+  const atMatchingHandle = await sysprompt(
+    buildOrchestrator({ branding }),
+    spineChannelTurn("", { gatewayContext: { botHandle: "@straylight" } }),
+  );
+  assert.doesNotMatch(atMatchingHandle, /in Slack\)/);
+
+  const hostileHandle = await sysprompt(
+    buildOrchestrator({ branding }),
+    spineChannelTurn("", { gatewayContext: { botHandle: "{{qm-bot}}" } }),
+  );
+  assert.match(hostileHandle, /\(@qm-bot in Slack\)/);
+  assert.doesNotMatch(hostileHandle, /\{\{/);
+});
+
+test("a display name containing template tokens cannot break prompt rendering", async () => {
+  const hostileActor: Principal = { id: "U9", type: "internal", displayName: "Al{{ice}}" };
+  const prompt = await sysprompt(buildOrchestrator(), {
+    surface: "slack",
+    actor: hostileActor,
+    conversation: { kind: "dm", threadRef: "dm:U9:pm9", audience: [hostileActor] },
+    text: "",
+    origin: { kind: "direct" },
+  });
+  assert.match(prompt, /1:1 with Alice/);
+  assert.doesNotMatch(prompt, /\{\{/);
+});
+
+test("template tokens in a stored branding value are stripped, never rendered or thrown", async () => {
+  const prompt = await sysprompt(
+    buildOrchestrator({ branding: { selfLabel: "{{straylight}}", orgName: "Acme {{Corp}}" } }),
+    slackDm(""),
+  );
+  assert.match(prompt, /You are straylight — the shared assistant platform for Acme Corp\./);
+  assert.doesNotMatch(prompt, /\{\{/);
+});
+
+test("env brandingDefault names the assistant when the store has no branding, and the store wins over it", async () => {
+  const brandingDefault: OrgBranding = { selfLabel: "envbot", orgName: "Env Org" };
+  const fromEnv = await sysprompt(buildOrchestrator({ brandingDefault }), slackDm(""));
+  assert.match(fromEnv, /You are envbot — the shared assistant platform for Env Org\./);
+
+  const fromStore = await sysprompt(
+    buildOrchestrator({ brandingDefault, branding: { selfLabel: "storebot" } }),
+    slackDm(""),
+  );
+  assert.match(fromStore, /You are storebot — the shared assistant platform for Env Org\./);
 });
 
 test("Mode 2 (spine channel): static prose stays within the word-count ceiling (excl. live tail + soul)", async () => {

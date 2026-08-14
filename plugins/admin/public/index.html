@@ -3862,7 +3862,7 @@
               <p class="governance-eyebrow">Temporary setup guide</p>
               <h1>Onboarding</h1>
               <p class="lead">
-                Get this QM instance ready for real conversations. Secrets are validated, encrypted in durable storage,
+                Get this deployment ready for real conversations. Secrets are validated, encrypted in durable storage,
                 and never displayed again.
               </p>
             </div>
@@ -3870,13 +3870,13 @@
               <section class="setup-step">
                 <span class="badge muted" id="onboarding-model-badge">Not ready</span>
                 <h2>1. Model provider</h2>
-                <p id="onboarding-model-summary">Add the key QM will use for its base model.</p>
+                <p id="onboarding-model-summary">Add the key the agent will use for its base model.</p>
               </section>
               <section class="setup-step">
                 <span class="badge muted" id="onboarding-slack-badge">Optional</span>
                 <h2>2. Slack app</h2>
                 <p id="onboarding-slack-summary">
-                  Create the QM app, install it, then add its bot and Socket Mode tokens.
+                  Create the Slack app, install it, then add its bot and Socket Mode tokens.
                 </p>
                 <div class="foot">
                   <a
@@ -3885,7 +3885,7 @@
                     href="https://api.slack.com/apps?new_app=1"
                     target="_blank"
                     rel="noopener noreferrer"
-                    >Create QM Slack app ↗</a
+                    >Create Slack app ↗</a
                   >
                   <button type="button" data-onboarding-target="slack">Enter Slack tokens</button>
                 </div>
@@ -3933,8 +3933,9 @@
               <div class="head">
                 <h2>Custom providers</h2>
                 <p>
-                  Point QM at any OpenAI- or Anthropic-compatible endpoint — a vendor like DeepSeek, or a gateway like
-                  LiteLLM fronting many models. Keys are validated, stored write-only, and the models join the picker.
+                  Point the deployment at any OpenAI- or Anthropic-compatible endpoint — a vendor like DeepSeek, or a
+                  gateway like LiteLLM fronting many models. Keys are validated, stored write-only, and the models join
+                  the picker.
                 </p>
               </div>
               <div class="body">
@@ -4456,8 +4457,9 @@
                     <h2>Branding</h2>
                     <p>
                       How this org's surfaces look. Accent is the highlight color across the web UI, admin, and portal;
-                      mark is the 1–2 character badge in the web UI; label is the assistant's name in transcripts. Leave
-                      a field blank to use the deployment default.
+                      mark is the 1–2 character badge in the web UI; label is the assistant's name everywhere it
+                      introduces itself; organization name is how the assistant refers to this org. Leave a field blank
+                      to use the deployment default.
                     </p>
                   </div>
                   <div class="body">
@@ -4472,6 +4474,14 @@
                       style="max-width: 320px"
                       maxlength="40"
                       placeholder="Agent"
+                    />
+                    <label for="branding-org-name" style="margin-top: 12px">Organization name</label>
+                    <input
+                      type="text"
+                      id="branding-org-name"
+                      style="max-width: 320px"
+                      maxlength="40"
+                      placeholder="Acme Corp"
                     />
                   </div>
                   <div class="foot">
@@ -4821,7 +4831,7 @@
                     href="https://api.slack.com/apps?new_app=1"
                     target="_blank"
                     rel="noopener noreferrer"
-                    >Create QM Slack app from manifest ↗</a
+                    >Create Slack app from manifest ↗</a
                   >
                 </p>
                 <p class="hint" id="slack-installation-state">Not configured.</p>
@@ -6546,6 +6556,7 @@
           $("branding-accent").value = b.accent || "";
           $("branding-mark").value = b.mark || "";
           $("branding-self-label").value = b.selfLabel || "";
+          $("branding-org-name").value = b.orgName || "";
         }
 
         const showBrowseSteps = scope.startsWith("org:") && "browseMaxSteps" in r.data;
@@ -7151,7 +7162,7 @@
         );
         $("onboarding-slack-summary").textContent = slack.data.configured
           ? "Connected to " + (slack.data.teamName || slack.data.teamId || "a Slack workspace") + "."
-          : "Create the QM app, install it, then add its bot and Socket Mode tokens.";
+          : "Create the Slack app, install it, then add its bot and Socket Mode tokens.";
         if (slack.data.createUrl) $("onboarding-slack-create").href = slack.data.createUrl;
 
         const configured = (catalog.data.catalog || []).filter((item) => item.configured);
@@ -8032,6 +8043,7 @@
           accent: $("branding-accent").value.trim(),
           mark: $("branding-mark").value.trim(),
           selfLabel: $("branding-self-label").value.trim(),
+          orgName: $("branding-org-name").value.trim(),
         }),
         "browse-max-steps": () => ({ steps: $("browse-max-steps").value.trim() }),
         "turn-wall-clock": () => ({ sec: $("turn-wall-clock").value.trim() }),

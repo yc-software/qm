@@ -508,3 +508,24 @@ test("the per-mailbox send limit holds when the client address changes", async (
   }
   assert.equal(h.mailer.sent.length, 2, "rotating the source address must not reset a per-mailbox budget");
 });
+
+test("a live brandName accessor overrides the env default on pages and emails", async (t) => {
+  let live = "";
+  const h = await startHarness({ brandName: () => live || "qm" });
+  t.after(() => h.close());
+
+  const { challenge } = pkcePair();
+  const query = authorizeQuery({ code_challenge: challenge });
+  const before = await (await fetch(`${h.base}/authorize?${query}`)).text();
+  assert.match(before, /Sign in to qm/);
+
+  live = "straylight";
+  const after = await (
+    await fetch(`${h.base}/authorize?${authorizeQuery({ code_challenge: pkcePair().challenge })}`)
+  ).text();
+  assert.match(after, /Sign in to straylight/);
+  assert.doesNotMatch(after, /Sign in to qm/);
+
+  await requestLink(h);
+  assert.match(h.mailer.sent[0]!.subject, /straylight/);
+});

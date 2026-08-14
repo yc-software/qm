@@ -470,6 +470,15 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
   assert.equal(core.PORT, "8080");
 });
 
+test("a configured bot identity lands in the AWS core task env and only there", () => {
+  const branded = { ...config, botName: "straylight", orgName: "Straylight Industries" };
+  const core = serviceEnvironment(branded, "core");
+  assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
+  assert.equal(core.ORG_BRAND_ORG_NAME, "Straylight Industries");
+  assert.equal(serviceEnvironment(branded, "web-ui").ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(serviceEnvironment(config, "core").ORG_BRAND_SELF_LABEL, undefined);
+});
+
 test("AWS routes security screen proxy configuration and its token only to core", () => {
   const screened: QmConfig = {
     ...config,

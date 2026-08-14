@@ -46,6 +46,7 @@ export interface ServiceCtx {
   hasPortal: boolean;
   hasAuth: boolean;
   authAllowedEmailDomain?: string;
+  brand?: BrandEnv;
   /** Provider-supplied internal URL other services use to reach core. */
   coreUrl: string;
   /** Provider-supplied internal base URL of the auth service. */
@@ -78,14 +79,39 @@ export interface ServiceDef {
   fly?: FlyServiceSpec;
 }
 
-export function orgEnv(service: string, orgId: string, publicUrl: string, hasPortal: boolean): Record<string, string> {
+export interface BrandEnv {
+  botName?: string;
+  orgName?: string;
+}
+
+export const brandEnvOf = (c: { botName?: string; orgName?: string }): BrandEnv | undefined =>
+  c.botName || c.orgName
+    ? { ...(c.botName ? { botName: c.botName } : {}), ...(c.orgName ? { orgName: c.orgName } : {}) }
+    : undefined;
+
+export function orgEnv(
+  service: string,
+  orgId: string,
+  publicUrl: string,
+  hasPortal: boolean,
+  brand?: BrandEnv,
+): Record<string, string> {
   const base = publicUrl.replace(/\/$/, "");
   const identity: Record<string, string> = service === "core" ? { ORG_ID: orgId } : { CORE_ORG_ID: orgId };
   const webUiUrl = base;
-  if (service === "core") return { ...identity, PUBLIC_WEB_URL: base, WEB_UI_PUBLIC_URL: webUiUrl };
+  if (service === "core") {
+    return {
+      ...identity,
+      PUBLIC_WEB_URL: base,
+      WEB_UI_PUBLIC_URL: webUiUrl,
+      ...(brand?.botName ? { ORG_BRAND_SELF_LABEL: brand.botName } : {}),
+      ...(brand?.orgName ? { ORG_BRAND_ORG_NAME: brand.orgName } : {}),
+    };
+  }
   if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl };
   if (service === "portal") return { ...identity, PORTAL_PUBLIC_URL: base };
   if (service === "admin" && hasPortal) return { ...identity, ADMIN_BASE_PATH: "/admin" };
+  if (service === "auth") return { ...identity, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
   return identity;
 }
 
@@ -140,7 +166,7 @@ export function brokerWiring(
 
 const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
   CORE_API_URL: s.coreUrl,
-  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal),
+  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal, s.brand),
   ...(s.hasAuth
     ? brokerWiring(service, {
         publicUrl: s.publicUrl,
@@ -159,7 +185,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     docker: { image: "core", internalPort: 8080, portEnv: "PORT", hostPortOffset: 0 },
     fly: {
       managed: (s) => ({
-        ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal),
+        ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal, s.brand),
         FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix,
       }),
       stackKeys: [

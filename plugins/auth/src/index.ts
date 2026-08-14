@@ -4,6 +4,8 @@ import { json } from "../../chassis/src/http.ts";
 import { portFromEnv } from "../../chassis/src/env.ts";
 import { bootProblems, readConfig } from "./config.ts";
 import { coreClaimStore } from "../../chassis/src/claims.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
+import { createBrandingCache } from "../../chassis/src/branding.ts";
 import { mailerFor } from "./email.ts";
 import { loadSigningKey } from "./keys.ts";
 import { TokenSigner } from "./tokens.ts";
@@ -23,12 +25,26 @@ export function bootChecks(): void {
 export async function startServer(): Promise<void> {
   bootChecks();
   const signingKey = await loadSigningKey(CFG.signingJwk!);
+  const branding = createBrandingCache(async () => {
+    const path = withSourceAuthNonce("/v1/surface-config", CFG.coreSigningSecret);
+    const r = await fetch(`${CFG.coreApiUrl}${path}`, {
+      headers: signedHeaders(CFG.coreSigningSecret, "GET", path),
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (!r.ok) throw new Error(`surface-config ${r.status}`);
+    const b = ((await r.json()) as { branding?: { selfLabel?: unknown } }).branding;
+    return typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {};
+  });
   const handle = createAuthHandler({
     cfg: CFG,
     signingKey,
     signer: new TokenSigner(CFG.tokenSecret, CFG.issuer),
     claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
     mailer: mailerFor(CFG),
+    brandName: () => {
+      void branding.forRender();
+      return branding.current().selfLabel || CFG.brandName;
+    },
   });
   const server = createServer((req, res) => {
     void handle(req, res).catch((err: unknown) => {

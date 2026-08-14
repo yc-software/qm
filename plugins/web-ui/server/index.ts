@@ -57,9 +57,7 @@ const brandingCache = createBrandingCache(async () => {
 
 async function brandIndexHtml(html: string): Promise<string> {
   const branding = await brandingCache.forRender();
-  const branded = injectBranding(html, branding);
-  const label = branding.selfLabel?.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return label ? branded.replace(/<title>[^<]*<\/title>/, () => `<title>${label} · Web</title>`) : branded;
+  return injectBranding(html, branding, { titleSuffix: "· Web" });
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();

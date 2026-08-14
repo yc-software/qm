@@ -6,7 +6,7 @@ import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
 import type { ConsentLinkStore } from "../connectors/consent-link.ts";
-import type { ScopedConfigStore } from "../resolution/config-store.ts";
+import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import type { EgressAuditSink } from "../admin/egress-audit-sink.ts";
@@ -90,7 +90,7 @@ export interface ServerDeps {
   modelCredentialFetch?: typeof fetch;
   customProviders?: CustomProviderStore;
   refreshCustomProviders?: () => Promise<void>;
-  brandingDefault?: { accent?: string; mark?: string; selfLabel?: string };
+  brandingDefault?: OrgBranding;
   harnessId?: string;
   admin?: AdminService;
   rateLimiter?: RateLimiter;

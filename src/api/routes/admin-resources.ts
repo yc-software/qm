@@ -15,7 +15,7 @@ import {
   ALL_PROVIDERS_AVAILABLE,
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoiceDurable } from "../../harness/harness-router.ts";
-import { type OrgBranding } from "../../resolution/config-store.ts";
+import { sanitizeBranding } from "../../resolution/branding.ts";
 import {
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
@@ -515,23 +515,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "branding is org-wide");
       if (bad) return bad;
-      const body = (ctx.body ?? {}) as { accent?: unknown; mark?: unknown; selfLabel?: unknown };
-      const clean = (v: unknown): string =>
-        (typeof v === "string" ? v : "").replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029<>]/g, "").trim();
-      const accent = clean(body.accent);
-      if (accent && !/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(accent)) {
+      const body = (ctx.body ?? {}) as { accent?: unknown; mark?: unknown; selfLabel?: unknown; orgName?: unknown };
+      const accentInput = typeof body.accent === "string" ? body.accent.trim() : "";
+      const value = sanitizeBranding(body);
+      if (accentInput && !value?.accent) {
         return { error: "branding accent must be a hex color (e.g. #4f46e5)" };
       }
-      const mark = clean(body.mark)
-        .replace(/["\\{}]/g, "")
-        .slice(0, 2);
-      const selfLabel = clean(body.selfLabel).slice(0, 40);
-      const value: OrgBranding = {
-        ...(accent ? { accent } : {}),
-        ...(mark ? { mark } : {}),
-        ...(selfLabel ? { selfLabel } : {}),
-      };
-      ctx.deps.config!.setBranding(scope, Object.keys(value).length ? value : null);
+      ctx.deps.config!.setBranding(scope, value ?? null);
       return { ok: true };
     },
   },

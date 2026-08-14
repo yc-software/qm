@@ -94,6 +94,7 @@ export async function startHarness(
   options: {
     env?: Record<string, string | undefined>;
     claims?: ClaimStore & { calls: string[][] };
+    brandName?: () => string;
   } = {},
 ): Promise<Harness> {
   const cfg = readConfig(testEnv(options.env));
@@ -107,6 +108,7 @@ export async function startHarness(
     signer: new TokenSigner(cfg.tokenSecret, cfg.issuer),
     claims,
     mailer,
+    ...(options.brandName ? { brandName: options.brandName } : {}),
     now: () => now.ms,
     onBackgroundTask: (task) => pending.push(task),
   });

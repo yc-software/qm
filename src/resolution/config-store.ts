@@ -93,6 +93,7 @@ export interface OrgBranding {
   accent?: string;
   mark?: string;
   selfLabel?: string;
+  orgName?: string;
 }
 export interface PersistedBranding {
   scopeId: ScopeId;

@@ -152,6 +152,8 @@ export interface QmConfig {
   vms?: Partial<Record<ServiceName, { size?: string; memory?: string }>>;
   imageOverrides: Partial<Record<ServiceName, string>>;
   sandbox?: SandboxConfig;
+  botName?: string;
+  orgName?: string;
   appPrefix?: string;
   region?: string;
   flyOrg?: string;
@@ -502,6 +504,8 @@ const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "vms",
   "imageOverrides",
   "sandbox",
+  "botName",
+  "orgName",
   "appPrefix",
   "region",
   "flyOrg",
@@ -708,6 +712,24 @@ function validate(raw: unknown, path: string): QmConfig {
     }
     out.basePort = bp;
   }
+  const identityName = (key: "botName" | "orgName", cap: number, what: string): string | undefined => {
+    if (o[key] === undefined) return undefined;
+    const name = typeof o[key] === "string" ? o[key].trim() : "";
+    if (!name || name.length > cap || /[<>{}\u0000-\u001F\u007F-\u009F\u2028\u2029"\\]/.test(name)) {
+      throw new CliError(
+        `${path}: "${key}" must be a nonempty string of at most ${cap} characters without <>{}, quotes, backslashes, or control characters — ${what}`,
+      );
+    }
+    return name;
+  };
+  const botName = identityName(
+    "botName",
+    31,
+    'it names the bot everywhere users see it: the Slack apps (including the "<botName> SSO" sign-in app, which Slack caps at 35 characters), the prompt identity, and sign-in pages',
+  );
+  if (botName) out.botName = botName;
+  const orgName = identityName("orgName", 40, "it is how the bot refers to your organization");
+  if (orgName) out.orgName = orgName;
   if (typeof o["appPrefix"] === "string") out.appPrefix = o["appPrefix"];
   if (typeof o["region"] === "string") out.region = o["region"];
   if (typeof o["flyOrg"] === "string") out.flyOrg = o["flyOrg"];

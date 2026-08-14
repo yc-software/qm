@@ -51,6 +51,35 @@ const putConnector = (base: string, b: object) =>
     body: JSON.stringify(b),
   });
 
+test("the slack-installation createUrl adopts the live branding label", async () => {
+  const srv = start();
+  try {
+    const nameFrom = async (): Promise<string> => {
+      const r = (await (await fetch(`${srv.base}/v1/admin/slack-installation`, { headers: ADMIN })).json()) as {
+        createUrl: string;
+      };
+      const manifest = JSON.parse(new URL(r.createUrl).searchParams.get("manifest_json") ?? "{}") as {
+        display_information?: { name?: string };
+      };
+      return manifest.display_information?.name ?? "";
+    };
+    assert.equal(await nameFrom(), "qm");
+    assert.equal(
+      (
+        await fetch(`${srv.base}/v1/admin/scopes/org:default-org/branding`, {
+          method: "PUT",
+          headers: ADMIN,
+          body: JSON.stringify({ selfLabel: "straylight" }),
+        })
+      ).status,
+      200,
+    );
+    assert.equal(await nameFrom(), "straylight");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("admin registers a BYO client → /start uses it; the secret is never echoed", async () => {
   const srv = start();
   try {

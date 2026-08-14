@@ -17,6 +17,7 @@ import { orgId } from "../config.ts";
 import { renderGatewayContext } from "./gateway-context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
+import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveReachableChannel } from "../resolution/scope-reach.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
@@ -787,8 +788,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
       const surfaceTool = input.surface ?? "slack";
-      const botName = input.gatewayContext?.botName?.trim() || undefined;
-      const orgName = "this organization";
+      const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
+      const botName = branding.selfLabel ?? "QM";
+      const orgName = branding.orgName ?? "this organization";
+      const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
+      const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
       let modeName = "mode-fallback";
       if (input.surfaceTools) modeName = "mode-autonomous";
       else if (!automatedTurn && (conversation.kind === "dm" || isWeb)) modeName = "mode-conversation";
@@ -800,9 +804,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars = { botName, surfaceTool, slack: isSlack };
       } else if (modeName === "mode-conversation") {
         frameVars = {
-          userName: actor.displayName?.trim() || "there",
+          botName,
+          userName: cleanBrandingLabel(actor.displayName, 80) ?? "there",
           userEmail: actor.id.includes("@") ? actor.id : undefined,
-          surfaceLabel: isWeb ? "the QM web app" : "Slack",
+          surfaceLabel: isWeb ? `the ${botName} web app` : "Slack",
           slack: isSlack,
           web: isWeb,
         };
@@ -811,7 +816,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (modeName === "mode-conversation" && input.proactiveOpener) {
         modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
       }
-      const sharedCore = applyPromptVars(SHARED_CORE_MD, { botName, orgName });
+      const sharedCore = applyPromptVars(SHARED_CORE_MD, { botName, botHandle, orgName });
       let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}\n\n${renderSecurityPolicyPrompt(securityPolicy)}`;
       const scopeProfile = supportsScopeProfile(deps.sandbox)
         ? await deps.sandbox

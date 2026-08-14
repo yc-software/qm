@@ -18,6 +18,8 @@ import {
 import {
   isVirtualService,
   ordered,
+  type BrandEnv,
+  brandEnvOf,
   orgEnv,
   runnableServices,
   serviceDef,
@@ -40,19 +42,23 @@ import { flySandboxRepository, imageRepository, pinnedByDigest, recordSandboxPin
 import { manifestRef } from "../manifest.ts";
 import { CONNECTIVITY_CODES, CoreUnreachableError, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
-const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: string): ServiceCtx => ({
-  appPrefix,
-  orgId: config.orgId,
-  deployAppPrefix,
-  publicUrl: config.publicUrl,
-  hasPortal: config.services.includes("portal"),
-  hasAuth: config.services.includes("auth"),
-  ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-    ? { authAllowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-    : {}),
-  coreUrl: `http://${appPrefix}-core.internal:8080`,
-  authUrl: `http://${appPrefix}-auth.flycast`,
-});
+const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: string): ServiceCtx => {
+  const brand = brandEnvOf(config);
+  return {
+    appPrefix,
+    orgId: config.orgId,
+    deployAppPrefix,
+    publicUrl: config.publicUrl,
+    hasPortal: config.services.includes("portal"),
+    hasAuth: config.services.includes("auth"),
+    ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
+      ? { authAllowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
+      : {}),
+    ...(brand ? { brand } : {}),
+    coreUrl: `http://${appPrefix}-core.internal:8080`,
+    authUrl: `http://${appPrefix}-auth.flycast`,
+  };
+};
 
 const FLY_RESPONSE = "QM_LAYER_RESPONSE=";
 const FLY_REMOTE_ERROR = "QM_LAYER_ERROR=";
@@ -857,10 +863,11 @@ function pluginTomlContent(
   hasPortal: boolean,
   region: string,
   plugin: ResolvedPlugin,
+  brand?: BrandEnv,
 ): string {
   const env: Record<string, string> = {
     CORE_API_URL: `http://${appPrefix}-core.internal:8080`,
-    ...orgEnv(plugin.name, orgId, publicUrl, hasPortal),
+    ...orgEnv(plugin.name, orgId, publicUrl, hasPortal, brand),
     PORT: "8080",
     ...plugin.env,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(flyOrg, orgId, appPrefix),
@@ -889,6 +896,7 @@ export function derivedPluginTomlFor(config: QmConfig, plugin: ResolvedPlugin): 
     config.services.includes("portal"),
     config.region ?? "",
     plugin,
+    brandEnvOf(config),
   );
 }
 
@@ -905,6 +913,7 @@ function writePluginDerived(ctx: FlyCtx, plugin: ResolvedPlugin): string {
       ctx.config.services.includes("portal"),
       ctx.region,
       plugin,
+      brandEnvOf(ctx.config),
     ),
   );
   return path;
@@ -1596,6 +1605,7 @@ export async function flyCheckLive(
             config.services.includes("portal"),
             ctx.region,
             plugin!,
+            brandEnvOf(config),
           ),
     );
     const envDrift = machines.flatMap((machine, index) =>

@@ -59,6 +59,8 @@ test(
       target: "docker",
       basePort,
       services: [...SERVICES],
+      botName: "straylight",
+      orgName: "Straylight Industries",
       env: { core: { HARNESS: "mock" } },
     });
     standInPlugin(dep, "widget");
@@ -86,6 +88,16 @@ test(
           encoding: "utf8",
         }).trim();
         assert.equal(got, sentinel);
+      });
+
+      await t.test("the configured bot identity reaches the core container and only the core container", () => {
+        const names = deploymentContainers(org);
+        const printenv = (container: string, name: string): string =>
+          execFileSync("docker", ["exec", container, "printenv", name], { encoding: "utf8" }).trim();
+        const core = suffix(names, "core")!;
+        assert.equal(printenv(core, "ORG_BRAND_SELF_LABEL"), "straylight");
+        assert.equal(printenv(core, "ORG_BRAND_ORG_NAME"), "Straylight Industries");
+        assert.throws(() => printenv(suffix(names, "web-ui")!, "ORG_BRAND_SELF_LABEL"));
       });
 
       await t.test("status enumerates exactly this deployment's containers with ports", () => {

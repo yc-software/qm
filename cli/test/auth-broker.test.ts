@@ -80,6 +80,19 @@ test("the external-IdP stack keeps its own OIDC endpoints and gains no broker wi
   assert.doesNotMatch(portal, /AUTH_BROKER_UPSTREAM/);
 });
 
+test("a configured botName brands the docker service env for core and auth", () => {
+  const config = configWith(
+    configText().replace('"plugins": [],', '"botName": "straylight", "orgName": "Acme Corp", "plugins": [],'),
+  );
+  const core = dockerServiceEnv(config, "core");
+  assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
+  assert.equal(core.ORG_BRAND_ORG_NAME, "Acme Corp");
+  assert.equal(dockerServiceEnv(config, "auth").AUTH_BRAND_NAME, "straylight");
+  const bare = configWith(configText());
+  assert.equal(dockerServiceEnv(bare, "core").ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(dockerServiceEnv(bare, "auth").AUTH_BRAND_NAME, undefined);
+});
+
 test("docker and AWS wire the broker with parity", () => {
   const docker = configWith(configText());
   const dockerPortal = dockerServiceEnv(docker, "portal");

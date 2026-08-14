@@ -47,6 +47,7 @@ test("cold start: the FIRST shell render already carries the org branding", asyn
     "self-label meta injected regardless of the shell's formatting",
   );
   assert.match(html, /--brand-mark:"Y"/, "brand mark variable injected for the badge");
+  assert.match(html, /<title>QM Admin<\/title>/, "tab title carries the configured label");
 });
 
 test("the shell's badge and product name are branding-driven, not hardcoded", () => {
@@ -65,4 +66,5 @@ test("a branding save acks only after the shell reflects it — the post-save re
   const html = await (await fetch(`${base}/`)).text();
   assert.match(html, /--brand-accent:#0055ff/);
   assert.match(html, /<meta name="brand-self-label" content="Zed"\s*\/?>/);
+  assert.match(html, /<title>Zed Admin<\/title>/, "tab title follows the saved label");
 });

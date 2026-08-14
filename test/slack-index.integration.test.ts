@@ -410,6 +410,7 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
     assert.equal(f.core.turns[0].deliveryTarget, "D1");
     assert.equal(f.core.turns[0].liveActor, true);
     assert.equal(f.core.turns[0].triggerTs, "100.1");
+    assert.equal(f.core.turns[0].gatewayContext.botHandle, "qmbot");
     assert.equal(f.core.ackPicks.length, 1);
     assert.equal(f.core.ackPicks[0]?.text, "hello agent");
     assert.ok((f.core.ackPicks[0]?.candidates.length ?? 0) > 0);

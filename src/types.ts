@@ -344,7 +344,7 @@ export interface GatewayContext {
   details?: Record<string, string>;
   instructions?: string;
   reactionGuidance?: string;
-  botName?: string;
+  botHandle?: string;
 }
 
 export interface ConversationTurn {

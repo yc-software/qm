@@ -174,19 +174,24 @@ test("branding governance validates, round-trips through surface-config, clears,
       400,
     );
     assert.equal(
+      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ accent: "#aabbccddee" }) })).status,
+      400,
+    );
+    assert.equal(
       (
         await fetch(url, {
           method: "PUT",
           headers: ADMIN,
-          body: JSON.stringify({ accent: "#6366f1", mark: "Q", selfLabel: "qm" }),
+          body: JSON.stringify({ accent: "#6366f1", mark: "Q", selfLabel: "{{qm}}", orgName: "Acme Corp" }),
         })
       ).status,
       200,
     );
     const readBack = (await (
       await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })
-    ).json()) as { branding?: { accent?: string } };
+    ).json()) as { branding?: { accent?: string; orgName?: string } };
     assert.equal(readBack.branding?.accent, "#6366f1");
+    assert.equal(readBack.branding?.orgName, "Acme Corp");
     assert.deepEqual(await surfaceBranding(), { accent: "#6366f1", mark: "Q", selfLabel: "qm" });
     assert.equal(
       (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ mark: "<b>xy" }) })).status,

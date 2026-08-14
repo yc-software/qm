@@ -4,6 +4,7 @@ import type { ApiCtx } from "../route.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { validateSlackInstallation } from "../../../surfaces/slack-installation.ts";
 import { slackBotManifestCreationUrl } from "../../../surfaces/slack-manifest.ts";
+import { resolveBranding } from "../../../resolution/branding.ts";
 
 export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
@@ -16,7 +17,8 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
     resource: "slack-installation",
     scopeLabel: scope,
   });
-  const createUrl = slackBotManifestCreationUrl();
+  const branding = await resolveBranding(ctx.deps.config, scope, ctx.deps.brandingDefault);
+  const createUrl = slackBotManifestCreationUrl(branding.selfLabel);
   const stored = await ctx.deps.slackInstallation.status();
   if (stored.managed) return sendJson(ctx.res, 200, { ...stored, source: "admin", createUrl });
   if (ctx.deps.slackEnvironmentState === "configured") {

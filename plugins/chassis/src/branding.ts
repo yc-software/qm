@@ -59,7 +59,7 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
 const escapeAttr = (v: string): string =>
   v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-export function injectBranding(html: string, branding: OrgBranding): string {
+export function injectBranding(html: string, branding: OrgBranding, opts?: { titleSuffix?: string }): string {
   const { accent, mark, selfLabel } = branding;
   let out = html;
   if (selfLabel) {
@@ -67,6 +67,10 @@ export function injectBranding(html: string, branding: OrgBranding): string {
       /(<meta name="brand-self-label" content=")[^"]*(")/,
       (_m, pre: string, post: string) => `${pre}${escapeAttr(selfLabel)}${post}`,
     );
+    if (opts?.titleSuffix) {
+      const title = escapeAttr(`${selfLabel} ${opts.titleSuffix}`);
+      out = out.replace(/<title>[^<]*<\/title>/, () => `<title>${title}</title>`);
+    }
   }
   const decls = [...(accent ? [`--brand-accent:${accent}`] : []), ...(mark ? [`--brand-mark:"${mark}"`] : [])].join(
     ";",

@@ -28,6 +28,20 @@ test("web-ui serves at the root in both shapes — publicUrl IS the web-ui URL (
   assert.equal(orgEnv("admin", "acme", url, false).ADMIN_BASE_PATH, undefined);
 });
 
+test("brand env reaches core as ORG_BRAND_* and auth as AUTH_BRAND_NAME, and only when configured", () => {
+  const url = "https://acme-web-ui.fly.dev";
+  const brand = { botName: "straylight", orgName: "Acme Corp" };
+  const core = orgEnv("core", "acme", url, false, brand);
+  assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
+  assert.equal(core.ORG_BRAND_ORG_NAME, "Acme Corp");
+  assert.equal(orgEnv("auth", "acme", url, false, brand).AUTH_BRAND_NAME, "straylight");
+  const bare = orgEnv("core", "acme", url, false);
+  assert.equal(bare.ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(bare.ORG_BRAND_ORG_NAME, undefined);
+  assert.equal(orgEnv("auth", "acme", url, false).AUTH_BRAND_NAME, undefined);
+  assert.equal(orgEnv("web-ui", "acme", url, false, brand).ORG_BRAND_SELF_LABEL, undefined);
+});
+
 const imageFromStack = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "imagefrom-stack.json");
 
 test("an imageFrom stack reuses the reference images and overrides only its own keys", () => {
@@ -40,27 +54,42 @@ test("an imageFrom stack reuses the reference images and overrides only its own 
   assert.match(coreToml, /FLY_SANDBOX_APP_NAME = "beta-sandboxes"/);
 });
 
+const exampleFlyConfig = (): QmConfig => ({
+  contract: 1,
+  orgId: "example",
+  publicUrl: "https://example.invalid",
+  target: "fly",
+  model: "example-model",
+  appPrefix: "example-stack",
+  region: "ord",
+  flyOrg: "example-org",
+  sandbox: {
+    app: "example-sandboxes",
+    image: "registry.fly.io/example-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+  },
+  services: ["core", "admin", "web-ui", "portal"],
+  plugins: [],
+  skills: [],
+  env: {},
+  imageOverrides: {},
+});
+
+test("a configured bot identity lands in the derived fly toml for core and auth only", () => {
+  const config = { ...exampleFlyConfig(), botName: "straylight", orgName: "Straylight Industries" };
+  config.services = ["core", "admin", "web-ui", "portal", "auth"];
+  const core = derivedTomlFor(config, "core", repoRoot);
+  assert.match(core, /^\s*ORG_BRAND_SELF_LABEL = "straylight"$/m);
+  assert.match(core, /^\s*ORG_BRAND_ORG_NAME = "Straylight Industries"$/m);
+  const auth = derivedTomlFor(config, "auth", repoRoot);
+  assert.match(auth, /^\s*AUTH_BRAND_NAME = "straylight"$/m);
+  const webUi = derivedTomlFor(config, "web-ui", repoRoot);
+  assert.doesNotMatch(webUi, /ORG_BRAND_SELF_LABEL/);
+  const bare = derivedTomlFor(exampleFlyConfig(), "core", repoRoot);
+  assert.doesNotMatch(bare, /ORG_BRAND_SELF_LABEL/);
+});
+
 test("derived Fly configs contain only the deployment's region, org, sandbox, and portal policy", () => {
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "example",
-    publicUrl: "https://example.invalid",
-    target: "fly",
-    model: "example-model",
-    appPrefix: "example-stack",
-    region: "ord",
-    flyOrg: "example-org",
-    sandbox: {
-      app: "example-sandboxes",
-      image:
-        "registry.fly.io/example-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-    },
-    services: ["core", "admin", "web-ui", "portal"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  };
+  const config = exampleFlyConfig();
   const core = derivedTomlFor(config, "core", repoRoot);
   const portal = derivedTomlFor(config, "portal", repoRoot);
   const admin = derivedTomlFor(config, "admin", repoRoot);

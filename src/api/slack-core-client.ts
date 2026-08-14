@@ -1,4 +1,5 @@
 import { orgId as configOrgId } from "../config.ts";
+import { resolveBranding } from "../resolution/branding.ts";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { buffer } from "node:stream/consumers";
@@ -14,7 +15,7 @@ import type {
 import { scopeId } from "../types.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { ScopedConfigStore } from "../resolution/config-store.ts";
+import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -108,11 +109,7 @@ export interface SlackCoreClientDeps {
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
-  brandingDefault?: { selfLabel?: string };
-}
-
-function agentLabelFrom(raw: string | undefined): string | undefined {
-  return raw?.replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, "").slice(0, 40) || undefined;
+  brandingDefault?: OrgBranding;
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
@@ -133,10 +130,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async surfaceHeaderFacts(scope) {
       const [choice, branding] = await Promise.all([
         resolveRuntimeChoiceDurable(deps.config, orgScope, scope, deps.runtimeFallback),
-        deps.config.getBrandingDurable(orgScope),
+        resolveBranding(deps.config, orgScope, deps.brandingDefault),
       ]);
-      const agentLabel = agentLabelFrom(branding?.selfLabel ?? deps.brandingDefault?.selfLabel);
-      return { ...(agentLabel ? { agentLabel } : {}), modelName: modelDisplayName(choice.modelId) };
+      return {
+        ...(branding.selfLabel ? { agentLabel: branding.selfLabel } : {}),
+        modelName: modelDisplayName(choice.modelId),
+      };
     },
 
     async channelHeaderPinEnabled(scope) {

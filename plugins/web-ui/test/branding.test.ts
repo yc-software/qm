@@ -59,6 +59,18 @@ test("the vite template carries the self-label anchor the server injects into", 
   assert.match(template, /<meta name="brand-self-label" content="QM"\s*\/?>/);
 });
 
+test("injectBranding rewrites the tab title with the escaped label when a suffix is given", async () => {
+  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const shell =
+    '<!doctype html><html><head><title>QM · Web</title><meta name="brand-self-label" content="Agent" /></head><body></body></html>';
+  const branded = injectBranding(shell, { selfLabel: "straylight" }, { titleSuffix: "· Web" });
+  assert.match(branded, /<title>straylight · Web<\/title>/);
+  assert.match(injectBranding(shell, {}, { titleSuffix: "· Web" }), /<title>QM · Web<\/title>/);
+  const hostile = injectBranding(shell, { selfLabel: "x</title><script>alert(1)</script>" }, { titleSuffix: "· Web" });
+  assert.doesNotMatch(hostile, /<script>/i);
+  assert.match(hostile, /<title>x&lt;\/title&gt;/);
+});
+
 test("brandName() reads the injected self-label and falls back to the product name", async () => {
   const ui = await import("../src/ui.ts");
   const brandName = (ui as { brandName?: () => string }).brandName;

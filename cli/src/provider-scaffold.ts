@@ -41,6 +41,13 @@ function renderConfig(orgId: string, values: ConfigValues): string {
   // The one public address of the deployment; the service URLs derive from it.
   "publicUrl": ${JSON.stringify(values.publicUrl)},
 
+  // Optional bot identity. "botName" is what the bot is called everywhere users
+  // see it — the Slack app, the prompt identity, sign-in pages — and "orgName"
+  // is how the bot refers to your organization. Both default to neutral values
+  // ("qm" / "this organization") and can be changed live from the Admin page.
+  // "botName": "straylight",
+  // "orgName": "Acme Corp",
+
   // Where to deploy: "docker" runs local containers, "fly" deploys Fly apps,
   // and "aws" runs the control plane on ECS and agent computers on Lambda MicroVMs.
   "target": ${JSON.stringify(values.target)},

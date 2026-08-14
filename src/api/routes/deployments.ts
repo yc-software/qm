@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
+import { resolveBranding } from "../../resolution/branding.ts";
 import { canonicalPayload, escapeHtml, sendJson, verifyOrReject } from "../http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
@@ -773,7 +774,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     // frame's own load carries sec-fetch-dest: iframe, so it proxies straight through.
     const isTopDocument = String(req.headers["sec-fetch-dest"] ?? "") === "document";
     if (ctx.method === "GET" && isTopDocument && deps.deployAppsLoginUrl) {
-      const accent = deps.config ? (await deps.config.getBrandingDurable(orgScope(deps)))?.accent : undefined;
+      const accent = (await resolveBranding(deps.config, orgScope(deps), deps.brandingDefault)).accent;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       res.end(
         appShellHtml({

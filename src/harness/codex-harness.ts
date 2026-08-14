@@ -606,7 +606,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       ephemeral: true,
       baseInstructions: turn.systemPrompt,
       developerInstructions:
-        "Use the supplied dynamic QM tools for all workspace, execution, memory, history, and surface operations. The built-in working directory is an empty read-only control jail, not the user's workspace.",
+        "Use the supplied dynamic tools for all workspace, execution, memory, history, and surface operations. The built-in working directory is an empty read-only control jail, not the user's workspace.",
       dynamicTools,
       experimentalRawEvents: true,
       environments: [],

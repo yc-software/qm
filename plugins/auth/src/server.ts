@@ -19,6 +19,7 @@ export interface AuthDeps {
   signer: TokenSigner;
   claims: ClaimStore;
   mailer: Mailer;
+  brandName?: () => string;
   now?: () => number;
   onBackgroundTask?: (task: Promise<void>) => void;
 }
@@ -102,6 +103,7 @@ function readAuthorizeRequest(
 
 export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { cfg, signer, claims, mailer, signingKey } = deps;
+  const brandName = deps.brandName ?? ((): string => cfg.brandName);
   const now = deps.now ?? Date.now;
   const notify = deps.onBackgroundTask ?? ((task: Promise<void>) => void task.catch(() => undefined));
   const formAction = `${cfg.publicPath}/authorize`;
@@ -121,7 +123,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   };
 
   const problem = (res: ServerResponse, status: number, heading: string, msg: string, detail?: string): void =>
-    sendHtml(res, status, problemPage({ brandName: cfg.brandName, heading, msg, ...(detail ? { detail } : {}) }));
+    sendHtml(res, status, problemPage({ brandName: brandName(), heading, msg, ...(detail ? { detail } : {}) }));
 
   const signInUrl = ((): string | undefined => {
     try {
@@ -136,7 +138,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       res,
       400,
       problemPage({
-        brandName: cfg.brandName,
+        brandName: brandName(),
         heading: "This sign-in link no longer works",
         msg: "Sign-in links work once and expire quickly. Request a fresh one and open it right away.",
         ...(signInUrl ? { retryUrl: signInUrl } : {}),
@@ -157,7 +159,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     return sendHtml(
       res,
       200,
-      emailFormPage({ brandName: cfg.brandName, action: formAction, requestToken: sealed.token }),
+      emailFormPage({ brandName: brandName(), action: formAction, requestToken: sealed.token }),
     );
   }
 
@@ -181,7 +183,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     const link = `${cfg.issuer}/verify#token=${encodeURIComponent(sealed.token)}`;
     try {
       const receipt = await mailer.send(
-        renderSignInEmail({ to: email, brandName: cfg.brandName, link, ttlMinutes: linkTtlMinutes }),
+        renderSignInEmail({ to: email, brandName: brandName(), link, ttlMinutes: linkTtlMinutes }),
       );
       console.log(`[auth] sign-in link sent to ${email} (${receipt})`);
     } catch (e) {
@@ -215,7 +217,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         res,
         400,
         emailFormPage({
-          brandName: cfg.brandName,
+          brandName: brandName(),
           action: formAction,
           requestToken: sealed.token,
           problem: "That doesn't look like an email address.",
@@ -223,7 +225,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       );
     }
     const ip = clientIpOf(req);
-    sendHtml(res, 200, linkSentPage({ brandName: cfg.brandName, email, ttlMinutes: linkTtlMinutes }));
+    sendHtml(res, 200, linkSentPage({ brandName: brandName(), email, ttlMinutes: linkTtlMinutes }));
     background(() => sendLink(request, email, ip));
   }
 
@@ -231,7 +233,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     return sendHtml(
       res,
       200,
-      confirmSignInPage({ brandName: cfg.brandName, action: `${cfg.publicPath}/verify` }),
+      confirmSignInPage({ brandName: brandName(), action: `${cfg.publicPath}/verify` }),
       CONFIRM_PAGE_CSP,
     );
   }

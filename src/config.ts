@@ -8,6 +8,8 @@ import {
   type MemoryRecallMode,
 } from "./memory/policy.ts";
 import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
+import { sanitizeBranding } from "./resolution/branding.ts";
+import type { OrgBranding } from "./resolution/config-store.ts";
 import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import { parseSecurityPosture, type SecurityPosture } from "./security/security-posture.ts";
@@ -37,7 +39,7 @@ export interface Config {
   sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines";
   deployProvider: "docker" | "aws";
   egressServiceHosts?: string[];
-  brandingDefault?: { accent?: string; mark?: string; selfLabel?: string };
+  brandingDefault?: OrgBranding;
   modelId?: string;
   opencodeModel?: string;
   codexModel?: string;
@@ -487,17 +489,12 @@ function numEnvStrict(name: string, value: string | undefined): number | undefin
 }
 
 function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
-  const clean = (v: string | undefined): string =>
-    (v ?? "").replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029<>]/g, "").trim();
-  const accentRaw = clean(env.ORG_BRAND_ACCENT);
-  const accent = /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(accentRaw) ? accentRaw : undefined;
-  const mark =
-    clean(env.ORG_BRAND_MARK)
-      .replace(/["\\{}]/g, "")
-      .slice(0, 2) || undefined;
-  const selfLabel = clean(env.ORG_BRAND_SELF_LABEL).slice(0, 40) || undefined;
-  const branding = { ...(accent ? { accent } : {}), ...(mark ? { mark } : {}), ...(selfLabel ? { selfLabel } : {}) };
-  return Object.keys(branding).length ? branding : undefined;
+  return sanitizeBranding({
+    accent: env.ORG_BRAND_ACCENT,
+    mark: env.ORG_BRAND_MARK,
+    selfLabel: env.ORG_BRAND_SELF_LABEL,
+    orgName: env.ORG_BRAND_ORG_NAME,
+  });
 }
 
 function harnessEnvStrict(value: string | undefined): Config["harness"] {
