@@ -1520,12 +1520,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
           const desiredModelId = turn.model ?? resolveModelId(turn.scopeLabel);
           const wantFast = wantsFastMode(turn.fastMode, desiredModelId);
-          const current = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
+          const current = entry.agentSession.model as
+            { id?: string; provider?: string; headers?: Record<string, string> } | undefined;
           const currentFast = Boolean(current?.headers?.["anthropic-beta"]?.includes(FAST_MODE_BETA));
-          if (current?.id !== desiredModelId || currentFast !== wantFast) {
+          const desired = resolveModel(desiredModelId);
+          const sameModel =
+            Boolean(desired) &&
+            current?.id === desired?.id &&
+            String(current?.provider ?? "") === String(desired?.provider ?? "");
+          if (!sameModel || currentFast !== wantFast) {
             try {
-              const base = resolveModel(desiredModelId);
-              if (base) await entry.agentSession.setModel(wantFast ? withFastModeHeaders(base) : base);
+              if (desired) await entry.agentSession.setModel(wantFast ? withFastModeHeaders(desired) : desired);
             } catch (e) {
               swallow("pi: model switch", e);
             }

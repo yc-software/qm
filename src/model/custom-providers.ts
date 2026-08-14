@@ -116,17 +116,24 @@ let registry = new Map<string, CustomRuntimeModel>();
 let providers: CustomProviderSpec[] = [];
 let version = 0;
 
+export function customModelSelectionId(providerId: string, wireId: string): string {
+  return `${providerId}/${wireId}`;
+}
+
 /**
  * Called by wiring at boot and again after every admin write, with the
- * full current set of enabled providers. Last write wins; built-in model
- * ids shadow custom ones at resolution, so a collision can't hijack a
- * built-in.
+ * full current set of enabled providers. Each model is keyed by its wire
+ * id and by provider/wireId. Built-in ids still win on the bare wire id
+ * so a collision cannot hijack a built-in; the namespaced key selects
+ * the custom model.
  */
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
   const next = new Map<string, CustomRuntimeModel>();
   for (const spec of specs) {
     for (const m of spec.models) {
-      next.set(m.id, toRuntimeModel(spec, m));
+      const runtime = toRuntimeModel(spec, m);
+      next.set(m.id, runtime);
+      next.set(customModelSelectionId(spec.id, m.id), runtime);
     }
   }
   registry = next;
@@ -148,7 +155,13 @@ export function isCustomModelId(id: string): boolean {
 }
 
 export function customModelCatalog(): Array<{ id: string; name: string; provider: string }> {
-  return [...registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
+  return providers.flatMap((spec) =>
+    spec.models.map((m) => ({
+      id: m.id,
+      name: m.name?.trim() || m.id,
+      provider: spec.id,
+    })),
+  );
 }
 
 /**
