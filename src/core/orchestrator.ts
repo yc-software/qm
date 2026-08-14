@@ -29,7 +29,11 @@ import { createBackgroundBroker } from "../connectors/background-exec-broker.ts"
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
 import { envKey } from "../credentials/connector-token.ts";
-import { renderKeychainManifest, type MaterializedEnvCred } from "../credentials/keychain.ts";
+import {
+  renderKeychainManifest,
+  type MaterializedEnvCred,
+  type PublicServiceCredential,
+} from "../credentials/keychain.ts";
 import { captureDeviceFlowLogins, deviceFlowCredOwner } from "../credentials/device-flow-persist.ts";
 import type { DeviceFlowCutoverMode } from "../credentials/device-flow-cutover.ts";
 import { type ResidentAuthConnector, RESIDENT_AUTH_CONNECTORS, mergeConnectors } from "../credentials/resident-auth.ts";
@@ -1037,28 +1041,37 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const authoredDetection =
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
       const liveAuthorTurn = (humanTurn || authoredDetection) && allInternal;
+      // Service credentials: one read of the org's credential list and one grant scan feed both
+      // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
+      let serviceCredRecords: PublicServiceCredential[] = [];
+      let grantedCredSlugs = new Set<string>();
+      if (!strictReadOnly && deps.serviceCreds) {
+        serviceCredRecords = await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId);
+        if (serviceCredRecords.length > 0) {
+          grantedCredSlugs = new Set(
+            (
+              await deps.acl.grantsOfKind(
+                "service-cred",
+                conversation.audience,
+                scopeId,
+                resolution.orgScopeId,
+                principalEntitledToScope,
+              )
+            ).map((g) => parseRef(g.ref).id),
+          );
+        }
+      }
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
         const orgScope = toScopeId("org", orgId());
         // Env delivery is gated by the same service-cred grants as the broker: the env var rides
         // only when every internal participant in this conversation is entitled to the credential.
-        const envGrantedSlugs = new Set(
-          (
-            await deps.acl.grantsOfKind(
-              "service-cred",
-              conversation.audience,
-              scopeId,
-              resolution.orgScopeId,
-              principalEntitledToScope,
-            )
-          ).map((g) => parseRef(g.ref).id),
-        );
-        for (const cred of await deps.serviceCreds.listServiceCredentials(orgScope)) {
+        for (const cred of serviceCredRecords) {
           if (
             cred.delivery !== "env" ||
             !cred.envKey ||
             !cred.enabled ||
             !cred.hasSecret ||
-            !envGrantedSlugs.has(cred.slug) ||
+            !grantedCredSlugs.has(cred.slug) ||
             cred.envKey in connectorEnv
           )
             continue;
@@ -1142,19 +1155,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilitySecret ?? deps.signingSecret,
         );
         if (deps.serviceCreds) {
-          const records = await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId);
+          const records = serviceCredRecords;
           const enabled = new Set(
             records.filter((r) => r.enabled && r.hasSecret && r.delivery !== "env").map((r) => r.slug),
           );
           if (enabled.size > 0) {
-            const grants = await deps.acl.grantsOfKind(
-              "service-cred",
-              conversation.audience,
-              scopeId,
-              resolution.orgScopeId,
-              principalEntitledToScope,
-            );
-            const slugs = [...new Set(grants.map((g) => parseRef(g.ref).id))].filter((s) => enabled.has(s));
+            const slugs = [...grantedCredSlugs].filter((s) => enabled.has(s));
             if (slugs.length > 0) {
               connectorEnv.AGENT_CREDENTIAL_TOKEN = await mintCapabilityToken(
                 {
