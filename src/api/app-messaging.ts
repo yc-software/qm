@@ -339,8 +339,8 @@ export function createMessagingMethods(
         });
       }
     },
-    async upsertChannels(channels, channelMembers, syncedAt) {
-      await deps.directory.replaceChannels(channels, channelMembers, syncedAt);
+    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds) {
+      await deps.directory.replaceChannels(channels, channelMembers, syncedAt, channelRosterIds);
       await h.syncLinkedProjectRosters();
     },
     async upsertGroups(groupMembers, syncedAt) {

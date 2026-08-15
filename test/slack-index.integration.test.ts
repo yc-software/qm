@@ -452,6 +452,61 @@ test("public channel rosters stay current in the core directory", async () => {
   }
 });
 
+test("large public channels publish their complete roster and accept internal turns", async () => {
+  const f = await fixture();
+  try {
+    const members = Array.from({ length: 201 }, (_, i) => `UL${i}`);
+    for (const id of members) f.client.usersById.set(id, internalUser(id, id));
+    f.client.membersByChannel.set("C1", [...members, "UBOT"]);
+    const pushes = f.core.directories.length;
+    await f.app.emitEvent("member_joined_channel", { user: members[0], channel: "C1", event_ts: "100.3" });
+    await waitFor(() => f.core.directories.length > pushes);
+    assert.equal(
+      f.core.directories.at(-1).channelMembers.filter((m: any) => m.channelId === "C1").length,
+      members.length,
+    );
+
+    await f.app.emitEvent("app_mention", {
+      channel: "C1",
+      channel_type: "channel",
+      user: members[0],
+      text: "<@UBOT> hello",
+      ts: "100.4",
+    });
+    assert.equal(f.core.turns.length, 1);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("failed roster reads are marked unknown instead of clearing known members", async () => {
+  const f = await fixture();
+  try {
+    assert.ok(f.core.directories.at(-1).channelRosterIds.includes("C1"));
+    f.client.membershipFailures.add("C1");
+    const pushes = f.core.directories.length;
+    await f.app.emitEvent("member_left_channel", { user: "U2", channel: "C1", event_ts: "100.5" });
+    await waitFor(() => f.core.directories.length > pushes);
+    assert.ok(!f.core.directories.at(-1).channelRosterIds.includes("C1"));
+  } finally {
+    await f.stop();
+  }
+});
+
+test("Slack Connect directory rosters contain only internal humans", async () => {
+  const f = await fixture({ externalParticipants: true });
+  try {
+    const pushed = f.core.directories.at(-1);
+    assert.ok(pushed.channelRosterIds.includes("CX"));
+    assert.deepEqual(
+      pushed.channelMembers.filter((m: any) => m.channelId === "CX").map((m: any) => m.principalId),
+      ["U1"],
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a human's DM sets the conversation header to the serving model + web surface", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {

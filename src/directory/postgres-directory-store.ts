@@ -42,6 +42,7 @@ const SCHEMA = [
     name       TEXT NOT NULL,
     name_lc    TEXT NOT NULL,
     is_private BOOLEAN NOT NULL DEFAULT FALSE,
+    roster_known BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (org_id, channel_id)
   )`,
   `CREATE INDEX IF NOT EXISTS directory_channels_name
@@ -88,6 +89,17 @@ const SCHEMA = [
   `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS members_synced_at BIGINT`,
   `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS channels_synced_at BIGINT`,
   `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS groups_synced_at BIGINT`,
+  `DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'directory_channels' AND column_name = 'roster_known'
+    ) THEN
+      ALTER TABLE directory_channels ADD COLUMN roster_known BOOLEAN NOT NULL DEFAULT FALSE;
+      UPDATE directory_channels c SET roster_known = TRUE
+      FROM directory_sync s WHERE c.org_id = s.org_id AND s.channel_members_synced = TRUE;
+    END IF;
+  END $$`,
   `CREATE TABLE IF NOT EXISTS directory_meta(
     org_id        TEXT PRIMARY KEY,
     workspace_url TEXT,
@@ -249,36 +261,64 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       });
     },
 
-    async replaceChannels(channels, channelMembers, syncedAt) {
+    async replaceChannels(channels, channelMembers, syncedAt, channelRosterIds) {
       const byId = new Map<string, DirectoryChannel>();
       for (const c of channels) if (c.channelId && c.name) byId.set(c.channelId, c);
       const list = [...byId.values()];
+      const listedIds = new Set(list.map((channel) => channel.channelId));
 
-      const membershipRows = channelMembers === undefined ? undefined : dedupMemberships(channelMembers);
+      const rosterIds =
+        channelMembers === undefined
+          ? undefined
+          : new Set((channelRosterIds ?? [...listedIds]).filter((channelId) => listedIds.has(channelId)));
+      const membershipRows =
+        channelMembers === undefined
+          ? undefined
+          : dedupMemberships(channelMembers).filter((member) => rosterIds!.has(member.channelId));
       const channelsPart = list.map((c) => `${c.channelId}|${c.name}|${c.isPrivate ? 1 : 0}`);
       const membersPart =
         membershipRows === undefined
           ? []
-          : ["members:known", ...membershipRows.map((m) => `m:${m.channelId}|${m.principalId}`)];
+          : [
+              ...[...rosterIds!].map((channelId) => `r:${channelId}`),
+              ...membershipRows.map((m) => `m:${m.channelId}|${m.principalId}`),
+            ];
       const hash = hashRoster([...channelsPart, ...membersPart]);
 
       const applied = await swapIfChanged("channels_hash", hash, syncedAt, async (client) => {
-        await client.query("DELETE FROM directory_channels WHERE org_id = $1", [orgId]);
+        const channelIds = [...listedIds];
+        await client.query("DELETE FROM directory_channels WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))", [
+          orgId,
+          channelIds,
+        ]);
+        await client.query(
+          "DELETE FROM directory_channel_members WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
+          [orgId, channelIds],
+        );
         if (list.length) {
           await client.query(
-            `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[])`,
+            `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, roster_known)
+             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[])
+             ON CONFLICT (org_id, channel_id) DO UPDATE SET
+               name = EXCLUDED.name,
+               name_lc = EXCLUDED.name_lc,
+               is_private = EXCLUDED.is_private,
+               roster_known = directory_channels.roster_known OR EXCLUDED.roster_known`,
             [
               orgId,
-              list.map((c) => c.channelId),
+              channelIds,
               list.map((c) => c.name),
               list.map((c) => normDirectoryQuery(c.name)),
               list.map((c) => !!c.isPrivate),
+              list.map((c) => rosterIds?.has(c.channelId) ?? false),
             ],
           );
         }
         if (membershipRows !== undefined) {
-          await client.query("DELETE FROM directory_channel_members WHERE org_id = $1", [orgId]);
+          await client.query(
+            "DELETE FROM directory_channel_members WHERE org_id = $1 AND channel_id = ANY($2::text[])",
+            [orgId, [...rosterIds!]],
+          );
           if (membershipRows.length) {
             await client.query(
               `INSERT INTO directory_channel_members (org_id, channel_id, principal_id)
@@ -316,8 +356,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     },
 
     async channelMemberIds(channelId) {
-      const synced = await q("SELECT channel_members_synced FROM directory_sync WHERE org_id = $1", [orgId]);
-      if (synced[0]?.channel_members_synced !== true) return undefined;
+      const known = await q("SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2", [
+        orgId,
+        channelId,
+      ]);
+      if (known[0]?.roster_known !== true) return undefined;
       const rows = await q(
         "SELECT principal_id FROM directory_channel_members WHERE org_id = $1 AND channel_id = $2 ORDER BY principal_id",
         [orgId, channelId],
@@ -332,11 +375,12 @@ export function createPostgresDirectoryStore(connectionString: string): Director
            WHERE org_id = $1 AND channel_id = $2 AND principal_id = $3
          ) AS member,
          (SELECT is_private FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS is_private,
-         (SELECT channel_members_synced FROM directory_sync WHERE org_id = $1) AS synced`,
+         (SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS roster_known`,
         [orgId, channelId, principalId],
       );
       const member = rows[0]?.member === true;
-      return member || (rows[0]?.is_private === true && rows[0]?.synced === true) ? member : undefined;
+      if (rows[0]?.roster_known !== true) return undefined;
+      return member || rows[0]?.is_private === true ? member : undefined;
     },
 
     async channelPrivacy(channelId) {

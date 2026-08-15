@@ -27,6 +27,7 @@ export {
   computeChannelAudience,
   computePublishMembers,
   allInternalChannelMembers,
+  internalChannelMembers,
   resolveChannelMembership,
 } from "./identity.ts";
 export {

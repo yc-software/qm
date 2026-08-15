@@ -32,6 +32,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     members?: unknown;
     channels?: unknown;
     channelMembers?: unknown;
+    channelRosterIds?: unknown;
     groupMembers?: unknown;
     workspaceUrl?: unknown;
     membersSyncedAt?: unknown;
@@ -78,7 +79,10 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
             isObj(m) && typeof m.channelId === "string" && typeof m.principalId === "string",
         )
       : undefined;
-    await app.upsertChannels(channels, channelMembers, numOrUndef(b.channelsSyncedAt));
+    const channelRosterIds = Array.isArray(b.channelRosterIds)
+      ? b.channelRosterIds.filter((channelId): channelId is string => typeof channelId === "string")
+      : undefined;
+    await app.upsertChannels(channels, channelMembers, numOrUndef(b.channelsSyncedAt), channelRosterIds);
     channelCount = channels.length;
   }
   let groupMemberCount: number | undefined;

@@ -236,4 +236,22 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     assert.equal(await d.channelMembership("C-public", "U-alice"), undefined);
     assert.equal(await d.channelMembership("C-sec", "U-alice"), false);
   });
+
+  it("partially replaces only the channel rosters known by the source", async () => {
+    const d = createDirectoryStore();
+    const channels = [
+      { channelId: "C-one", name: "one", isPrivate: true },
+      { channelId: "C-two", name: "two", isPrivate: true },
+      { channelId: "C-new", name: "new", isPrivate: true },
+    ];
+    await d.replaceChannels(channels.slice(0, 2), [
+      { channelId: "C-one", principalId: "U-old-one" },
+      { channelId: "C-two", principalId: "U-old-two" },
+    ]);
+    await d.replaceChannels(channels, [{ channelId: "C-two", principalId: "U-new-two" }], undefined, ["C-two"]);
+    assert.equal(await d.channelMembership("C-one", "U-old-one"), true);
+    assert.equal(await d.channelMembership("C-two", "U-old-two"), false);
+    assert.equal(await d.channelMembership("C-two", "U-new-two"), true);
+    assert.equal(await d.channelMembership("C-new", "U-new"), undefined);
+  });
 });

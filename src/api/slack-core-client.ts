@@ -47,6 +47,7 @@ interface DirectoryPush {
   members?: Array<{ principalId: string; displayName: string; type: "internal"; slackId?: string }>;
   channels?: Array<{ channelId: string; name: string; isPrivate?: boolean }>;
   channelMembers?: Array<{ channelId: string; principalId: string }>;
+  channelRosterIds?: string[];
   groupMembers?: Array<{ groupId: string; principalId: string }>;
   workspaceUrl?: string;
   membersSyncedAt?: number;
@@ -302,7 +303,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async pushDirectory(body) {
       if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(body.workspaceUrl);
       if (body.members) await deps.app.upsertDirectory(body.members, body.membersSyncedAt);
-      if (body.channels) await deps.app.upsertChannels(body.channels, body.channelMembers, body.channelsSyncedAt);
+      if (body.channels)
+        await deps.app.upsertChannels(body.channels, body.channelMembers, body.channelsSyncedAt, body.channelRosterIds);
       if (body.groupMembers) await deps.app.upsertGroups(body.groupMembers, body.groupsSyncedAt);
     },
 

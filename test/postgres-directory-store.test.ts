@@ -365,6 +365,24 @@ test("pg directory: a swap stamped older than the stored snapshot is refused", {
   assert.equal((await store.listChannels()).length, 0);
 });
 
+test("pg directory: a partial roster swap preserves channels whose roster is unknown", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  const channels = [
+    { channelId: "C-one", name: "one", isPrivate: true },
+    { channelId: "C-two", name: "two", isPrivate: true },
+    { channelId: "C-new", name: "new", isPrivate: true },
+  ];
+  await store.replaceChannels(channels.slice(0, 2), [
+    { channelId: "C-one", principalId: "U-old-one" },
+    { channelId: "C-two", principalId: "U-old-two" },
+  ]);
+  await store.replaceChannels(channels, [{ channelId: "C-two", principalId: "U-new-two" }], undefined, ["C-two"]);
+  assert.equal(await store.channelMembership("C-one", "U-old-one"), true);
+  assert.equal(await store.channelMembership("C-two", "U-old-two"), false);
+  assert.equal(await store.channelMembership("C-two", "U-new-two"), true);
+  assert.equal(await store.channelMembership("C-new", "U-new"), undefined);
+});
+
 test(
   "pg directory: an identical push still advances the stamp, so ordering survives content-idempotent pushes",
   { skip },
