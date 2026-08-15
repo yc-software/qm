@@ -1,14 +1,3 @@
-// Generic Model Context Protocol (MCP) client — HTTP transport only.
-//
-// Speaks JSON-RPC 2.0 over a single POST endpoint, accepting both plain JSON
-// and SSE-framed responses (the two response shapes the spec's streamable
-// HTTP transport allows). Supports three auth modes: none, static bearer
-// token, and OAuth2 client-credentials minted against `<base>/token`.
-//
-// This is the transport layer only: no registry, no tool injection, no
-// policy. See mcp-tool-service.ts for the layer that turns registered
-// servers into agent tools.
-
 const TOKEN_SKEW_MS = 60_000;
 const MCP_ACCEPT = "application/json, text/event-stream";
 
@@ -131,6 +120,7 @@ export function createMcpClient(opts: {
   const host = hostOf(base);
   let cached: CachedToken | null = null;
   let rpcId = 0;
+  let session: Promise<string | null> | null = null;
 
   async function mintToken(clientId: string, clientSecret: string): Promise<string> {
     if (cached && now() < cached.expiresAt - TOKEN_SKEW_MS) return cached.accessToken;
@@ -159,18 +149,66 @@ export function createMcpClient(opts: {
     return { authorization: `Bearer ${await mintToken(auth.clientId, auth.clientSecret)}` };
   }
 
-  async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
-    const id = ++rpcId;
-    const res = await fetchImpl(`${base}/mcp`, {
+  async function post(payload: Record<string, unknown>, active: string | null): Promise<McpHttpResponse> {
+    return fetchImpl(`${base}/mcp`, {
       method: "POST",
       headers: {
         ...(await authHeaders()),
         "content-type": "application/json",
         accept: MCP_ACCEPT,
+        ...(active ? { "mcp-session-id": active } : {}),
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(`mcp ${method} failed (HTTP ${res.status})`);
+  }
+
+  async function negotiate(): Promise<string | null> {
+    const id = ++rpcId;
+    const res = await post(
+      {
+        jsonrpc: "2.0",
+        id,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "qm-mcp-client", version: "1.0" },
+        },
+      },
+      null,
+    );
+    if (res.status === 401 || res.status === 403) throw new Error(`mcp initialize failed (HTTP ${res.status})`);
+    if (!res.ok) return null;
+    const parsed = parseMcpEnvelope(await res.text(), res.headers?.get("content-type"), id);
+    if (!parsed || parsed.error) return null;
+    const negotiated = res.headers?.get("mcp-session-id") ?? null;
+    if (!negotiated) return null;
+    const ack = await post({ jsonrpc: "2.0", method: "notifications/initialized" }, negotiated);
+    await ack.text();
+    if (!ack.ok) throw new Error(`mcp notifications/initialized failed (HTTP ${ack.status})`);
+    return negotiated;
+  }
+
+  function sessionOnce(): Promise<string | null> {
+    session ??= negotiate().catch((e: unknown) => {
+      session = null;
+      throw e;
+    });
+    return session;
+  }
+
+  async function rpc(method: string, params: Record<string, unknown>, retried = false): Promise<unknown> {
+    const pending = sessionOnce();
+    const active = await pending;
+    const id = ++rpcId;
+    const res = await post({ jsonrpc: "2.0", id, method, params }, active);
+    if (!res.ok) {
+      if (res.status === 404 && active && !retried) {
+        if (session === pending) session = null;
+        return rpc(method, params, true);
+      }
+      throw new Error(`mcp ${method} failed (HTTP ${res.status})`);
+    }
     const parsed = parseMcpEnvelope(await res.text(), res.headers?.get("content-type"), id);
     if (!parsed) throw new Error(`mcp ${method} returned non-JSON`);
     if (parsed.error) throw new Error(`mcp ${method} error: ${parsed.error.message ?? "unknown"}`);
