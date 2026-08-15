@@ -10,7 +10,7 @@ before(async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query(
-    "DROP TABLE IF EXISTS directory_members, directory_channels, directory_channel_members, directory_group_members, directory_sync, directory_meta CASCADE",
+    "DROP TABLE IF EXISTS directory_members, directory_channels, directory_channel_members, directory_capability_channels, directory_capability_channel_members, directory_capability_channel_revocations, directory_groups, directory_group_members, directory_sync, directory_meta CASCADE",
   );
   await p.end();
 });
@@ -381,6 +381,74 @@ test("pg directory: a partial roster swap preserves channels whose roster is unk
   assert.equal(await store.channelMembership("C-two", "U-old-two"), false);
   assert.equal(await store.channelMembership("C-two", "U-new-two"), true);
   assert.equal(await store.channelMembership("C-new", "U-new"), undefined);
+});
+
+test("pg directory: capability rosters survive legacy channel-directory swaps", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replaceCapabilityChannels(
+    ["C-one", "C-two", "C-new"],
+    [
+      { channelId: "C-one", principalId: "U-old-one" },
+      { channelId: "C-one", principalId: "U-keep" },
+      { channelId: "C-two", principalId: "U-old-two" },
+    ],
+    ["C-one", "C-two"],
+  );
+  await store.replaceCapabilityChannels(
+    ["C-one", "C-two", "C-new"],
+    [{ channelId: "C-two", principalId: "U-new-two" }],
+    ["C-two"],
+  );
+  await store.replaceChannels(
+    [
+      { channelId: "C-one", name: "one" },
+      { channelId: "C-two", name: "two" },
+      { channelId: "C-new", name: "new" },
+    ],
+    [],
+  );
+  assert.equal(await store.channelCapabilityMembership("C-one", "U-old-one"), true);
+  assert.equal(await store.channelCapabilityMembership("C-two", "U-old-two"), false);
+  assert.equal(await store.channelCapabilityMembership("C-two", "U-new-two"), true);
+  assert.equal(await store.channelCapabilityMembership("C-new", "U-new"), undefined);
+  await store.replaceCapabilityChannels(["C-one", "C-two", "C-new"], [], [], undefined, [
+    { channelId: "C-one", principalId: "U-old-one" },
+  ]);
+  assert.equal(await store.channelCapabilityMembership("C-one", "U-old-one"), false);
+  assert.equal(await store.channelCapabilityMembership("C-one", "U-keep"), true);
+  await store.replaceCapabilityChannels(["C-one", "C-two", "C-new"], [], [], undefined, [
+    { channelId: "C-new", principalId: "U-new" },
+  ]);
+  assert.equal(await store.channelCapabilityMembership("C-new", "U-new"), false);
+  await store.replaceCapabilityChannels(
+    ["C-one", "C-two", "C-new"],
+    [{ channelId: "C-new", principalId: "U-new" }],
+    ["C-new"],
+  );
+  assert.equal(await store.channelCapabilityMembership("C-new", "U-new"), true);
+});
+
+test("pg directory: a partial group swap preserves unknown rosters", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replaceGroups(
+    [
+      { groupId: "G-one", principalId: "U-old-one" },
+      { groupId: "G-two", principalId: "U-old-two" },
+    ],
+    undefined,
+    ["G-one", "G-two"],
+    ["G-one", "G-two"],
+  );
+  await store.replaceGroups(
+    [{ groupId: "G-two", principalId: "U-new-two" }],
+    undefined,
+    ["G-one", "G-two", "G-new"],
+    ["G-two"],
+  );
+  assert.equal(await store.groupMembership("G-one", "U-old-one"), true);
+  assert.equal(await store.groupMembership("G-two", "U-old-two"), false);
+  assert.equal(await store.groupMembership("G-two", "U-new-two"), true);
+  assert.equal(await store.groupMembership("G-new", "U-new"), undefined);
 });
 
 test(

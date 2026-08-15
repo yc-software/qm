@@ -346,8 +346,16 @@ async function fixture(options: { externalParticipants?: boolean; webUiPublicUrl
     is_private: false,
     is_ext_shared: true,
   });
+  app.client.channelsById.set("CPX", {
+    id: "CPX",
+    name: "private-shared",
+    is_member: true,
+    is_private: true,
+    is_ext_shared: true,
+  });
   app.client.membersByChannel.set("C1", ["U1", "U2", "UBOT"]);
   app.client.membersByChannel.set("CX", ["U1", "UX", "UBOT"]);
+  app.client.membersByChannel.set("CPX", ["U1", "UX", "UBOT"]);
   const plugin = await started;
   await new Promise((resolve) => setImmediate(resolve));
   return { app, client: app.client, core, stop: () => plugin.stop() };
@@ -479,15 +487,30 @@ test("large public channels publish their complete roster and accept internal tu
   }
 });
 
-test("failed roster reads are marked unknown instead of clearing known members", async () => {
+test("failed background roster reads are marked unknown instead of clearing known capabilities", async () => {
   const f = await fixture();
   try {
-    assert.ok(f.core.directories.at(-1).channelRosterIds.includes("C1"));
+    assert.ok(f.core.directories.at(-1).capabilityChannelRosterIds.includes("C1"));
     f.client.membershipFailures.add("C1");
     const pushes = f.core.directories.length;
-    await f.app.emitEvent("member_left_channel", { user: "U2", channel: "C1", event_ts: "100.5" });
+    await f.app.emitEvent("channel_rename", { channel: { id: "C1" }, event_ts: "100.5" });
     await waitFor(() => f.core.directories.length > pushes);
-    assert.ok(!f.core.directories.at(-1).channelRosterIds.includes("C1"));
+    assert.ok(!f.core.directories.at(-1).capabilityChannelRosterIds.includes("C1"));
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a failed refresh after a leave event revokes only the departing member", async () => {
+  const f = await fixture();
+  try {
+    f.client.membershipFailures.add("C1");
+    const pushes = f.core.directories.length;
+    await f.app.emitEvent("member_left_channel", { user: "U2", channel: "C1", event_ts: "100.6" });
+    await waitFor(() => f.core.directories.length > pushes);
+    const pushed = f.core.directories.at(-1);
+    assert.ok(!pushed.capabilityChannelRosterIds.includes("C1"));
+    assert.deepEqual(pushed.capabilityChannelRevocations, [{ channelId: "C1", principalId: "U2" }]);
   } finally {
     await f.stop();
   }
@@ -497,11 +520,17 @@ test("Slack Connect directory rosters contain only internal humans", async () =>
   const f = await fixture({ externalParticipants: true });
   try {
     const pushed = f.core.directories.at(-1);
-    assert.ok(pushed.channelRosterIds.includes("CX"));
+    assert.ok(pushed.capabilityChannelRosterIds.includes("CX"));
+    assert.ok(pushed.capabilityChannelRosterIds.includes("CPX"));
     assert.deepEqual(
-      pushed.channelMembers.filter((m: any) => m.channelId === "CX").map((m: any) => m.principalId),
+      pushed.capabilityChannelMembers.filter((m: any) => m.channelId === "CX").map((m: any) => m.principalId),
       ["U1"],
     );
+    assert.deepEqual(
+      pushed.capabilityChannelMembers.filter((m: any) => m.channelId === "CPX").map((m: any) => m.principalId),
+      ["U1"],
+    );
+    assert.ok(!pushed.channelRosterIds.includes("CPX"));
   } finally {
     await f.stop();
   }
@@ -936,6 +965,47 @@ test("a failed group listing pushes its fallback rows under the OLD stamp, never
       undefined,
       "a failed group listing must omit the groups section, never ship rows under a fresh stamp",
     );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a failed group member read marks only that roster unknown", async () => {
+  const f = await fixture();
+  try {
+    f.client.channelsById.set("G5", { id: "G5", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.membersByChannel.set("G5", ["U1", "U2", "UBOT"]);
+    await f.app.emitMessage({ channel: "G5", channel_type: "mpim", user: "U1", text: "hi", ts: "403.1" });
+    await waitFor(() =>
+      f.core.directories.some((d: any) => (d.groupMembers ?? []).some((g: any) => g.groupId === "G5")),
+    );
+    const good = f.core.directories.findLast((d: any) => d.groupsSyncedAt !== undefined);
+    f.client.membershipFailures.add("G5");
+    const pushes = f.core.directories.length;
+    await f.app.emitEvent("channel_rename", { channel: { id: "C1" }, event_ts: "403.2" });
+    await waitFor(() => f.core.directories.length > pushes);
+    const last = f.core.directories.at(-1);
+    assert.ok(last.groupsSyncedAt > good.groupsSyncedAt);
+    assert.ok(last.groupIds.includes("G5"));
+    assert.ok(!last.groupRosterIds.includes("G5"));
+    assert.equal(last.groupMembers.filter((member: any) => member.groupId === "G5").length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("all listed group DMs reach the directory past the legacy private-channel cap", async () => {
+  const f = await fixture();
+  try {
+    for (let i = 0; i < 51; i++) {
+      const id = `G${i}`;
+      f.client.channelsById.set(id, { id, name: "", is_member: true, is_private: true, is_mpim: true });
+      f.client.membersByChannel.set(id, ["U1", "U2", "UBOT"]);
+    }
+    const pushes = f.core.directories.length;
+    await f.app.emitEvent("channel_rename", { channel: { id: "C1" }, event_ts: "403.3" });
+    await waitFor(() => f.core.directories.length > pushes);
+    assert.equal(new Set(f.core.directories.at(-1).groupMembers.map((member: any) => member.groupId)).size, 51);
   } finally {
     await f.stop();
   }

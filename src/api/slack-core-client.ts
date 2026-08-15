@@ -48,7 +48,12 @@ interface DirectoryPush {
   channels?: Array<{ channelId: string; name: string; isPrivate?: boolean }>;
   channelMembers?: Array<{ channelId: string; principalId: string }>;
   channelRosterIds?: string[];
+  capabilityChannelMembers?: Array<{ channelId: string; principalId: string }>;
+  capabilityChannelRosterIds?: string[];
+  capabilityChannelRevocations?: Array<{ channelId: string; principalId: string }>;
   groupMembers?: Array<{ groupId: string; principalId: string }>;
+  groupIds?: string[];
+  groupRosterIds?: string[];
   workspaceUrl?: string;
   membersSyncedAt?: number;
   channelsSyncedAt?: number;
@@ -305,7 +310,16 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       if (body.members) await deps.app.upsertDirectory(body.members, body.membersSyncedAt);
       if (body.channels)
         await deps.app.upsertChannels(body.channels, body.channelMembers, body.channelsSyncedAt, body.channelRosterIds);
-      if (body.groupMembers) await deps.app.upsertGroups(body.groupMembers, body.groupsSyncedAt);
+      if (body.channels && body.capabilityChannelMembers && body.capabilityChannelRosterIds)
+        await deps.app.upsertCapabilityChannels(
+          body.channels.map((channel) => channel.channelId),
+          body.capabilityChannelMembers,
+          body.capabilityChannelRosterIds,
+          body.channelsSyncedAt,
+          body.capabilityChannelRevocations,
+        );
+      if (body.groupMembers)
+        await deps.app.upsertGroups(body.groupMembers, body.groupsSyncedAt, body.groupIds, body.groupRosterIds);
     },
 
     claimDeliveries(type, claimMs) {

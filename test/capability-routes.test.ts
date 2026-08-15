@@ -68,6 +68,11 @@ describe("capability-token control plane (crons + SOUL)", () => {
       [{ channelId: "C", name: "eng", isPrivate: false }],
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
     );
+    await built.directory.replaceCapabilityChannels(
+      ["C"],
+      ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
+      ["C"],
+    );
     server = createServer(built.app, {
       signingSecret: SECRET,
       scheduler: built.scheduler,
@@ -740,5 +745,14 @@ describe("capability-token control plane (crons + SOUL)", () => {
       dmList.visible.some((c: any) => c.id === id),
       "surfaced read-only in visible",
     );
+  });
+
+  it("a dedicated capability roster revokes a member even when a legacy channel roster still contains them", async () => {
+    await built.directory.replaceCapabilityChannels(
+      ["C"],
+      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
+      ["C"],
+    );
+    assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 403);
   });
 });

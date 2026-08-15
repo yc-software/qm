@@ -57,7 +57,20 @@ export interface DirectoryStore {
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
   channelMemberIds(channelId: string): Promise<string[] | undefined>;
   channelPrivacy(channelId: string): Promise<boolean | undefined>;
-  replaceGroups(groupMembers: GroupMembership[], syncedAt?: number): Promise<boolean>;
+  replaceGroups(
+    groupMembers: GroupMembership[],
+    syncedAt?: number,
+    groupIds?: string[],
+    groupRosterIds?: string[],
+  ): Promise<boolean>;
+  replaceCapabilityChannels(
+    channelIds: string[],
+    channelMembers: ChannelMembership[],
+    channelRosterIds: string[],
+    syncedAt?: number,
+    revocations?: ChannelMembership[],
+  ): Promise<boolean>;
+  channelCapabilityMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
   upsertGroup(groupId: string, principalIds: readonly string[]): Promise<void>;
   resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
   groupMember(groupId: string, principalId: string): Promise<boolean>;
@@ -96,7 +109,12 @@ export function createDirectoryStore(): DirectoryStore {
   let channels: DirectoryChannel[] = [];
   let channelMembers: Map<string, Set<string>> | undefined;
   let knownChannelRosters: Set<string> | undefined;
+  let capabilityChannelMembers: Map<string, Set<string>> | undefined;
+  let knownCapabilityChannelRosters: Set<string> | undefined;
+  let capabilityChannelRevocations = new Map<string, Set<string>>();
   let groupMembers: Map<string, Set<string>> | undefined;
+  let listedGroupIds: Set<string> | undefined;
+  let knownGroupRosters: Set<string> | undefined;
   let groupsSynced = false;
   let workspaceUrl: string | undefined;
   const syncedAts = new Map<string, number>();
@@ -164,14 +182,66 @@ export function createDirectoryStore(): DirectoryStore {
       const channel = channels.find((candidate) => candidate.channelId === channelId);
       return channel ? channel.isPrivate === true : undefined;
     },
-    async replaceGroups(nextGroupMembers, syncedAt) {
+    async replaceCapabilityChannels(channelIds, nextChannelMembers, nextChannelRosterIds, syncedAt, revocations = []) {
+      if (!acceptSync("capabilityChannels", syncedAt)) return false;
+      const listed = new Set(channelIds.filter(Boolean));
+      const rosterIds = new Set(nextChannelRosterIds.filter((channelId) => listed.has(channelId)));
+      knownCapabilityChannelRosters = knownCapabilityChannelRosters
+        ? new Set([...knownCapabilityChannelRosters].filter((channelId) => listed.has(channelId)))
+        : new Set();
+      capabilityChannelRevocations = new Map(
+        [...capabilityChannelRevocations].filter(([channelId]) => listed.has(channelId)),
+      );
+      const byChannel = new Map(
+        [...(capabilityChannelMembers ?? [])].filter(
+          ([channelId]) => listed.has(channelId) && !rosterIds.has(channelId),
+        ),
+      );
+      for (const channelId of rosterIds) byChannel.set(channelId, new Set());
+      for (const member of nextChannelMembers) {
+        if (!member.principalId || !rosterIds.has(member.channelId)) continue;
+        (byChannel.get(member.channelId) ?? byChannel.set(member.channelId, new Set()).get(member.channelId)!).add(
+          member.principalId,
+        );
+      }
+      capabilityChannelMembers = byChannel;
+      for (const channelId of rosterIds) {
+        knownCapabilityChannelRosters.add(channelId);
+        capabilityChannelRevocations.delete(channelId);
+      }
+      for (const member of revocations) {
+        if (!listed.has(member.channelId) || !member.principalId) continue;
+        const revoked = capabilityChannelRevocations.get(member.channelId) ?? new Set<string>();
+        revoked.add(member.principalId);
+        capabilityChannelRevocations.set(member.channelId, revoked);
+        capabilityChannelMembers.get(member.channelId)?.delete(member.principalId);
+      }
+      return true;
+    },
+    async channelCapabilityMembership(channelId, principalId) {
+      if (capabilityChannelRevocations.get(channelId)?.has(principalId)) return false;
+      if (!knownCapabilityChannelRosters?.has(channelId)) return undefined;
+      return capabilityChannelMembers?.get(channelId)?.has(principalId) ?? false;
+    },
+    async replaceGroups(nextGroupMembers, syncedAt, nextGroupIds, nextGroupRosterIds) {
       if (!acceptSync("groups", syncedAt)) return false;
-      const byGroup = new Map<string, Set<string>>();
+      const legacy = nextGroupIds === undefined || nextGroupRosterIds === undefined;
+      const listed = new Set((nextGroupIds ?? nextGroupMembers.map((member) => member.groupId)).filter(Boolean));
+      const rosterIds = new Set((nextGroupRosterIds ?? [...listed]).filter((groupId) => listed.has(groupId)));
+      const byGroup = new Map(
+        [...(groupMembers ?? [])].filter(([groupId]) => listed.has(groupId) && !rosterIds.has(groupId)),
+      );
+      for (const groupId of rosterIds) byGroup.set(groupId, new Set());
       for (const m of nextGroupMembers) {
-        if (!m.groupId || !m.principalId) continue;
+        if (!m.groupId || !m.principalId || !rosterIds.has(m.groupId)) continue;
         (byGroup.get(m.groupId) ?? byGroup.set(m.groupId, new Set()).get(m.groupId)!).add(m.principalId);
       }
       groupMembers = byGroup;
+      listedGroupIds = listed;
+      knownGroupRosters = legacy
+        ? new Set(rosterIds)
+        : new Set([...(knownGroupRosters ?? [])].filter((groupId) => listed.has(groupId)));
+      for (const groupId of rosterIds) knownGroupRosters.add(groupId);
       groupsSynced = true;
       return true;
     },
@@ -181,6 +251,10 @@ export function createDirectoryStore(): DirectoryStore {
       const byGroup = groupMembers ?? new Map<string, Set<string>>();
       byGroup.set(groupId, new Set(ids));
       groupMembers = byGroup;
+      listedGroupIds ??= new Set();
+      listedGroupIds.add(groupId);
+      knownGroupRosters ??= new Set();
+      knownGroupRosters.add(groupId);
       const stored = syncedAts.get("groups");
       syncedAts.set("groups", Math.max(stored ?? 0, Date.now()));
     },
@@ -199,9 +273,10 @@ export function createDirectoryStore(): DirectoryStore {
       return groupMembers?.get(groupId)?.has(principalId) ?? false;
     },
     async groupMembership(groupId, principalId) {
-      const memberships = groupMembers;
-      if (!memberships || !groupsSynced) return undefined;
-      return memberships.get(groupId)?.has(principalId) ?? false;
+      if (!groupsSynced) return undefined;
+      if (!listedGroupIds?.has(groupId)) return false;
+      if (!knownGroupRosters?.has(groupId)) return undefined;
+      return groupMembers?.get(groupId)?.has(principalId) ?? false;
     },
     async listGroupsFor(principalId) {
       const memberships = groupMembers;

@@ -33,7 +33,12 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     channels?: unknown;
     channelMembers?: unknown;
     channelRosterIds?: unknown;
+    capabilityChannelMembers?: unknown;
+    capabilityChannelRosterIds?: unknown;
+    capabilityChannelRevocations?: unknown;
     groupMembers?: unknown;
+    groupIds?: unknown;
+    groupRosterIds?: unknown;
     workspaceUrl?: unknown;
     membersSyncedAt?: unknown;
     channelsSyncedAt?: unknown;
@@ -83,6 +88,30 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
       ? b.channelRosterIds.filter((channelId): channelId is string => typeof channelId === "string")
       : undefined;
     await app.upsertChannels(channels, channelMembers, numOrUndef(b.channelsSyncedAt), channelRosterIds);
+    const capabilityChannelMembers = Array.isArray(b.capabilityChannelMembers)
+      ? b.capabilityChannelMembers.filter(
+          (m): m is { channelId: string; principalId: string } =>
+            isObj(m) && typeof m.channelId === "string" && typeof m.principalId === "string",
+        )
+      : undefined;
+    const capabilityChannelRosterIds = Array.isArray(b.capabilityChannelRosterIds)
+      ? b.capabilityChannelRosterIds.filter((channelId): channelId is string => typeof channelId === "string")
+      : undefined;
+    const capabilityChannelRevocations = Array.isArray(b.capabilityChannelRevocations)
+      ? b.capabilityChannelRevocations.filter(
+          (m): m is { channelId: string; principalId: string } =>
+            isObj(m) && typeof m.channelId === "string" && typeof m.principalId === "string",
+        )
+      : undefined;
+    if (capabilityChannelMembers && capabilityChannelRosterIds) {
+      await app.upsertCapabilityChannels(
+        channels.map((channel) => channel.channelId),
+        capabilityChannelMembers,
+        capabilityChannelRosterIds,
+        numOrUndef(b.channelsSyncedAt),
+        capabilityChannelRevocations,
+      );
+    }
     channelCount = channels.length;
   }
   let groupMemberCount: number | undefined;
@@ -91,7 +120,13 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
       (m): m is { groupId: string; principalId: string } =>
         isObj(m) && typeof m.groupId === "string" && typeof m.principalId === "string",
     );
-    await app.upsertGroups(groupMembers, numOrUndef(b.groupsSyncedAt));
+    const groupIds = Array.isArray(b.groupIds)
+      ? b.groupIds.filter((groupId): groupId is string => typeof groupId === "string")
+      : undefined;
+    const groupRosterIds = Array.isArray(b.groupRosterIds)
+      ? b.groupRosterIds.filter((groupId): groupId is string => typeof groupId === "string")
+      : undefined;
+    await app.upsertGroups(groupMembers, numOrUndef(b.groupsSyncedAt), groupIds, groupRosterIds);
     groupMemberCount = groupMembers.length;
   }
   return sendJson(res, 200, {

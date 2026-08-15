@@ -404,7 +404,16 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion">,
   ): Promise<boolean> {
     const { kind, ref } = parseScopeId(claims.scopeId);
-    if ((kind === "channel" || kind === "group") && !(await principalCanWriteScope(claims.actorId, claims.scopeId))) {
+    if (kind === "channel" && !deps.identity.isInternal(deps.identity.classify(claims.actorId))) return false;
+    const capabilityMembership =
+      kind === "channel"
+        ? await deps.directory.channelCapabilityMembership(ref, claims.actorId).catch(() => undefined)
+        : undefined;
+    if (
+      (kind === "channel" &&
+        !(capabilityMembership ?? (await principalCanAccessCurrentScope(claims.actorId, claims.scopeId)))) ||
+      (kind === "group" && !(await principalCanWriteScope(claims.actorId, claims.scopeId)))
+    ) {
       return false;
     }
     if (kind !== "group" || deps.projects?.recognizes(ref) !== true) return true;

@@ -211,14 +211,14 @@ export function registerSlackEvents(
   }
 
   app.event("member_left_channel", async ({ event, body, client }: any) => {
-    const e = event as { channel?: string; event_ts?: string };
+    const e = event as { channel?: string; user?: string; event_ts?: string };
     if (
       deduper.seen(
         dedupeKey({ event_id: (body as { event_id?: string })?.event_id, channel: e.channel, ts: e.event_ts }),
       )
     )
       return;
-    await forceDirectorySync(client);
+    await forceDirectorySync(client, e.channel, e.user);
   });
 
   app.event("reaction_added", async ({ event, body, client }: any) => {

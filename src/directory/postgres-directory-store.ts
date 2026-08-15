@@ -55,12 +55,38 @@ const SCHEMA = [
     principal_id TEXT NOT NULL,
     PRIMARY KEY (org_id, channel_id, principal_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS directory_capability_channels(
+    org_id     TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    PRIMARY KEY (org_id, channel_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS directory_capability_channel_members(
+    org_id       TEXT NOT NULL,
+    channel_id   TEXT NOT NULL,
+    principal_id TEXT NOT NULL,
+    PRIMARY KEY (org_id, channel_id, principal_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS directory_capability_channel_revocations(
+    org_id       TEXT NOT NULL,
+    channel_id   TEXT NOT NULL,
+    principal_id TEXT NOT NULL,
+    PRIMARY KEY (org_id, channel_id, principal_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS directory_group_members(
     org_id       TEXT NOT NULL,
     group_id     TEXT NOT NULL,
     principal_id TEXT NOT NULL,
     PRIMARY KEY (org_id, group_id, principal_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS directory_groups(
+    org_id       TEXT NOT NULL,
+    group_id     TEXT NOT NULL,
+    roster_known BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (org_id, group_id)
+  )`,
+  `INSERT INTO directory_groups (org_id, group_id, roster_known)
+    SELECT DISTINCT org_id, group_id, TRUE FROM directory_group_members
+    ON CONFLICT (org_id, group_id) DO NOTHING`,
   `CREATE INDEX IF NOT EXISTS directory_group_members_principal
     ON directory_group_members (org_id, principal_id, group_id)`,
   `CREATE TABLE IF NOT EXISTS directory_sync(
@@ -89,6 +115,8 @@ const SCHEMA = [
   `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS members_synced_at BIGINT`,
   `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS channels_synced_at BIGINT`,
   `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS groups_synced_at BIGINT`,
+  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS capability_channels_hash TEXT`,
+  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS capability_channels_synced_at BIGINT`,
   `DO $$
   BEGIN
     IF NOT EXISTS (
@@ -391,16 +419,132 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length > 0 ? (rows[0]!.is_private as boolean) : undefined;
     },
 
-    async replaceGroups(groupMembers, syncedAt) {
-      const rows = dedupPairs(
+    async replaceCapabilityChannels(channelIds, channelMembers, channelRosterIds, syncedAt, revocations = []) {
+      const listedIds = [...new Set(channelIds.filter(Boolean))];
+      const listed = new Set(listedIds);
+      const rosterIds = [...new Set(channelRosterIds.filter((channelId) => listed.has(channelId)))];
+      const rostered = new Set(rosterIds);
+      const membershipRows = dedupMemberships(channelMembers).filter((member) => rostered.has(member.channelId));
+      const revokedRows = dedupMemberships(revocations).filter((member) => listed.has(member.channelId));
+      const hash = hashRoster([
+        ...listedIds.map((channelId) => `c:${channelId}`),
+        ...rosterIds.map((channelId) => `r:${channelId}`),
+        ...membershipRows.map((member) => `m:${member.channelId}|${member.principalId}`),
+        ...revokedRows.map((member) => `x:${member.channelId}|${member.principalId}`),
+      ]);
+      return swapIfChanged("capability_channels_hash", hash, syncedAt, async (client) => {
+        await client.query(
+          "DELETE FROM directory_capability_channel_members WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
+          [orgId, listedIds],
+        );
+        await client.query(
+          "DELETE FROM directory_capability_channels WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
+          [orgId, listedIds],
+        );
+        await client.query(
+          "DELETE FROM directory_capability_channel_revocations WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
+          [orgId, listedIds],
+        );
+        await client.query(
+          "DELETE FROM directory_capability_channel_members WHERE org_id = $1 AND channel_id = ANY($2::text[])",
+          [orgId, rosterIds],
+        );
+        await client.query(
+          "DELETE FROM directory_capability_channel_revocations WHERE org_id = $1 AND channel_id = ANY($2::text[])",
+          [orgId, rosterIds],
+        );
+        if (rosterIds.length) {
+          await client.query(
+            `INSERT INTO directory_capability_channels (org_id, channel_id)
+             SELECT $1, * FROM unnest($2::text[])
+             ON CONFLICT (org_id, channel_id) DO NOTHING`,
+            [orgId, rosterIds],
+          );
+        }
+        if (membershipRows.length) {
+          await client.query(
+            `INSERT INTO directory_capability_channel_members (org_id, channel_id, principal_id)
+             SELECT $1, * FROM unnest($2::text[], $3::text[])`,
+            [orgId, membershipRows.map((m) => m.channelId), membershipRows.map((m) => m.principalId)],
+          );
+        }
+        if (revokedRows.length) {
+          await client.query(
+            `DELETE FROM directory_capability_channel_members member
+             USING unnest($2::text[], $3::text[]) AS revoked(channel_id, principal_id)
+             WHERE member.org_id = $1 AND member.channel_id = revoked.channel_id
+               AND member.principal_id = revoked.principal_id`,
+            [orgId, revokedRows.map((m) => m.channelId), revokedRows.map((m) => m.principalId)],
+          );
+          await client.query(
+            `INSERT INTO directory_capability_channel_revocations (org_id, channel_id, principal_id)
+             SELECT $1, * FROM unnest($2::text[], $3::text[])
+             ON CONFLICT (org_id, channel_id, principal_id) DO NOTHING`,
+            [orgId, revokedRows.map((m) => m.channelId), revokedRows.map((m) => m.principalId)],
+          );
+        }
+      });
+    },
+
+    async channelCapabilityMembership(channelId, principalId) {
+      const rows = await q(
+        `SELECT EXISTS (
+           SELECT 1 FROM directory_capability_channels
+           WHERE org_id = $1 AND channel_id = $2
+         ) AS known,
+         EXISTS (
+           SELECT 1 FROM directory_capability_channel_members
+           WHERE org_id = $1 AND channel_id = $2 AND principal_id = $3
+         ) AS member,
+         EXISTS (
+           SELECT 1 FROM directory_capability_channel_revocations
+           WHERE org_id = $1 AND channel_id = $2 AND principal_id = $3
+         ) AS revoked`,
+        [orgId, channelId, principalId],
+      );
+      if (rows[0]?.revoked === true) return false;
+      return rows[0]?.known === true ? rows[0]?.member === true : undefined;
+    },
+
+    async replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
+      const allRows = dedupPairs(
         groupMembers,
         (m) => m.groupId,
         (m) => m.principalId,
       );
-      const hash = hashRoster(rows.map((m) => `${m.groupId}|${m.principalId}`));
+      const listedIds = [...new Set((groupIds ?? allRows.map((member) => member.groupId)).filter(Boolean))];
+      const listed = new Set(listedIds);
+      const rosterIds = [...new Set((groupRosterIds ?? listedIds).filter((groupId) => listed.has(groupId)))];
+      const rostered = new Set(rosterIds);
+      const rows = allRows.filter((member) => rostered.has(member.groupId));
+      const hash = hashRoster([
+        ...listedIds.map((groupId) => `g:${groupId}`),
+        ...rosterIds.map((groupId) => `r:${groupId}`),
+        ...rows.map((member) => `m:${member.groupId}|${member.principalId}`),
+      ]);
 
       return swapIfChanged("groups_hash", hash, syncedAt, async (client) => {
-        await client.query("DELETE FROM directory_group_members WHERE org_id = $1", [orgId]);
+        await client.query(
+          "DELETE FROM directory_group_members WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))",
+          [orgId, listedIds],
+        );
+        await client.query("DELETE FROM directory_groups WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))", [
+          orgId,
+          listedIds,
+        ]);
+        if (listedIds.length) {
+          await client.query(
+            `INSERT INTO directory_groups (org_id, group_id, roster_known)
+             SELECT $1, * FROM unnest($2::text[], $3::boolean[])
+             ON CONFLICT (org_id, group_id) DO UPDATE SET
+               roster_known = directory_groups.roster_known OR EXCLUDED.roster_known`,
+            [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId))],
+          );
+        }
+        await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = ANY($2::text[])", [
+          orgId,
+          rosterIds,
+        ]);
         if (rows.length) {
           await client.query(
             `INSERT INTO directory_group_members (org_id, group_id, principal_id)
@@ -416,6 +560,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       if (!groupId || !ids.length) return;
       await withPgTransaction(await pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
+        await client.query(
+          `INSERT INTO directory_groups (org_id, group_id, roster_known) VALUES ($1, $2, TRUE)
+           ON CONFLICT (org_id, group_id) DO UPDATE SET roster_known = TRUE`,
+          [orgId, groupId],
+        );
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);
         await client.query(
           `INSERT INTO directory_group_members (org_id, group_id, principal_id)
@@ -464,11 +613,19 @@ export function createPostgresDirectoryStore(connectionString: string): Director
            WHERE org_id = $1 AND group_id = $2 AND principal_id = $3
          ) AS member,
          EXISTS (
+           SELECT 1 FROM directory_groups WHERE org_id = $1 AND group_id = $2
+         ) AS listed,
+         COALESCE((
+           SELECT roster_known FROM directory_groups WHERE org_id = $1 AND group_id = $2
+         ), FALSE) AS roster_known,
+         EXISTS (
            SELECT 1 FROM directory_sync WHERE org_id = $1 AND groups_hash IS NOT NULL
-         ) AS known`,
+         ) AS synced`,
         [orgId, groupId, principalId],
       );
-      return rows[0]?.known === true ? rows[0]?.member === true : undefined;
+      if (rows[0]?.member === true) return true;
+      if (rows[0]?.listed !== true) return rows[0]?.synced === true ? false : undefined;
+      return rows[0]?.roster_known === true ? rows[0]?.member === true : undefined;
     },
 
     async listGroupsFor(principalId) {

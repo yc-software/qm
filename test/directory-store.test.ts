@@ -188,6 +188,29 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
     assert.equal(await d.groupMember("G-new", "U-alice"), false);
   });
 
+  it("partially replaces only group rosters known by the source", async () => {
+    const d = createDirectoryStore();
+    await d.replaceGroups(
+      [
+        { groupId: "G-one", principalId: "U-old-one" },
+        { groupId: "G-two", principalId: "U-old-two" },
+      ],
+      undefined,
+      ["G-one", "G-two"],
+      ["G-one", "G-two"],
+    );
+    await d.replaceGroups(
+      [{ groupId: "G-two", principalId: "U-new-two" }],
+      undefined,
+      ["G-one", "G-two", "G-new"],
+      ["G-two"],
+    );
+    assert.equal(await d.groupMembership("G-one", "U-old-one"), true);
+    assert.equal(await d.groupMembership("G-two", "U-old-two"), false);
+    assert.equal(await d.groupMembership("G-two", "U-new-two"), true);
+    assert.equal(await d.groupMembership("G-new", "U-new"), undefined);
+  });
+
   it("members and channels swaps are stale-guarded the same way", async () => {
     const d = createDirectoryStore();
     assert.equal(await d.replace([{ principalId: "U-new", displayName: "New", type: "internal" }], 2000), true);
@@ -253,5 +276,50 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     assert.equal(await d.channelMembership("C-two", "U-old-two"), false);
     assert.equal(await d.channelMembership("C-two", "U-new-two"), true);
     assert.equal(await d.channelMembership("C-new", "U-new"), undefined);
+  });
+
+  it("keeps capability rosters separate from legacy channel-directory swaps", async () => {
+    const d = createDirectoryStore();
+    await d.replaceCapabilityChannels(
+      ["C-one", "C-two", "C-new"],
+      [
+        { channelId: "C-one", principalId: "U-old-one" },
+        { channelId: "C-one", principalId: "U-keep" },
+        { channelId: "C-two", principalId: "U-old-two" },
+      ],
+      ["C-one", "C-two"],
+    );
+    await d.replaceCapabilityChannels(
+      ["C-one", "C-two", "C-new"],
+      [{ channelId: "C-two", principalId: "U-new-two" }],
+      ["C-two"],
+    );
+    await d.replaceChannels(
+      [
+        { channelId: "C-one", name: "one" },
+        { channelId: "C-two", name: "two" },
+        { channelId: "C-new", name: "new" },
+      ],
+      [],
+    );
+    assert.equal(await d.channelCapabilityMembership("C-one", "U-old-one"), true);
+    assert.equal(await d.channelCapabilityMembership("C-two", "U-old-two"), false);
+    assert.equal(await d.channelCapabilityMembership("C-two", "U-new-two"), true);
+    assert.equal(await d.channelCapabilityMembership("C-new", "U-new"), undefined);
+    await d.replaceCapabilityChannels(["C-one", "C-two", "C-new"], [], [], undefined, [
+      { channelId: "C-one", principalId: "U-old-one" },
+    ]);
+    assert.equal(await d.channelCapabilityMembership("C-one", "U-old-one"), false);
+    assert.equal(await d.channelCapabilityMembership("C-one", "U-keep"), true);
+    await d.replaceCapabilityChannels(["C-one", "C-two", "C-new"], [], [], undefined, [
+      { channelId: "C-new", principalId: "U-new" },
+    ]);
+    assert.equal(await d.channelCapabilityMembership("C-new", "U-new"), false);
+    await d.replaceCapabilityChannels(
+      ["C-one", "C-two", "C-new"],
+      [{ channelId: "C-new", principalId: "U-new" }],
+      ["C-new"],
+    );
+    assert.equal(await d.channelCapabilityMembership("C-new", "U-new"), true);
   });
 });

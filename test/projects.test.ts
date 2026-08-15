@@ -206,6 +206,15 @@ test("capability scope checks follow current shared rosters", async () => {
     ],
     1,
   );
+  await built.directory.replaceCapabilityChannels(
+    ["C-public", "C-private"],
+    [
+      { channelId: "C-public", principalId: "member" },
+      { channelId: "C-private", principalId: "member" },
+    ],
+    ["C-public", "C-private"],
+    1,
+  );
   await built.directory.replaceGroups([{ groupId: "G1", principalId: "member" }], 1);
 
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), true);
@@ -221,9 +230,24 @@ test("capability scope checks follow current shared rosters", async () => {
     2,
   );
   await built.directory.replaceGroups([], 2);
+  await built.directory.replaceCapabilityChannels(["C-public", "C-private"], [], ["C-public", "C-private"], 2);
 
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), false);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "group:G1" }), false);
+  assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), false);
+});
+
+test("channel capabilities bridge legacy public rosters but still honor deactivation", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-transition-")) }));
+  await built.app.upsertDirectory([{ principalId: "member", displayName: "Member", type: "internal" }]);
+  await built.directory.replaceChannels([{ channelId: "C-public", name: "public" }], []);
+  assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), true);
+  await built.directory.replaceCapabilityChannels(
+    ["C-public"],
+    [{ channelId: "C-public", principalId: "member" }],
+    ["C-public"],
+  );
+  await built.identity.deactivate("member");
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), false);
 });
 

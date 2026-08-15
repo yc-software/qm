@@ -9,7 +9,11 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
   const calls: string[][] = [];
   const dockerExec: DockerExec = async (args) => {
     calls.push(args);
-    return { code: args[1] === "inspect" ? 1 : 0, stdout: "", stderr: "" };
+    return {
+      code: args[1] === "inspect" ? 1 : 0,
+      stdout: "",
+      stderr: args[1] === "inspect" ? "No such network" : "",
+    };
   };
   const store = createDeployStore();
   const first = await store.create({
@@ -37,4 +41,81 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
   assert.ok(calls.some((args) => args.join(" ").includes(`--name ${firstName} --network ${firstName}-net`)));
   assert.ok(calls.some((args) => args.join(" ").includes(`--name ${secondName} --network ${secondName}-net`)));
   assert.ok(calls.some((args) => args.join(" ") === `network rm ${firstName}-net`));
+});
+
+test("Docker provider migrates running deployments off the legacy shared network", async () => {
+  const calls: string[][] = [];
+  let containerName = "";
+  let connectAttempts = 0;
+  let targetAttached = false;
+  let legacyAttached = true;
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
+      return { code: 0, stdout: legacyAttached ? `${containerName}\n` : "", stderr: "" };
+    }
+    if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "missing" };
+    if (args[0] === "network" && args[1] === "connect" && ++connectAttempts === 1) {
+      return { code: 1, stdout: "", stderr: "transient" };
+    }
+    if (args[0] === "network" && args[1] === "connect") targetAttached = true;
+    if (args[0] === "network" && args[1] === "disconnect") legacyAttached = false;
+    if (args[0] === "inspect") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          ...(legacyAttached ? { "agent-deploynet": {} } : {}),
+          ...(targetAttached ? { [`${containerName}-net`]: {} } : {}),
+        }),
+        stderr: "",
+      };
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/legacy",
+  });
+  containerName = `agent-deploy-${deployment.id.slice(0, 12)}`;
+  await store.setEndpoint(deployment.id, { host: "127.0.0.1", port: 9200 });
+  const running = (await store.get(deployment.id))!;
+  const provider = createDockerDeployProvider({ dockerExec });
+
+  assert.deepEqual(await provider.resolveEndpoint!(running, running.versions[0]!), running.endpoint);
+  assert.equal(connectAttempts, 2);
+  assert.ok(calls.some((args) => args.join(" ") === `network connect ${containerName}-net ${containerName}`));
+  assert.ok(calls.some((args) => args.join(" ") === `network disconnect agent-deploynet ${containerName}`));
+});
+
+test("Docker provider retries legacy migration after the daemon recovers", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const calls: string[][] = [];
+  const container = "agent-deploy-legacy123";
+  let legacyInspections = 0;
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
+      legacyInspections++;
+      return legacyInspections === 1
+        ? { code: 1, stdout: "", stderr: "daemon unavailable" }
+        : { code: 0, stdout: `${container}\n`, stderr: "" };
+    }
+    if (args[0] === "inspect") {
+      return { code: 0, stdout: JSON.stringify({ "agent-deploynet": {} }), stderr: "" };
+    }
+    if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "missing" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+
+  createDockerDeployProvider({ dockerExec });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(legacyInspections, 1);
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(legacyInspections, 2);
+  assert.ok(calls.some((args) => args.join(" ") === `network disconnect agent-deploynet ${container}`));
 });
