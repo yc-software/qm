@@ -531,7 +531,7 @@ export function renderSidebarTop(): void {
           html`
             ${navRow("contexts", ICON.contexts, "Projects")} ${navRow("chats", ICON.chats, "Chats")}
             ${navRow("files", ICON.files, "Files")} ${navRow("crons", ICON.crons, "Crons")}
-            ${navRow("keychain", ICON.keychain, "Keychain")} ${navRow("deploys", ICON.deploys, "Apps")}
+            ${navRow("keychain", ICON.keychain, "Integrations")} ${navRow("deploys", ICON.deploys, "Apps")}
             ${navRow("memory", ICON.memory, "Memory")} ${navRow("skills", ICON.skills, "Skills")}
             ${
               can("admin")

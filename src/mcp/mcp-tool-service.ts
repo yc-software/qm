@@ -29,12 +29,49 @@ export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): McpToolDescriptor[];
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
-  call(name: string, args: Record<string, unknown>, principalId?: string): Promise<string>;
+  call(name: string, args: Record<string, unknown>, principalId?: string, scopeId?: string): Promise<string>;
+  approvalFor?(
+    name: string,
+    args: Record<string, unknown>,
+    principalId?: string,
+    scopeId?: string,
+  ): Promise<{ reason: string; approvalKey: string; command?: string } | null>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   /** Probe a server config without persisting it. Returns its tool names. */
   probe(server: McpServer): Promise<string[]>;
   close(): void;
+}
+
+export function combineMcpToolServices(services: readonly McpToolService[]): McpToolService {
+  const ownerOf = (name: string) => services.find((service) => service.toolDefs().some((tool) => tool.name === name));
+  return {
+    toolDefs: () => {
+      const seen = new Set<string>();
+      return services
+        .flatMap((service) => service.toolDefs())
+        .filter((tool) => (seen.has(tool.name) ? false : (seen.add(tool.name), true)));
+    },
+    async call(name, args, principalId, scopeId) {
+      const owner = ownerOf(name);
+      if (!owner) throw new Error(`unknown MCP tool: ${name}`);
+      return owner.call(name, args, principalId, scopeId);
+    },
+    async approvalFor(name, args, principalId, scopeId) {
+      return ownerOf(name)?.approvalFor?.(name, args, principalId, scopeId) ?? null;
+    },
+    async refresh() {
+      await Promise.all(services.map((service) => service.refresh()));
+    },
+    async probe(server) {
+      const primary = services[0];
+      if (!primary) return [];
+      return primary.probe(server);
+    },
+    close() {
+      for (const service of services) service.close();
+    },
+  };
 }
 
 function authOf(server: McpServer): McpAuth {

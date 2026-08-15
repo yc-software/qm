@@ -791,7 +791,7 @@ const PANE_TOOLS: { tool: SessionTool; glyph: Parameters<typeof icon>[0]; label:
   { tool: "apps", glyph: Rocket, label: "Apps" },
   { tool: "skills", glyph: Box, label: "Skills" },
   { tool: "memory", glyph: Brain, label: "Memory" },
-  { tool: "keychain", glyph: KeyRound, label: "Your keychain" },
+  { tool: "keychain", glyph: KeyRound, label: "Integrations" },
 ];
 
 function openPaneTool(panel: IDockviewPanel, tool: SessionTool): void {

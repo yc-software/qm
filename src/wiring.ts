@@ -90,7 +90,13 @@ import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/work
 import { createMemoryService, type MemoryService } from "./memory/memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { combineMcpToolServices, createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createIntegrationConnectionStore, type IntegrationConnection } from "./integrations/integration-store.ts";
+import { PipedreamClient } from "./integrations/pipedream-client.ts";
+import {
+  createPipedreamIntegrationService,
+  type PipedreamIntegrationService,
+} from "./integrations/pipedream-service.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -331,6 +337,7 @@ export interface BuiltApp {
   refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
+  pipedream: PipedreamIntegrationService;
   acl: AclStore;
   skills: SkillStore;
   skillBundles: SkillBundleStore;
@@ -574,7 +581,27 @@ export function buildApp(
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
-  const mcpToolService = createMcpToolService({ servers: mcpServers, audit: auditLog });
+  const registeredMcpToolService = createMcpToolService({ servers: mcpServers, audit: auditLog });
+  const integrationConnections = createIntegrationConnectionStore(
+    artifactMap<IntegrationConnection>("integration_connections"),
+  );
+  const pipedreamBindingSecret = config.pipedream
+    ? (config.connectorSecretKey ?? config.signingSecret ?? config.pipedream.clientSecret)
+    : undefined;
+  const pipedream = createPipedreamIntegrationService({
+    store: integrationConnections,
+    audit: auditLog,
+    ...(pipedreamBindingSecret ? { approvalSecret: pipedreamBindingSecret } : {}),
+    ...(config.pipedream
+      ? {
+          client: new PipedreamClient({
+            ...config.pipedream,
+            externalIdSecret: pipedreamBindingSecret!,
+          }),
+        }
+      : {}),
+  });
+  const mcpToolService = combineMcpToolServices([registeredMcpToolService, pipedream]);
   const mcpTools = () => mcpToolService.toolDefs();
   const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
@@ -1485,6 +1512,7 @@ export function buildApp(
     refreshCustomProviders,
     mcpServers,
     mcpToolService,
+    pipedream,
     acl,
     skills,
     skillBundles,
@@ -1553,6 +1581,7 @@ export function serverDeps(
     refreshCustomProviders: built.refreshCustomProviders,
     mcpServers: built.mcpServers,
     mcpToolService: built.mcpToolService,
+    pipedream: built.pipedream,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     harnessId: config.harness,
     connectorTokens: built.connectorTokens,

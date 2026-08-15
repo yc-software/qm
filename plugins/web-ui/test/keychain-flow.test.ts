@@ -141,7 +141,7 @@ test("keychain overview wires managed connector grants into account controls", (
 test("destructive controls settle duplicate attempts while a mutation is busy", () => {
   assert.match(connectorsSource, /\?disabled=\$\{keychainOperations\.mutationInFlight\}/);
   assert.match(connectorsSource, /connectorNotice = "Another keychain change is still in progress\."/);
-  assert.equal(connectorsSource.match(/const operation = beginKeychainMutation\(\)/g)?.length, 3);
+  assert.equal(connectorsSource.match(/const operation = beginKeychainMutation\(\)/g)?.length, 5);
   assert.equal(
     connectorsSource.match(/if \(keychainOperations\.finishMutation\(operation\)\) drawConnectors\(\)/g)?.length,
     3,
@@ -159,4 +159,10 @@ test("keychain actions keep secondary weight and compact mobile sizing", () => {
   assert.match(connectorsSource, /\$\{available \? html`<button class="btn" type="button"/);
   assert.doesNotMatch(shellCssSource, /\.kc-hero-actions \.btn\s*\{\s*flex:\s*1;/);
   assert.doesNotMatch(shellCssSource, /sidebar-closed \.kc-hero-copy/);
+});
+
+test("integrations degrade clearly when optional secure storage is unavailable", () => {
+  assert.match(connectorsSource, /keys\.reason instanceof ApiError && keys\.reason\.status === 404/);
+  assert.match(connectorsSource, /Secure credential storage is not enabled on this deployment\./);
+  assert.doesNotMatch(connectorsSource, /connectorNotice = "not_found"/);
 });

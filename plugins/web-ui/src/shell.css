@@ -3688,6 +3688,37 @@ a.chat-row-open {
   background: color-mix(in srgb, #d99a21 14%, var(--background));
   color: #946000;
 }
+.kc-state.success {
+  background: var(--kc-green-soft);
+  color: var(--kc-green);
+}
+.kc-integration-policy {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 0 40px;
+}
+.kc-integration-policy label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.kc-integration-policy .kc-integration-access {
+  min-width: 210px;
+}
+.kc-integration-policy .kc-integration-access select {
+  height: 32px;
+  font: inherit;
+  font-size: 12px;
+}
+.kc-policy-note {
+  align-self: center;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+}
 .kc-resource-description {
   max-width: 700px;
   margin: 5px 0 0 40px;

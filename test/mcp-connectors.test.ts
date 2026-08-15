@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText, type McpFetch } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
-import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { combineMcpToolServices, createMcpToolService, type McpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 function jsonResponse(body: unknown, status = 200, contentType = "application/json") {
@@ -123,4 +123,43 @@ test("unknown tool call rejects", async () => {
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   await assert.rejects(() => service.call("nope_tool", {}), /unknown MCP tool/);
   service.close();
+});
+
+test("combined MCP services route calls and approvals to the owning service", async () => {
+  const calls: Array<{ owner: string; principal?: string; scope?: string }> = [];
+  const service = (owner: string, name: string): McpToolService => ({
+    toolDefs: () => [
+      {
+        name,
+        serverId: owner,
+        remoteName: name,
+        description: owner,
+        inputSchema: { type: "object" },
+        readOnly: false,
+      },
+    ],
+    async call(_name, _args, principal, scope) {
+      calls.push({ owner, ...(principal ? { principal } : {}), ...(scope ? { scope } : {}) });
+      return owner;
+    },
+    async approvalFor() {
+      return { reason: owner, approvalKey: `${owner}:write` };
+    },
+    async refresh() {},
+    async probe() {
+      return [owner];
+    },
+    close() {},
+  });
+  const combined = combineMcpToolServices([service("native", "native_query"), service("pipedream", "integrations")]);
+  assert.deepEqual(
+    combined.toolDefs().map((tool) => tool.name),
+    ["native_query", "integrations"],
+  );
+  assert.equal(await combined.call("integrations", {}, "U1", "channel:C1"), "pipedream");
+  assert.deepEqual(calls, [{ owner: "pipedream", principal: "U1", scope: "channel:C1" }]);
+  assert.deepEqual(await combined.approvalFor?.("integrations", {}, "U1", "channel:C1"), {
+    reason: "pipedream",
+    approvalKey: "pipedream:write",
+  });
 });

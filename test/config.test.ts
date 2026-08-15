@@ -41,6 +41,15 @@ test("store kinds default to memory and accept postgres", () => {
     () => loadConfig({ SESSION_STORE: "postgres" }),
     /missing or insecure required core secrets: DATABASE_URL/,
   );
+  assert.throws(
+    () =>
+      loadConfig({
+        PIPEDREAM_CLIENT_ID: "client",
+        PIPEDREAM_CLIENT_SECRET: "secret",
+        PIPEDREAM_PROJECT_ID: "wrong",
+      }),
+    /PIPEDREAM_PROJECT_ID must start with proj_/,
+  );
 });
 
 test("production and unauthenticated-core escape hatch are parsed once", () => {
@@ -362,6 +371,32 @@ test("Fly identity and Slack runtime settings are parsed once into Config", () =
     appToken: "xapp-test",
     apiUrl: "https://slack.example/api",
   });
+});
+
+test("Pipedream Connect configuration is all-or-nothing", () => {
+  assert.equal(loadConfig({}).pipedream, undefined);
+  assert.throws(
+    () => loadConfig({ PIPEDREAM_CLIENT_ID: "client" }),
+    /PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET, and PIPEDREAM_PROJECT_ID must be set together/,
+  );
+  assert.deepEqual(
+    loadConfig({
+      PIPEDREAM_CLIENT_ID: "client",
+      PIPEDREAM_CLIENT_SECRET: "secret",
+      PIPEDREAM_PROJECT_ID: "proj_test",
+      PIPEDREAM_ENVIRONMENT: "production",
+      PIPEDREAM_API_URL: "https://api.example.test",
+      PIPEDREAM_MCP_URL: "https://mcp.example.test/v3",
+    }).pipedream,
+    {
+      clientId: "client",
+      clientSecret: "secret",
+      projectId: "proj_test",
+      environment: "production",
+      apiUrl: "https://api.example.test",
+      mcpUrl: "https://mcp.example.test/v3",
+    },
+  );
 });
 
 test("maxClaims defaults from CONFIG_DEFAULTS and MAX_CLAIMS overrides", () => {
