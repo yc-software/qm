@@ -755,4 +755,31 @@ describe("capability-token control plane (crons + SOUL)", () => {
     );
     assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
   });
+
+  it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
+    await built.directory.replaceChannels(
+      [{ channelId: "C", name: "eng", isPrivate: true }],
+      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
+    );
+    await built.directory.replaceCapabilityChannels(
+      ["C"],
+      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
+      ["C"],
+    );
+    const members = [{ id: "B-LEGACY", type: "internal" as const }];
+    const token = await capFor("B-LEGACY", scopeId("channel", "C"), {
+      botActor: true,
+      liveActor: true,
+      members,
+    });
+    assert.equal((await get("/v1/soul", { "x-agent-capability": token })).status, 200);
+    assert.equal(
+      (
+        await get("/v1/soul", {
+          "x-agent-capability": await capFor("B-LEGACY", scopeId("channel", "C"), { members }),
+        })
+      ).status,
+      403,
+    );
+  });
 });

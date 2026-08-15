@@ -396,6 +396,7 @@ export interface TurnRequest {
   ownerKeychainUnion?: boolean;
   unprompted?: boolean;
   liveActor?: boolean;
+  botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
   overheard?: OverheardMessage[];

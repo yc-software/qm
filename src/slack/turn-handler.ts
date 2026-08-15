@@ -67,6 +67,7 @@ interface Incoming {
   kind: "dm" | "channel";
   channel: string;
   userId: string;
+  actor?: ActorAssertion;
   authorName?: string;
   rawText: string;
   files: SlackFile[];
@@ -189,9 +190,14 @@ export function createTurnHandler(deps: {
       inc.recvWall !== undefined && inc.eventTs !== undefined
         ? Math.max(0, Math.round(inc.recvWall - inc.eventTs * 1000))
         : undefined;
-    const classified = inc.prefetched
-      ? { actor: inc.prefetched.actor, ...(inc.prefetched.timezone ? { timezone: inc.prefetched.timezone } : {}) }
-      : await classifyUserCached(client, inc.userId);
+    let classified: { actor: ActorAssertion; timezone?: string };
+    if (inc.actor) classified = { actor: inc.actor };
+    else if (inc.prefetched)
+      classified = {
+        actor: inc.prefetched.actor,
+        ...(inc.prefetched.timezone ? { timezone: inc.prefetched.timezone } : {}),
+      };
+    else classified = await classifyUserCached(client, inc.userId);
     const actor = classified.actor;
     const timezone = classified.timezone;
     const text = stripMention(inc.rawText, ids.botUserId);
@@ -433,6 +439,7 @@ export function createTurnHandler(deps: {
               : { entryTs: inc.ts, ...(actor.isBot || inc.botAuthored ? {} : { liveActor: true }) }),
           }
         : { liveActor: true, triggerTs: inc.ts }),
+      ...(actor.isBot ? { botActor: true } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
       ...(priorTurns ? { priorTurns } : {}),
       ...(overheard ? { overheard } : {}),

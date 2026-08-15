@@ -428,6 +428,28 @@ test("pg directory: capability rosters survive legacy channel-directory swaps", 
   assert.equal(await store.channelCapabilityMembership("C-new", "U-new"), true);
 });
 
+test("pg directory: public-to-private transitions invalidate preserved rosters", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replaceChannels(
+    [{ channelId: "C-transition", name: "transition" }],
+    [{ channelId: "C-transition", principalId: "U-old" }],
+  );
+  await store.replaceCapabilityChannels(
+    ["C-transition"],
+    [{ channelId: "C-transition", principalId: "U-old" }],
+    ["C-transition"],
+  );
+  await store.replaceChannels([{ channelId: "C-transition", name: "transition", isPrivate: true }]);
+  assert.equal(await store.channelMembership("C-transition", "U-old"), undefined);
+  assert.equal(await store.channelCapabilityMembership("C-transition", "U-old"), undefined);
+  await store.replaceCapabilityChannels(
+    ["C-transition"],
+    [{ channelId: "C-transition", principalId: "U-old" }],
+    ["C-transition"],
+  );
+  assert.equal(await store.channelCapabilityMembership("C-transition", "U-old"), true);
+});
+
 test("pg directory: a partial group swap preserves unknown rosters", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   await store.replaceGroups(

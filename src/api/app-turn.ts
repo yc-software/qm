@@ -243,6 +243,7 @@ export function createTurnMethods(
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
+        ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
         ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),

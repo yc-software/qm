@@ -79,6 +79,7 @@ async function ctx(
 
 test("git HTTP broker streams a smart-HTTP request through the pinned service credential", async () => {
   let seen: { url: string; method: string; headers: Record<string, string>; body: string } | undefined;
+  let authorized: unknown;
   const deps: ServerDeps = {
     control: {} as ServerDeps["control"],
     serviceCreds: {
@@ -106,10 +107,34 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
     },
   };
   const c = await ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
+  c.req.headers["x-agent-capability"] = await mintCapabilityToken(
+    {
+      actorId: "B-LEGACY",
+      scopeId: "channel:C1",
+      aud: CREDENTIAL_BROKER_AUD,
+      credentials: ["gitlab"],
+      botActor: true,
+      liveActor: true,
+      members: [{ id: "B-LEGACY", type: "internal" }],
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    },
+    SECRET,
+  );
+  c.app.authorizesCapabilityScope = async (claims) => {
+    authorized = claims;
+    return true;
+  };
   await brokerGitHttp(c);
 
   assert.equal(await text(c.res), "0000");
   assert.equal(c.res.statusCode, 200);
+  assert.deepEqual(authorized, {
+    actorId: "B-LEGACY",
+    scopeId: "channel:C1",
+    botActor: true,
+    liveActor: true,
+    members: [{ id: "B-LEGACY", type: "internal" }],
+  });
   assert.equal(c.res.capturedHeaders?.["content-type"], "application/x-git-receive-pack-result");
   assert.deepEqual(seen, {
     url: "https://gitlab.example/acme/repo.git/git-receive-pack",

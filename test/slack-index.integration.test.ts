@@ -24,6 +24,7 @@ class FakeSlackClient {
   readonly messagesByChannel = new Map<string, any[]>();
   readonly membershipFailures = new Set<string>();
   readonly membershipListings = new Map<string, number>();
+  readonly botsById = new Map<string, any>();
   groupListings = 0;
   failGroupListing = false;
   private postSequence = 0;
@@ -117,7 +118,7 @@ class FakeSlackClient {
     uploadV2: async () => ({ ok: true }),
     info: async () => ({ file: {} }),
   };
-  readonly bots = { info: async () => ({ bot: {} }) };
+  readonly bots = { info: async ({ bot }: { bot: string }) => ({ bot: this.botsById.get(bot) }) };
 
   async *paginate(method: string, args: any): AsyncGenerator<any> {
     if (method === "users.list") {
@@ -324,14 +325,16 @@ async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
   }
 }
 
-async function fixture(options: { externalParticipants?: boolean; webUiPublicUrl?: string } = {}) {
+async function fixture(
+  options: { externalParticipants?: boolean; webUiPublicUrl?: string; identityEmail?: "0" | "1" } = {},
+) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
   const started = startSlackPlugin(
     {
       botToken: "xoxb-test",
       appToken: "xapp-test",
-      identityEmail: "0",
+      identityEmail: options.identityEmail ?? "0",
       ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
     },
     core,
@@ -513,6 +516,21 @@ test("a failed refresh after a leave event revokes only the departing member", a
     const pushed = f.core.directories.at(-1);
     assert.ok(!pushed.capabilityChannelRosterIds.includes("CPX"));
     assert.deepEqual(pushed.capabilityChannelRevocations, [{ channelId: "CPX", principalId: "U1" }]);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a failed email-mode refresh revokes the departing canonical principal", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    f.client.membershipFailures.add("CPX");
+    const pushes = f.core.directories.length;
+    await f.app.emitEvent("member_left_channel", { user: "U1", channel: "CPX", event_ts: "100.7" });
+    await waitFor(() => f.core.directories.length > pushes);
+    assert.deepEqual(f.core.directories.at(-1).capabilityChannelRevocations, [
+      { channelId: "CPX", principalId: "alice@example.com" },
+    ]);
   } finally {
     await f.stop();
   }
@@ -756,6 +774,50 @@ test("a bot-authored mention can become a turn", async () => {
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].actor.externalId, "B1");
     assert.equal(f.client.posts[0].text, "agent reply");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a bot-authored mention without a user resolves its bot principal", async () => {
+  const f = await fixture();
+  try {
+    f.client.usersById.set("B1", {
+      id: "B1",
+      team_id: "T1",
+      is_bot: true,
+      name: "peerbot",
+      profile: { display_name: "Peer Bot" },
+    });
+    f.client.botsById.set("B-PEER", { id: "B-PEER", user_id: "B1", name: "Peer Bot" });
+    f.client.membersByChannel.set("C1", ["U1", "U2", "B1", "UBOT"]);
+    await f.app.emitEvent("app_mention", {
+      channel: "C1",
+      channel_type: "channel",
+      bot_id: "B-PEER",
+      text: "<@UBOT> hello",
+      ts: "102.25",
+    });
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.core.turns[0].actor.externalId, "B1");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a verified legacy bot without a user principal can become a turn", async () => {
+  const f = await fixture();
+  try {
+    f.client.botsById.set("B-LEGACY", { id: "B-LEGACY", name: "Legacy Bot" });
+    await f.app.emitEvent("app_mention", {
+      channel: "C1",
+      channel_type: "channel",
+      bot_id: "B-LEGACY",
+      text: "<@UBOT> hello",
+      ts: "102.26",
+    });
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.core.turns[0].actor.externalId, "B-LEGACY");
   } finally {
     await f.stop();
   }

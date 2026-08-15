@@ -148,6 +148,9 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
       actorId: claims.actorId,
       scopeId: claims.scopeId,
       ...(claims.scopeVersion ? { scopeVersion: claims.scopeVersion } : {}),
+      ...(claims.botActor ? { botActor: true } : {}),
+      ...(claims.liveActor ? { liveActor: true } : {}),
+      ...(claims.members ? { members: claims.members } : {}),
     }))
   ) {
     return sendJson(ctx.res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });

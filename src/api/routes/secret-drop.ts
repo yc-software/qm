@@ -1,5 +1,10 @@
 import { orgId as configOrgId } from "../../config.ts";
-import { mintCapabilityToken, verifyCapabilityToken, SECRET_DROP_AUD } from "../../auth/capability-token.ts";
+import {
+  mintCapabilityToken,
+  verifyCapabilityToken,
+  SECRET_DROP_AUD,
+  type CapabilityClaims,
+} from "../../auth/capability-token.ts";
 import { KeychainError, type GrantMode } from "../../credentials/keychain.ts";
 import { SECRET_DROP_TTL_MS, type SecretDropField, type SecretDropRecord } from "../../credentials/secret-drop.ts";
 import { isSharedScope, parseScopeId } from "../../types.ts";
@@ -43,7 +48,7 @@ function dropNotYoursHtml(): string {
 <h2>This link is for someone else</h2><p>This credential request was created for a different teammate. If it was meant for you, sign in as yourself and open it again.</p></body>`;
 }
 
-function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord): Promise<boolean> {
+function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord, claims?: CapabilityClaims): Promise<boolean> {
   const audienceScopeId = rec.audienceScopeId;
   if (!audienceScopeId || !isSharedScope(audienceScopeId)) return Promise.resolve(true);
   return ctx.app
@@ -51,19 +56,32 @@ function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord): Promise<boolea
       actorId: rec.ownerId,
       scopeId: audienceScopeId,
       ...(rec.scopeVersion ? { scopeVersion: rec.scopeVersion } : {}),
+      ...(claims?.botActor ? { botActor: true } : {}),
+      ...(claims?.liveActor ? { liveActor: true } : {}),
+      ...(claims?.members ? { members: claims.members } : {}),
     })
     .catch(() => false);
 }
 
-async function dropLinkTokenOk(ctx: ApiCtx, dropId: string, rec: SecretDropRecord): Promise<boolean> {
+async function dropLinkClaims(
+  ctx: ApiCtx,
+  dropId: string,
+  rec: SecretDropRecord,
+): Promise<CapabilityClaims | true | null> {
   if (!rec.requiresToken) return true;
   const capSecret = ctx.deps.capabilitySecret ?? ctx.secret;
   const token = ctx.url.searchParams.get("t");
-  if (!capSecret || !token) return false;
+  if (!capSecret || !token) return null;
   const claims = await verifyCapabilityToken(token, capSecret);
-  return (
-    !!claims && claims.aud === SECRET_DROP_AUD && claims.drop === dropId && samePerson(claims.actorId, rec.ownerId)
-  );
+  if (
+    !claims ||
+    claims.aud !== SECRET_DROP_AUD ||
+    claims.drop !== dropId ||
+    !samePerson(claims.actorId, rec.ownerId) ||
+    (rec.audienceScopeId && claims.scopeId !== rec.audienceScopeId)
+  )
+    return null;
+  return claims;
 }
 
 function dropFormHtml(
@@ -165,6 +183,9 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     {
       actorId: capability.actorId,
       scopeId: capability.scopeId,
+      ...(capability.botActor ? { botActor: true } : {}),
+      ...(capability.liveActor ? { liveActor: true } : {}),
+      ...(capability.members ? { members: capability.members } : {}),
       aud: SECRET_DROP_AUD,
       drop: dropId,
       exp: Date.now() + SECRET_DROP_TTL_MS,
@@ -183,7 +204,7 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
     res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
     return void res.end(dropFormHtml(params.id!, null));
   }
-  if (!(await dropLinkTokenOk(ctx, params.id!, peeked.rec))) {
+  if (!(await dropLinkClaims(ctx, params.id!, peeked.rec))) {
     res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
     return void res.end(dropFormHtml(params.id!, null));
   }
@@ -213,7 +234,8 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
         : "this drop link is invalid or was already used — ask the agent for a fresh one";
     return sendJson(res, 404, { error: "not_found", message });
   }
-  if (!(await dropLinkTokenOk(ctx, params.id!, peeked.rec))) {
+  const linkClaims = await dropLinkClaims(ctx, params.id!, peeked.rec);
+  if (!linkClaims) {
     return sendJson(res, 404, {
       error: "not_found",
       message: "this drop link is invalid or was already used — ask the agent for a fresh one",
@@ -225,7 +247,8 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
       message: "sign in as the account owner to complete this credential drop",
     });
   }
-  if (!(await dropScopeAuthorized(ctx, peeked.rec))) {
+  const attestation = linkClaims === true ? undefined : linkClaims;
+  if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
     await deps.secretDrops.redeem(params.id!).catch(() => null);
     return sendJson(res, 409, {
       error: "scope_changed",
@@ -266,7 +289,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
       ...(drop.host ? { host: drop.host } : {}),
       origin: "secret-drop",
     });
-    const mayShare = await dropScopeAuthorized(ctx, drop);
+    const mayShare = await dropScopeAuthorized(ctx, drop, attestation);
     let grantId: string | undefined;
     if (mayShare && drop.grantMode && drop.audienceScopeId) {
       const grant = await deps.keychain.createGrant({

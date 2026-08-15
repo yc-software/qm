@@ -435,6 +435,48 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
   assert.deepEqual(captured!.egress, { allowedHosts: [], deniedHosts: [] });
 });
 
+test("live bot attestation reaches control, OAuth, and egress capabilities", async () => {
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+  });
+  const { app, sandbox } = buildApp(config);
+  let captured: ProvisionOptions | undefined;
+  const realProvision = sandbox.provision.bind(sandbox);
+  sandbox.provision = (layers, opts) => {
+    captured = opts;
+    return realProvision(layers, opts);
+  };
+  const actor = { externalId: "B-LEGACY", isBot: true };
+  const res = await app.turn(
+    channel("!run echo bot", {
+      actor,
+      botActor: true,
+      liveActor: true,
+      conversation: {
+        kind: "channel",
+        threadRef: "ch:C1:bot",
+        channelRef: "C1",
+        isPrivate: true,
+        audience: [actor],
+        publishMembers: [actor],
+      },
+    }),
+  );
+  assert.equal(res.status, "ok");
+  for (const token of [
+    captured!.env!.AGENT_API_TOKEN,
+    captured!.env!.AGENT_OAUTH_CONSENT_TOKEN,
+    captured!.egressToken,
+  ]) {
+    const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
+    assert.equal(claims?.botActor, true);
+    assert.equal(claims?.liveActor, true);
+    assert.deepEqual(claims?.members, [{ id: "B-LEGACY", type: "internal" }]);
+  }
+});
+
 test("org env-delivery credentials ride provision env under their envKey — read live, so a rotation applies next turn", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),

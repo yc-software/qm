@@ -251,7 +251,13 @@ describe("surface-context pulls", async () => {
     const asking = post(
       "/v1/surface-file",
       { channel: "#eng", ts: "1699.5", name: "wave.png" },
-      { "x-agent-capability": await cap() },
+      {
+        "x-agent-capability": await cap({
+          botActor: true,
+          liveActor: true,
+          members: [{ id: "U1", type: "internal" }],
+        }),
+      },
     );
     const query = await fulfillNext(() => ({
       file: { blobId: "blob-42", name: "wave.png", sizeBytes: 3, mimetype: "image/png", author: "Alice" },
@@ -268,6 +274,9 @@ describe("surface-context pulls", async () => {
     assert.ok(token, "the download token verifies against the core secret");
     assert.equal(token!.aud, "blob-transfer");
     assert.deepEqual(token!.blob, { dir: "read", id: "blob-42" }, "the token moves this one blob, read-only");
+    assert.equal(token!.botActor, true);
+    assert.equal(token!.liveActor, true);
+    assert.deepEqual(token!.members, [{ id: "U1", type: "internal" }]);
   });
 
   it("a current-conversation file pull rides the token's opaque target and passes threadTs through", async () => {

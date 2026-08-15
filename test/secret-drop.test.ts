@@ -514,6 +514,31 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.match(html, /location\.search/, "the submit fetch carries location.search");
     assert.ok(!html.includes(t), "the token itself is never embedded in the page body");
   });
+
+  it("a live bot attestation survives mint and private-scope redemption", async () => {
+    await built.directory.replaceChannels(
+      [{ channelId: "C1", name: "drops", isPrivate: true }],
+      [{ channelId: "C1", principalId: "U_A" }],
+    );
+    await built.directory.replaceCapabilityChannels(["C1"], [{ channelId: "C1", principalId: "U_A" }], ["C1"]);
+    const members = [{ id: "B-LEGACY", type: "internal" as const }];
+    const minted = await post(
+      "/v1/keychain/drops",
+      { service: "botsvc", purpose: "bot credential" },
+      await capFor("B-LEGACY", scopeId("channel", "C1"), {
+        botActor: true,
+        liveActor: true,
+        members,
+      }),
+    );
+    assert.equal(minted.status, 200);
+    const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+    const token = await verifyCapabilityToken(linkToken(formPath)!, SECRET);
+    assert.equal(token?.botActor, true);
+    assert.equal(token?.liveActor, true);
+    assert.deepEqual(token?.members, members);
+    assert.equal((await redeem(dropId, { secret: "bot-secret" }, "B-LEGACY", linkToken(formPath))).status, 200);
+  });
 });
 
 describe("/v1/keychain/drops — sibling-aware resume", () => {

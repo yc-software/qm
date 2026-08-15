@@ -184,7 +184,7 @@ export async function resolveChannelMembership(opts: {
   slackIdsByPrincipal?: Map<string, string>;
 }> {
   const { memberIds, actor, info } = opts;
-  if (!memberIds.includes(opts.actorSlackId)) return { audience: [actor, externalMarker()] };
+  if (!actor.isBot && !memberIds.includes(opts.actorSlackId)) return { audience: [actor, externalMarker()] };
 
   const members: ActorAssertion[] = [];
   const slackIdsByPrincipal = new Map<string, string>();

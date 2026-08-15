@@ -192,6 +192,9 @@ async function gate(
         actorId: capability.actorId,
         scopeId: capability.scopeId,
         ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
+        ...(capability.botActor ? { botActor: true } : {}),
+        ...(capability.liveActor ? { liveActor: true } : {}),
+        ...(capability.members ? { members: capability.members } : {}),
       }))
     ) {
       sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });

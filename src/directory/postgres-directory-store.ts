@@ -315,6 +315,34 @@ export function createPostgresDirectoryStore(connectionString: string): Director
 
       const applied = await swapIfChanged("channels_hash", hash, syncedAt, async (client) => {
         const channelIds = [...listedIds];
+        const privateIds = list.filter((channel) => channel.isPrivate === true).map((channel) => channel.channelId);
+        const becamePrivate = privateIds.length
+          ? (
+              await client.query(
+                "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND channel_id = ANY($2::text[]) AND is_private = FALSE",
+                [orgId, privateIds],
+              )
+            ).rows.map((row) => row.channel_id as string)
+          : [];
+        if (becamePrivate.length) {
+          await client.query(
+            "DELETE FROM directory_channel_members WHERE org_id = $1 AND channel_id = ANY($2::text[])",
+            [orgId, becamePrivate],
+          );
+          await client.query(
+            "DELETE FROM directory_capability_channel_members WHERE org_id = $1 AND channel_id = ANY($2::text[])",
+            [orgId, becamePrivate],
+          );
+          await client.query(
+            "DELETE FROM directory_capability_channels WHERE org_id = $1 AND channel_id = ANY($2::text[])",
+            [orgId, becamePrivate],
+          );
+          await client.query(
+            "DELETE FROM directory_capability_channel_revocations WHERE org_id = $1 AND channel_id = ANY($2::text[])",
+            [orgId, becamePrivate],
+          );
+          await client.query("UPDATE directory_sync SET capability_channels_hash = NULL WHERE org_id = $1", [orgId]);
+        }
         await client.query("DELETE FROM directory_channels WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))", [
           orgId,
           channelIds,
@@ -331,7 +359,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
                name = EXCLUDED.name,
                name_lc = EXCLUDED.name_lc,
                is_private = EXCLUDED.is_private,
-               roster_known = directory_channels.roster_known OR EXCLUDED.roster_known`,
+               roster_known = CASE
+                 WHEN NOT directory_channels.is_private AND EXCLUDED.is_private THEN EXCLUDED.roster_known
+                 ELSE directory_channels.roster_known OR EXCLUDED.roster_known
+               END`,
             [
               orgId,
               channelIds,

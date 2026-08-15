@@ -1010,6 +1010,27 @@ test("orchestrator stamps AGENT_CREDENTIAL_TOKEN with an org-wide credential's s
   const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.aud, CREDENTIAL_BROKER_AUD);
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
+
+  const actor = { externalId: "B-LEGACY", isBot: true };
+  await built.app.turn({
+    surface: "slack",
+    actor,
+    botActor: true,
+    liveActor: true,
+    conversation: {
+      kind: "channel",
+      threadRef: "ch:C1:bot",
+      channelRef: "C1",
+      isPrivate: true,
+      audience: [actor],
+      publishMembers: [actor],
+    },
+    text: "!run echo bot",
+  });
+  const botClaims = await verifyCapabilityToken(env()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(botClaims?.botActor, true);
+  assert.equal(botClaims?.liveActor, true);
+  assert.deepEqual(botClaims?.members, [{ id: "B-LEGACY", type: "internal" }]);
 });
 
 test("orchestrator does NOT stamp a credential granted only to someone else", async () => {

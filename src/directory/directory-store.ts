@@ -144,11 +144,27 @@ export function createDirectoryStore(): DirectoryStore {
     },
     async replaceChannels(nextChannels, nextChannelMembers, syncedAt, nextChannelRosterIds) {
       if (!acceptSync("channels", syncedAt)) return false;
+      const becamePrivate = new Set(
+        nextChannels
+          .filter(
+            (next) =>
+              next.isPrivate === true &&
+              channels.some((current) => current.channelId === next.channelId && current.isPrivate !== true),
+          )
+          .map((channel) => channel.channelId),
+      );
       channels = nextChannels.filter((c) => c.channelId && c.name);
       const listed = new Set(channels.map((channel) => channel.channelId));
       knownChannelRosters = knownChannelRosters
         ? new Set([...knownChannelRosters].filter((channelId) => listed.has(channelId)))
         : undefined;
+      for (const channelId of becamePrivate) {
+        channelMembers?.delete(channelId);
+        knownChannelRosters?.delete(channelId);
+        capabilityChannelMembers?.delete(channelId);
+        knownCapabilityChannelRosters?.delete(channelId);
+        capabilityChannelRevocations.delete(channelId);
+      }
       if (nextChannelMembers !== undefined) {
         const rosterIds = new Set(nextChannelRosterIds ?? channels.map((channel) => channel.channelId));
         const byChannel = new Map(

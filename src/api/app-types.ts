@@ -318,7 +318,9 @@ export interface App {
   listScopeResources(principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   membershipControlsScope(scope: ScopeId): Promise<boolean>;
-  authorizesCapabilityScope(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion">): Promise<boolean>;
+  authorizesCapabilityScope(
+    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
+  ): Promise<boolean>;
   openFileForViewer(id: string, principalId: string): Promise<OpenedFile | null>;
   grant(g: Grant): Promise<void>;
   revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string): Promise<void>;

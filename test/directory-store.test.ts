@@ -322,4 +322,20 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     );
     assert.equal(await d.channelCapabilityMembership("C-new", "U-new"), true);
   });
+
+  it("invalidates preserved rosters when a public channel becomes private", async () => {
+    const d = createDirectoryStore();
+    await d.replaceChannels([{ channelId: "C-one", name: "one" }], [{ channelId: "C-one", principalId: "U-old" }]);
+    await d.replaceCapabilityChannels(["C-one"], [{ channelId: "C-one", principalId: "U-old" }], ["C-one"]);
+    await d.replaceChannels([{ channelId: "C-one", name: "one", isPrivate: true }]);
+    assert.equal(await d.channelMembership("C-one", "U-old"), undefined);
+    assert.equal(await d.channelCapabilityMembership("C-one", "U-old"), undefined);
+
+    await d.replaceChannels([{ channelId: "C-one", name: "one" }]);
+    await d.replaceChannels(
+      [{ channelId: "C-one", name: "one", isPrivate: true }],
+      [{ channelId: "C-one", principalId: "U-current" }],
+    );
+    assert.deepEqual(await d.channelMemberIds("C-one"), ["U-current"]);
+  });
 });

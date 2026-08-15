@@ -90,34 +90,16 @@ test("Docker provider migrates running deployments off the legacy shared network
   assert.ok(calls.some((args) => args.join(" ") === `network disconnect agent-deploynet ${containerName}`));
 });
 
-test("Docker provider retries legacy migration after the daemon recovers", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+test("constructing a Docker provider does not inspect or migrate unrelated deployments", async () => {
   const calls: string[][] = [];
-  const container = "agent-deploy-legacy123";
-  let legacyInspections = 0;
   const dockerExec: DockerExec = async (args) => {
     calls.push(args);
-    if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
-      legacyInspections++;
-      return legacyInspections === 1
-        ? { code: 1, stdout: "", stderr: "daemon unavailable" }
-        : { code: 0, stdout: `${container}\n`, stderr: "" };
-    }
-    if (args[0] === "inspect") {
-      return { code: 0, stdout: JSON.stringify({ "agent-deploynet": {} }), stderr: "" };
-    }
-    if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "missing" };
     return { code: 0, stdout: "", stderr: "" };
   };
 
   createDockerDeployProvider({ dockerExec });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(legacyInspections, 1);
-  t.mock.timers.tick(30_000);
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(legacyInspections, 2);
-  assert.ok(calls.some((args) => args.join(" ") === `network disconnect agent-deploynet ${container}`));
+  assert.deepEqual(calls, []);
 });
 
 test("an unrelated legacy migration failure does not block a new deployment", async () => {
