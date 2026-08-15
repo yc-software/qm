@@ -30,6 +30,7 @@ function start() {
       signingSecret: SECRET,
     }),
   );
+  void built.directory.replaceChannels([{ channelId: "C1", name: "agent-admin", isPrivate: false }]);
   const keychain = createKeychain({
     creds: createMemoryMap(),
     grants: createMemoryMap(),

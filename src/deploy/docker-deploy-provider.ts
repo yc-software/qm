@@ -1,14 +1,14 @@
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
-import { spawnDockerExec } from "../sandbox/docker-exec.ts";
+import { spawnDockerExec, type DockerExec } from "../sandbox/docker-exec.ts";
 
-const NETWORK = "agent-deploynet";
 const APP_PORT = 8080;
 
 export interface DockerDeployProviderOptions {
   image?: string;
   docker?: string;
   basePort?: number;
+  dockerExec?: DockerExec;
 }
 
 export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {}): DeployProvider {
@@ -32,15 +32,26 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     }
   };
 
-  const dexec = spawnDockerExec(docker);
+  const dexec = opts.dockerExec ?? spawnDockerExec(docker);
 
   const name = (d: Deployment) => `agent-deploy-${d.id.slice(0, 12)}`;
+  const network = (d: Deployment) => `${name(d)}-net`;
+  const ensureNetwork = async (d: Deployment): Promise<string> => {
+    const net = network(d);
+    if ((await dexec(["network", "inspect", net])).code !== 0) {
+      const r = await dexec(["network", "create", net]);
+      if (r.code !== 0 && !/already exists/i.test(r.stderr)) {
+        throw new Error(`docker network create ${net} failed: ${r.stderr.trim()}`);
+      }
+    }
+    return net;
+  };
 
   return {
     profile: { managedScaleToZero: false },
 
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
-      await dexec(["network", "create", NETWORK]);
+      const net = await ensureNetwork(d);
       await dexec(["rm", "-f", name(d)]);
       const hostPort = allocPort(name(d));
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
@@ -50,7 +61,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
         "--name",
         name(d),
         "--network",
-        NETWORK,
+        net,
         "--memory",
         "512m",
         "--cpus",
@@ -72,6 +83,8 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
         version.entrypoint,
       ]);
       if (r.code !== 0) {
+        await dexec(["rm", "-f", name(d)]);
+        await dexec(["network", "rm", net]);
         freePort(name(d));
         throw new Error(`deploy run failed: ${r.stderr.trim()}`);
       }
@@ -87,6 +100,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
 
     async destroy(d: Deployment): Promise<void> {
       await dexec(["rm", "-f", name(d)]);
+      await dexec(["network", "rm", network(d)]);
       freePort(name(d));
     },
   };

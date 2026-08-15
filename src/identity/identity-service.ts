@@ -104,7 +104,7 @@ export function createIdentityService(backing?: DurableMap<DeactivationRecord>):
       return refreshP;
     },
     resolve(actor: ActorAssertion): Principal {
-      const p = classify(actor.externalId, actor.isExternalGuest);
+      const p = classify(actor.externalId, actor.isExternalGuest || actor.isBot);
       return {
         ...p,
         ...(actor.teamIds ? { teamIds: actor.teamIds } : {}),

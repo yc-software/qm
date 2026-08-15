@@ -89,6 +89,19 @@ test("the toggle never lets an external actor interact", async () => {
   assert.match(res.reason ?? "", /internal-only/);
 });
 
+test("a bot assertion is refused before entering the turn pipeline", async () => {
+  const built = freshApp();
+  const res = await built.app.turn({
+    surface: "slack",
+    actor: { externalId: "B1", isBot: true },
+    conversation: { kind: "dm", threadRef: "dm:B1:t1" },
+    text: "hello",
+  });
+  assert.equal(res.status, "refused");
+  assert.match(res.reason ?? "", /internal-only/);
+  assert.equal((await built.runs.list()).length, 0);
+});
+
 test("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
   const built = freshApp();
   const server = createInsecureTestServer(built.app, {

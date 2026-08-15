@@ -240,6 +240,20 @@ test("allInternalChannelMembers: all-internal + complete → deduped ids; WITHHE
   );
 });
 
+test("bot accounts are absent from shared-scope rosters", () => {
+  assert.deepEqual(
+    allInternalChannelMembers(
+      [
+        { externalId: "U1", isExternalGuest: false },
+        { externalId: "B1", isExternalGuest: false, isBot: true },
+      ],
+      true,
+      { is_private: true },
+    ),
+    ["U1"],
+  );
+});
+
 function membershipDeps(overrides: Partial<Parameters<typeof resolveChannelMembership>[0]> = {}) {
   const internal = (externalId: string): ActorAssertion => ({ externalId, isExternalGuest: false });
   const byId: Record<string, ActorAssertion> = {

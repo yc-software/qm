@@ -614,6 +614,52 @@ test("an external principal is refused in a DM before core sees the text", async
   }
 });
 
+test("a bot-authored mention never becomes a turn", async () => {
+  const f = await fixture();
+  try {
+    f.client.usersById.set("B1", {
+      id: "B1",
+      team_id: "T1",
+      is_bot: true,
+      name: "peerbot",
+      profile: { display_name: "Peer Bot" },
+    });
+    f.client.membersByChannel.set("C1", ["U1", "U2", "B1", "UBOT"]);
+    await f.app.emitEvent("app_mention", {
+      channel: "C1",
+      channel_type: "channel",
+      user: "B1",
+      bot_id: "B-PEER",
+      text: "<@UBOT> hello",
+      ts: "102.2",
+    });
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.client.posts.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a bot-authored stop cannot abort a live run", async () => {
+  const f = await fixture();
+  try {
+    f.core.activeRun = "run-active";
+    await f.app.emitMessage({
+      channel: "D1",
+      channel_type: "im",
+      subtype: "bot_message",
+      user: "B1",
+      bot_id: "B-PEER",
+      text: "stop",
+      ts: "102.3",
+    });
+    assert.deepEqual(f.core.abortedRuns, []);
+    assert.equal(f.core.turns.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a Slack Connect mention is refused ephemerally and never mirrored", async () => {
   const f = await fixture();
   try {
@@ -832,7 +878,7 @@ test("a group DM whose listing fails is retried at most once, never once per mes
   }
 });
 
-test("a peer bot's thread reply dispatches without attesting liveness", async () => {
+test("a peer bot's thread reply is mirrored without dispatching a turn", async () => {
   const f = await fixture();
   try {
     f.client.usersById.set("UB2", { id: "UB2", team_id: "T1", name: "copilot", is_bot: true });
@@ -850,10 +896,7 @@ test("a peer bot's thread reply dispatches without attesting liveness", async ()
       ts: "301.3",
       thread_ts: "301.1",
     });
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].unprompted, true);
-    assert.equal(f.core.turns[0].entryTs, "301.3");
-    assert.equal(f.core.turns[0].liveActor, undefined, "a bot author is automation, never a live act");
+    assert.equal(f.core.turns.length, 0);
   } finally {
     await f.stop();
   }

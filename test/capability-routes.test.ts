@@ -64,6 +64,7 @@ describe("capability-token control plane (crons + SOUL)", () => {
         signingSecret: SECRET,
       }),
     );
+    await built.directory.replaceChannels([{ channelId: "C", name: "eng", isPrivate: false }]);
     server = createServer(built.app, {
       signingSecret: SECRET,
       scheduler: built.scheduler,
@@ -625,7 +626,7 @@ describe("capability-token control plane (crons + SOUL)", () => {
     assert.equal((await get(`/v1/crons/${id}`, { "x-agent-capability": await capFor("U1") })).status, 404);
   });
 
-  it("get/patch/delete/run of an OWNER cron are denied to another user (403), even in the same channel", async () => {
+  it("another public-channel user can read an OWNER cron but cannot patch, run, or delete it", async () => {
     const created = (await (
       await post(
         "/v1/crons",
@@ -634,7 +635,7 @@ describe("capability-token control plane (crons + SOUL)", () => {
       )
     ).json()) as any;
     const id = created.cron.id;
-    assert.equal((await get(`/v1/crons/${id}`, { "x-agent-capability": await capChannel("U2") })).status, 403);
+    assert.equal((await get(`/v1/crons/${id}`, { "x-agent-capability": await capChannel("U2") })).status, 200);
     assert.equal(
       (await patch(`/v1/crons/${id}`, { action: "hijacked" }, { "x-agent-capability": await capChannel("U2") })).status,
       403,

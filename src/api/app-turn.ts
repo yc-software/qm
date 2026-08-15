@@ -57,6 +57,9 @@ export function createTurnMethods(
     async turn(req: TurnRequest): Promise<TurnResult> {
       await deps.identity.refresh();
       const actor: Principal = deps.identity.resolve(req.actor);
+      if (!deps.identity.isInternal(actor)) {
+        return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
+      }
       let projectAudience: Principal[] | undefined;
       let projectName: string | undefined;
       let projectVersion: string | undefined;
@@ -66,9 +69,6 @@ export function createTurnMethods(
       const projectId = projectGroup ? projectIdFromGroupRef(conversationRef) : null;
 
       if (projectGroup) {
-        if (!deps.identity.isInternal(actor)) {
-          return { status: "refused", reason: "you're not a member of that context" };
-        }
         if (!projectId) return { status: "refused", reason: "you're not a member of that context" };
         const project = await deps.projects?.get(projectId);
         if (

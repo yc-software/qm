@@ -324,7 +324,7 @@ export function createDirectory(deps: {
 
   async function pushDirectory(snap: UserSnapshot, client: any): Promise<void> {
     const members = [...snap.byId.entries()]
-      .filter(([, u]) => !u.actor.isExternalGuest)
+      .filter(([, u]) => !u.actor.isExternalGuest && !u.actor.isBot)
       .map(([slackId, u]) => {
         const a = u.actor;
         return {

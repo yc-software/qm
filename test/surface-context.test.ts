@@ -81,6 +81,7 @@ describe("surface-context pulls", async () => {
     ]);
     await built.app.upsertChannels(
       [
+        { channelId: "C9", name: "current" },
         { channelId: "C-ENG", name: "eng" },
         { channelId: "CPUBLIC01", name: "general" },
         { channelId: "C-SECRET", name: "warroom", isPrivate: true },

@@ -502,6 +502,22 @@ test("file bundles: one item per service, materialize to a /tmp script with env 
     (e: KeychainError) => e.status === 400,
     "paths must be home-relative",
   );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "unsafe", files: [{ path: "$(uname)", contentBase64: b64("x") }] }),
+    (e: KeychainError) => e.status === 400,
+    "paths must contain portable filename characters",
+  );
+  assert.throws(
+    () =>
+      renderUseScript({
+        kind: "file",
+        credentialId: "legacy-unsafe",
+        ownerId: "U1",
+        service: "unsafe",
+        files: [{ path: "$(uname)", contentBase64: b64("x") }],
+      }),
+    /file path must be home-relative/,
+  );
 
   const grant = await k.createGrant({
     credentialId: cred.id,
@@ -952,6 +968,18 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-routes-")), signingSecret: SECRET }));
+    await built.directory.replaceChannels([
+      { channelId: "C_SECONDS", name: "seconds", isPrivate: false },
+      { channelId: "C_BAD_EXP", name: "bad-exp", isPrivate: false },
+      { channelId: "C7", name: "grants", isPrivate: false },
+      { channelId: "C_OVERVIEW", name: "overview", isPrivate: false },
+      { channelId: "C_NAMED", name: "pilot-portal", isPrivate: false },
+      { channelId: "C8", name: "file-grants", isPrivate: false },
+    ]);
+    await built.directory.replaceGroups([
+      { groupId: "G_CONN", principalId: "alex@conn" },
+      { groupId: "G_CONN", principalId: "carol@conn" },
+    ]);
     server = createServer(built.app, {
       signingSecret: SECRET,
       keychain: built.keychain,

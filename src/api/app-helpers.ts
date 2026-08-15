@@ -404,6 +404,12 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion">,
   ): Promise<boolean> {
     const { kind, ref } = parseScopeId(claims.scopeId);
+    if (
+      (kind === "channel" || kind === "group") &&
+      !(await principalCanAccessCurrentScope(claims.actorId, claims.scopeId))
+    ) {
+      return false;
+    }
     if (kind !== "group" || deps.projects?.recognizes(ref) !== true) return true;
     return (
       (await principalCanManageScope(claims.actorId, claims.scopeId)) &&
