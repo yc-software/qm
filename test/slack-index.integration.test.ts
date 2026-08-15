@@ -23,6 +23,7 @@ class FakeSlackClient {
   readonly membersByChannel = new Map<string, string[]>();
   readonly messagesByChannel = new Map<string, any[]>();
   readonly membershipFailures = new Set<string>();
+  readonly membershipListings = new Map<string, number>();
   groupListings = 0;
   failGroupListing = false;
   private postSequence = 0;
@@ -135,6 +136,7 @@ class FakeSlackClient {
       return;
     }
     if (method === "conversations.members") {
+      this.membershipListings.set(args.channel, (this.membershipListings.get(args.channel) ?? 0) + 1);
       if (this.membershipFailures.has(args.channel)) throw new Error("missing conversations:read");
       yield { members: this.membersByChannel.get(args.channel) ?? [] };
       return;
@@ -490,12 +492,12 @@ test("large public channels publish their complete roster and accept internal tu
 test("failed background roster reads are marked unknown instead of clearing known capabilities", async () => {
   const f = await fixture();
   try {
-    assert.ok(f.core.directories.at(-1).capabilityChannelRosterIds.includes("C1"));
-    f.client.membershipFailures.add("C1");
+    assert.ok(f.core.directories.at(-1).capabilityChannelRosterIds.includes("CPX"));
+    f.client.membershipFailures.add("CPX");
     const pushes = f.core.directories.length;
     await f.app.emitEvent("channel_rename", { channel: { id: "C1" }, event_ts: "100.5" });
     await waitFor(() => f.core.directories.length > pushes);
-    assert.ok(!f.core.directories.at(-1).capabilityChannelRosterIds.includes("C1"));
+    assert.ok(!f.core.directories.at(-1).capabilityChannelRosterIds.includes("CPX"));
   } finally {
     await f.stop();
   }
@@ -504,26 +506,26 @@ test("failed background roster reads are marked unknown instead of clearing know
 test("a failed refresh after a leave event revokes only the departing member", async () => {
   const f = await fixture();
   try {
-    f.client.membershipFailures.add("C1");
+    f.client.membershipFailures.add("CPX");
     const pushes = f.core.directories.length;
-    await f.app.emitEvent("member_left_channel", { user: "U2", channel: "C1", event_ts: "100.6" });
+    await f.app.emitEvent("member_left_channel", { user: "U1", channel: "CPX", event_ts: "100.6" });
     await waitFor(() => f.core.directories.length > pushes);
     const pushed = f.core.directories.at(-1);
-    assert.ok(!pushed.capabilityChannelRosterIds.includes("C1"));
-    assert.deepEqual(pushed.capabilityChannelRevocations, [{ channelId: "C1", principalId: "U2" }]);
+    assert.ok(!pushed.capabilityChannelRosterIds.includes("CPX"));
+    assert.deepEqual(pushed.capabilityChannelRevocations, [{ channelId: "CPX", principalId: "U1" }]);
   } finally {
     await f.stop();
   }
 });
 
-test("Slack Connect directory rosters contain only internal humans", async () => {
+test("Slack Connect directory rosters contain only internal principals", async () => {
   const f = await fixture({ externalParticipants: true });
   try {
     const pushed = f.core.directories.at(-1);
-    assert.ok(pushed.capabilityChannelRosterIds.includes("CX"));
+    assert.ok(!pushed.capabilityChannelRosterIds.includes("CX"));
     assert.ok(pushed.capabilityChannelRosterIds.includes("CPX"));
     assert.deepEqual(
-      pushed.capabilityChannelMembers.filter((m: any) => m.channelId === "CX").map((m: any) => m.principalId),
+      pushed.channelMembers.filter((m: any) => m.channelId === "CX").map((m: any) => m.principalId),
       ["U1"],
     );
     assert.deepEqual(
@@ -531,6 +533,11 @@ test("Slack Connect directory rosters contain only internal humans", async () =>
       ["U1"],
     );
     assert.ok(!pushed.channelRosterIds.includes("CPX"));
+    f.client.membershipListings.set("CPX", 0);
+    const pushes = f.core.directories.length;
+    await f.app.emitEvent("channel_rename", { channel: { id: "C1" }, event_ts: "100.7" });
+    await waitFor(() => f.core.directories.length > pushes);
+    assert.equal(f.client.membershipListings.get("CPX"), 1);
   } finally {
     await f.stop();
   }
@@ -727,7 +734,7 @@ test("an external principal is refused in a DM before core sees the text", async
   }
 });
 
-test("a bot-authored mention never becomes a turn", async () => {
+test("a bot-authored mention can become a turn", async () => {
   const f = await fixture();
   try {
     f.client.usersById.set("B1", {
@@ -746,14 +753,15 @@ test("a bot-authored mention never becomes a turn", async () => {
       text: "<@UBOT> hello",
       ts: "102.2",
     });
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.client.posts.length, 0);
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.core.turns[0].actor.externalId, "B1");
+    assert.equal(f.client.posts[0].text, "agent reply");
   } finally {
     await f.stop();
   }
 });
 
-test("a bot-authored stop cannot abort a live run", async () => {
+test("a bot-authored stop can abort a live run", async () => {
   const f = await fixture();
   try {
     f.core.activeRun = "run-active";
@@ -766,7 +774,7 @@ test("a bot-authored stop cannot abort a live run", async () => {
       text: "stop",
       ts: "102.3",
     });
-    assert.deepEqual(f.core.abortedRuns, []);
+    assert.deepEqual(f.core.abortedRuns, ["run-active"]);
     assert.equal(f.core.turns.length, 0);
   } finally {
     await f.stop();
@@ -1032,7 +1040,7 @@ test("a group DM whose listing fails is retried at most once, never once per mes
   }
 });
 
-test("a peer bot's thread reply is mirrored without dispatching a turn", async () => {
+test("a peer bot's thread reply dispatches without attesting liveness", async () => {
   const f = await fixture();
   try {
     f.client.usersById.set("UB2", { id: "UB2", team_id: "T1", name: "copilot", is_bot: true });
@@ -1050,7 +1058,10 @@ test("a peer bot's thread reply is mirrored without dispatching a turn", async (
       ts: "301.3",
       thread_ts: "301.1",
     });
-    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.core.turns[0].unprompted, true);
+    assert.equal(f.core.turns[0].entryTs, "301.3");
+    assert.equal(f.core.turns[0].liveActor, undefined, "a bot author is automation, never a live act");
   } finally {
     await f.stop();
   }

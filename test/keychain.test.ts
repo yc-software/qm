@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
@@ -502,22 +503,36 @@ test("file bundles: one item per service, materialize to a /tmp script with env 
     (e: KeychainError) => e.status === 400,
     "paths must be home-relative",
   );
-  await assert.rejects(
-    k.save({ ownerId: "U1", service: "unsafe", files: [{ path: "$(uname)", contentBase64: b64("x") }] }),
-    (e: KeychainError) => e.status === 400,
-    "paths must contain portable filename characters",
+  const unusual = await k.save({
+    ownerId: "U1",
+    service: "unusual",
+    files: [{ path: "$(echo injected)", contentBase64: b64("x") }],
+  });
+  assert.deepEqual(unusual.targets, ["$(echo injected)"]);
+  const unusualScript = renderUseScript({
+    kind: "file",
+    credentialId: "legacy-unusual",
+    ownerId: "U1",
+    service: "unusual",
+    files: [{ path: "$(echo injected)", contentBase64: b64("x") }],
+  });
+  const renderedPath = execFileSync("sh", ["-c", `${unusualScript}\nfind "$HOME" -maxdepth 1 -type f -print`], {
+    encoding: "utf8",
+  });
+  assert.match(renderedPath, /\/\$\(echo injected\)$/m);
+  const pointerScript = renderUseScript({
+    kind: "file",
+    credentialId: "legacy-pointer",
+    ownerId: "U1",
+    service: "unusual-pointer",
+    files: [{ path: "$(echo injected)/.aws/config", contentBase64: b64("x") }],
+  });
+  const pointerPath = execFileSync(
+    "sh",
+    ["-c", `${pointerScript}\nprintf '%s\\n' "$AWS_CONFIG_FILE"\nfind "$__kc_dir" -type f -print`],
+    { encoding: "utf8" },
   );
-  assert.throws(
-    () =>
-      renderUseScript({
-        kind: "file",
-        credentialId: "legacy-unsafe",
-        ownerId: "U1",
-        service: "unsafe",
-        files: [{ path: "$(uname)", contentBase64: b64("x") }],
-      }),
-    /file path must be home-relative/,
-  );
+  assert.match(pointerPath, /\/\$\(echo injected\)\/\.aws\/config$/m);
 
   const grant = await k.createGrant({
     credentialId: cred.id,

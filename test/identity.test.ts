@@ -17,10 +17,10 @@ test("classifies a flagged Slack Connect user as guest", () => {
   assert.equal(id.isInternal(p), false);
 });
 
-test("resolves bot assertions as non-internal", () => {
+test("resolves bot assertions as internal automation callers", () => {
   const p = id.resolve({ externalId: "B1", isBot: true });
-  assert.equal(p.type, "guest");
-  assert.equal(id.isInternal(p), false);
+  assert.equal(p.type, "internal");
+  assert.equal(id.isInternal(p), true);
 });
 
 test("audienceIsAllInternal is false if any member is non-internal (G1)", () => {

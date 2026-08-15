@@ -747,12 +747,12 @@ describe("capability-token control plane (crons + SOUL)", () => {
     );
   });
 
-  it("a dedicated capability roster revokes a member even when a legacy channel roster still contains them", async () => {
+  it("a public channel remains available to an active internal principal outside its current roster", async () => {
     await built.directory.replaceCapabilityChannels(
       ["C"],
       ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
       ["C"],
     );
-    assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 403);
+    assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
   });
 });

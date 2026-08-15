@@ -128,7 +128,7 @@ export function computeChannelAudience(
 ): ActorAssertion[] {
   if (members && members.length) {
     const byId = new Map<string, ActorAssertion>();
-    for (const m of [actor, ...members]) if (m.externalId && !m.isBot) byId.set(m.externalId, m);
+    for (const m of [actor, ...members]) if (m.externalId) byId.set(m.externalId, m);
     const audience = [...byId.values()];
     if (isExternallyShared(info) && audience.every((m) => !m.isExternalGuest)) {
       audience.push(externalMarker());
@@ -147,7 +147,7 @@ export function computePublishMembers(
 ): ActorAssertion[] | undefined {
   if (!complete) return undefined;
   if (isExternallyShared(info)) return undefined;
-  const all = [actor, ...members].filter((m) => !m.isBot);
+  const all = [actor, ...members];
   if (all.some((m) => m.isExternalGuest)) return undefined;
   const byId = new Map<string, ActorAssertion>();
   for (const m of all) if (m.externalId) byId.set(m.externalId, m);
@@ -161,15 +161,14 @@ export function allInternalChannelMembers(
 ): string[] | undefined {
   if (!complete) return undefined;
   if (isExternallyShared(info)) return undefined;
-  const humans = members.filter((m) => !m.isBot);
-  if (humans.some((m) => m.isExternalGuest)) return undefined;
-  return internalChannelMembers(humans, true);
+  if (members.some((m) => m.isExternalGuest)) return undefined;
+  return internalChannelMembers(members, true);
 }
 
 export function internalChannelMembers(members: ActorAssertion[], complete: boolean): string[] | undefined {
   if (!complete) return undefined;
   const ids = new Set<string>();
-  for (const m of members) if (m.externalId && !m.isExternalGuest && !m.isBot) ids.add(m.externalId);
+  for (const m of members) if (m.externalId && !m.isExternalGuest) ids.add(m.externalId);
   return [...ids];
 }
 
@@ -193,7 +192,7 @@ export async function resolveChannelMembership(opts: {
   for (const id of memberIds) {
     const { actor: member, ok } = await opts.classify(id);
     members.push(member);
-    if (member.externalId && !member.isExternalGuest && !member.isBot) slackIdsByPrincipal.set(member.externalId, id);
+    if (member.externalId && !member.isExternalGuest) slackIdsByPrincipal.set(member.externalId, id);
     if (!ok) complete = false;
   }
   const audience = computeChannelAudience(actor, members, info);

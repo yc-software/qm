@@ -49,23 +49,35 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
 
   const migrateContainer = async (container: string): Promise<boolean> => {
     const inspected = await dexec(["inspect", "--format", "{{json .NetworkSettings.Networks}}", container]);
-    if (inspected.code !== 0) return false;
+    if (inspected.code !== 0) {
+      if (/no such (?:object|container)|not found/i.test(inspected.stderr)) return false;
+      throw new Error(`docker inspect ${container} failed: ${inspected.stderr.trim()}`);
+    }
     let attached: Record<string, unknown>;
     try {
       attached = JSON.parse(inspected.stdout) as Record<string, unknown>;
     } catch {
-      return false;
+      throw new Error(`docker inspect ${container} returned invalid network state`);
     }
     const target = `${container}-net`;
-    try {
-      await ensureNetwork(target);
-    } catch {
-      return false;
+    await ensureNetwork(target);
+    if (!(target in attached)) {
+      const connected = await dexec(["network", "connect", target, container]);
+      if (connected.code !== 0) throw new Error(`docker network connect ${target} failed: ${connected.stderr.trim()}`);
     }
-    if (!(target in attached) && (await dexec(["network", "connect", target, container])).code !== 0) return false;
-    if (LEGACY_NETWORK in attached && (await dexec(["network", "disconnect", LEGACY_NETWORK, container])).code !== 0)
-      return false;
+    if (LEGACY_NETWORK in attached) {
+      const disconnected = await dexec(["network", "disconnect", LEGACY_NETWORK, container]);
+      if (disconnected.code !== 0)
+        throw new Error(`docker network disconnect ${LEGACY_NETWORK} failed: ${disconnected.stderr.trim()}`);
+    }
     return true;
+  };
+  const migrateTarget = async (container: string): Promise<boolean> => {
+    try {
+      return await migrateContainer(container);
+    } catch {
+      return migrateContainer(container);
+    }
   };
 
   let migrationRetryable = false;
@@ -83,7 +95,11 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     for (const container of listed.stdout
       .split(/\s+/)
       .filter((candidate) => /^agent-deploy-[a-zA-Z0-9_-]+$/.test(candidate))) {
-      if (!(await migrateContainer(container))) migrated = false;
+      try {
+        if (!(await migrateContainer(container))) migrated = false;
+      } catch {
+        migrated = false;
+      }
     }
     if (!migrated) return false;
     const removed = await dexec(["network", "rm", LEGACY_NETWORK]);
@@ -131,17 +147,12 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       });
     return migrationInFlight;
   };
-  const ensureMigration = async (): Promise<void> => {
-    if ((await runMigration()) || (await runMigration())) return;
-    throw new Error("legacy Docker network migration incomplete");
-  };
   void runMigration();
 
   return {
     profile: { managedScaleToZero: false },
 
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
-      await ensureMigration();
       const net = await ensureNetwork(network(d));
       await dexec(["rm", "-f", name(d)]);
       const hostPort = allocPort(name(d));
@@ -183,7 +194,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     },
 
     async logs(d: Deployment, opts: { tailLines: number }): Promise<string | null> {
-      await ensureMigration();
+      if (!(await migrateTarget(name(d)))) return null;
       const lines = Math.max(1, Math.min(2000, Math.floor(opts.tailLines)));
       const r = await dexec(["logs", "--tail", String(lines), name(d)]);
       if (r.code !== 0) return null;
@@ -191,15 +202,13 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     },
 
     async destroy(d: Deployment): Promise<void> {
-      await ensureMigration();
       await dexec(["rm", "-f", name(d)]);
       await dexec(["network", "rm", network(d)]);
       freePort(name(d));
     },
 
     async resolveEndpoint(d): Promise<DeployEndpoint | null> {
-      await ensureMigration();
-      return (await migrateContainer(name(d))) ? d.endpoint : null;
+      return (await migrateTarget(name(d))) ? d.endpoint : null;
     },
   };
 }

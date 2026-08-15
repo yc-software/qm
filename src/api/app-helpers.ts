@@ -405,10 +405,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   ): Promise<boolean> {
     const { kind, ref } = parseScopeId(claims.scopeId);
     if (kind === "channel" && !deps.identity.isInternal(deps.identity.classify(claims.actorId))) return false;
-    const capabilityMembership =
-      kind === "channel"
-        ? await deps.directory.channelCapabilityMembership(ref, claims.actorId).catch(() => undefined)
-        : undefined;
+    const privateChannel =
+      kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === true;
+    const capabilityMembership = privateChannel
+      ? await deps.directory.channelCapabilityMembership(ref, claims.actorId).catch(() => undefined)
+      : undefined;
     if (
       (kind === "channel" &&
         !(capabilityMembership ?? (await principalCanAccessCurrentScope(claims.actorId, claims.scopeId)))) ||

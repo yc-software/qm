@@ -203,6 +203,7 @@ test("capability scope checks follow current shared rosters", async () => {
     [
       { channelId: "C-public", principalId: "member" },
       { channelId: "C-private", principalId: "member" },
+      { channelId: "C-private", principalId: "B1" },
     ],
     1,
   );
@@ -211,6 +212,7 @@ test("capability scope checks follow current shared rosters", async () => {
     [
       { channelId: "C-public", principalId: "member" },
       { channelId: "C-private", principalId: "member" },
+      { channelId: "C-private", principalId: "B1" },
     ],
     ["C-public", "C-private"],
     1,
@@ -218,6 +220,7 @@ test("capability scope checks follow current shared rosters", async () => {
   await built.directory.replaceGroups([{ groupId: "G1", principalId: "member" }], 1);
 
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), true);
+  assert.equal(await built.app.authorizesCapabilityScope({ actorId: "B1", scopeId: "channel:C-private" }), true);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "group:G1" }), true);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), true);
 
@@ -234,7 +237,7 @@ test("capability scope checks follow current shared rosters", async () => {
 
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), false);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "group:G1" }), false);
-  assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), false);
+  assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), true);
 });
 
 test("channel capabilities bridge legacy public rosters but still honor deactivation", async () => {

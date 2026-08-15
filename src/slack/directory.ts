@@ -194,7 +194,25 @@ export function createDirectory(deps: {
     refs: ReadonlyArray<{ id: string; info?: ChannelMeta }>,
     kind: RosterKind,
   ): Promise<Map<string, string[]>> {
+    const classified = await allClassifiedRosters(client, refs, kind);
     const rosters = new Map<string, string[]>();
+    for (const ref of refs) {
+      const roster = classified.get(ref.id);
+      if (!roster) continue;
+      const internalIds = kind.allowExternal
+        ? internalChannelMembers(roster.actors, roster.complete)
+        : allInternalChannelMembers(roster.actors, roster.complete, ref.info);
+      if (internalIds) rosters.set(ref.id, internalIds);
+    }
+    return rosters;
+  }
+
+  async function allClassifiedRosters(
+    client: any,
+    refs: ReadonlyArray<{ id: string; info?: ChannelMeta }>,
+    kind: RosterKind,
+  ): Promise<Map<string, { actors: ActorAssertion[]; complete: boolean }>> {
+    const rosters = new Map<string, { actors: ActorAssertion[]; complete: boolean }>();
     const limit = kind.limit ?? MAX_PRIVATE_CHANNELS;
     const slice = refs.slice(0, limit);
     if (refs.length > slice.length) {
@@ -217,10 +235,7 @@ export function createDirectory(deps: {
         actors.push(actor);
         if (!ok) complete = false;
       }
-      const internalIds = kind.allowExternal
-        ? internalChannelMembers(actors, complete)
-        : allInternalChannelMembers(actors, complete, ref.info);
-      if (internalIds) rosters.set(ref.id, internalIds);
+      rosters.set(ref.id, { actors, complete });
     }
     return rosters;
   }
@@ -253,40 +268,25 @@ export function createDirectory(deps: {
     });
     for (const channel of publicChannels) {
       const internalIds = publicRosters.get(channel.id);
-      if (!internalIds) {
-        for (const principalId of invalidations.get(channel.id) ?? []) {
-          capabilityChannelRevocations.push({ channelId: channel.id, principalId });
-        }
-        continue;
-      }
+      if (!internalIds) continue;
       channelRosterIds.push(channel.id);
-      capabilityChannelRosterIds.push(channel.id);
-      for (const pid of internalIds) {
-        channelMembers.push({ channelId: channel.id, principalId: pid });
-        capabilityChannelMembers.push({ channelId: channel.id, principalId: pid });
-      }
+      for (const pid of internalIds) channelMembers.push({ channelId: channel.id, principalId: pid });
     }
-    const rosters = await allInternalRosters(client, privateChannels, {
+    const rosters = await allClassifiedRosters(client, privateChannels, {
       plural: "private channels",
-      authz: "private-channel-send",
+      authz: "private-channel",
       item: "private channel",
       limit: privateChannels.length,
-    });
-    const capabilityRosters = await allInternalRosters(client, privateChannels, {
-      plural: "private channels",
-      authz: "private-channel-capability",
-      item: "private channel",
-      limit: privateChannels.length,
-      allowExternal: true,
     });
     for (const c of privateChannels) {
       channels.push({ channelId: c.id, name: c.name, isPrivate: true });
-      const internalIds = rosters.get(c.id);
+      const roster = rosters.get(c.id);
+      const internalIds = roster && allInternalChannelMembers(roster.actors, roster.complete, c.info);
       if (internalIds) {
         channelRosterIds.push(c.id);
         for (const pid of internalIds) channelMembers.push({ channelId: c.id, principalId: pid });
       }
-      const capabilityIds = capabilityRosters.get(c.id);
+      const capabilityIds = roster && internalChannelMembers(roster.actors, roster.complete);
       if (!capabilityIds) {
         for (const principalId of invalidations.get(c.id) ?? []) {
           capabilityChannelRevocations.push({ channelId: c.id, principalId });
@@ -452,7 +452,7 @@ export function createDirectory(deps: {
     invalidations: ChannelInvalidations = new Map(),
   ): Promise<boolean> {
     const members = [...snap.byId.entries()]
-      .filter(([, u]) => !u.actor.isExternalGuest && !u.actor.isBot)
+      .filter(([, u]) => !u.actor.isExternalGuest)
       .map(([slackId, u]) => {
         const a = u.actor;
         return {

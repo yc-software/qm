@@ -119,3 +119,46 @@ test("Docker provider retries legacy migration after the daemon recovers", async
   assert.equal(legacyInspections, 2);
   assert.ok(calls.some((args) => args.join(" ") === `network disconnect agent-deploynet ${container}`));
 });
+
+test("an unrelated legacy migration failure does not block a new deployment", async () => {
+  const dockerExec: DockerExec = async (args) => {
+    if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
+      return { code: 0, stdout: "agent-deploy-broken\n", stderr: "" };
+    }
+    if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "daemon unavailable" };
+    if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "missing" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/new",
+  });
+  const provider = createDockerDeployProvider({ dockerExec });
+
+  await assert.doesNotReject(provider.apply(deployment, deployment.versions[0]!));
+});
+
+test("a transient target inspection failure does not report the deployment missing", async () => {
+  const dockerExec: DockerExec = async (args) => {
+    if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
+      return { code: 1, stdout: "", stderr: "No such network" };
+    }
+    if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "daemon unavailable" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/running",
+  });
+  await store.setEndpoint(deployment.id, { host: "127.0.0.1", port: 9200 });
+  const running = (await store.get(deployment.id))!;
+  const provider = createDockerDeployProvider({ dockerExec });
+
+  await assert.rejects(provider.resolveEndpoint!(running, running.versions[0]!), /daemon unavailable/);
+});

@@ -196,7 +196,6 @@ export function createTurnHandler(deps: {
     const timezone = classified.timezone;
     const text = stripMention(inc.rawText, ids.botUserId);
     if (!hasContent(text, inc.files)) return;
-    if (actor.isBot || inc.botAuthored) return;
 
     let audience: ActorAssertion[] = [actor];
     let channelRef: string | undefined;

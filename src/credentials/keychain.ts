@@ -1262,19 +1262,34 @@ export function createKeychain(deps: {
   };
 }
 
-const FILE_ENV_POINTERS: Array<[RegExp, (abs: string) => string]> = [
-  [/(^|\/)\.aws\/credentials$/, (abs) => `export AWS_SHARED_CREDENTIALS_FILE="${abs}"`],
-  [/(^|\/)\.aws\/config$/, (abs) => `export AWS_CONFIG_FILE="${abs}"`],
-  [/(^|\/)\.kube\/config$/, (abs) => `export KUBECONFIG="${abs}"`],
-  [/(^|\/)\.config\/gh\/hosts\.yml$/, (abs) => `export GH_CONFIG_DIR="${abs.replace(/\/hosts\.yml$/, "")}"`],
+const tempCredentialPath = (rel: string): string =>
+  /^[A-Za-z0-9._@+ /-]+$/.test(rel) ? `"$__kc_dir/${rel}"` : `"$__kc_dir"${shq(`/${rel}`)}`;
+
+const FILE_ENV_POINTERS: Array<[RegExp, (rel: string) => string]> = [
+  [/(^|\/)\.aws\/credentials$/, (rel) => `export AWS_SHARED_CREDENTIALS_FILE=${tempCredentialPath(rel)}`],
+  [/(^|\/)\.aws\/config$/, (rel) => `export AWS_CONFIG_FILE=${tempCredentialPath(rel)}`],
+  [/(^|\/)\.kube\/config$/, (rel) => `export KUBECONFIG=${tempCredentialPath(rel)}`],
+  [
+    /(^|\/)\.config\/gh\/hosts\.yml$/,
+    (rel) => `export GH_CONFIG_DIR=${tempCredentialPath(rel.replace(/\/hosts\.yml$/, ""))}`,
+  ],
   [
     /(^|\/)(?:\.config\/(?:glab-cli|glab)|Library\/Application Support\/glab-cli)\/config\.yml$/,
-    (abs) => `export GLAB_CONFIG_DIR="${abs.replace(/\/config\.yml$/, "")}"`,
+    (rel) => `export GLAB_CONFIG_DIR=${tempCredentialPath(rel.replace(/\/config\.yml$/, ""))}`,
   ],
-  [/(^|\/)\.docker\/config\.json$/, (abs) => `export DOCKER_CONFIG="${abs.replace(/\/config\.json$/, "")}"`],
-  [/(^|\/)\.npmrc$/, (abs) => `export NPM_CONFIG_USERCONFIG="${abs}"`],
-  [/(^|\/)\.netrc$/, (abs) => `export NETRC="${abs}"`],
-  [/(^|\/)\.ssh\/[^/]*(id_|key)[^/]*$/, (abs) => `export GIT_SSH_COMMAND="ssh -i ${abs} -o IdentitiesOnly=yes"`],
+  [
+    /(^|\/)\.docker\/config\.json$/,
+    (rel) => `export DOCKER_CONFIG=${tempCredentialPath(rel.replace(/\/config\.json$/, ""))}`,
+  ],
+  [/(^|\/)\.npmrc$/, (rel) => `export NPM_CONFIG_USERCONFIG=${tempCredentialPath(rel)}`],
+  [/(^|\/)\.netrc$/, (rel) => `export NETRC=${tempCredentialPath(rel)}`],
+  [
+    /(^|\/)\.ssh\/[^/]*(id_|key)[^/]*$/,
+    (rel) =>
+      /^[A-Za-z0-9._@+ /-]+$/.test(rel)
+        ? `export GIT_SSH_COMMAND="ssh -i $__kc_dir/${rel} -o IdentitiesOnly=yes"`
+        : `export GIT_SSH_COMMAND="ssh -i $__kc_dir"${shq(`/${rel}`)}" -o IdentitiesOnly=yes"`,
+  ],
 ];
 
 export function renderUseScript(m: MaterializedCred): string {
@@ -1283,18 +1298,16 @@ export function renderUseScript(m: MaterializedCred): string {
   const lines = [`__kc_dir="$(mktemp -d "\${TMPDIR:-/tmp}/keychain.XXXXXX")"`, `umask 077`];
   for (const f of files) {
     const parent = f.path.includes("/") ? f.path.replace(/\/[^/]*$/, "") : "";
-    if (parent) lines.push(`mkdir -p "$__kc_dir/${parent}"`);
-    lines.push(
-      `printf '%s' ${shq(f.contentBase64)} | base64 -d > "$__kc_dir/${f.path}"`,
-      `chmod 600 "$__kc_dir/${f.path}"`,
-    );
+    if (parent) lines.push(`mkdir -p ${tempCredentialPath(parent)}`);
+    const path = tempCredentialPath(f.path);
+    lines.push(`printf '%s' ${shq(f.contentBase64)} | base64 -d > ${path}`, `chmod 600 ${path}`);
   }
   const pointed = new Set<RegExp>();
   for (const f of files) {
     for (const [re, render] of FILE_ENV_POINTERS) {
       if (re.test(f.path) && !pointed.has(re)) {
         pointed.add(re);
-        lines.push(render(`$__kc_dir/${f.path}`));
+        lines.push(render(f.path));
       }
     }
   }

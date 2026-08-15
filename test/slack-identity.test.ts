@@ -240,7 +240,7 @@ test("allInternalChannelMembers: all-internal + complete → deduped ids; WITHHE
   );
 });
 
-test("bot accounts are absent from shared-scope rosters", () => {
+test("bot accounts can hold shared-scope membership", () => {
   assert.deepEqual(
     allInternalChannelMembers(
       [
@@ -250,7 +250,7 @@ test("bot accounts are absent from shared-scope rosters", () => {
       true,
       { is_private: true },
     ),
-    ["U1"],
+    ["U1", "B1"],
   );
 });
 
