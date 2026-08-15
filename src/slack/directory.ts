@@ -46,13 +46,13 @@ interface GroupMembershipRow {
   groupId: string;
   principalId: string;
 }
-interface PrivateChannelRef {
+interface ChannelRef {
   id: string;
   name: string;
   info: ChannelMeta;
 }
 
-type RosterKind = { plural: string; authz: string; item: string };
+type RosterKind = { plural: string; authz: string; item: string; limit?: number };
 
 const MEMBERS_PAGE_LIMIT = 200;
 const MAX_CLASSIFY_MEMBERS = 200;
@@ -79,7 +79,6 @@ export interface Directory {
     refs: ReadonlyArray<{ id: string; info?: ChannelMeta }>,
     kind: RosterKind,
   ): Promise<Map<string, string[]>>;
-  knownPublicChannels: { has(channel: string): boolean; add(channel: string): void; delete(channel: string): void };
   syncForUnseenGroup(client: any, groupId: string): void;
   resolveAutoIdentityMode(client: any): Promise<SlackIdentityMode>;
   maxClassifyMembers: number;
@@ -144,9 +143,9 @@ export function createDirectory(deps: {
 
   async function listBotChannels(
     client: any,
-  ): Promise<{ publicChannels: ChannelRow[]; privateChannels: PrivateChannelRef[] }> {
-    const publicChannels: ChannelRow[] = [];
-    const privateChannels: PrivateChannelRef[] = [];
+  ): Promise<{ publicChannels: ChannelRef[]; privateChannels: ChannelRef[] }> {
+    const publicChannels: ChannelRef[] = [];
+    const privateChannels: ChannelRef[] = [];
     for await (const res of client.paginate("conversations.list", {
       types: "public_channel,private_channel",
       exclude_archived: true,
@@ -168,7 +167,11 @@ export function createDirectory(deps: {
             info: { is_private: true, is_ext_shared: c.is_ext_shared, is_pending_ext_shared: c.is_pending_ext_shared },
           });
         } else {
-          publicChannels.push({ channelId: c.id, name: c.name });
+          publicChannels.push({
+            id: c.id,
+            name: c.name,
+            info: { is_private: false, is_ext_shared: c.is_ext_shared, is_pending_ext_shared: c.is_pending_ext_shared },
+          });
         }
       }
     }
@@ -193,10 +196,11 @@ export function createDirectory(deps: {
     kind: RosterKind,
   ): Promise<Map<string, string[]>> {
     const rosters = new Map<string, string[]>();
-    const slice = refs.slice(0, MAX_PRIVATE_CHANNELS);
+    const limit = kind.limit ?? MAX_PRIVATE_CHANNELS;
+    const slice = refs.slice(0, limit);
     if (refs.length > slice.length) {
       console.error(
-        `[slack-plugin] ${refs.length} ${kind.plural} exceed the cap (${MAX_PRIVATE_CHANNELS}); ${refs.length - slice.length} omitted from ${kind.authz} authorization`,
+        `[slack-plugin] ${refs.length} ${kind.plural} exceed the cap (${limit}); ${refs.length - slice.length} omitted from ${kind.authz} authorization`,
       );
     }
     for (const ref of slice) {
@@ -220,12 +224,24 @@ export function createDirectory(deps: {
     return rosters;
   }
 
-  async function computePrivateChannelMembership(
+  async function computeChannelMembership(
     client: any,
-    privateChannels: PrivateChannelRef[],
+    publicChannels: ChannelRef[],
+    privateChannels: ChannelRef[],
   ): Promise<{ channels: ChannelRow[]; channelMembers: ChannelMembershipRow[] }> {
     const channels: ChannelRow[] = [];
     const channelMembers: ChannelMembershipRow[] = [];
+    const publicRosters = await allInternalRosters(client, publicChannels, {
+      plural: "public channels",
+      authz: "public-channel-capability",
+      item: "public channel",
+      limit: publicChannels.length,
+    });
+    for (const channel of publicChannels) {
+      for (const pid of publicRosters.get(channel.id) ?? []) {
+        channelMembers.push({ channelId: channel.id, principalId: pid });
+      }
+    }
     const rosters = await allInternalRosters(client, privateChannels, {
       plural: "private channels",
       authz: "private-channel-send",
@@ -278,7 +294,6 @@ export function createDirectory(deps: {
         groupsFetchedAt?: number;
       }
     | undefined;
-  let knownPublicChannelSet = new Set<string>();
   const seenGroupIds = new Set<string>();
 
   async function fetchChannels(client: any): Promise<{
@@ -288,17 +303,16 @@ export function createDirectory(deps: {
     fetchedAt: number;
     groupsFetchedAt?: number;
   } | null> {
-    let listed: { publicChannels: ChannelRow[]; privateChannels: PrivateChannelRef[] };
+    let listed: { publicChannels: ChannelRef[]; privateChannels: ChannelRef[] };
     try {
       listed = await listBotChannels(client);
     } catch (err) {
       console.error("[slack-plugin] channel list failed:", (err as Error).message);
       return null;
     }
-    knownPublicChannelSet = new Set(listed.publicChannels.map((channel) => channel.channelId));
     const fresh = privateChannelsCache && Date.now() - privateChannelsCache.fetchedAt < CHANNEL_MEMBERS_TTL_MS;
     if (!fresh) {
-      const computed = await computePrivateChannelMembership(client, listed.privateChannels);
+      const computed = await computeChannelMembership(client, listed.publicChannels, listed.privateChannels);
       let groupMembers: GroupMembershipRow[] | undefined;
       let groupsFetchedAt: number | undefined;
       try {
@@ -315,7 +329,10 @@ export function createDirectory(deps: {
     }
     const priv = privateChannelsCache ?? { channels: [], channelMembers: [], fetchedAt: 0 };
     return {
-      channels: [...listed.publicChannels, ...priv.channels],
+      channels: [
+        ...listed.publicChannels.map((channel) => ({ channelId: channel.id, name: channel.name })),
+        ...priv.channels,
+      ],
       channelMembers: priv.channelMembers,
       fetchedAt: priv.fetchedAt,
       ...(priv.groupMembers ? { groupMembers: priv.groupMembers, groupsFetchedAt: priv.groupsFetchedAt } : {}),
@@ -487,11 +504,6 @@ export function createDirectory(deps: {
     getChannelInfo,
     channelMembership,
     allInternalRosters,
-    knownPublicChannels: {
-      has: (channel: string) => knownPublicChannelSet.has(channel),
-      add: (channel: string) => void knownPublicChannelSet.add(channel),
-      delete: (channel: string) => void knownPublicChannelSet.delete(channel),
-    },
     syncForUnseenGroup,
     resolveAutoIdentityMode,
     maxClassifyMembers: MAX_CLASSIFY_MEMBERS,

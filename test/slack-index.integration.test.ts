@@ -423,6 +423,35 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
   }
 });
 
+test("public channel rosters stay current in the core directory", async () => {
+  const f = await fixture();
+  try {
+    assert.ok(f.core.directories.some((d: any) => d.channelMembers));
+    assert.deepEqual(
+      f.core.directories
+        .at(-1)
+        .channelMembers.filter((m: any) => m.channelId === "C1")
+        .map((m: any) => m.principalId)
+        .sort(),
+      ["U1", "U2"],
+    );
+
+    f.client.membersByChannel.set("C1", ["U1", "UBOT"]);
+    const pushes = f.core.directories.length;
+    await f.app.emitEvent("member_left_channel", { user: "U2", channel: "C1", event_ts: "100.2" }, "Ev-u2-left");
+    await waitFor(() => f.core.directories.length > pushes);
+    assert.deepEqual(
+      f.core.directories
+        .at(-1)
+        .channelMembers.filter((m: any) => m.channelId === "C1")
+        .map((m: any) => m.principalId),
+      ["U1"],
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a human's DM sets the conversation header to the serving model + web surface", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {

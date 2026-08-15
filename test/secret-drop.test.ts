@@ -227,7 +227,10 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-")), signingSecret: SECRET }));
-    await built.directory.replaceChannels([{ channelId: "C1", name: "drops", isPrivate: false }]);
+    await built.directory.replaceChannels(
+      [{ channelId: "C1", name: "drops", isPrivate: false }],
+      [{ channelId: "C1", principalId: "U_A" }],
+    );
     server = createServer(built.app, {
       signingSecret: SECRET,
       keychain: built.keychain,
@@ -518,7 +521,10 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
     const built = buildApp(
       testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-sib-")), signingSecret: SECRET }),
     );
-    await built.directory.replaceChannels([{ channelId: "C1", name: "drops", isPrivate: false }]);
+    await built.directory.replaceChannels(
+      [{ channelId: "C1", name: "drops", isPrivate: false }],
+      [{ channelId: "C1", principalId: "U_A" }],
+    );
     const fires: DropResolution[] = [];
     let fired: (() => void) | undefined;
     const server = createServer(built.app, {

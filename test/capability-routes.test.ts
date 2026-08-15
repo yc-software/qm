@@ -64,7 +64,10 @@ describe("capability-token control plane (crons + SOUL)", () => {
         signingSecret: SECRET,
       }),
     );
-    await built.directory.replaceChannels([{ channelId: "C", name: "eng", isPrivate: false }]);
+    await built.directory.replaceChannels(
+      [{ channelId: "C", name: "eng", isPrivate: false }],
+      ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
+    );
     server = createServer(built.app, {
       signingSecret: SECRET,
       scheduler: built.scheduler,

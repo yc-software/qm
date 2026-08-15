@@ -200,7 +200,10 @@ test("capability scope checks follow current shared rosters", async () => {
       { channelId: "C-public", name: "public" },
       { channelId: "C-private", name: "private", isPrivate: true },
     ],
-    [{ channelId: "C-private", principalId: "member" }],
+    [
+      { channelId: "C-public", principalId: "member" },
+      { channelId: "C-private", principalId: "member" },
+    ],
     1,
   );
   await built.directory.replaceGroups([{ groupId: "G1", principalId: "member" }], 1);
@@ -221,7 +224,7 @@ test("capability scope checks follow current shared rosters", async () => {
 
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), false);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "group:G1" }), false);
-  assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), true);
+  assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), false);
 });
 
 async function listen(server: Server): Promise<string> {

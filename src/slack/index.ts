@@ -226,6 +226,7 @@ export async function startSlackPlugin(
         );
       }
     }
+    await directory.forceDirectorySync(app.client);
     await app.start();
   } catch (err) {
     stopped = true;
@@ -237,7 +238,6 @@ export async function startSlackPlugin(
   console.log(
     `[slack-plugin] connected as @${auth.user} (bot ${ids.botUserId}) in team ${auth.team} (${ids.ownTeamId}); in-process core`,
   );
-  void directory.getUserSnapshot(app.client).catch(swallowAs("slack: initial user snapshot", undefined));
   ackEmoji.refreshAckEmoji(app.client);
 
   let deliveriesPollInFlight = false;

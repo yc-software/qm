@@ -587,6 +587,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
         { channelId: "C_INFRA", principalId: "U_ALICE" },
         { channelId: "C_INFRA", principalId: "U_BOB" },
         { channelId: "C_NOALICE", principalId: "U_BOB" },
+        { channelId: "C_PUBLIC", principalId: "U_BOB" },
       ],
     );
     server = createServer(built.app, {

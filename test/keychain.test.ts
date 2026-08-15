@@ -968,14 +968,28 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-routes-")), signingSecret: SECRET }));
-    await built.directory.replaceChannels([
-      { channelId: "C_SECONDS", name: "seconds", isPrivate: false },
-      { channelId: "C_BAD_EXP", name: "bad-exp", isPrivate: false },
-      { channelId: "C7", name: "grants", isPrivate: false },
-      { channelId: "C_OVERVIEW", name: "overview", isPrivate: false },
-      { channelId: "C_NAMED", name: "pilot-portal", isPrivate: false },
-      { channelId: "C8", name: "file-grants", isPrivate: false },
-    ]);
+    await built.directory.replaceChannels(
+      [
+        { channelId: "C_SECONDS", name: "seconds", isPrivate: false },
+        { channelId: "C_BAD_EXP", name: "bad-exp", isPrivate: false },
+        { channelId: "C7", name: "grants", isPrivate: false },
+        { channelId: "C_OVERVIEW", name: "overview", isPrivate: false },
+        { channelId: "C_NAMED", name: "pilot-portal", isPrivate: false },
+        { channelId: "C_MYSTERY", name: "", isPrivate: false },
+        { channelId: "C8", name: "file-grants", isPrivate: false },
+      ],
+      [
+        { channelId: "C_SECONDS", principalId: "U_SECONDS" },
+        { channelId: "C_BAD_EXP", principalId: "U_BAD_EXP" },
+        { channelId: "C7", principalId: "OWNER" },
+        { channelId: "C7", principalId: "U3" },
+        { channelId: "C_OVERVIEW", principalId: "OVERVIEW_OWNER" },
+        { channelId: "C_NAMED", principalId: "SCOPENAME_OWNER" },
+        { channelId: "C_MYSTERY", principalId: "SCOPENAME_OWNER" },
+        { channelId: "C8", principalId: "OWNER" },
+        { channelId: "C8", principalId: "U3" },
+      ],
+    );
     await built.directory.replaceGroups([
       { groupId: "G_CONN", principalId: "alex@conn" },
       { groupId: "G_CONN", principalId: "carol@conn" },

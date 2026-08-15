@@ -39,7 +39,7 @@ export function registerSlackEvents(
   const { handler, mirror, directory, ids, deduper } = deps;
   const { dispatch, handleReactionEvent, botHasStakeInThread } = handler;
   const { mirrorMessageEvent, pushSurfaceEvents } = mirror;
-  const { knownPublicChannels, syncForUnseenGroup, forceDirectorySync } = directory;
+  const { syncForUnseenGroup, forceDirectorySync } = directory;
 
   app.event("app_mention", async ({ event, body, client, context }: any) => {
     const e = event as any;
@@ -68,10 +68,7 @@ export function registerSlackEvents(
 
   app.message(async ({ message, body, client, context }: any) => {
     const m = message as any;
-    const privacyChange = channelPrivacyChange(m);
-    if (privacyChange) {
-      if (privacyChange.isPrivate) knownPublicChannels.delete(privacyChange.channel);
-      else knownPublicChannels.add(privacyChange.channel);
+    if (channelPrivacyChange(m)) {
       await forceDirectorySync(client);
       return;
     }
@@ -198,7 +195,7 @@ export function registerSlackEvents(
             }
           : {}),
       });
-    } else if (!e.channel || !knownPublicChannels.has(e.channel)) {
+    } else {
       await forceDirectorySync(client);
     }
   });
@@ -221,7 +218,7 @@ export function registerSlackEvents(
       )
     )
       return;
-    if (!e.channel || !knownPublicChannels.has(e.channel)) await forceDirectorySync(client);
+    await forceDirectorySync(client);
   });
 
   app.event("reaction_added", async ({ event, body, client }: any) => {

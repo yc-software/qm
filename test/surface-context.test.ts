@@ -86,7 +86,12 @@ describe("surface-context pulls", async () => {
         { channelId: "CPUBLIC01", name: "general" },
         { channelId: "C-SECRET", name: "warroom", isPrivate: true },
       ],
-      [{ channelId: "C-SECRET", principalId: "U-member" }],
+      [
+        { channelId: "C9", principalId: "U1" },
+        { channelId: "C9", principalId: "U-ghost" },
+        { channelId: "C9", principalId: "U-member" },
+        { channelId: "C-SECRET", principalId: "U-member" },
+      ],
     );
   });
 
