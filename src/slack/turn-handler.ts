@@ -255,18 +255,6 @@ export function createTurnHandler(deps: {
       replyThreadTs = root;
     }
 
-    if (!inc.unprompted) {
-      const intercepted = await maybeInterceptStop({
-        text,
-        threadRef,
-        getInFlightRun: (ref) =>
-          inFlightRunByThread.get(ref) ??
-          fetchActiveRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined)),
-        signalAbort: signalRunAbort,
-      }).catch(swallowAs("slack: abort signal", true));
-      if (intercepted) return;
-    }
-
     let queuedRunId: string | undefined;
     let taskList: TaskListPresenter | undefined;
     const ack = inc.unprompted
@@ -351,6 +339,18 @@ export function createTurnHandler(deps: {
         );
       }
       return;
+    }
+
+    if (!inc.unprompted) {
+      const intercepted = await maybeInterceptStop({
+        text,
+        threadRef,
+        getInFlightRun: (ref) =>
+          inFlightRunByThread.get(ref) ??
+          fetchActiveRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined)),
+        signalAbort: signalRunAbort,
+      }).catch(swallowAs("slack: abort signal", true));
+      if (intercepted) return;
     }
 
     {

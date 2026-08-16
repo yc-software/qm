@@ -25,6 +25,10 @@ class FakeSlackClient {
   readonly membershipFailures = new Set<string>();
   readonly membershipListings = new Map<string, number>();
   readonly botsById = new Map<string, any>();
+  membershipDelayMs = 0;
+  activeMembershipListings = 0;
+  maxActiveMembershipListings = 0;
+  firstMembershipListingStartedAt: number | undefined;
   groupListings = 0;
   failGroupListing = false;
   private postSequence = 0;
@@ -137,9 +141,17 @@ class FakeSlackClient {
       return;
     }
     if (method === "conversations.members") {
+      this.firstMembershipListingStartedAt ??= Date.now();
       this.membershipListings.set(args.channel, (this.membershipListings.get(args.channel) ?? 0) + 1);
-      if (this.membershipFailures.has(args.channel)) throw new Error("missing conversations:read");
-      yield { members: this.membersByChannel.get(args.channel) ?? [] };
+      this.activeMembershipListings++;
+      this.maxActiveMembershipListings = Math.max(this.maxActiveMembershipListings, this.activeMembershipListings);
+      try {
+        if (this.membershipDelayMs) await new Promise((resolve) => setTimeout(resolve, this.membershipDelayMs));
+        if (this.membershipFailures.has(args.channel)) throw new Error("missing conversations:read");
+        yield { members: this.membersByChannel.get(args.channel) ?? [] };
+      } finally {
+        this.activeMembershipListings--;
+      }
       return;
     }
     throw new Error(`unexpected pagination method: ${method}`);
@@ -326,7 +338,13 @@ async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
 }
 
 async function fixture(
-  options: { externalParticipants?: boolean; webUiPublicUrl?: string; identityEmail?: "0" | "1" } = {},
+  options: {
+    externalParticipants?: boolean;
+    webUiPublicUrl?: string;
+    identityEmail?: "0" | "1";
+    extraChannels?: number;
+    membershipDelayMs?: number;
+  } = {},
 ) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
@@ -340,6 +358,7 @@ async function fixture(
     core,
   );
   const app = FakeApp.instances.at(-1)!;
+  app.client.membershipDelayMs = options.membershipDelayMs ?? 0;
   app.client.usersById.set("U1", internalUser("U1", "Alice"));
   app.client.usersById.set("U2", internalUser("U2", "Bob"));
   app.client.usersById.set("UX", { id: "UX", team_id: "T2", name: "mallory", profile: { display_name: "Mallory" } });
@@ -361,6 +380,11 @@ async function fixture(
   app.client.membersByChannel.set("C1", ["U1", "U2", "UBOT"]);
   app.client.membersByChannel.set("CX", ["U1", "UX", "UBOT"]);
   app.client.membersByChannel.set("CPX", ["U1", "UX", "UBOT"]);
+  for (let i = 0; i < (options.extraChannels ?? 0); i++) {
+    const id = `CE${i}`;
+    app.client.channelsById.set(id, { id, name: `extra-${i}`, is_member: true, is_private: false });
+    app.client.membersByChannel.set(id, ["U1", "UBOT"]);
+  }
   const plugin = await started;
   await new Promise((resolve) => setImmediate(resolve));
   return { app, client: app.client, core, stop: () => plugin.stop() };
@@ -460,6 +484,18 @@ test("public channel rosters stay current in the core directory", async () => {
         .map((m: any) => m.principalId),
       ["U1"],
     );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("full directory refreshes bound concurrent Slack roster reads", async () => {
+  const f = await fixture({ extraChannels: 5, membershipDelayMs: 10 });
+  try {
+    assert.equal(f.client.membershipListings.size, 8);
+    assert.ok(f.client.maxActiveMembershipListings > 1);
+    assert.ok(f.client.maxActiveMembershipListings <= 4);
+    assert.ok(f.core.directories.at(-1).channelsSyncedAt <= f.client.firstMembershipListingStartedAt!);
   } finally {
     await f.stop();
   }
@@ -829,6 +865,13 @@ test("a verified legacy bot without a user principal can become a turn", async (
 test("a bot-authored stop can abort a live run", async () => {
   const f = await fixture();
   try {
+    f.client.usersById.set("B1", {
+      id: "B1",
+      team_id: "T1",
+      is_bot: true,
+      name: "peerbot",
+      profile: { display_name: "Peer Bot" },
+    });
     f.core.activeRun = "run-active";
     await f.app.emitMessage({
       channel: "D1",
@@ -849,9 +892,11 @@ test("a bot-authored stop can abort a live run", async () => {
 test("a Slack Connect mention is refused ephemerally and never mirrored", async () => {
   const f = await fixture();
   try {
-    const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> share secrets", ts: "103.1" };
+    f.core.activeRun = "run-active";
+    const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> stop", ts: "103.1" };
     await f.app.emitEvent("app_mention", event);
     assert.equal(f.core.turns.length, 0);
+    assert.equal(f.core.abortedRuns.length, 0);
     assert.equal(f.core.ingests.length, 0);
     assert.equal(f.client.posts.length, 0);
     assert.equal(f.client.ephemerals.length, 1);

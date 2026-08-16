@@ -59,6 +59,7 @@ interface ChannelRef {
 type RosterKind = { plural: string; authz: string; item: string; limit?: number };
 
 const MEMBERS_PAGE_LIMIT = 200;
+const ROSTER_FETCH_CONCURRENCY = 4;
 
 export interface Directory {
   getUserSnapshot(client: any): Promise<{ byId: Map<string, CachedUser>; fetchedAt: number } | undefined>;
@@ -104,6 +105,7 @@ export function createDirectory(deps: {
   let userSnapshotInFlight: Promise<UserSnapshot> | undefined;
 
   async function refreshUserSnapshot(client: any): Promise<UserSnapshot> {
+    const fetchedAt = Date.now();
     const byId = new Map<string, CachedUser>();
     const mentionIndex = new Map<string, string>();
     const ambiguousNames = new Set<string>();
@@ -140,7 +142,7 @@ export function createDirectory(deps: {
         `[slack] email identity mode: ${missingEmails} own-team member(s) have no visible email (missing users:read.email scope?) — they fail closed to guest`,
       );
     }
-    return { byId, fetchedAt: Date.now() };
+    return { byId, fetchedAt };
   }
 
   async function listBotChannels(
@@ -220,23 +222,30 @@ export function createDirectory(deps: {
         `[slack-plugin] ${refs.length} ${kind.plural} exceed the cap (${limit}); ${refs.length - slice.length} omitted from ${kind.authz} authorization`,
       );
     }
-    for (const ref of slice) {
-      let memberIds: string[];
-      try {
-        memberIds = await fetchChannelMemberIds(client, ref.id);
-      } catch (err) {
-        console.error(`[slack-plugin] members fetch failed for ${kind.item} ${ref.id}:`, (err as Error).message);
-        continue;
-      }
-      const actors: ActorAssertion[] = [];
-      let complete = true;
-      for (const id of memberIds) {
-        const { actor, ok } = await classifyUserCached(client, id);
-        actors.push(actor);
-        if (!ok) complete = false;
-      }
-      rosters.set(ref.id, { actors, complete });
-    }
+    const queue = [...slice];
+    await Promise.all(
+      Array.from({ length: Math.min(ROSTER_FETCH_CONCURRENCY, queue.length) }, async () => {
+        for (;;) {
+          const ref = queue.pop();
+          if (!ref) return;
+          let memberIds: string[];
+          try {
+            memberIds = await fetchChannelMemberIds(client, ref.id);
+          } catch (err) {
+            console.error(`[slack-plugin] members fetch failed for ${kind.item} ${ref.id}:`, (err as Error).message);
+            continue;
+          }
+          const actors: ActorAssertion[] = [];
+          let complete = true;
+          for (const id of memberIds) {
+            const { actor, ok } = await classifyUserCached(client, id);
+            actors.push(actor);
+            if (!ok) complete = false;
+          }
+          rosters.set(ref.id, { actors, complete });
+        }
+      }),
+    );
     return rosters;
   }
 
@@ -344,6 +353,7 @@ export function createDirectory(deps: {
     fetchedAt: number;
     groupsFetchedAt?: number;
   } | null> {
+    const fetchedAt = Date.now();
     let listed: { publicChannels: ChannelRef[]; privateChannels: ChannelRef[] };
     try {
       listed = await listBotChannels(client);
@@ -379,7 +389,7 @@ export function createDirectory(deps: {
           ...new Set([...privateChannelsCache.channelRosterIds, ...computed.channelRosterIds]),
         ];
       }
-      return { ...computed, channels, fetchedAt: Date.now() };
+      return { ...computed, channels, fetchedAt };
     }
     const fresh = privateChannelsCache && Date.now() - privateChannelsCache.fetchedAt < CHANNEL_MEMBERS_TTL_MS;
     let includeGroups = true;
@@ -395,12 +405,12 @@ export function createDirectory(deps: {
       let groupRosterIds: string[] | undefined;
       let groupsFetchedAt: number | undefined;
       try {
+        groupsFetchedAt = Date.now();
         groupIds = await listBotGroupDms(client);
         for (const id of groupIds) seenGroupIds.add(id);
         const computedGroups = await computeGroupMembership(client, groupIds);
         groupMembers = computedGroups.groupMembers;
         groupRosterIds = computedGroups.groupRosterIds;
-        groupsFetchedAt = Date.now();
       } catch (err) {
         console.error("[slack-plugin] group-DM list failed:", (err as Error).message);
         includeGroups = false;
@@ -415,7 +425,7 @@ export function createDirectory(deps: {
         groupIds,
         groupRosterIds,
         groupsFetchedAt,
-        fetchedAt: Date.now(),
+        fetchedAt,
       };
     }
     const priv = privateChannelsCache ?? {
@@ -499,7 +509,7 @@ export function createDirectory(deps: {
       userSnapshotInFlight = refreshUserSnapshot(client)
         .then((s) => {
           userSnapshot = s;
-          void pushDirectory(s, client);
+          if (snap) void pushDirectory(s, client);
           return s;
         })
         .finally(() => {
