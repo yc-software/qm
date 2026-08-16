@@ -68,11 +68,6 @@ describe("capability-token control plane (crons + SOUL)", () => {
       [{ channelId: "C", name: "eng", isPrivate: false }],
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
     );
-    await built.directory.replaceCapabilityChannels(
-      ["C"],
-      ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
-      ["C"],
-    );
     server = createServer(built.app, {
       signingSecret: SECRET,
       scheduler: built.scheduler,
@@ -748,10 +743,9 @@ describe("capability-token control plane (crons + SOUL)", () => {
   });
 
   it("a public channel remains available to an active internal principal outside its current roster", async () => {
-    await built.directory.replaceCapabilityChannels(
-      ["C"],
+    await built.directory.replaceChannels(
+      [{ channelId: "C", name: "eng", isPrivate: false }],
       ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
-      ["C"],
     );
     assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
   });
@@ -760,11 +754,6 @@ describe("capability-token control plane (crons + SOUL)", () => {
     await built.directory.replaceChannels(
       [{ channelId: "C", name: "eng", isPrivate: true }],
       ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
-    );
-    await built.directory.replaceCapabilityChannels(
-      ["C"],
-      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
-      ["C"],
     );
     const members = [{ id: "B-LEGACY", type: "internal" as const }];
     const token = await capFor("B-LEGACY", scopeId("channel", "C"), {

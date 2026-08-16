@@ -393,19 +393,13 @@ export interface App {
     channelMembers?: ChannelMembership[],
     syncedAt?: number,
     channelRosterIds?: string[],
+    revocations?: ChannelMembership[],
   ): Promise<void>;
   upsertGroups(
     groupMembers: GroupMembership[],
     syncedAt?: number,
     groupIds?: string[],
     groupRosterIds?: string[],
-  ): Promise<void>;
-  upsertCapabilityChannels(
-    channelIds: string[],
-    channelMembers: ChannelMembership[],
-    channelRosterIds: string[],
-    syncedAt?: number,
-    revocations?: ChannelMembership[],
   ): Promise<void>;
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;

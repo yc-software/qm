@@ -59,7 +59,6 @@ export function createMessagingMethods(
   | "setRunDeliveryState"
   | "upsertDirectory"
   | "upsertChannels"
-  | "upsertCapabilityChannels"
   | "upsertGroups"
   | "setDirectoryWorkspaceUrl"
   | "directoryMeta"
@@ -340,21 +339,12 @@ export function createMessagingMethods(
         });
       }
     },
-    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds) {
-      await deps.directory.replaceChannels(channels, channelMembers, syncedAt, channelRosterIds);
+    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations) {
+      await deps.directory.replaceChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations);
       await h.syncLinkedProjectRosters();
     },
     async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
       await deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
-    },
-    async upsertCapabilityChannels(channelIds, channelMembers, channelRosterIds, syncedAt, revocations) {
-      await deps.directory.replaceCapabilityChannels(
-        channelIds,
-        channelMembers,
-        channelRosterIds,
-        syncedAt,
-        revocations,
-      );
     },
     async setDirectoryWorkspaceUrl(url) {
       await deps.directory.setWorkspaceUrl(url);

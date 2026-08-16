@@ -45,12 +45,10 @@ interface StoredApprovalView {
 
 interface DirectoryPush {
   members?: Array<{ principalId: string; displayName: string; type: "internal"; slackId?: string }>;
-  channels?: Array<{ channelId: string; name: string; isPrivate?: boolean }>;
+  channels?: Array<{ channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean }>;
   channelMembers?: Array<{ channelId: string; principalId: string }>;
   channelRosterIds?: string[];
-  capabilityChannelMembers?: Array<{ channelId: string; principalId: string }>;
-  capabilityChannelRosterIds?: string[];
-  capabilityChannelRevocations?: Array<{ channelId: string; principalId: string }>;
+  channelRevocations?: Array<{ channelId: string; principalId: string }>;
   groupMembers?: Array<{ groupId: string; principalId: string }>;
   groupIds?: string[];
   groupRosterIds?: string[];
@@ -309,14 +307,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(body.workspaceUrl);
       if (body.members) await deps.app.upsertDirectory(body.members, body.membersSyncedAt);
       if (body.channels)
-        await deps.app.upsertChannels(body.channels, body.channelMembers, body.channelsSyncedAt, body.channelRosterIds);
-      if (body.channels && body.capabilityChannelMembers && body.capabilityChannelRosterIds)
-        await deps.app.upsertCapabilityChannels(
-          body.channels.map((channel) => channel.channelId),
-          body.capabilityChannelMembers,
-          body.capabilityChannelRosterIds,
+        await deps.app.upsertChannels(
+          body.channels,
+          body.channelMembers,
           body.channelsSyncedAt,
-          body.capabilityChannelRevocations,
+          body.channelRosterIds,
+          body.channelRevocations,
         );
       if (body.groupMembers)
         await deps.app.upsertGroups(body.groupMembers, body.groupsSyncedAt, body.groupIds, body.groupRosterIds);

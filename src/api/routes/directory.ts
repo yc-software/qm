@@ -33,9 +33,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     channels?: unknown;
     channelMembers?: unknown;
     channelRosterIds?: unknown;
-    capabilityChannelMembers?: unknown;
-    capabilityChannelRosterIds?: unknown;
-    capabilityChannelRevocations?: unknown;
+    channelRevocations?: unknown;
     groupMembers?: unknown;
     groupIds?: unknown;
     groupRosterIds?: unknown;
@@ -75,7 +73,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   let channelCount: number | undefined;
   if (Array.isArray(b.channels)) {
     const channels = b.channels.filter(
-      (c): c is { channelId: string; name: string; isPrivate?: boolean } =>
+      (c): c is { channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean } =>
         isObj(c) && typeof c.channelId === "string" && typeof c.name === "string",
     );
     const channelMembers = Array.isArray(b.channelMembers)
@@ -87,31 +85,19 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     const channelRosterIds = Array.isArray(b.channelRosterIds)
       ? b.channelRosterIds.filter((channelId): channelId is string => typeof channelId === "string")
       : undefined;
-    await app.upsertChannels(channels, channelMembers, numOrUndef(b.channelsSyncedAt), channelRosterIds);
-    const capabilityChannelMembers = Array.isArray(b.capabilityChannelMembers)
-      ? b.capabilityChannelMembers.filter(
+    const channelRevocations = Array.isArray(b.channelRevocations)
+      ? b.channelRevocations.filter(
           (m): m is { channelId: string; principalId: string } =>
             isObj(m) && typeof m.channelId === "string" && typeof m.principalId === "string",
         )
       : undefined;
-    const capabilityChannelRosterIds = Array.isArray(b.capabilityChannelRosterIds)
-      ? b.capabilityChannelRosterIds.filter((channelId): channelId is string => typeof channelId === "string")
-      : undefined;
-    const capabilityChannelRevocations = Array.isArray(b.capabilityChannelRevocations)
-      ? b.capabilityChannelRevocations.filter(
-          (m): m is { channelId: string; principalId: string } =>
-            isObj(m) && typeof m.channelId === "string" && typeof m.principalId === "string",
-        )
-      : undefined;
-    if (capabilityChannelMembers && capabilityChannelRosterIds) {
-      await app.upsertCapabilityChannels(
-        channels.map((channel) => channel.channelId),
-        capabilityChannelMembers,
-        capabilityChannelRosterIds,
-        numOrUndef(b.channelsSyncedAt),
-        capabilityChannelRevocations,
-      );
-    }
+    await app.upsertChannels(
+      channels,
+      channelMembers,
+      numOrUndef(b.channelsSyncedAt),
+      channelRosterIds,
+      channelRevocations,
+    );
     channelCount = channels.length;
   }
   let groupMemberCount: number | undefined;

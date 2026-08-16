@@ -520,7 +520,6 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       [{ channelId: "C1", name: "drops", isPrivate: true }],
       [{ channelId: "C1", principalId: "U_A" }],
     );
-    await built.directory.replaceCapabilityChannels(["C1"], [{ channelId: "C1", principalId: "U_A" }], ["C1"]);
     const members = [{ id: "B-LEGACY", type: "internal" as const }];
     const minted = await post(
       "/v1/keychain/drops",

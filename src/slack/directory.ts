@@ -10,6 +10,7 @@ import {
   createRefreshCoalescer,
   createUserCache,
   externalMarker,
+  isExternallyShared,
   isReservedMentionName,
   probeIdentityMode,
   resolveChannelMembership,
@@ -38,6 +39,7 @@ interface ChannelRow {
   channelId: string;
   name: string;
   isPrivate?: boolean;
+  isExternal?: boolean;
 }
 interface ChannelMembershipRow {
   channelId: string;
@@ -54,7 +56,7 @@ interface ChannelRef {
   info: ChannelMeta;
 }
 
-type RosterKind = { plural: string; authz: string; item: string; limit?: number; allowExternal?: boolean };
+type RosterKind = { plural: string; authz: string; item: string; limit?: number };
 
 const MEMBERS_PAGE_LIMIT = 200;
 
@@ -95,7 +97,7 @@ export function createDirectory(deps: {
   const { core, ids } = deps;
   const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
   const CHANNEL_MEMBERS_TTL_MS = deps.channelMembersTtlMs ?? 30 * 60_000;
-  const MAX_PRIVATE_CHANNELS = deps.maxPrivateChannels ?? 50;
+  const MAX_PRIVATE_CHANNELS = deps.maxPrivateChannels ?? Infinity;
   const userCache = createUserCache(deps.userCacheTtlMs ? { ttlMs: deps.userCacheTtlMs } : {});
 
   let userSnapshot: UserSnapshot | undefined;
@@ -199,9 +201,7 @@ export function createDirectory(deps: {
     for (const ref of refs) {
       const roster = classified.get(ref.id);
       if (!roster) continue;
-      const internalIds = kind.allowExternal
-        ? internalChannelMembers(roster.actors, roster.complete)
-        : allInternalChannelMembers(roster.actors, roster.complete, ref.info);
+      const internalIds = allInternalChannelMembers(roster.actors, roster.complete, ref.info);
       if (internalIds) rosters.set(ref.id, internalIds);
     }
     return rosters;
@@ -213,7 +213,7 @@ export function createDirectory(deps: {
     kind: RosterKind,
   ): Promise<Map<string, { actors: ActorAssertion[]; complete: boolean }>> {
     const rosters = new Map<string, { actors: ActorAssertion[]; complete: boolean }>();
-    const limit = kind.limit ?? MAX_PRIVATE_CHANNELS;
+    const limit = kind.limit ?? Infinity;
     const slice = refs.slice(0, limit);
     if (refs.length > slice.length) {
       console.error(
@@ -249,61 +249,37 @@ export function createDirectory(deps: {
     channels: ChannelRow[];
     channelMembers: ChannelMembershipRow[];
     channelRosterIds: string[];
-    capabilityChannelMembers: ChannelMembershipRow[];
-    capabilityChannelRosterIds: string[];
-    capabilityChannelRevocations: ChannelMembershipRow[];
+    channelRevocations: ChannelMembershipRow[];
   }> {
-    const channels: ChannelRow[] = [];
+    const refs = [...publicChannels, ...privateChannels];
+    const channels = refs.map((channel) => ({
+      channelId: channel.id,
+      name: channel.name,
+      ...(channel.info.is_private ? { isPrivate: true } : {}),
+      ...(isExternallyShared(channel.info) ? { isExternal: true } : {}),
+    }));
     const channelMembers: ChannelMembershipRow[] = [];
     const channelRosterIds: string[] = [];
-    const capabilityChannelMembers: ChannelMembershipRow[] = [];
-    const capabilityChannelRosterIds: string[] = [];
-    const capabilityChannelRevocations: ChannelMembershipRow[] = [];
-    const publicRosters = await allInternalRosters(client, publicChannels, {
-      plural: "public channels",
-      authz: "public-channel-capability",
-      item: "public channel",
-      limit: publicChannels.length,
-      allowExternal: true,
+    const channelRevocations = [...invalidations].flatMap(([channelId, principalIds]) =>
+      [...principalIds].map((principalId) => ({ channelId, principalId })),
+    );
+    const rosters = await allClassifiedRosters(client, refs, {
+      plural: "channels",
+      authz: "channel",
+      item: "channel",
+      limit: publicChannels.length + Math.min(privateChannels.length, MAX_PRIVATE_CHANNELS),
     });
-    for (const channel of publicChannels) {
-      const internalIds = publicRosters.get(channel.id);
+    for (const channel of refs) {
+      const roster = rosters.get(channel.id);
+      const internalIds = roster && internalChannelMembers(roster.actors, roster.complete);
       if (!internalIds) continue;
+      const revoked = invalidations.get(channel.id);
       channelRosterIds.push(channel.id);
-      for (const pid of internalIds) channelMembers.push({ channelId: channel.id, principalId: pid });
-    }
-    const rosters = await allClassifiedRosters(client, privateChannels, {
-      plural: "private channels",
-      authz: "private-channel",
-      item: "private channel",
-      limit: privateChannels.length,
-    });
-    for (const c of privateChannels) {
-      channels.push({ channelId: c.id, name: c.name, isPrivate: true });
-      const roster = rosters.get(c.id);
-      const internalIds = roster && allInternalChannelMembers(roster.actors, roster.complete, c.info);
-      if (internalIds) {
-        channelRosterIds.push(c.id);
-        for (const pid of internalIds) channelMembers.push({ channelId: c.id, principalId: pid });
+      for (const principalId of internalIds) {
+        if (!revoked?.has(principalId)) channelMembers.push({ channelId: channel.id, principalId });
       }
-      const capabilityIds = roster && internalChannelMembers(roster.actors, roster.complete);
-      if (!capabilityIds) {
-        for (const principalId of invalidations.get(c.id) ?? []) {
-          capabilityChannelRevocations.push({ channelId: c.id, principalId });
-        }
-        continue;
-      }
-      capabilityChannelRosterIds.push(c.id);
-      for (const pid of capabilityIds) capabilityChannelMembers.push({ channelId: c.id, principalId: pid });
     }
-    return {
-      channels,
-      channelMembers,
-      channelRosterIds,
-      capabilityChannelMembers,
-      capabilityChannelRosterIds,
-      capabilityChannelRevocations,
-    };
+    return { channels, channelMembers, channelRosterIds, channelRevocations };
   }
 
   async function listBotGroupDms(client: any): Promise<string[]> {
@@ -343,9 +319,7 @@ export function createDirectory(deps: {
         channels: ChannelRow[];
         channelMembers: ChannelMembershipRow[];
         channelRosterIds: string[];
-        capabilityChannelMembers: ChannelMembershipRow[];
-        capabilityChannelRosterIds: string[];
-        capabilityChannelRevocations: ChannelMembershipRow[];
+        channelRevocations: ChannelMembershipRow[];
         groupMembers?: GroupMembershipRow[];
         groupIds?: string[];
         groupRosterIds?: string[];
@@ -358,13 +332,12 @@ export function createDirectory(deps: {
   async function fetchChannels(
     client: any,
     invalidations: ChannelInvalidations,
+    targetChannelIds?: ReadonlySet<string>,
   ): Promise<{
     channels: ChannelRow[];
     channelMembers: ChannelMembershipRow[];
     channelRosterIds: string[];
-    capabilityChannelMembers: ChannelMembershipRow[];
-    capabilityChannelRosterIds: string[];
-    capabilityChannelRevocations: ChannelMembershipRow[];
+    channelRevocations: ChannelMembershipRow[];
     groupMembers?: GroupMembershipRow[];
     groupIds?: string[];
     groupRosterIds?: string[];
@@ -377,6 +350,36 @@ export function createDirectory(deps: {
     } catch (err) {
       console.error("[slack-plugin] channel list failed:", (err as Error).message);
       return null;
+    }
+    const listedChannels = [...listed.publicChannels, ...listed.privateChannels];
+    if (targetChannelIds?.size) {
+      const computed = await computeChannelMembership(
+        client,
+        listed.publicChannels.filter((channel) => targetChannelIds.has(channel.id)),
+        listed.privateChannels.filter((channel) => targetChannelIds.has(channel.id)),
+        invalidations,
+      );
+      const channels = listedChannels.map((channel) => ({
+        channelId: channel.id,
+        name: channel.name,
+        ...(channel.info.is_private ? { isPrivate: true } : {}),
+        ...(isExternallyShared(channel.info) ? { isExternal: true } : {}),
+      }));
+      if (privateChannelsCache) {
+        const refreshed = new Set(computed.channelRosterIds);
+        privateChannelsCache.channels = channels;
+        privateChannelsCache.channelMembers = [
+          ...privateChannelsCache.channelMembers.filter(
+            (member) =>
+              !refreshed.has(member.channelId) && !invalidations.get(member.channelId)?.has(member.principalId),
+          ),
+          ...computed.channelMembers,
+        ];
+        privateChannelsCache.channelRosterIds = [
+          ...new Set([...privateChannelsCache.channelRosterIds, ...computed.channelRosterIds]),
+        ];
+      }
+      return { ...computed, channels, fetchedAt: Date.now() };
     }
     const fresh = privateChannelsCache && Date.now() - privateChannelsCache.fetchedAt < CHANNEL_MEMBERS_TTL_MS;
     let includeGroups = true;
@@ -419,21 +422,14 @@ export function createDirectory(deps: {
       channels: [],
       channelMembers: [],
       channelRosterIds: [],
-      capabilityChannelMembers: [],
-      capabilityChannelRosterIds: [],
-      capabilityChannelRevocations: [],
+      channelRevocations: [],
       fetchedAt: 0,
     };
     return {
-      channels: [
-        ...listed.publicChannels.map((channel) => ({ channelId: channel.id, name: channel.name })),
-        ...priv.channels,
-      ],
+      channels: priv.channels,
       channelMembers: priv.channelMembers,
       channelRosterIds: priv.channelRosterIds,
-      capabilityChannelMembers: priv.capabilityChannelMembers,
-      capabilityChannelRosterIds: priv.capabilityChannelRosterIds,
-      capabilityChannelRevocations: priv.capabilityChannelRevocations,
+      channelRevocations: priv.channelRevocations,
       fetchedAt: priv.fetchedAt,
       ...(includeGroups && priv.groupMembers
         ? {
@@ -450,6 +446,7 @@ export function createDirectory(deps: {
     snap: UserSnapshot,
     client: any,
     invalidations: ChannelInvalidations = new Map(),
+    targetChannelIds?: ReadonlySet<string>,
   ): Promise<boolean> {
     const members = [...snap.byId.entries()]
       .filter(([, u]) => !u.actor.isExternalGuest)
@@ -462,7 +459,7 @@ export function createDirectory(deps: {
           ...(slackId && slackId !== a.externalId ? { slackId } : {}),
         };
       });
-    const fetched = await fetchChannels(client, invalidations);
+    const fetched = await fetchChannels(client, invalidations, targetChannelIds);
     if (!members.length && !(fetched && fetched.channels.length)) return false;
     try {
       await core.pushDirectory({
@@ -473,9 +470,7 @@ export function createDirectory(deps: {
               channels: fetched.channels,
               channelMembers: fetched.channelMembers,
               channelRosterIds: fetched.channelRosterIds,
-              capabilityChannelMembers: fetched.capabilityChannelMembers,
-              capabilityChannelRosterIds: fetched.capabilityChannelRosterIds,
-              capabilityChannelRevocations: fetched.capabilityChannelRevocations,
+              channelRevocations: fetched.channelRevocations,
               channelsSyncedAt: fetched.fetchedAt,
               ...(fetched.groupMembers
                 ? {
@@ -522,18 +517,28 @@ export function createDirectory(deps: {
 
   let directorySyncClient: any;
   const invalidatedChannelMembers = new Map<string, Set<string>>();
+  const targetedChannelIds = new Set<string>();
+  let fullDirectorySyncRequested = false;
   const coalescedDirectorySync = createRefreshCoalescer(async () => {
-    if (privateChannelsCache) privateChannelsCache.fetchedAt = 0;
+    const fullSync = fullDirectorySyncRequested;
+    fullDirectorySyncRequested = false;
+    const scheduledTargets = new Set(targetedChannelIds);
+    const targets = fullSync || !scheduledTargets.size ? undefined : scheduledTargets;
+    if (!targets && privateChannelsCache) privateChannelsCache.fetchedAt = 0;
     const snap = userSnapshot ?? (await getUserSnapshot(directorySyncClient));
     const pendingInvalidations = new Map(
       [...invalidatedChannelMembers].map(([channelId, principalIds]) => [channelId, new Set(principalIds)]),
     );
-    if (snap && (await pushDirectory(snap, directorySyncClient, pendingInvalidations))) {
+    if (snap && (await pushDirectory(snap, directorySyncClient, pendingInvalidations, targets))) {
+      if (privateChannelsCache) privateChannelsCache.channelRevocations = [];
+      for (const channelId of scheduledTargets) targetedChannelIds.delete(channelId);
       for (const [channelId, principalIds] of pendingInvalidations) {
         const current = invalidatedChannelMembers.get(channelId);
         for (const principalId of principalIds) current?.delete(principalId);
         if (!current?.size) invalidatedChannelMembers.delete(channelId);
       }
+    } else if (fullSync) {
+      fullDirectorySyncRequested = true;
     }
   });
 
@@ -543,11 +548,13 @@ export function createDirectory(deps: {
     invalidatePrincipalId?: string,
   ): Promise<void> {
     directorySyncClient = client;
+    if (!invalidateChannelId) fullDirectorySyncRequested = true;
     if (invalidateChannelId && invalidatePrincipalId) {
       const principals = invalidatedChannelMembers.get(invalidateChannelId) ?? new Set<string>();
       principals.add(invalidatePrincipalId);
       invalidatedChannelMembers.set(invalidateChannelId, principals);
     }
+    if (invalidateChannelId) targetedChannelIds.add(invalidateChannelId);
     return coalescedDirectorySync();
   }
 

@@ -95,7 +95,7 @@ export function registerSlackEvents(
   app.message(async ({ message, body, client, context }: any) => {
     const m = message as any;
     if (channelPrivacyChange(m)) {
-      await forceDirectorySync(client);
+      await forceDirectorySync(client, m.channel);
       return;
     }
     if (isGroupMembershipMessage(m)) {
@@ -226,7 +226,7 @@ export function registerSlackEvents(
           : {}),
       });
     } else {
-      await forceDirectorySync(client);
+      await forceDirectorySync(client, e.channel);
     }
   });
 
@@ -236,7 +236,7 @@ export function registerSlackEvents(
       const channel = typeof e.channel === "string" ? e.channel : e.channel?.id;
       if (deduper.seen(dedupeKey({ event_id: (body as { event_id?: string })?.event_id, channel, ts: e.event_ts })))
         return;
-      await forceDirectorySync(client);
+      await forceDirectorySync(client, channel);
     });
   }
 

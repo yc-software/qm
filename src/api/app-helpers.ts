@@ -408,7 +408,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const privateChannel =
       kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === true;
     const capabilityMembership = privateChannel
-      ? await deps.directory.channelCapabilityMembership(ref, claims.actorId).catch(() => undefined)
+      ? await deps.directory.channelMembership(ref, claims.actorId).catch(() => undefined)
       : undefined;
     const attestedBot =
       privateChannel &&

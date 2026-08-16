@@ -278,64 +278,34 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     assert.equal(await d.channelMembership("C-new", "U-new"), undefined);
   });
 
-  it("keeps capability rosters separate from legacy channel-directory swaps", async () => {
+  it("applies removals without clearing a failed channel refresh", async () => {
     const d = createDirectoryStore();
-    await d.replaceCapabilityChannels(
-      ["C-one", "C-two", "C-new"],
-      [
-        { channelId: "C-one", principalId: "U-old-one" },
-        { channelId: "C-one", principalId: "U-keep" },
-        { channelId: "C-two", principalId: "U-old-two" },
-      ],
-      ["C-one", "C-two"],
-    );
-    await d.replaceCapabilityChannels(
-      ["C-one", "C-two", "C-new"],
-      [{ channelId: "C-two", principalId: "U-new-two" }],
-      ["C-two"],
-    );
-    await d.replaceChannels(
-      [
-        { channelId: "C-one", name: "one" },
-        { channelId: "C-two", name: "two" },
-        { channelId: "C-new", name: "new" },
-      ],
-      [],
-    );
-    assert.equal(await d.channelCapabilityMembership("C-one", "U-old-one"), true);
-    assert.equal(await d.channelCapabilityMembership("C-two", "U-old-two"), false);
-    assert.equal(await d.channelCapabilityMembership("C-two", "U-new-two"), true);
-    assert.equal(await d.channelCapabilityMembership("C-new", "U-new"), undefined);
-    await d.replaceCapabilityChannels(["C-one", "C-two", "C-new"], [], [], undefined, [
-      { channelId: "C-one", principalId: "U-old-one" },
-    ]);
-    assert.equal(await d.channelCapabilityMembership("C-one", "U-old-one"), false);
-    assert.equal(await d.channelCapabilityMembership("C-one", "U-keep"), true);
-    await d.replaceCapabilityChannels(["C-one", "C-two", "C-new"], [], [], undefined, [
-      { channelId: "C-new", principalId: "U-new" },
-    ]);
-    assert.equal(await d.channelCapabilityMembership("C-new", "U-new"), false);
-    await d.replaceCapabilityChannels(
-      ["C-one", "C-two", "C-new"],
-      [{ channelId: "C-new", principalId: "U-new" }],
-      ["C-new"],
-    );
-    assert.equal(await d.channelCapabilityMembership("C-new", "U-new"), true);
-  });
-
-  it("invalidates preserved rosters when a public channel becomes private", async () => {
-    const d = createDirectoryStore();
-    await d.replaceChannels([{ channelId: "C-one", name: "one" }], [{ channelId: "C-one", principalId: "U-old" }]);
-    await d.replaceCapabilityChannels(["C-one"], [{ channelId: "C-one", principalId: "U-old" }], ["C-one"]);
-    await d.replaceChannels([{ channelId: "C-one", name: "one", isPrivate: true }]);
-    assert.equal(await d.channelMembership("C-one", "U-old"), undefined);
-    assert.equal(await d.channelCapabilityMembership("C-one", "U-old"), undefined);
-
-    await d.replaceChannels([{ channelId: "C-one", name: "one" }]);
     await d.replaceChannels(
       [{ channelId: "C-one", name: "one", isPrivate: true }],
-      [{ channelId: "C-one", principalId: "U-current" }],
+      [
+        { channelId: "C-one", principalId: "U-leaving" },
+        { channelId: "C-one", principalId: "U-keep" },
+      ],
     );
-    assert.deepEqual(await d.channelMemberIds("C-one"), ["U-current"]);
+    await d.replaceChannels(
+      [{ channelId: "C-one", name: "one", isPrivate: true }],
+      [],
+      undefined,
+      [],
+      [{ channelId: "C-one", principalId: "U-leaving" }],
+    );
+    assert.equal(await d.channelMembership("C-one", "U-leaving"), false);
+    assert.equal(await d.channelMembership("C-one", "U-keep"), true);
+  });
+
+  it("uses one Slack Connect roster without making a private room an ordinary send target", async () => {
+    const d = createDirectoryStore();
+    await d.replaceChannels(
+      [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
+      [{ channelId: "C-connect", principalId: "U-member" }],
+    );
+    assert.equal(await d.channelMembership("C-connect", "U-member"), true);
+    assert.equal(await d.channelMember("C-connect", "U-member"), false);
+    assert.deepEqual(await d.listChannelsFor("U-member"), []);
   });
 });
