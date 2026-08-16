@@ -54,7 +54,13 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
     "## Already scheduled here",
     "Standing work set up for this conversation — it exists, don't re-create it. Pause one of **yours** that's stale or done with `cron` action=disable (webhooks: `webhook` action=disable).",
     ...lines,
-    ...(total > lines.length ? [`…and ${total - lines.length} more — \`cron\` action=list.`] : []),
+    ...(total > lines.length
+      ? [
+          `…and ${total - lines.length} more — \`cron\` action=list${
+            webhooks.length > OBLIGATIONS_CAP ? " / `webhook` action=list" : ""
+          }.`,
+        ]
+      : []),
   ].join("\n");
 }
 

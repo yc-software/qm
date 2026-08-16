@@ -252,3 +252,42 @@ test("silent-failure surfacing: a refused turn delivers a notice (the sender alr
   assert.match(pending[0]?.text ?? "", /did not complete/i);
   assert.match((await webhooks.get(wh.id))?.lastError ?? "", /internal-only/);
 });
+
+test("a third-party principal destination without recipient consent skips delivery and notifies the owner", async () => {
+  const { webhooks, deliveries, calls, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "x",
+    verification: { scheme: "github", secret: SECRET },
+    destination: { type: "principal", target: "U2" },
+  });
+  const out = await receiver.deliver(wh.id, githubReq("{}"));
+  assert.equal(out.status, 202);
+  await flush();
+  assert.equal(calls.length, 1);
+  const pending = await deliveries.pending("principal");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.destination.target, "U1");
+  assert.match(pending[0]?.text ?? "", /consent/i);
+});
+
+test("a third-party principal destination with accepted consent delivers to the recipient", async () => {
+  const { webhooks, deliveries, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "x",
+    verification: { scheme: "github", secret: SECRET },
+    destination: { type: "principal", target: "U2" },
+    recipientConsent: { recipientId: "U2", status: "accepted" },
+  });
+  await receiver.deliver(wh.id, githubReq("{}"));
+  await flush();
+  const pending = await deliveries.pending("principal");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.destination.target, "U2");
+  assert.equal(pending[0]?.text, "DID-THE-WORK");
+});

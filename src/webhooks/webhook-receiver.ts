@@ -114,6 +114,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         fireKey,
         surface: "webhook",
         ...(destination ? { destination } : {}),
+        recipientConsentRequired: true,
         ...(wh.recipientConsent ? { recipientConsent: wh.recipientConsent } : {}),
         errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,
       })

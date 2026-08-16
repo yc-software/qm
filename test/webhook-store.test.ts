@@ -108,3 +108,20 @@ test("create dedup survives a 'restart': a fresh store over the same backing sti
   assert.equal(b.id, a.id, "the content-keyed id dedups across a process restart");
   assert.equal((await backing.all()).length, 1);
 });
+
+test("re-creating a byte-identical disabled webhook re-enables it", async () => {
+  const store = createWebhookStore();
+  const input = {
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "triage",
+    verification: { scheme: "github" as const, secret: "s1" },
+  };
+  const first = await store.create(input);
+  await store.setEnabled(first.id, false);
+  const second = await store.create(input);
+  assert.equal(second.id, first.id);
+  assert.equal(second.enabled, true);
+  assert.equal((await store.get(first.id))?.enabled, true);
+});

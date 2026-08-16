@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import type { Webhook } from "../types.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 
 export interface VerifierInput {
@@ -107,8 +108,12 @@ const hmacSha256: Verifier = {
   },
 };
 
-const VERIFIERS: Record<string, Verifier> = { github, slack, stripe, "hmac-sha256": hmacSha256 };
+const VERIFIERS: Record<WebhookScheme, Verifier> = { github, slack, stripe, "hmac-sha256": hmacSha256 };
+
+export type WebhookScheme = Webhook["verification"]["scheme"];
+
+export const WEBHOOK_SCHEMES = Object.keys(VERIFIERS) as readonly WebhookScheme[];
 
 export function getVerifier(scheme: string): Verifier | null {
-  return VERIFIERS[scheme] ?? null;
+  return (VERIFIERS as Partial<Record<string, Verifier>>)[scheme] ?? null;
 }

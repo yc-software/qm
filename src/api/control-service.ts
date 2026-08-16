@@ -763,7 +763,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async disableWebhook(id, capability) {
-      const webhook = (await app.listWebhooks()).find((w) => w.id === id);
+      const webhook = await app.getWebhook(id);
       if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
       if (!(await canAdministerWebhook(app, webhook, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your webhook" };

@@ -7,7 +7,6 @@ primary_region = "sjc"
   CORE_API_URL = "http://qm-core.internal:8080"
   CORE_ORG_ID = "acme"
   WEB_UI_PUBLIC_URL = "https://agent.example.com"
-  WEBHOOK_PUBLIC_BASE = "https://agent.example.com"
   WEB_UI_PRINCIPALS = ""
 
 [http_service]

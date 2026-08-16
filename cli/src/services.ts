@@ -108,7 +108,7 @@ export function orgEnv(
       ...(brand?.orgName ? { ORG_BRAND_ORG_NAME: brand.orgName } : {}),
     };
   }
-  if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl, WEBHOOK_PUBLIC_BASE: base };
+  if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl };
   if (service === "portal") return { ...identity, PORTAL_PUBLIC_URL: base };
   if (service === "admin" && hasPortal) return { ...identity, ADMIN_BASE_PATH: "/admin" };
   if (service === "auth") return { ...identity, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
@@ -214,7 +214,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     docker: { image: "web-ui", internalPort: 8080, portEnv: "PORT", hostPortOffset: 2 },
     fly: {
       managed: (s) => pluginWiring("web-ui", s),
-      stackKeys: ["WEB_UI_PUBLIC_URL", "WEBHOOK_PUBLIC_BASE"],
+      stackKeys: ["WEB_UI_PUBLIC_URL"],
       deployFlags: ["--ha=false", "--flycast", "--no-public-ips"],
       flycast: true,
     },

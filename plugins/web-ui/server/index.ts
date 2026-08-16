@@ -32,7 +32,6 @@ import {
 
 const PORT = portFromEnv(8096);
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
-const WEBHOOK_PUBLIC_BASE = (process.env.WEBHOOK_PUBLIC_BASE ?? process.env.CORE_PUBLIC_URL ?? CORE).replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
@@ -559,6 +558,7 @@ async function setWebhookEnabledViaCore(
   verb: "disable" | "enable",
 ): Promise<void> {
   const r = await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`);
+  if (r.status < 200 || r.status >= 300) return relay(res, r);
   let webhooks: CoreWebhook[] = [];
   try {
     webhooks = (JSON.parse(r.text) as { webhooks?: CoreWebhook[] }).webhooks ?? [];
@@ -571,10 +571,6 @@ async function setWebhookEnabledViaCore(
     "POST",
     `/v1/webhooks/${encodeURIComponent(id)}/${verb}?principalId=${encodeURIComponent(user)}`,
   );
-}
-
-function inboundUrl(id: string): string {
-  return `${WEBHOOK_PUBLIC_BASE}/v1/webhooks/incoming/${encodeURIComponent(id)}`;
 }
 
 interface CoreCron {
@@ -2005,17 +2001,7 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/webhooks",
     handle: async (c) => {
       const { res, user } = c;
-      const r = await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`);
-      if (r.status < 200 || r.status >= 300) {
-        return relay(res, r);
-      }
-      let webhooks: CoreWebhook[] = [];
-      try {
-        webhooks = (JSON.parse(r.text) as { webhooks?: CoreWebhook[] }).webhooks ?? [];
-      } catch {
-        void 0;
-      }
-      return json(res, 200, { webhooks: webhooks.map((w) => ({ ...w, url: inboundUrl(w.id) })) });
+      return relay(res, await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`));
     },
   },
   {
@@ -2034,7 +2020,17 @@ const apiRoutes: readonly WebRoute[] = [
           destination?: unknown;
         };
         action = String(p.action ?? "").trim();
-        if (p.verification && typeof p.verification.scheme === "string") {
+        if (p.verification !== undefined) {
+          if (
+            typeof p.verification !== "object" ||
+            p.verification === null ||
+            typeof p.verification.scheme !== "string"
+          ) {
+            return json(res, 400, {
+              error: "unsupported_verification",
+              message: "verification requires a scheme (HMAC-SHA256, GitHub, Slack, or Stripe)",
+            });
+          }
           verification = {
             scheme: p.verification.scheme,
             ...(p.verification.secret ? { secret: String(p.verification.secret) } : {}),
@@ -2093,16 +2089,7 @@ const apiRoutes: readonly WebRoute[] = [
         verification,
         ...(filters ? { filters } : {}),
       });
-      const r = await coreFetch("POST", "/v1/webhooks", reqBody);
-      if (r.status < 200 || r.status >= 300) {
-        return relay(res, r);
-      }
-      try {
-        const { webhook } = JSON.parse(r.text) as { webhook: CoreWebhook };
-        return json(res, 200, { webhook, url: inboundUrl(webhook.id) });
-      } catch {
-        return relay(res, r);
-      }
+      return relay(res, await coreFetch("POST", "/v1/webhooks", reqBody));
     },
   },
   {

@@ -1,4 +1,5 @@
 import type { Webhook } from "../../types.ts";
+import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
 import { canAdministerWebhook } from "../control-service.ts";
@@ -21,12 +22,10 @@ function isCreateWebhook(b: unknown): b is CreateWebhookInput {
   );
 }
 
-const WEBHOOK_SCHEMES = new Set(["hmac-sha256", "github", "slack", "stripe"]);
-
 function isWebhookVerification(value: Record<string, unknown>): boolean {
   return (
     typeof value.scheme === "string" &&
-    WEBHOOK_SCHEMES.has(value.scheme) &&
+    (WEBHOOK_SCHEMES as readonly string[]).includes(value.scheme) &&
     typeof value.secret === "string" &&
     value.secret.length > 0
   );
@@ -120,16 +119,19 @@ async function createWebhook(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "expected a CreateWebhookInput" });
   try {
     const webhook = await app.createWebhook(body);
-    const incomingPath = `/v1/webhooks/incoming/${webhook.id}`;
-    const publicBase = deps.publicUrl ? deps.publicUrl.replace(/\/$/, "") : "";
-    return sendJson(res, 200, { webhook, url: publicBase ? `${publicBase}${incomingPath}` : incomingPath });
+    return sendJson(res, 200, { webhook, url: inboundUrl(deps.publicUrl, webhook.id) });
   } catch (e) {
     return sendJson(res, 400, { error: "webhook_create_failed", message: errMessage(e) });
   }
 }
 
+function inboundUrl(publicBase: string | undefined, id: string): string {
+  const incomingPath = `/v1/webhooks/incoming/${id}`;
+  return publicBase ? `${publicBase.replace(/\/$/, "")}${incomingPath}` : incomingPath;
+}
+
 async function listWebhooks(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability, actor, url } = ctx;
+  const { res, app, deps, capability, actor, url } = ctx;
   const all = await app.listWebhooks();
   const viewer = capability?.actorId ?? actor?.p ?? url.searchParams.get("viewer");
   const isViewer = viewer ? await app.personMatcher(viewer) : undefined;
@@ -137,13 +139,15 @@ async function listWebhooks(ctx: ApiCtx): Promise<void> {
     ? await Promise.all(all.map((webhook) => canAdministerWebhook(app, webhook, viewer, isViewer)))
     : all.map(() => true);
   const visible = all.filter((_webhook, index) => allowed[index]);
-  return sendJson(res, 200, { webhooks: visible.map(redactWebhook) });
+  return sendJson(res, 200, {
+    webhooks: visible.map((webhook) => ({ ...redactWebhook(webhook), url: inboundUrl(deps.publicUrl, webhook.id) })),
+  });
 }
 
 async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
   const { res, app, params, capability, actor, url } = ctx;
   const id = params.id!;
-  const webhook = (await app.listWebhooks()).find((w) => w.id === id);
+  const webhook = await app.getWebhook(id);
   if (!webhook) return sendJson(res, 404, { error: "not_found" });
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (principalId && !(await canAdministerWebhook(app, webhook, principalId))) {

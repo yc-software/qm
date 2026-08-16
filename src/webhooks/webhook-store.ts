@@ -50,12 +50,15 @@ export function createWebhookStore(backing: DurableMap<Webhook> = createMemoryMa
         contentPart(filters),
         contentPart(input.destination),
       ]);
-      return createDeduped(backing, contentId, (id) => ({
+      const webhook = await createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, Date.now()),
         action: input.action,
         verification: input.verification,
         ...(filters ? { filters } : {}),
       }));
+      if (webhook.enabled) return webhook;
+      await setTriggerEnabled(backing, webhook.id, true);
+      return { ...webhook, enabled: true };
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
@@ -73,4 +76,22 @@ export function createWebhookStore(backing: DurableMap<Webhook> = createMemoryMa
       });
     },
   };
+}
+
+export async function disableLegacyWebhookRows(pg: {
+  q(text: string, params?: unknown[]): Promise<unknown[]>;
+}): Promise<void> {
+  const sweepId = "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal";
+  await pg.q(
+    "CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+  );
+  const claimed = await pg.q(
+    "INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING RETURNING id",
+    [sweepId],
+  );
+  if (claimed.length === 0) return;
+  await pg.q("CREATE TABLE IF NOT EXISTS webhooks (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+  await pg.q(
+    "UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean",
+  );
 }

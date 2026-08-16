@@ -146,8 +146,6 @@ export const FORWARD_DEPLOYMENT_LAYER_HEADERS = [
 
 export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
-// Google Pub/Sub authenticated-push: a public POST carrying the OIDC bearer in Authorization,
-// which core verifies itself. Forward the body + content-type + authorization unchanged.
 export interface DeploymentTarget {
   coreBase: string;
   id: string;

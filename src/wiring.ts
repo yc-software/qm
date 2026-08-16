@@ -71,7 +71,7 @@ import {
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
-import { createWebhookStore } from "./webhooks/webhook-store.ts";
+import { createWebhookStore, disableLegacyWebhookRows } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
@@ -950,6 +950,8 @@ export function buildApp(
     },
   };
   const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"));
+  if (pgArtifactMap)
+    void disableLegacyWebhookRows(pgArtifactMap.pool).catch(swallowAs("wiring: legacy webhook sweep", undefined));
   const deliveries = config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore();
   const layerEnv = config.layerEnv ?? {};
   const layerBrokerCache = new Map<string, AwsRoleBroker>();

@@ -16,12 +16,15 @@ const SECRET = "core-signing-secret".repeat(3);
 const PUBLIC = "https://core.public.example";
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-wh-")) }));
-const core = createServer(built.app, { signingSecret: SECRET, webhookReceiver: built.webhookReceiver });
+const core = createServer(built.app, {
+  signingSecret: SECRET,
+  webhookReceiver: built.webhookReceiver,
+  publicUrl: PUBLIC,
+});
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
-process.env.WEBHOOK_PUBLIC_BASE = PUBLIC;
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
@@ -183,6 +186,15 @@ test("public web creation rejects unauthenticated verification and malformed fil
     asUser("alice", { method: "POST", body: JSON.stringify({ action: "unsafe", verification: { scheme: "none" } }) }),
   );
   assert.equal(none.status, 400);
+  const nonStringScheme = await fetch(
+    `${webBase}/api/webhooks`,
+    asUser("alice", {
+      method: "POST",
+      body: JSON.stringify({ action: "x", verification: { scheme: null, secret: "my-github-secret" } }),
+    }),
+  );
+  assert.equal(nonStringScheme.status, 400);
+  assert.match(await nonStringScheme.text(), /verification requires a scheme/);
   const filters = await fetch(
     `${webBase}/api/webhooks`,
     asUser("alice", {

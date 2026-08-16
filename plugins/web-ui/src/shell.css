@@ -3463,26 +3463,7 @@ a.chat-row-open {
   height: 150px;
   object-fit: cover;
 }
-.card .copyrow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.copyrow .mono {
-  flex: 1;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  padding: 8px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--secondary);
-  overflow-x: auto;
-  white-space: nowrap;
-}
-.copyrow .btn {
-  flex-shrink: 0;
-}
-.actions {
+.card .actions {
   margin-top: 2px;
 }
 .keychain-page {
@@ -4142,6 +4123,25 @@ a.chat-row-open {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+}
+.copyrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.copyrow .mono {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--secondary);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.copyrow .btn {
+  flex-shrink: 0;
 }
 .resource-form label {
   display: flex;
