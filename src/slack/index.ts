@@ -226,7 +226,7 @@ export async function startSlackPlugin(
         );
       }
     }
-    await directory.forceDirectorySync(app.client);
+    await directory.getUserSnapshot(app.client);
     await app.start();
   } catch (err) {
     stopped = true;

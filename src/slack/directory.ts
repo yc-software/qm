@@ -507,9 +507,9 @@ export function createDirectory(deps: {
     const stale = !snap || Date.now() - snap.fetchedAt >= USER_SNAPSHOT_TTL_MS;
     if (stale && !userSnapshotInFlight) {
       userSnapshotInFlight = refreshUserSnapshot(client)
-        .then((s) => {
+        .then(async (s) => {
           userSnapshot = s;
-          if (snap) void pushDirectory(s, client);
+          await pushDirectory(s, client);
           return s;
         })
         .finally(() => {
