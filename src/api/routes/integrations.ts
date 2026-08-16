@@ -1,4 +1,5 @@
 import { samePerson } from "../../directory/person.ts";
+import { normalizePipedreamAppSlug } from "../../integrations/pipedream-client.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -40,6 +41,17 @@ async function status(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { configured: service.configured(), provider: "pipedream" });
 }
 
+async function apps(ctx: ApiCtx): Promise<void> {
+  const service = requireService(ctx);
+  const principalId = requirePrincipal(ctx);
+  if (!service || !principalId) return;
+  try {
+    return sendJson(ctx.res, 200, { apps: await service.listApps(principalId, ctx.url.searchParams.get("q") ?? "") });
+  } catch (error) {
+    return sendJson(ctx.res, 502, { error: "provider_error", message: errMessage(error) });
+  }
+}
+
 async function connect(ctx: ApiCtx): Promise<void> {
   const service = requireService(ctx);
   const principalId = requirePrincipal(ctx);
@@ -47,8 +59,11 @@ async function connect(ctx: ApiCtx): Promise<void> {
   const returnUrl = ctx.deps.portalUrl
     ? `${ctx.deps.portalUrl.replace(/\/$/, "")}/integrations?connected=1`
     : undefined;
+  const body = ctx.body && typeof ctx.body === "object" ? (ctx.body as Record<string, unknown>) : {};
+  const app = normalizePipedreamAppSlug(body.app);
+  if (!app) return sendJson(ctx.res, 400, { error: "bad_request", message: "a valid app is required" });
   try {
-    return sendJson(ctx.res, 200, await service.createConnectLink(principalId, returnUrl));
+    return sendJson(ctx.res, 200, await service.createConnectLink(principalId, app, returnUrl));
   } catch (error) {
     return sendJson(ctx.res, 502, { error: "provider_error", message: errMessage(error) });
   }
@@ -112,6 +127,7 @@ async function deleteAccount(ctx: ApiCtx): Promise<void> {
 
 export const integrationRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/integrations/status", auth: "source", handle: status },
+  { method: "GET", path: "/v1/integrations/apps", auth: "source", handle: apps },
   { method: "POST", path: "/v1/integrations/connect", auth: "source", handle: connect },
   { method: "GET", path: "/v1/integrations/accounts", auth: "source", handle: accounts },
   { method: "PUT", path: "/v1/integrations/accounts/:id", auth: "source", handle: updateAccount },

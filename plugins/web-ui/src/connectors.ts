@@ -26,6 +26,12 @@ interface ManagedIntegration {
   access: "read" | "read-write";
 }
 
+interface ManagedIntegrationApp {
+  nameSlug: string;
+  name: string;
+  description?: string;
+}
+
 const CONNECTOR_LABELS: Record<string, { name: string; hosts: string; desc?: string }> = {
   google: {
     name: "Google Workspace",
@@ -140,6 +146,14 @@ interface KeychainUsage {
 let connectorProviders: Record<string, ConnectorProvider> = {};
 let managedIntegrations: ManagedIntegration[] = [];
 let managedIntegrationsConfigured = false;
+let managedIntegrationApps: ManagedIntegrationApp[] = [];
+let managedIntegrationPickerOpen = false;
+let managedIntegrationSearch = "";
+let managedIntegrationSearchLoading = false;
+let managedIntegrationSearchError = "";
+let managedIntegrationConnecting = "";
+let managedIntegrationSearchSequence = 0;
+let managedIntegrationPickerOpener: HTMLElement | null = null;
 let keychainCredentials: KeychainCredential[] = [];
 let keychainConnectorCredentials: KeychainConnectorCredential[] = [];
 let keychainGrants: KeychainGrant[] = [];
@@ -158,6 +172,14 @@ export function resetKeychainState(): void {
   connectorProviders = {};
   managedIntegrations = [];
   managedIntegrationsConfigured = false;
+  managedIntegrationApps = [];
+  managedIntegrationPickerOpen = false;
+  managedIntegrationSearch = "";
+  managedIntegrationSearchLoading = false;
+  managedIntegrationSearchError = "";
+  managedIntegrationConnecting = "";
+  managedIntegrationSearchSequence++;
+  managedIntegrationPickerOpener = null;
   keychainCredentials = [];
   keychainConnectorCredentials = [];
   keychainGrants = [];
@@ -169,6 +191,16 @@ export function resetKeychainState(): void {
   secureDropUrl = null;
   confirmation = null;
   confirmationOpener = null;
+}
+
+export function leaveKeychainView(): void {
+  keychainOperations.cancelNavigation();
+  managedIntegrationConnecting = "";
+  managedIntegrationPickerOpen = false;
+  managedIntegrationSearchLoading = false;
+  managedIntegrationSearchError = "";
+  managedIntegrationSearchSequence++;
+  managedIntegrationPickerOpener = null;
 }
 
 function fmtDate(ms?: number): string {
@@ -387,6 +419,69 @@ function addCredentialCard(): TemplateResult {
   </section>`;
 }
 
+function managedIntegrationPicker(): TemplateResult {
+  return html`<section class="kc-app-picker" aria-labelledby="kc-app-picker-title">
+    <div class="kc-section-head">
+      <div>
+        <h2 id="kc-app-picker-title">Connect a business app</h2>
+        <p>Search Pipedream's catalog, then sign in directly with the selected provider.</p>
+      </div>
+      <button class="kc-text-action" type="button" @click=${closeManagedIntegrationPicker}>Cancel</button>
+    </div>
+    <form
+      class="kc-app-search"
+      @submit=${(event: SubmitEvent) => {
+        event.preventDefault();
+        void searchManagedIntegrationApps(managedIntegrationSearch);
+      }}
+    >
+      <input
+        class="skill-desc-input"
+        type="search"
+        data-focus-key="integration-app-search"
+        aria-label="Search business apps"
+        placeholder="Search GoHighLevel, HubSpot, Salesforce…"
+        autocomplete="off"
+        .value=${managedIntegrationSearch}
+        @input=${(event: Event) => {
+          managedIntegrationSearch = (event.target as HTMLInputElement).value;
+        }}
+      />
+      <button class="btn" type="submit" ?disabled=${managedIntegrationSearchLoading}>
+        ${managedIntegrationSearchLoading ? "Searching…" : "Search"}
+      </button>
+    </form>
+    <div class="kc-app-results" aria-live="polite">${managedIntegrationResults()}</div>
+  </section>`;
+}
+
+function managedIntegrationResults(): TemplateResult | TemplateResult[] {
+  if (managedIntegrationSearchLoading) return html`<div class="kc-app-result-empty">Loading apps…</div>`;
+  if (managedIntegrationSearchError)
+    return html`<div class="kc-app-result-error">${managedIntegrationSearchError}</div>`;
+  if (!managedIntegrationApps.length)
+    return html`<div class="kc-app-result-empty">No apps found. Try a different name.</div>`;
+  return managedIntegrationApps.map(
+    (app) =>
+      html`<div class="kc-app-result">
+        <span class="connector-logo">${icon(Plug, 18)}</span>
+        <div>
+          <strong>${app.name}</strong>
+          <span>${app.description || app.nameSlug}</span>
+        </div>
+        <button
+          class="btn primary"
+          type="button"
+          aria-label=${`${managedIntegrationConnecting === app.nameSlug ? "Opening" : "Connect"} ${app.name}`}
+          ?disabled=${Boolean(managedIntegrationConnecting)}
+          @click=${() => void startManagedIntegration(app.nameSlug)}
+        >
+          ${managedIntegrationConnecting === app.nameSlug ? "Opening…" : "Connect"}
+        </button>
+      </div>`,
+  );
+}
+
 function confirmationCard(): TemplateResult {
   const pending = confirmation!;
   return html`<div
@@ -507,7 +602,18 @@ function drawConnectors(loading = false): void {
             : ""
         }
         <div class="kc-resource-actions">
-          ${available ? html`<button class="btn" type="button" @click=${() => void startConnector(id)}>${connected || needsReconnect ? "Reconnect" : "Connect account"}</button>` : ""}
+          ${
+            available
+              ? html`<button
+                  class="btn"
+                  type="button"
+                  ?disabled=${keychainOperations.navigationInFlight}
+                  @click=${() => void startConnector(id)}
+                >
+                  ${connected || needsReconnect ? "Reconnect" : "Connect account"}
+                </button>`
+              : ""
+          }
           ${connected || needsReconnect ? html`<button class="kc-text-action danger" type="button" data-confirm-key=${`disconnect:${id}`} ?disabled=${keychainOperations.mutationInFlight} @click=${() => void revokeConnector(id)}>Disconnect</button>` : ""}
         </div>
       </article>
@@ -570,7 +676,12 @@ function drawConnectors(loading = false): void {
         <div class="kc-resource-actions">
           ${
             !connection.healthy
-              ? html`<button class="btn" type="button" @click=${() => void startManagedIntegration()}>
+              ? html`<button
+                  class="btn"
+                  type="button"
+                  ?disabled=${keychainOperations.navigationInFlight}
+                  @click=${() => void startManagedIntegration(connection.appSlug)}
+                >
                   Reconnect
                 </button>`
               : ""
@@ -617,7 +728,13 @@ function drawConnectors(loading = false): void {
             </button>
             ${
               managedIntegrationsConfigured
-                ? html`<button class="btn primary" type="button" @click=${() => void startManagedIntegration()}>
+                ? html`<button
+                    class="btn primary"
+                    type="button"
+                    data-integration-add
+                    ?disabled=${keychainOperations.navigationInFlight}
+                    @click=${() => void openManagedIntegrationPicker()}
+                  >
                     ${icon(Plus, 16)} Add integration
                   </button>`
                 : html`<button
@@ -646,7 +763,7 @@ function drawConnectors(loading = false): void {
           </div>
         </div>
         ${connectorNotice || loading ? html`<div class="kc-notice" role="status">${loading ? "Loading integrations…" : connectorNotice}</div>` : ""}
-        ${addingCredential ? addCredentialCard() : ""}
+        ${managedIntegrationPickerOpen ? managedIntegrationPicker() : ""} ${addingCredential ? addCredentialCard() : ""}
         <section class="kc-section" aria-labelledby="kc-managed-title">
           <div class="kc-section-head">
             <div class="kc-section-title">
@@ -675,7 +792,13 @@ function drawConnectors(loading = false): void {
                     </div>
                     ${
                       managedIntegrationsConfigured
-                        ? html`<button class="btn" type="button" @click=${() => void startManagedIntegration()}>
+                        ? html`<button
+                            class="btn"
+                            type="button"
+                            data-integration-add
+                            ?disabled=${keychainOperations.navigationInFlight}
+                            @click=${() => void openManagedIntegrationPicker()}
+                          >
                             Add integration
                           </button>`
                         : ""
@@ -919,40 +1042,109 @@ async function createDrop(): Promise<void> {
 }
 
 async function startConnector(provider: string): Promise<void> {
-  const stateEpoch = keychainOperations.captureEpoch();
+  const operation = keychainOperations.beginNavigation();
+  if (!operation) return;
   connectorNotice = "";
+  drawConnectors();
   try {
     const r = await api<{ authorizeUrl?: string }>(`/api/connectors/${encodeURIComponent(provider)}/start`, {
       method: "POST",
+      signal: operation.signal,
     });
-    if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
+    if (!keychainOperations.isCurrentNavigation(operation)) return;
     if (r.authorizeUrl) {
+      keychainOperations.finishNavigation(operation);
       location.href = r.authorizeUrl;
       return;
     }
     connectorNotice = "No authorization URL was returned.";
   } catch (e) {
-    if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
-    connectorNotice = errMessage(e, "Could not start the connector.");
+    if (!keychainOperations.isCurrentNavigation(operation)) return;
+    if (!isAbortError(e)) connectorNotice = errMessage(e, "Could not start the connector.");
   }
-  drawConnectors(false);
+  if (keychainOperations.finishNavigation(operation)) drawConnectors(false);
 }
 
-async function startManagedIntegration(): Promise<void> {
-  const stateEpoch = keychainOperations.captureEpoch();
+async function openManagedIntegrationPicker(): Promise<void> {
+  managedIntegrationPickerOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  managedIntegrationPickerOpen = true;
+  managedIntegrationSearch = "";
+  managedIntegrationApps = [];
+  managedIntegrationSearchError = "";
+  managedIntegrationSearchLoading = true;
+  drawConnectors();
+  requestAnimationFrame(() =>
+    document.querySelector<HTMLInputElement>('[data-focus-key="integration-app-search"]')?.focus(),
+  );
+  await searchManagedIntegrationApps("");
+}
+
+function closeManagedIntegrationPicker(): void {
+  const opener = managedIntegrationPickerOpener;
+  managedIntegrationPickerOpen = false;
+  managedIntegrationPickerOpener = null;
+  managedIntegrationSearchSequence++;
+  managedIntegrationSearchLoading = false;
+  managedIntegrationSearchError = "";
+  managedIntegrationConnecting = "";
+  keychainOperations.cancelNavigation();
+  drawConnectors();
+  restoreDialogFocus(opener, () => document.querySelector<HTMLElement>("[data-integration-add]"));
+}
+
+async function searchManagedIntegrationApps(query: string): Promise<void> {
+  const sequence = ++managedIntegrationSearchSequence;
+  managedIntegrationSearchLoading = true;
+  managedIntegrationSearchError = "";
   connectorNotice = "";
+  drawConnectors();
   try {
-    const result = await api<{ url?: string }>("/api/integrations/connect", { method: "POST", body: "{}" });
-    if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
+    const result = await api<{ apps?: ManagedIntegrationApp[] }>(
+      `/api/integrations/apps?q=${encodeURIComponent(query.trim())}`,
+    );
+    if (sequence !== managedIntegrationSearchSequence) return;
+    managedIntegrationApps = result.apps ?? [];
+  } catch (error) {
+    if (sequence !== managedIntegrationSearchSequence) return;
+    managedIntegrationApps = [];
+    managedIntegrationSearchError = errMessage(error, "Could not load the integration catalog.");
+  } finally {
+    if (sequence === managedIntegrationSearchSequence) {
+      managedIntegrationSearchLoading = false;
+      drawConnectors(false);
+    }
+  }
+}
+
+async function startManagedIntegration(appSlug: string): Promise<void> {
+  const operation = keychainOperations.beginNavigation();
+  if (!operation) return;
+  connectorNotice = "";
+  managedIntegrationConnecting = appSlug;
+  drawConnectors();
+  try {
+    const result = await api<{ url?: string }>("/api/integrations/connect", {
+      method: "POST",
+      body: JSON.stringify({ app: appSlug }),
+      signal: operation.signal,
+    });
+    if (!keychainOperations.isCurrentNavigation(operation)) return;
     if (!result.url) throw new Error("No connection URL was returned.");
+    keychainOperations.finishNavigation(operation);
     location.href = result.url;
     return;
   } catch (error) {
-    if (keychainOperations.isCurrentEpoch(stateEpoch)) {
-      connectorNotice = errMessage(error, "Could not start the integration connection.");
-    }
+    if (!keychainOperations.isCurrentNavigation(operation)) return;
+    if (!isAbortError(error)) connectorNotice = errMessage(error, "Could not start the integration connection.");
   }
-  drawConnectors(false);
+  if (keychainOperations.finishNavigation(operation)) {
+    managedIntegrationConnecting = "";
+    drawConnectors(false);
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return !!error && typeof error === "object" && "name" in error && error.name === "AbortError";
 }
 
 async function updateManagedIntegration(

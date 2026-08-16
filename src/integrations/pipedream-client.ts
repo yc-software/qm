@@ -4,6 +4,9 @@ const TOKEN_SKEW_MS = 60_000;
 const MAX_RESULT_CHARS = 60_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const APP_SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,127}$/i;
+const DEFAULT_CONNECT_ORIGIN = "https://pipedream.com";
+const CONNECT_PATH = "/_static/connect.html";
 
 export type PipedreamEnvironment = "development" | "production";
 
@@ -15,6 +18,7 @@ export interface PipedreamConfig {
   externalIdSecret: string;
   apiUrl?: string;
   mcpUrl?: string;
+  connectOrigin?: string;
 }
 
 export interface PipedreamAccount {
@@ -32,6 +36,12 @@ export interface PipedreamAccount {
   error?: string;
 }
 
+export interface PipedreamApp {
+  nameSlug: string;
+  name: string;
+  description?: string;
+}
+
 export interface PipedreamTool {
   name: string;
   description: string;
@@ -45,6 +55,11 @@ interface AccessToken {
 
 function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+export function normalizePipedreamAppSlug(value: unknown): string | null {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return APP_SLUG_PATTERN.test(normalized) ? normalized : null;
 }
 
 function parseMcpBody(text: string, contentType: string | null): Record<string, unknown> {
@@ -107,6 +122,7 @@ export class PipedreamClient {
   private readonly now: () => number;
   private readonly apiUrl: string;
   private readonly mcpUrl: string;
+  private readonly connectOrigin: string;
 
   constructor(config: PipedreamConfig, fetchImpl: typeof fetch = fetch, now: () => number = () => Date.now()) {
     this.config = config;
@@ -114,6 +130,7 @@ export class PipedreamClient {
     this.now = now;
     this.apiUrl = (config.apiUrl ?? "https://api.pipedream.com").replace(/\/$/, "");
     this.mcpUrl = config.mcpUrl ?? "https://remote.mcp.pipedream.net/v3";
+    this.connectOrigin = new URL(config.connectOrigin ?? DEFAULT_CONNECT_ORIGIN).origin;
   }
 
   externalUserId(principalId: string): string {
@@ -152,7 +169,45 @@ export class PipedreamClient {
     };
   }
 
-  async createConnectLink(principalId: string, redirectUri?: string): Promise<{ url: string; expiresAt: string }> {
+  async listApps(query: string): Promise<PipedreamApp[]> {
+    const search = new URLSearchParams({
+      q: query.trim().slice(0, 120),
+      limit: "20",
+      sort_key: "featured_weight",
+      sort_direction: "desc",
+      has_actions: "true",
+    });
+    const response = await this.request(`${this.apiUrl}/v1/connect/apps?${search}`, {
+      headers: await this.headers(),
+    });
+    if (!response.ok) throw new Error(`Pipedream app search failed (HTTP ${response.status})`);
+    const body = await boundedJson(response);
+    if (!Array.isArray(body.data)) return [];
+    const apps: PipedreamApp[] = [];
+    for (const value of body.data) {
+      const app = jsonObject(value);
+      const nameSlug = normalizePipedreamAppSlug(app.name_slug);
+      const name = typeof app.name === "string" ? app.name.trim().slice(0, 160) : "";
+      if (!nameSlug || !name) continue;
+      apps.push({
+        nameSlug,
+        name,
+        ...(typeof app.description === "string" && app.description.trim()
+          ? { description: app.description.trim().slice(0, 500) }
+          : {}),
+      });
+      if (apps.length === 20) break;
+    }
+    return apps;
+  }
+
+  async createConnectLink(
+    principalId: string,
+    appSlug: string,
+    redirectUri?: string,
+  ): Promise<{ url: string; expiresAt: string }> {
+    const normalizedApp = normalizePipedreamAppSlug(appSlug);
+    if (!normalizedApp) throw new Error("A valid integration app is required");
     const response = await this.request(
       `${this.apiUrl}/v1/connect/${encodeURIComponent(this.config.projectId)}/tokens`,
       {
@@ -171,8 +226,18 @@ export class PipedreamClient {
     const url = typeof body.connect_link_url === "string" ? body.connect_link_url : "";
     if (!url) throw new Error("Pipedream Connect returned no link");
     const parsedUrl = new URL(url);
-    if (parsedUrl.protocol !== "https:") throw new Error("Pipedream Connect returned an insecure link");
-    return { url, expiresAt: typeof body.expires_at === "string" ? body.expires_at : "" };
+    if (
+      parsedUrl.protocol !== "https:" ||
+      parsedUrl.origin !== this.connectOrigin ||
+      parsedUrl.pathname !== CONNECT_PATH ||
+      parsedUrl.username ||
+      parsedUrl.password ||
+      parsedUrl.hash
+    ) {
+      throw new Error("Pipedream Connect returned an invalid link");
+    }
+    parsedUrl.searchParams.set("app", normalizedApp);
+    return { url: parsedUrl.toString(), expiresAt: typeof body.expires_at === "string" ? body.expires_at : "" };
   }
 
   async listAccounts(principalId: string): Promise<PipedreamAccount[]> {

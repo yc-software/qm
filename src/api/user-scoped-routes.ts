@@ -56,6 +56,7 @@ const USER_SCOPED: Rule[] = [
   pat("POST", "/v1/connectors/token", { in: "body", name: "principalId" }),
   pat("POST", "/v1/connectors/oauth/revoke", { in: "body", name: "principalId" }),
   pat("GET", "/v1/integrations/status", { in: "query", name: "principalId" }),
+  pat("GET", "/v1/integrations/apps", { in: "query", name: "principalId" }),
   pat("POST", "/v1/integrations/connect", { in: "body", name: "principalId" }),
   pat("GET", "/v1/integrations/accounts", { in: "query", name: "principalId" }),
   pat("PUT", "/v1/integrations/accounts/:id", { in: "body", name: "principalId" }),

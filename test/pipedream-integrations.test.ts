@@ -15,7 +15,7 @@ interface RequestLog {
   signal: AbortSignal | null;
 }
 
-function fixture() {
+function fixture(options: { connectLinkUrl?: string; apps?: unknown[] } = {}) {
   const requests: RequestLog[] = [];
   const account = {
     id: "apn_123",
@@ -51,7 +51,23 @@ function fixture() {
       return Response.json({ access_token: "pd_access", expires_in: 3600 });
     }
     if (url.endsWith("/tokens")) {
-      return Response.json({ connect_link_url: "https://pipedream.test/connect", expires_at: "soon", token: "ctok" });
+      return Response.json({
+        connect_link_url: options.connectLinkUrl ?? "https://pipedream.test/_static/connect.html?connectLink=true",
+        expires_at: "soon",
+        token: "ctok",
+      });
+    }
+    if (url.includes("/v1/connect/apps?")) {
+      return Response.json({
+        data: options.apps ?? [
+          {
+            name_slug: "highlevel_oauth",
+            name: "GoHighLevel",
+            description: "CRM and marketing automation",
+          },
+          { name_slug: "", name: "Invalid" },
+        ],
+      });
     }
     if (url.includes("/accounts?") && method === "GET") return Response.json({ data: [account] });
     if (url.includes("/accounts/apn_123") && method === "DELETE") return new Response(null, { status: 204 });
@@ -71,6 +87,7 @@ function fixture() {
       externalIdSecret: "external-secret",
       apiUrl: "https://api.test",
       mcpUrl: "https://mcp.test/v3",
+      connectOrigin: "https://pipedream.test",
     },
     fetchImpl,
     () => 1_000_000,
@@ -83,8 +100,15 @@ test("Pipedream client scopes Connect links and account reads to an opaque exter
   const externalId = client.externalUserId("slack:U123");
   assert.match(externalId, /^qm_[0-9a-f]{40}$/);
   assert.ok(!externalId.includes("U123"));
-  const link = await client.createConnectLink("slack:U123", "https://portal.test/integrations");
-  assert.equal(link.url, "https://pipedream.test/connect");
+  const apps = await client.listApps(" high level ");
+  assert.deepEqual(apps, [
+    { nameSlug: "highlevel_oauth", name: "GoHighLevel", description: "CRM and marketing automation" },
+  ]);
+  const appRequest = requests.find((request) => request.url.includes("/v1/connect/apps?"));
+  assert.ok(appRequest?.url.includes("q=high+level"));
+  assert.ok(appRequest?.url.includes("has_actions=true"));
+  const link = await client.createConnectLink("slack:U123", "highlevel_oauth", "https://portal.test/integrations");
+  assert.equal(link.url, "https://pipedream.test/_static/connect.html?connectLink=true&app=highlevel_oauth");
   const tokenRequest = requests.find((request) => request.url.endsWith("/tokens"));
   assert.equal(tokenRequest?.body.external_user_id, externalId);
   assert.equal(tokenRequest?.body.scope, "connect:accounts:read connect:accounts:write");
@@ -95,6 +119,51 @@ test("Pipedream client scopes Connect links and account reads to an opaque exter
   assert.ok(accountRequest?.url.includes("include_credentials=false"));
   assert.equal(requests.filter((request) => request.url.endsWith("/v1/oauth/token")).length, 1);
   assert.ok(requests.every((request) => request.signal instanceof AbortSignal));
+});
+
+test("Pipedream rejects missing and malformed apps before creating a Connect token", async () => {
+  const { client, requests } = fixture();
+  await assert.rejects(() => client.createConnectLink("slack:U123", ""), /valid integration app/);
+  await assert.rejects(() => client.createConnectLink("slack:U123", "hubspot?redirect=evil"), /valid integration app/);
+  assert.equal(requests.length, 0);
+});
+
+test("Pipedream rejects Connect capability URLs outside its exact trusted surface", async () => {
+  for (const connectLinkUrl of [
+    "https://attacker.test/_static/connect.html?connectLink=true",
+    "https://pipedream.test/other?connectLink=true",
+    "https://user@pipedream.test/_static/connect.html?connectLink=true",
+    "https://pipedream.test/_static/connect.html?connectLink=true#fragment",
+  ]) {
+    const { client } = fixture({ connectLinkUrl });
+    await assert.rejects(() => client.createConnectLink("slack:U123", "highlevel_oauth"), /invalid link/);
+  }
+});
+
+test("Pipedream caps normalized app search results even when the provider exceeds its limit", async () => {
+  const apps = Array.from({ length: 50 }, (_, index) => ({ name_slug: `app_${index}`, name: `App ${index}` }));
+  const { client } = fixture({ apps });
+  const results = await client.listApps("");
+  assert.equal(results.length, 20);
+  assert.equal(results.at(-1)?.nameSlug, "app_19");
+});
+
+test("integration service refuses malformed app names without persisting them in audit", async () => {
+  const { client, requests } = fixture();
+  const audit = createAuditLog();
+  const service = createPipedreamIntegrationService({
+    client,
+    store: createIntegrationConnectionStore(createMemoryMap()),
+    audit,
+    approvalSecret: "approval-secret",
+  });
+  await assert.rejects(() => service.createConnectLink("slack:U123", "x".repeat(10_000)), /valid integration app/);
+  assert.equal(requests.length, 0);
+  const [event] = await audit.events();
+  assert.deepEqual(
+    { action: event?.action, resource: event?.resource, status: event?.status },
+    { action: "integration.connect.start", resource: "pipedream", status: "refused" },
+  );
 });
 
 test("Pipedream MCP calls use the selected account and never materialize its credentials", async () => {

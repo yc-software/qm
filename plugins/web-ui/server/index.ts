@@ -1390,11 +1390,34 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/integrations/apps",
+    handle: async (c) => {
+      const { res, user } = c;
+      const query = new URL(c.req.url ?? "", "http://localhost").searchParams.get("q") ?? "";
+      return relayCore(
+        res,
+        "GET",
+        `/v1/integrations/apps?principalId=${encodeURIComponent(user)}&q=${encodeURIComponent(query)}`,
+      );
+    },
+  },
+  {
     method: "POST",
     path: "/api/integrations/connect",
     handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "POST", "/v1/integrations/connect", JSON.stringify({ principalId: user }));
+      const { req, res, user } = c;
+      const body = await readJson<{ app?: unknown }>(req, res, false);
+      if (!body) return;
+      if (typeof body.app !== "string" || !body.app.trim()) {
+        return json(res, 400, { error: "bad_request", message: "app is required" });
+      }
+      return relayCore(
+        res,
+        "POST",
+        "/v1/integrations/connect",
+        JSON.stringify({ principalId: user, app: body.app.trim() }),
+      );
     },
   },
   {

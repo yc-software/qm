@@ -4,7 +4,13 @@ import type { McpServer } from "../mcp/mcp-server-store.ts";
 import type { McpToolDescriptor, McpToolService } from "../mcp/mcp-tool-service.ts";
 import { personalScope, type ScopeId } from "../types.ts";
 import type { IntegrationConnection, IntegrationConnectionStore } from "./integration-store.ts";
-import { PipedreamClient, type PipedreamAccount, type PipedreamTool } from "./pipedream-client.ts";
+import {
+  normalizePipedreamAppSlug,
+  PipedreamClient,
+  type PipedreamAccount,
+  type PipedreamApp,
+  type PipedreamTool,
+} from "./pipedream-client.ts";
 
 const TOOL_NAME = "integrations";
 const TOOL_CACHE_MS = 5 * 60_000;
@@ -31,7 +37,12 @@ const descriptor: McpToolDescriptor = {
 
 export interface PipedreamIntegrationService extends McpToolService {
   configured(): boolean;
-  createConnectLink(principalId: string, redirectUri?: string): Promise<{ url: string; expiresAt: string }>;
+  listApps(principalId: string, query: string): Promise<PipedreamApp[]>;
+  createConnectLink(
+    principalId: string,
+    appSlug: string,
+    redirectUri?: string,
+  ): Promise<{ url: string; expiresAt: string }>;
   listOwned(principalId: string): Promise<IntegrationConnection[]>;
   updateOwned(
     principalId: string,
@@ -201,14 +212,30 @@ export function createPipedreamIntegrationService(opts: {
   return {
     configured: () => !!opts.client,
     toolDefs: () => (opts.client ? [descriptor] : []),
-    async createConnectLink(principalId, redirectUri) {
+    async listApps(principalId, query) {
       if (!opts.client) throw new Error("Pipedream Connect is not configured");
       try {
-        const link = await opts.client.createConnectLink(principalId, redirectUri);
-        record(principalId, "connect.start", "pipedream", undefined, "ok");
+        const apps = await opts.client.listApps(query);
+        record(principalId, "apps.list", "pipedream", undefined, "ok", { result_count: apps.length });
+        return apps;
+      } catch (error) {
+        record(principalId, "apps.list", "pipedream", undefined, "failed");
+        throw error;
+      }
+    },
+    async createConnectLink(principalId, appSlug, redirectUri) {
+      if (!opts.client) throw new Error("Pipedream Connect is not configured");
+      const app = normalizePipedreamAppSlug(appSlug);
+      if (!app) {
+        record(principalId, "connect.start", "pipedream", undefined, "refused");
+        throw new Error("A valid integration app is required");
+      }
+      try {
+        const link = await opts.client.createConnectLink(principalId, app, redirectUri);
+        record(principalId, "connect.start", app, undefined, "ok");
         return link;
       } catch (error) {
-        record(principalId, "connect.start", "pipedream", undefined, "failed");
+        record(principalId, "connect.start", app, undefined, "failed");
         throw error;
       }
     },
