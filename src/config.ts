@@ -599,11 +599,43 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
+function pipedreamCompletenessEnvStrict(env: NodeJS.ProcessEnv): void {
+  const values = [env.PIPEDREAM_CLIENT_ID, env.PIPEDREAM_CLIENT_SECRET, env.PIPEDREAM_PROJECT_ID].map((value) =>
+    value?.trim(),
+  );
+  if (values.some(Boolean) && !values.every(Boolean)) {
+    throw new Error("PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET, and PIPEDREAM_PROJECT_ID must be set together");
+  }
+}
+
+function pipedreamEnvStrict(env: NodeJS.ProcessEnv): Config["pipedream"] {
+  const clientId = env.PIPEDREAM_CLIENT_ID?.trim();
+  const clientSecret = env.PIPEDREAM_CLIENT_SECRET;
+  const projectId = env.PIPEDREAM_PROJECT_ID?.trim();
+  if (!clientId || !clientSecret?.trim() || !projectId) return undefined;
+  if (!/^proj_[a-zA-Z0-9]+$/.test(projectId)) {
+    throw new Error("PIPEDREAM_PROJECT_ID must start with proj_ and contain only letters or digits");
+  }
+  if (env.PIPEDREAM_ENVIRONMENT && !["development", "production"].includes(env.PIPEDREAM_ENVIRONMENT)) {
+    throw new Error('PIPEDREAM_ENVIRONMENT must be "development" or "production"');
+  }
+  return {
+    clientId,
+    clientSecret,
+    projectId,
+    environment: env.PIPEDREAM_ENVIRONMENT === "production" ? "production" : "development",
+    ...(env.PIPEDREAM_API_URL ? { apiUrl: env.PIPEDREAM_API_URL } : {}),
+    ...(env.PIPEDREAM_MCP_URL ? { mcpUrl: env.PIPEDREAM_MCP_URL } : {}),
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  pipedreamCompletenessEnvStrict(env);
   const missingSecrets = validateCoreSecretEnv(env);
   if (missingSecrets.length) {
     throw new Error(`missing or insecure required core secrets: ${missingSecrets.join(", ")}`);
   }
+  const pipedream = pipedreamEnvStrict(env);
   const modelProvider = modelProviderEnvStrict(env);
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
     if (env[key] === "sqlite") {
@@ -731,26 +763,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     numEnvStrict("RUN_MAX_AGE_MS", env.RUN_MAX_AGE_MS) ??
     (turnWallClockMs > 0 ? 2 * turnWallClockMs : CONFIG_DEFAULTS.runMaxAgeMs);
   const slack = slackPluginConfigFromEnv(env);
-  const pipedreamValues = [env.PIPEDREAM_CLIENT_ID, env.PIPEDREAM_CLIENT_SECRET, env.PIPEDREAM_PROJECT_ID];
-  if (pipedreamValues.some(Boolean) && !pipedreamValues.every(Boolean)) {
-    throw new Error("PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET, and PIPEDREAM_PROJECT_ID must be set together");
-  }
-  if (env.PIPEDREAM_PROJECT_ID && !/^proj_[a-zA-Z0-9]+$/.test(env.PIPEDREAM_PROJECT_ID)) {
-    throw new Error("PIPEDREAM_PROJECT_ID must start with proj_ and contain only letters or digits");
-  }
-  if (env.PIPEDREAM_ENVIRONMENT && !["development", "production"].includes(env.PIPEDREAM_ENVIRONMENT)) {
-    throw new Error('PIPEDREAM_ENVIRONMENT must be "development" or "production"');
-  }
-  const pipedream = pipedreamValues.every(Boolean)
-    ? {
-        clientId: env.PIPEDREAM_CLIENT_ID!,
-        clientSecret: env.PIPEDREAM_CLIENT_SECRET!,
-        projectId: env.PIPEDREAM_PROJECT_ID!,
-        environment: env.PIPEDREAM_ENVIRONMENT === "production" ? ("production" as const) : ("development" as const),
-        ...(env.PIPEDREAM_API_URL ? { apiUrl: env.PIPEDREAM_API_URL } : {}),
-        ...(env.PIPEDREAM_MCP_URL ? { mcpUrl: env.PIPEDREAM_MCP_URL } : {}),
-      }
-    : undefined;
   return {
     production: env.NODE_ENV === "production",
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
