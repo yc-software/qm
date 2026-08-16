@@ -1,6 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Grant, Permission, ScopeId } from "../types.ts";
 import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import type { AclStore } from "../acl/acl-store.ts";
@@ -8,13 +8,7 @@ import { deployRef, encodeRef } from "../acl/resource-ref.ts";
 import { normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import {
-  deployCurrentGitRef,
-  type DeployStore,
-  type Deployment,
-  type DeployEndpoint,
-  type DeploymentVersion,
-} from "./deploy-store.ts";
+import { type DeployStore, type Deployment, type DeployEndpoint, type DeploymentVersion } from "./deploy-store.ts";
 import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -141,6 +135,32 @@ function requiredEntrypoint(input: string | undefined, d: Deployment | null): st
   return entrypoint;
 }
 
+function deploymentSourceHash(input: {
+  entrypoint: string;
+  files: DeployFile[];
+  homeFiles?: DeployFile[];
+  env?: Record<string, string>;
+}): string {
+  const files = (input.files ?? [])
+    .map((file) => [file.path, Buffer.from(file.data).toString("base64")])
+    .sort(([a], [b]) => a!.localeCompare(b!));
+  const homeFiles = (input.homeFiles ?? [])
+    .map((file) => [file.path, Buffer.from(file.data).toString("base64")])
+    .sort(([a], [b]) => a!.localeCompare(b!));
+  const env = Object.fromEntries(Object.entries(input.env ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+  return createHash("sha256")
+    .update(JSON.stringify({ entrypoint: input.entrypoint, files, homeFiles, env }))
+    .digest("hex");
+}
+
+async function removeSnapshot(root: string, path: string | undefined): Promise<void> {
+  if (!path) return;
+  const target = resolve(path);
+  const rel = relative(resolve(root), target);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return;
+  await rm(target, { recursive: true, force: true });
+}
+
 export function createDeployService(deps: DeployServiceDeps): DeployService {
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
   const advisoryLock = deps.advisoryLock ?? createNoopAdvisoryLock();
@@ -169,39 +189,86 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     } else {
       endpoint = await deps.provider.apply(d, version);
     }
-    if (endpoint.image && endpoint.image !== version.image) {
-      await deps.deployStore.setVersionImage(id, version.version, endpoint.image);
-    }
     return endpoint;
   };
 
-  const markVersionRunning = async (id: string, version: number, endpoint: DeployEndpoint): Promise<void> => {
-    await deps.deployStore.setEndpoint(id, endpoint);
-    await deps.deployStore.setStatus(id, "running");
-    await deps.deployStore.setAppliedVersion(id, version);
+  const activateVersion = async (id: string, version: DeploymentVersion): Promise<DeployEndpoint> => {
+    const before = await deps.deployStore.get(id);
+    await deps.deployStore.markDeploying(id, version.version);
+    try {
+      const endpoint = await applyVersion(id, version, before?.appliedVersion);
+      if (endpoint.image && endpoint.image !== version.image) {
+        await deps.deployStore.setVersionImage(id, version.version, endpoint.image);
+      }
+      await deps.deployStore.markApplied(id, version.version, endpoint);
+      return endpoint;
+    } catch (error) {
+      const persistFailure =
+        before?.status === "archived" ? deps.deployStore.markArchived : deps.deployStore.markFailed;
+      await persistFailure(id).catch((cleanupError) => swallow("deploy failure persistence", cleanupError));
+      if (before) {
+        try {
+          await deps.provider.destroy(before);
+          await deps.deployStore.markRuntimeClean(id);
+        } catch (cleanupError) {
+          swallow("deploy runtime cleanup", cleanupError);
+        }
+      }
+      throw error;
+    }
   };
 
-  const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
-    if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
-    const version = d.versions.find((v) => v.version === d.currentVersion);
+  const cleanupPending = (d: Deployment): boolean =>
+    d.status === "deploying" ||
+    d.deployingVersion !== undefined ||
+    ((d.status === "archived" || d.status === "stopped") && d.endpoint != null);
+
+  const cleanInterruptedRuntime = async (d: Deployment): Promise<Deployment> => {
+    if (d.status === "deploying") await deps.deployStore.markFailed(d.id);
+    await deps.provider.destroy(d);
+    await deps.deployStore.markRuntimeClean(d.id);
+    return (await deps.deployStore.get(d.id)) ?? d;
+  };
+
+  const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint | null> => {
+    const reapply = (): Promise<DeployEndpoint | null> =>
+      withDeployLock(d.id, async () => {
+        let cur = (await deps.deployStore.get(d.id)) ?? d;
+        if (cleanupPending(cur)) {
+          cur = await cleanInterruptedRuntime(cur);
+        }
+        if (
+          cur.status !== "running" &&
+          !(cur.status === "failed" && cur.appliedVersion !== undefined) &&
+          !(cur.status === "deploying" && cur.deployingVersion !== undefined)
+        )
+          return null;
+        const liveVersion =
+          cur.status === "deploying" ? (cur.deployingVersion ?? cur.appliedVersion) : cur.appliedVersion;
+        const selectedVersion = liveVersion ?? cur.currentVersion;
+        const v = cur.versions.find((x) => x.version === selectedVersion);
+        if (!v) return cur.endpoint;
+        if (cur.status === "running" && cur.endpoint != null) {
+          if (!deps.provider.resolveEndpoint) return cur.endpoint;
+          const again = await deps.provider.resolveEndpoint(cur, v);
+          if (again) {
+            if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
+            return again;
+          }
+        }
+        return activateVersion(cur.id, v);
+      });
+    if (d.endpoint == null) return reapply();
+    if (!deps.provider.resolveEndpoint) return d.endpoint;
+    const liveVersion = d.appliedVersion ?? d.currentVersion;
+    const version = d.versions.find((v) => v.version === liveVersion);
     if (!version) return d.endpoint;
     const resolved = await deps.provider.resolveEndpoint(d, version);
     if (resolved) {
       if (!endpointsEqual(resolved, d.endpoint)) await deps.deployStore.setEndpoint(d.id, resolved);
       return resolved;
     }
-    return withDeployLock(d.id, async () => {
-      const cur = (await deps.deployStore.get(d.id)) ?? d;
-      const v = cur.versions.find((x) => x.version === cur.currentVersion) ?? version;
-      const again = await deps.provider.resolveEndpoint!(cur, v);
-      if (again) {
-        if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
-        return again;
-      }
-      const fresh = await applyVersion(cur.id, v, cur.appliedVersion ?? cur.currentVersion);
-      await markVersionRunning(cur.id, v.version, fresh);
-      return fresh;
-    });
+    return reapply();
   };
 
   const deploymentRef = (id: string): string => encodeRef(deployRef(id));
@@ -345,9 +412,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
         ...(input.env ? { env: input.env } : {}),
+        sourceHash: deploymentSourceHash(input),
       });
-      const endpoint = await applyVersion(d.id, d.versions[0]!);
-      await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
+      await withDeployLock(d.id, () => activateVersion(d.id, d.versions[0]!));
       deps.auditLog.record({
         at: Date.now(),
         principalId: input.createdBy,
@@ -360,7 +427,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async redeploy(id, input) {
       return withDeployLock(id, async () => {
-        const before = await deps.deployStore.get(id);
+        const sourceHash = deploymentSourceHash(input);
+        let before = await deps.deployStore.get(id);
+        if (before && cleanupPending(before)) before = await cleanInterruptedRuntime(before);
+        const retry =
+          before && (before.status === "failed" || before.status === "deploying")
+            ? [...before.versions]
+                .reverse()
+                .find((candidate) => candidate.version !== before.appliedVersion && candidate.sourceHash === sourceHash)
+            : undefined;
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
         const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
         const v = await deps.deployStore.addVersion(id, {
@@ -369,11 +444,18 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           files: input.files,
           ...(homeDir ? { homeDir } : {}),
           ...(input.env ? { env: input.env } : {}),
+          sourceHash,
         });
+        if (retry?.version === v.version) {
+          await removeSnapshot(deps.deployDir, retry.snapshotDir);
+          await removeSnapshot(deps.deployDir, retry.homeDir);
+        } else if (v.snapshotDir !== snapshotDir) {
+          await removeSnapshot(deps.deployDir, snapshotDir);
+          await removeSnapshot(deps.deployDir, homeDir);
+        }
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown deployment: ${id}`);
-        const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion);
-        await markVersionRunning(id, v.version, endpoint);
+        await activateVersion(id, v);
         deps.auditLog.record({
           at: Date.now(),
           principalId: d.createdBy,
@@ -396,12 +478,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async rollbackDeployment(id, version) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
-        await deps.deployStore.setCurrentVersion(id, version);
+        if (before && cleanupPending(before)) await cleanInterruptedRuntime(before);
         const v = await deps.deployStore.versionOf(id, version);
         const d = await deps.deployStore.get(id);
         if (!d || !v) return;
-        const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion);
-        await markVersionRunning(id, v.version, endpoint);
+        await activateVersion(id, v);
         deps.auditLog.record({
           at: Date.now(),
           principalId: d.createdBy,
@@ -416,35 +497,27 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return withDeployLock(id, async () => {
         const d = await deps.deployStore.get(id);
         if (!d) return;
-        await deps.provider.destroy(d);
-        await deps.deployStore.setStatus(id, "archived");
-        await deps.deployStore.setEndpoint(id, null);
+        await deps.deployStore.markArchived(id);
+        try {
+          await deps.provider.destroy(d);
+          await deps.deployStore.markRuntimeClean(id);
+        } catch (error) {
+          swallow("deploy archive cleanup", error);
+        }
       });
     },
 
     async restoreDeployment(id, actorId) {
       return withDeployLock(id, async () => {
-        const d = await deps.deployStore.get(id);
+        let d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown deployment: ${id}`);
         if (d.status === "running") return d;
         if (d.status !== "archived") throw new Error(`deployment is not archived: ${id}`);
-        const version = d.versions.find((v) => v.version === d.currentVersion);
-        if (!version) throw new Error(`no such version ${d.currentVersion}`);
-        try {
-          const endpoint = await applyVersion(id, version, d.appliedVersion);
-          await markVersionRunning(id, version.version, endpoint);
-        } catch (error) {
-          await deps.provider
-            .destroy(d)
-            .catch((cleanupError) => swallow("deploy restore runtime cleanup", cleanupError));
-          await deps.deployStore
-            .setStatus(id, "archived")
-            .catch((cleanupError) => swallow("deploy restore status cleanup", cleanupError));
-          await deps.deployStore
-            .setEndpoint(id, null)
-            .catch((cleanupError) => swallow("deploy restore endpoint cleanup", cleanupError));
-          throw error;
-        }
+        if (cleanupPending(d)) d = await cleanInterruptedRuntime(d);
+        const liveVersion = d.appliedVersion ?? d.currentVersion;
+        const version = d.versions.find((v) => v.version === liveVersion);
+        if (!version) throw new Error(`no such version ${liveVersion}`);
+        await activateVersion(id, version);
         deps.auditLog.record({
           at: Date.now(),
           principalId: actorId ?? d.createdBy,
@@ -494,9 +567,18 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async reachDeployment(idOrName, principalId, opts = {}): Promise<Reach> {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      if (!d || d.status !== "running" || d.endpoint == null) return { status: "not_found" };
+      if (
+        !d ||
+        !(
+          (d.status === "running" && d.endpoint != null) ||
+          (d.status === "failed" && d.appliedVersion !== undefined) ||
+          (d.status === "deploying" && d.deployingVersion !== undefined)
+        )
+      )
+        return { status: "not_found" };
       if (!opts.bypassAcl && !(await reachAllowed(d, principalId))) return { status: "denied" };
       const endpoint = await liveEndpoint(d);
+      if (!endpoint) return { status: "not_found" };
       await deps.deployStore.touch(d.id, Date.now());
       return { status: "ok", endpoint };
     },
@@ -515,19 +597,28 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async pushGit(id, runReceivePack) {
       return withDeployLock(id, async () => {
-        const { result, ok } = await runReceivePack();
-        if (!ok) return result;
+        const beforePush = await deps.deployStore.get(id);
+        if (beforePush && cleanupPending(beforePush)) await cleanInterruptedRuntime(beforePush);
+        const baseline = await deps.deployStore.preparePush(id);
+        let received: Awaited<ReturnType<typeof runReceivePack>>;
+        try {
+          received = await runReceivePack();
+        } catch (error) {
+          await deps.deployStore
+            .takePushedCommit(id, baseline)
+            .catch((cleanupError) => swallow("deploy pushed ref cleanup", cleanupError));
+          throw error;
+        }
+        const pushed = await deps.deployStore.takePushedCommit(id, baseline);
+        if (!received.ok || !pushed) return received.result;
         let ownerScopeId = "unknown";
         try {
           const before = await deps.deployStore.get(id);
-          if (!before) return result;
+          if (!before) return received.result;
           ownerScopeId = before.ownerScopeId;
-          const pushed = await deps.deployStore.refOf(id, deployCurrentGitRef);
-          if (!pushed) return result;
           const v = await deps.deployStore.addVersionFromCommit(id, pushed);
-          if (!v) return result;
-          const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
-          await markVersionRunning(id, v.version, endpoint);
+          if (!v) return received.result;
+          await activateVersion(id, v);
           deps.auditLog.record({
             at: Date.now(),
             principalId: before.createdBy,
@@ -546,26 +637,38 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             status: "error",
           });
         }
-        return result;
+        return received.result;
       });
     },
 
     async reapIdleDeployments(ttlMs, now = Date.now()) {
       const result = await leaderLease.hold("deployments:reaper", async () => {
-        if (deps.provider.profile.managedScaleToZero) return 0;
         let stopped = 0;
         for (const d of await deps.deployStore.list()) {
-          if (d.status !== "running") continue;
-          const last = d.lastAccessAt ?? d.versions[d.versions.length - 1]?.createdAt ?? 0;
-          if (now - last < ttlMs) continue;
-          await withDeployLock(d.id, async () => {
-            const cur = await deps.deployStore.get(d.id);
-            if (!cur || cur.status !== "running") return;
-            await deps.provider.destroy(cur);
-            await deps.deployStore.setStatus(d.id, "stopped");
-            await deps.deployStore.setEndpoint(d.id, null);
-            stopped++;
-          });
+          try {
+            if (cleanupPending(d)) {
+              await withDeployLock(d.id, async () => {
+                const cur = await deps.deployStore.get(d.id);
+                if (!cur || !cleanupPending(cur)) return;
+                await cleanInterruptedRuntime(cur);
+              });
+              continue;
+            }
+            if (deps.provider.profile.managedScaleToZero) continue;
+            if (d.status !== "running") continue;
+            const last = d.lastAccessAt ?? d.versions[d.versions.length - 1]?.createdAt ?? 0;
+            if (now - last < ttlMs) continue;
+            await withDeployLock(d.id, async () => {
+              const cur = await deps.deployStore.get(d.id);
+              if (!cur || cur.status !== "running") return;
+              await deps.deployStore.markStopped(d.id);
+              await deps.provider.destroy(cur);
+              await deps.deployStore.markRuntimeClean(d.id);
+              stopped++;
+            });
+          } catch (error) {
+            swallow(`deploy reaper: ${d.id}`, error);
+          }
         }
         return stopped;
       });

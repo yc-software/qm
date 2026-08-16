@@ -12,7 +12,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
 
-test("deploy versions are immutable and rollback flips the pointer", async () => {
+test("deploy versions are immutable and selecting one flips the pointer", async () => {
   const s = createDeployStore();
   const d = await s.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -26,9 +26,11 @@ test("deploy versions are immutable and rollback flips the pointer", async () =>
   await s.addVersion(d.id, { entrypoint: "v2", snapshotDir: "/snap/v2" });
   const after = (await s.get(d.id))!;
   assert.equal(after.versions.length, 2, "v1 is retained — versions are append-only");
-  assert.equal(after.currentVersion, 2);
+  assert.equal(after.currentVersion, 1, "recording a version does not select it before apply succeeds");
   assert.equal((await s.versionOf(d.id, 1))!.snapshotDir, "/snap/v1");
 
+  await s.setCurrentVersion(d.id, 2);
+  assert.equal((await s.get(d.id))!.currentVersion, 2);
   await s.setCurrentVersion(d.id, 1);
   assert.equal((await s.get(d.id))!.currentVersion, 1);
   assert.equal((await s.get(d.id))!.versions.length, 2, "rollback doesn't drop versions");
@@ -39,6 +41,59 @@ test("deploy versions are immutable and rollback flips the pointer", async () =>
 test("addVersion on an unknown deployment throws", async () => {
   const s = createDeployStore();
   await assert.rejects(s.addVersion("nope", { entrypoint: "x", snapshotDir: "/x" }), /unknown deployment/);
+});
+
+test("an interrupted candidate is reused without advancing version history", async () => {
+  const s = createDeployStore();
+  const d = await s.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "v1",
+    snapshotDir: "/snap/v1",
+  });
+  await s.setAppliedVersion(d.id, 1);
+  const first = await s.addVersion(d.id, {
+    entrypoint: "v2",
+    snapshotDir: "/snap/v2-first",
+    homeDir: "/home/v2-first",
+    sourceHash: "v2-source",
+  });
+  const retry = await s.addVersion(d.id, {
+    entrypoint: "v2",
+    snapshotDir: "/snap/v2-retry",
+    homeDir: "/home/v2-retry",
+    sourceHash: "v2-source",
+  });
+
+  assert.equal(first.version, 2);
+  assert.equal(retry.version, 2);
+  assert.equal(retry.snapshotDir, "/snap/v2-retry");
+  assert.equal(retry.homeDir, "/home/v2-retry");
+  assert.equal((await s.get(d.id))!.versions.length, 2);
+});
+
+test("legacy live state selects the applied version before inheriting runtime metadata", async () => {
+  const s = createDeployStore();
+  const d = await s.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "v1",
+    snapshotDir: "/snap/v1",
+    env: { MODE: "live" },
+  });
+  await s.setAppliedVersion(d.id, 1);
+  await s.addVersion(d.id, {
+    entrypoint: "v2-failed",
+    snapshotDir: "/snap/v2",
+    env: { MODE: "failed" },
+  });
+  await s.setCurrentVersion(d.id, 2);
+  await s.setStatus(d.id, "running");
+
+  const normalized = (await s.get(d.id))!;
+
+  assert.equal(normalized.currentVersion, 1);
+  assert.equal(normalized.deployingVersion, undefined);
 });
 
 test("addVersionFromCommit registers a pushed commit as a new version inheriting entrypoint/env", async () => {
@@ -69,13 +124,15 @@ test("addVersionFromCommit registers a pushed commit as a new version inheriting
   assert.equal(v2.commit, pushed);
   assert.equal(v2.entrypoint, "node server.js");
   assert.deepEqual(v2.env, { FOO: "bar" });
-  assert.equal((await s.get(d.id))!.currentVersion, 2);
+  assert.equal((await s.get(d.id))!.currentVersion, 1);
 
   const v2bundle = await s.bundleOf(d.id, 2);
   assert.ok((v2bundle?.byteLength ?? 0) > 0, "a push-deployed version can be exported as a git bundle");
 
-  assert.equal(await s.addVersionFromCommit(d.id, pushed), null);
+  assert.equal((await s.addVersionFromCommit(d.id, pushed))?.version, 2);
   assert.equal((await s.get(d.id))!.versions.length, 2);
+  await s.setCurrentVersion(d.id, 2);
+  assert.equal((await s.get(d.id))!.currentVersion, 2);
 });
 
 test("homeDir (resident-auth snapshot) round-trips through create + addVersion", async () => {
@@ -182,6 +239,7 @@ test("deploy versions carry git commits for app files and rollback moves the cur
     null,
     "the hosted current ref is not moved before a version is applied",
   );
+  await s2.setCurrentVersion(d.id, 2);
   await s2.setAppliedVersion(d.id, 2);
   assert.equal(await s2.refOf(d.id, deployCurrentGitRef), v2.commit);
   assert.ok(existsSync(await s2.repoUrl(d.id)), "a real bare git repo backs the deployment");
@@ -362,6 +420,7 @@ test("deploy git repos restore from the durable archive into a fresh repo root",
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-b-")), archiveStore },
   });
   const v2 = (await s2.versionOf(d.id, 2))!;
+  await s2.setCurrentVersion(d.id, 2);
   await s2.setAppliedVersion(d.id, 2);
   assert.equal(
     await s2.refOf(d.id, deployCurrentGitRef),

@@ -26,6 +26,7 @@ import {
   deploymentListRefreshCanRedraw,
   deploymentListAfterRestoreRefresh,
   deploymentLatestAt,
+  deploymentLiveVersion,
   deploymentSlug,
   deploymentTab,
   deploymentTabEmptyMessage,
@@ -82,6 +83,8 @@ function statusClass(d: DeploymentView): string {
   )
     return "deploying";
   if (d.status === "running") return "running";
+  if (d.status === "deploying") return "deploying";
+  if (d.status === "failed") return "failed";
   if (d.status === "archived") return "archived";
   return "stopped";
 }
@@ -98,7 +101,11 @@ function permissionBadge(d: DeploymentView): TemplateResult {
 
 function versionLabel(d: DeploymentView): string {
   if (d.currentVersion === undefined) return "Version unknown";
-  if (d.appliedVersion !== undefined && d.appliedVersion !== d.currentVersion)
+  if (d.status === "deploying" && d.deployingVersion !== undefined && d.deployingVersion !== d.appliedVersion)
+    return d.appliedVersion === undefined
+      ? `v${d.deployingVersion} pending`
+      : `v${d.appliedVersion} live · v${d.deployingVersion} pending`;
+  if (d.status === "deploying" && d.appliedVersion !== undefined && d.appliedVersion !== d.currentVersion)
     return `v${d.appliedVersion} live · v${d.currentVersion} pending`;
   return `v${d.currentVersion}`;
 }
@@ -396,8 +403,8 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           <h3>Overview</h3>
           <div class="deploy-facts">
             <div><span>Status</span><strong>${statusLabel(d)}</strong></div>
-            <div><span>Live version</span><strong>${d.appliedVersion ?? d.currentVersion ?? "—"}</strong></div>
-            <div><span>Latest version</span><strong>${d.currentVersion ?? "—"}</strong></div>
+            <div><span>Live version</span><strong>${deploymentLiveVersion(d) ?? "—"}</strong></div>
+            <div><span>Current version</span><strong>${d.currentVersion ?? "—"}</strong></div>
             <div>
               <span>Last deployed</span
               ><strong>${deploymentLatestAt(d) ? new Date(deploymentLatestAt(d)).toLocaleString() : "—"}</strong>
@@ -497,7 +504,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                       <div class="deploy-version-row">
                         <div>
                           <strong>v${version.version}</strong
-                          >${version.version === d.appliedVersion ? html`<span class="badge ok">Live</span>` : nothing}${version.version === d.currentVersion && version.version !== d.appliedVersion ? html`<span class="badge">Latest</span>` : nothing}
+                          >${version.version === d.appliedVersion ? html`<span class="badge ok">Live</span>` : nothing}
                         </div>
                         <div>
                           <span>${new Date(version.createdAt).toLocaleString()}</span

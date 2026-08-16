@@ -13,6 +13,7 @@ export interface DeploymentView {
   createdInScope?: string;
   currentVersion?: number;
   appliedVersion?: number;
+  deployingVersion?: number;
   webUrl?: string;
   gitUrl?: string;
   name?: string;
@@ -79,9 +80,13 @@ export function deploymentSlug(d: DeploymentView): string {
   return d.name?.trim() || d.id;
 }
 
+export function deploymentLiveVersion(d: DeploymentView): number | undefined {
+  return d.appliedVersion;
+}
+
 export function deploymentLatestAt(d: DeploymentView): number {
-  const applied = d.versions?.find((version) => version.version === (d.appliedVersion ?? d.currentVersion));
-  return applied?.createdAt ?? d.versions?.at(-1)?.createdAt ?? 0;
+  const liveVersion = deploymentLiveVersion(d);
+  return d.versions?.find((version) => version.version === liveVersion)?.createdAt ?? 0;
 }
 
 export function deploymentTab(d: DeploymentView, viewer: string | undefined): DeploymentTab {

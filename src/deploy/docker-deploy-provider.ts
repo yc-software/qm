@@ -86,7 +86,9 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     },
 
     async destroy(d: Deployment): Promise<void> {
-      await dexec(["rm", "-f", name(d)]);
+      const result = await dexec(["rm", "-f", name(d)]);
+      if (result.code !== 0 && !result.stderr.includes("No such container"))
+        throw new Error(`deploy destroy failed: ${result.stderr.trim()}`);
       freePort(name(d));
     },
   };

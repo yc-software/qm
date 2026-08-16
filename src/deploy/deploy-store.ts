@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { swallow } from "../util/errors.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -17,6 +18,7 @@ export interface DeploymentVersion {
   snapshotDir: string;
   homeDir?: string;
   image?: string;
+  sourceHash?: string;
   commit?: string;
   parentCommit?: string;
   env?: Record<string, string>;
@@ -44,7 +46,7 @@ export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string
   }
 }
 
-type DeploymentStatus = "running" | "stopped" | "archived";
+type DeploymentStatus = "deploying" | "running" | "stopped" | "failed" | "archived";
 
 interface DefaultAudienceSnapshot {
   sourceScopeId: ScopeId;
@@ -65,6 +67,7 @@ export interface Deployment {
   endpoint: DeployEndpoint | null;
   lastAccessAt?: number;
   appliedVersion?: number;
+  deployingVersion?: number;
   versions: DeploymentVersion[];
 }
 
@@ -74,6 +77,7 @@ interface VersionInput {
   homeDir?: string;
   env?: Record<string, string>;
   files?: DeployGitInputFile[];
+  sourceHash?: string;
 }
 
 export interface DeployStore {
@@ -89,6 +93,12 @@ export interface DeployStore {
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
   setEndpoint(id: string, endpoint: DeployEndpoint | null): Promise<void>;
+  markDeploying(id: string, version: number): Promise<void>;
+  markFailed(id: string): Promise<void>;
+  markApplied(id: string, version: number, endpoint: DeployEndpoint): Promise<void>;
+  markArchived(id: string): Promise<void>;
+  markStopped(id: string): Promise<void>;
+  markRuntimeClean(id: string): Promise<void>;
   setName(id: string, name: string): Promise<void>;
   setOwnerScope(id: string, ownerScopeId: ScopeId): Promise<void>;
   setDisplayName(id: string, displayName: string | undefined): Promise<void>;
@@ -100,6 +110,8 @@ export interface DeployStore {
   filesOf(id: string, version: number, paths?: string[]): Promise<DeployGitInputFile[] | null>;
   diffVersions(id: string, fromVersion: number | undefined, toVersion: number): Promise<DeployGitDiff | null>;
   bundleOf(id: string, version: number): Promise<Uint8Array | null>;
+  preparePush(id: string): Promise<string | null>;
+  takePushedCommit(id: string, baseline: string | null): Promise<string | null>;
   refOf(id: string, ref: string): Promise<string | null>;
   repoUrl(id: string): Promise<string>;
 }
@@ -110,6 +122,8 @@ export interface DeployStoreBackings {
 }
 
 const CURRENT_REF = "refs/heads/current";
+export const deployPushGitNamespace = "pending";
+const PUSH_REF = `refs/namespaces/${deployPushGitNamespace}/refs/heads/current`;
 const versionRef = (version: number): string => `refs/versions/${version}`;
 
 function normalizeBackings(backing?: DurableMap<Deployment> | DeployStoreBackings): {
@@ -126,6 +140,18 @@ function normalizeBackings(backing?: DurableMap<Deployment> | DeployStoreBacking
 
 export function createDeployStore(backing?: DurableMap<Deployment> | DeployStoreBackings): DeployStore {
   const { deployments: backingMap, git } = normalizeBackings(backing);
+
+  async function updateDeployment(
+    id: string,
+    update: (deployment: Deployment) => Deployment,
+  ): Promise<Deployment | null> {
+    if (backingMap.update) return backingMap.update(id, update);
+    const current = await backingMap.get(id);
+    if (!current) return null;
+    const next = update(current);
+    await backingMap.put(id, next);
+    return next;
+  }
 
   async function makeVersion(
     deploymentId: string,
@@ -149,6 +175,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       snapshotDir: input.snapshotDir,
       ...(input.homeDir ? { homeDir: input.homeDir } : {}),
       ...(input.env ? { env: input.env } : {}),
+      ...(input.sourceHash ? { sourceHash: input.sourceHash } : {}),
       ...(commit ? { commit } : {}),
       ...(parentCommit ? { parentCommit } : {}),
     };
@@ -160,9 +187,84 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     await git.setRef(deploymentId, `refs/deploy-commits/${version.commit}`, version.commit);
   }
 
-  async function updateAppliedRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
-    if (version.commit) await git.setRef(deploymentId, CURRENT_REF, version.commit);
-    else await git.deleteRef(deploymentId, CURRENT_REF);
+  function sameSource(a: DeploymentVersion, b: DeploymentVersion): boolean {
+    return (
+      a.entrypoint === b.entrypoint &&
+      a.homeDir === b.homeDir &&
+      JSON.stringify(a.env ?? {}) === JSON.stringify(b.env ?? {})
+    );
+  }
+
+  function sameRuntime(a: DeploymentVersion, b: DeploymentVersion): boolean {
+    return sameSource(a, b) && a.image === b.image;
+  }
+
+  async function resolveAppliedVersion(deploymentId: string, deployment?: Deployment): Promise<number | undefined> {
+    const d = deployment ?? (await backingMap.get(deploymentId));
+    if (!d || d.appliedVersion !== undefined) return d?.appliedVersion;
+    const currentRef = await git.refOf(deploymentId, CURRENT_REF);
+    if (!currentRef) return undefined;
+    const matches = d.versions.filter((version) => version.commit === currentRef);
+    if (!matches.length || !matches.every((version) => sameRuntime(version, matches[0]!))) return undefined;
+    const inferred = matches.find((version) => version.version === d.currentVersion) ?? matches.at(-1)!;
+    const updated = await updateDeployment(deploymentId, (current) =>
+      current.appliedVersion === undefined
+        ? { ...current, appliedVersion: inferred.version, currentVersion: inferred.version }
+        : current,
+    );
+    return updated?.appliedVersion;
+  }
+
+  async function syncAppliedRef(deploymentId: string, deployment?: Deployment): Promise<void> {
+    const d = deployment ?? (await backingMap.get(deploymentId));
+    if (!d) return;
+    const appliedVersion = d.appliedVersion ?? (await resolveAppliedVersion(deploymentId, d));
+    if (appliedVersion === undefined) return;
+    const version = d.versions.find((candidate) => candidate.version === appliedVersion);
+    const expected = version?.commit;
+    if (!expected) {
+      await git.deleteRef(deploymentId, CURRENT_REF);
+      return;
+    }
+    const actual = await git.refOf(deploymentId, CURRENT_REF);
+    if (actual === expected) return;
+    await git.setRef(deploymentId, CURRENT_REF, expected);
+  }
+
+  async function normalizeLegacy(deployment: Deployment): Promise<Deployment> {
+    if (deployment.status === "running" && deployment.deployingVersion !== undefined) {
+      deployment =
+        (await updateDeployment(deployment.id, (current) => {
+          if (current.status !== "running" || current.deployingVersion === undefined) return current;
+          const { deployingVersion: _, ...rest } = current;
+          return rest;
+        })) ?? deployment;
+    }
+    if (
+      deployment.appliedVersion !== undefined &&
+      deployment.status !== "deploying" &&
+      deployment.currentVersion !== deployment.appliedVersion
+    ) {
+      deployment =
+        (await updateDeployment(deployment.id, (current) =>
+          current.appliedVersion !== undefined &&
+          current.status !== "deploying" &&
+          current.currentVersion !== current.appliedVersion
+            ? { ...current, currentVersion: current.appliedVersion }
+            : current,
+        )) ?? deployment;
+    }
+    if (deployment.appliedVersion !== undefined) return deployment;
+    const appliedVersion = await resolveAppliedVersion(deployment.id, deployment);
+    if (appliedVersion !== undefined) return (await backingMap.get(deployment.id)) ?? deployment;
+    if (deployment.status !== "stopped") return deployment;
+    return (
+      (await updateDeployment(deployment.id, (current) =>
+        current.appliedVersion === undefined && current.status === "stopped"
+          ? { ...current, status: "failed", deployingVersion: current.currentVersion }
+          : current,
+      )) ?? deployment
+    );
   }
 
   return {
@@ -187,20 +289,63 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     async addVersion(id, input) {
       const d = await backingMap.get(id);
       if (!d) throw new Error(`unknown deployment: ${id}`);
+      const retry =
+        (d.status === "failed" || d.status === "deploying") && input.sourceHash
+          ? [...d.versions]
+              .reverse()
+              .find((candidate) => candidate.version !== d.appliedVersion && candidate.sourceHash === input.sourceHash)
+          : undefined;
+      if (retry) {
+        const refreshed = {
+          ...retry,
+          snapshotDir: input.snapshotDir,
+          ...(input.homeDir ? { homeDir: input.homeDir } : {}),
+        };
+        await updateDeployment(id, (current) => ({
+          ...current,
+          status: "deploying",
+          endpoint: null,
+          deployingVersion: retry.version,
+          versions: current.versions.map((candidate) => (candidate.version === retry.version ? refreshed : candidate)),
+        }));
+        return refreshed;
+      }
       const version = d.versions.length + 1;
       const parentCommit = d.versions.find((x) => x.version === d.currentVersion)?.commit;
       const v = await makeVersion(id, version, input, parentCommit);
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await updateDeployment(id, (current) => {
+        if (current.versions.length + 1 !== version) throw new Error(`deployment version changed: ${id}`);
+        return {
+          ...current,
+          status: "deploying",
+          endpoint: null,
+          deployingVersion: version,
+          versions: [...current.versions, v],
+        };
+      });
       await updateVersionRef(id, v);
       return v;
     },
     async addVersionFromCommit(id, commit) {
-      const d = await backingMap.get(id);
-      if (!d) throw new Error(`unknown deployment: ${id}`);
+      const raw = await backingMap.get(id);
+      if (!raw) throw new Error(`unknown deployment: ${id}`);
+      const d = await normalizeLegacy(raw);
+      const appliedVersion = await resolveAppliedVersion(id, d);
       const current = d.versions.find((x) => x.version === d.currentVersion);
-      if (current?.commit === commit) return null;
+      const applied = d.versions.find((x) => x.version === appliedVersion);
+      if (applied?.commit === commit && d.status === "running") return null;
+      const existing = d.versions
+        .filter((candidate) => candidate.commit === commit && (!current || sameSource(candidate, current)))
+        .at(-1);
+      if (existing) {
+        await updateDeployment(id, (latest) => ({
+          ...latest,
+          status: "deploying",
+          endpoint: null,
+          deployingVersion: existing.version,
+        }));
+        return existing;
+      }
       const version = d.versions.length + 1;
       const v: DeploymentVersion = {
         version,
@@ -212,89 +357,131 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
         commit,
         ...(current?.commit ? { parentCommit: current.commit } : {}),
       };
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await updateDeployment(id, (latest) => {
+        if (latest.versions.length + 1 !== version) throw new Error(`deployment version changed: ${id}`);
+        return {
+          ...latest,
+          status: "deploying",
+          endpoint: null,
+          deployingVersion: version,
+          versions: [...latest.versions, v],
+        };
+      });
       await updateVersionRef(id, v);
       return v;
     },
-    get: (id) => backingMap.get(id),
-    getByName: async (name) => (await backingMap.all()).find((d) => d.name === name) ?? null,
-    list: () => backingMap.all(),
-    async setCurrentVersion(id, version) {
+    async get(id) {
       const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      if (!d) return null;
+      return normalizeLegacy(d);
+    },
+    async getByName(name) {
+      const d = (await backingMap.all()).find((candidate) => candidate.name === name) ?? null;
+      if (!d) return null;
+      return normalizeLegacy(d);
+    },
+    async list() {
+      const deployments = await backingMap.all();
+      await Promise.all(deployments.map(normalizeLegacy));
+      return backingMap.all();
+    },
+    async setCurrentVersion(id, version) {
+      await updateDeployment(id, (d) => {
+        if (!d.versions.some((candidate) => candidate.version === version))
+          throw new Error(`no such version ${version}`);
+        return { ...d, currentVersion: version };
+      });
     },
     async setVersionImage(id, version, image) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      v.image = image;
-      await backingMap.put(id, d);
+      await updateDeployment(id, (d) => {
+        if (!d.versions.some((candidate) => candidate.version === version))
+          throw new Error(`no such version ${version}`);
+        return {
+          ...d,
+          versions: d.versions.map((candidate) =>
+            candidate.version === version ? { ...candidate, image } : candidate,
+          ),
+        };
+      });
     },
     async setStatus(id, status) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.status = status;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { status });
     },
     async setEndpoint(id, endpoint) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.endpoint = endpoint;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { endpoint });
     },
-    async setName(id, name) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.name = name;
-        await backingMap.put(id, d);
-      }
-    },
-    async setOwnerScope(id, ownerScopeId) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.ownerScopeId = ownerScopeId;
-        await backingMap.put(id, d);
-      }
-    },
-    async setDisplayName(id, displayName) {
-      const d = await backingMap.get(id);
-      if (d) {
-        if (displayName) d.displayName = displayName;
-        else delete d.displayName;
-        await backingMap.put(id, d);
-      }
-    },
-    async setDefaultAudience(id, snapshot) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.defaultAudience = snapshot;
-        await backingMap.put(id, d);
-      }
-    },
-    async setAppliedVersion(id, version) {
+    async markDeploying(id, version) {
       const d = await backingMap.get(id);
       if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.appliedVersion = version;
-      await backingMap.put(id, d);
-      await updateAppliedRef(id, v);
+      const appliedVersion = await resolveAppliedVersion(id, d);
+      await updateDeployment(id, (current) => {
+        if (!current.versions.some((candidate) => candidate.version === version))
+          throw new Error(`no such version ${version}`);
+        return {
+          ...current,
+          status: current.status === "archived" ? "archived" : "deploying",
+          endpoint: null,
+          deployingVersion: version,
+          ...(current.appliedVersion === undefined && appliedVersion !== undefined ? { appliedVersion } : {}),
+        };
+      });
+    },
+    async markFailed(id) {
+      const d = await backingMap.get(id);
+      if (!d) return;
+      const appliedVersion = await resolveAppliedVersion(id, d);
+      await updateDeployment(id, (current) => {
+        return {
+          ...current,
+          status: "failed",
+          endpoint: null,
+          ...(current.appliedVersion === undefined && appliedVersion !== undefined ? { appliedVersion } : {}),
+        };
+      });
+    },
+    async markApplied(id, version, endpoint) {
+      const d = await updateDeployment(id, (current) => {
+        if (!current.versions.some((candidate) => candidate.version === version))
+          throw new Error(`no such version ${version}`);
+        const { deployingVersion: _, ...rest } = current;
+        return { ...rest, endpoint, currentVersion: version, status: "running", appliedVersion: version };
+      });
+      if (d) await syncAppliedRef(id, d).catch((error) => swallow("deploy applied ref sync", error));
+    },
+    async markArchived(id) {
+      await updateDeployment(id, (current) => ({ ...current, status: "archived" }));
+    },
+    async markStopped(id) {
+      await updateDeployment(id, (current) => ({ ...current, status: "stopped" }));
+    },
+    async markRuntimeClean(id) {
+      await updateDeployment(id, (current) => {
+        const { deployingVersion: _, ...rest } = current;
+        return { ...rest, endpoint: null };
+      });
+    },
+    async setName(id, name) {
+      await backingMap.merge(id, { name });
+    },
+    async setOwnerScope(id, ownerScopeId) {
+      await backingMap.merge(id, { ownerScopeId });
+    },
+    async setDisplayName(id, displayName) {
+      await backingMap.merge(id, { displayName });
+    },
+    async setDefaultAudience(id, snapshot) {
+      await backingMap.merge(id, { defaultAudience: snapshot });
+    },
+    async setAppliedVersion(id, version) {
+      const d = await updateDeployment(id, (current) => {
+        if (!current.versions.some((candidate) => candidate.version === version))
+          throw new Error(`no such version ${version}`);
+        return { ...current, appliedVersion: version };
+      });
+      if (d) await syncAppliedRef(id, d);
     },
     async touch(id, at) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.lastAccessAt = at;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { lastAccessAt: at });
     },
     async versionOf(id, version) {
       return (await backingMap.get(id))?.versions.find((v) => v.version === version) ?? null;
@@ -318,8 +505,28 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
       return v?.commit ? git.bundle(id, v.commit) : null;
     },
-    refOf: (id, ref) => git.refOf(id, ref),
-    repoUrl: (id) => git.repoUrl(id),
+    async preparePush(id) {
+      await syncAppliedRef(id);
+      const d = await backingMap.get(id);
+      const applied = d?.versions.find((version) => version.version === d.appliedVersion)?.commit;
+      if (applied) await git.setRef(id, PUSH_REF, applied);
+      else await git.deleteRef(id, PUSH_REF);
+      return applied ?? null;
+    },
+    async takePushedCommit(id, baseline) {
+      const pushed = await git.refOf(id, PUSH_REF);
+      if (pushed && pushed !== baseline) await git.setRef(id, `refs/deploy-commits/${pushed}`, pushed);
+      await git.deleteRef(id, PUSH_REF);
+      return pushed === baseline ? null : pushed;
+    },
+    async refOf(id, ref) {
+      if (ref === CURRENT_REF) await syncAppliedRef(id);
+      return git.refOf(id, ref);
+    },
+    async repoUrl(id) {
+      await syncAppliedRef(id);
+      return git.repoUrl(id);
+    },
   };
 }
 

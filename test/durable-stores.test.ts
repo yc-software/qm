@@ -78,6 +78,7 @@ test("deployments persist with immutable versions across store instances", async
     snapshotDir: "/snap/1",
   });
   await s1.addVersion(d.id, { entrypoint: "node server.js --v2", snapshotDir: "/snap/2" });
+  await s1.setCurrentVersion(d.id, 2);
 
   const s2 = createDeployStore(map);
   const got = await s2.get(d.id);

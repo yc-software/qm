@@ -595,6 +595,36 @@ test("destroy: terminates the body and clears its pointer", async () => {
   assert.equal(await store.get(ID), null, "the pointer is cleared");
 });
 
+test("destroy: a termination failure retains the body pointer for retry", async () => {
+  const { api } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  api.terminate = async () => {
+    throw new Error("termination failed");
+  };
+
+  await assert.rejects(p.destroy(d), /termination failed/);
+  assert.notEqual(await store.get(ID), null);
+});
+
+test("destroy: an already-missing body clears its pointer", async () => {
+  const { api } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  api.terminate = async () => {
+    throw new AwsApiError("not found", 404);
+  };
+
+  await p.destroy(d);
+  assert.equal(await store.get(ID), null);
+});
+
 test("profile: scale-to-zero is platform-managed and reconcile is in place", () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();

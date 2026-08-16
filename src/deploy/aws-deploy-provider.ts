@@ -670,10 +670,14 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       bumpResolveGen(d.id);
       const stored = await store.get(d.id);
       if (stored) {
-        await api.terminate(stored.microvmId).catch((e) => swallow("aws-deploy: destroy terminate", e));
+        try {
+          await api.terminate(stored.microvmId);
+        } catch (error) {
+          if (!(error instanceof AwsApiError && error.status === 404)) throw error;
+        }
         evict(stored.microvmId);
       }
-      await store.delete(d.id).catch((e) => swallow("aws-deploy: destroy clear pointer", e));
+      await store.delete(d.id);
     },
   };
 }

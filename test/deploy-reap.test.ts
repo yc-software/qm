@@ -68,3 +68,20 @@ test("managed provider: reap is a no-op — the platform sleeps/wakes it, endpoi
   assert.equal((await deployStore.get(d.id))!.status, "running");
   assert.deepEqual((await deployStore.get(d.id))!.endpoint, { host: "127.0.0.1", port: 5000 });
 });
+
+test("managed provider: reap still cleans an interrupted runtime", async () => {
+  const setup = svc(true);
+  const d = await setup.deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+  });
+  await setup.deployStore.markDeploying(d.id, 1);
+
+  assert.equal(await setup.deploy.reapIdleDeployments(60_000, future), 0);
+  assert.equal(setup.destroys, 1);
+  const cleaned = (await setup.deployStore.get(d.id))!;
+  assert.equal(cleaned.status, "failed");
+  assert.equal(cleaned.deployingVersion, undefined);
+});

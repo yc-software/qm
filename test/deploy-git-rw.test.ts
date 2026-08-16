@@ -33,11 +33,15 @@ const GIT_ENV = {
 function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   const deployStore = createDeployStore({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } });
   const acl: AclStore = createAclStore();
+  let applies = 0;
   const deploy = createDeployService({
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 19998 }),
+      apply: async () => {
+        applies++;
+        return { host: "127.0.0.1", port: 19998 };
+      },
       destroy: async () => {},
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
@@ -55,7 +59,17 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   const server: Server = createServer(app, { signingSecret: SECRET, identity, ...urls });
   server.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { app, deploy, acl, identity, base, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return {
+    app,
+    deploy,
+    acl,
+    identity,
+    base,
+    get applies() {
+      return applies;
+    },
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
 }
 
 async function gitUrl(base: string, deploymentId: string, permission: "read" | "write"): Promise<string> {
@@ -155,6 +169,56 @@ test("a write token can push, and the push registers a new immutable version", a
     const v2 = fresh.versions.find((v) => v.version === 2)!;
     assert.equal(v2.commit, pushedSha.trim());
     assert.equal(v2.entrypoint, "node server.js");
+  } finally {
+    await f.close();
+  }
+});
+
+test("a stale write clone cannot overwrite a newer deployment version", async () => {
+  const f = fixture();
+  try {
+    const d = await f.app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "node server.js",
+      files: [{ path: "server.js", data: "console.log('v1')" }],
+    });
+    const url = await gitUrl(f.base, d.id, "write");
+    const first = mkdtempSync(join(tmpdir(), "git-rw-first-"));
+    const stale = mkdtempSync(join(tmpdir(), "git-rw-stale-"));
+    await Promise.all([
+      execFileP("git", ["clone", "--quiet", url, first], { env: GIT_ENV }),
+      execFileP("git", ["clone", "--quiet", url, stale], { env: GIT_ENV }),
+    ]);
+
+    for (const [work, contents] of [
+      [first, "console.log('v2')"],
+      [stale, "console.log('stale')"],
+    ] as const) {
+      await writeFile(join(work, "server.js"), contents);
+      await execFileP("git", ["add", "-A"], { cwd: work, env: GIT_ENV });
+      await execFileP("git", ["commit", "-q", "-m", "update"], { cwd: work, env: GIT_ENV });
+    }
+
+    await execFileP("git", ["push", "origin", "HEAD:current"], { cwd: first, env: GIT_ENV });
+    await assert.rejects(
+      execFileP("git", ["push", "origin", ":current"], { cwd: first, env: GIT_ENV }),
+      /403|forbidden|current/i,
+    );
+    await assert.rejects(
+      execFileP("git", ["push", "origin", "HEAD:current"], { cwd: stale, env: GIT_ENV }),
+      /non-fast-forward|fetch first|rejected/i,
+    );
+    await assert.rejects(
+      execFileP("git", ["push", "origin", "HEAD:other"], { cwd: stale, env: GIT_ENV }),
+      /403|forbidden|current/i,
+    );
+
+    const current = (await f.deploy.listDeployments())[0]!;
+    assert.equal(current.currentVersion, 2);
+    assert.equal(current.appliedVersion, 2);
+    assert.equal(current.versions.length, 2);
+    assert.equal(f.applies, 2);
   } finally {
     await f.close();
   }

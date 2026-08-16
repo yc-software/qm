@@ -75,6 +75,76 @@ test("reaper: the leader (default no-op lease) reaps as before", async () => {
   assert.equal((await deployStore.get(d.id))!.endpoint, null);
 });
 
+test("archive succeeds durably and reaper retries terminal runtime cleanup after provider failure", async () => {
+  const deployStore = createDeployStore();
+  let destroys = 0;
+  const deploy = createDeployService({
+    deployStore,
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => ({ host: "127.0.0.1", port: 5000 }),
+      destroy: async () => {
+        if (++destroys === 1) throw new Error("destroy failed");
+      },
+    },
+    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    acl: createAclStore(),
+    deployDir: mkdtempSync(join(tmpdir(), "reaper-cleanup-")),
+  });
+  const d = await deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+  });
+
+  await deploy.archiveDeployment(d.id);
+  const pending = (await deployStore.get(d.id))!;
+  assert.equal(pending.status, "archived");
+  assert.notEqual(pending.endpoint, null);
+
+  assert.equal(await deploy.reapIdleDeployments(60_000, future), 0);
+  const cleaned = (await deployStore.get(d.id))!;
+  assert.equal(cleaned.status, "archived");
+  assert.equal(cleaned.endpoint, null);
+  assert.equal(destroys, 2);
+});
+
+test("reaper continues after one deployment cleanup fails", async () => {
+  const deployStore = createDeployStore();
+  let blockedId = "";
+  const deploy = createDeployService({
+    deployStore,
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => ({ host: "127.0.0.1", port: 5000 }),
+      destroy: async (deployment) => {
+        if (deployment.id === blockedId) throw new Error("destroy failed");
+      },
+    },
+    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    acl: createAclStore(),
+    deployDir: mkdtempSync(join(tmpdir(), "reaper-continues-")),
+  });
+  const first = await deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "one",
+    files: [],
+  });
+  const second = await deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "two",
+    files: [],
+  });
+  blockedId = first.id;
+
+  assert.equal(await deploy.reapIdleDeployments(60_000, future), 1);
+  assert.notEqual((await deployStore.get(first.id))!.endpoint, null);
+  assert.equal((await deployStore.get(second.id))!.endpoint, null);
+});
+
 function spyLock(): { lock: AdvisoryLock; keys: string[] } {
   const keys: string[] = [];
   const lock: AdvisoryLock = {
@@ -95,14 +165,14 @@ test("withDeployLock: redeploy/rollback/archive each acquire the advisory mutex 
     entrypoint: "x",
     files: [],
   });
-  assert.deepEqual(keys, [], "the initial create takes no deploy lock");
+  const want = `deploy:${d.id}`;
+  assert.deepEqual(keys, [want], "the initial activation locks deploy:<id>");
 
   await deploy.redeploy(d.id, { entrypoint: "y", files: [] });
   await deploy.rollbackDeployment(d.id, 1);
   await deploy.archiveDeployment(d.id);
 
-  const want = `deploy:${d.id}`;
-  assert.deepEqual(keys, [want, want, want], "redeploy, rollback, archive each lock deploy:<id>");
+  assert.deepEqual(keys, [want, want, want, want], "every activation and archive locks deploy:<id>");
 });
 
 test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)", async () => {

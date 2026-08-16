@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -161,12 +162,13 @@ test("a reconcile-capable provider receives the git diff and marks the applied v
   assert.equal((await deployStore.get(d.id))!.appliedVersion, 2);
 });
 
-test("applied version is marked only after endpoint metadata is persisted", async () => {
+test("applied version is marked only after activation metadata is persisted", async () => {
   const baseStore = createDeployStore();
+  let destroys = 0;
   const deployStore: DeployStore = {
     ...baseStore,
-    setEndpoint: async () => {
-      throw new Error("endpoint write failed");
+    markApplied: async () => {
+      throw new Error("activation write failed");
     },
   };
   const deploy = createDeployService({
@@ -177,7 +179,9 @@ test("applied version is marked only after endpoint metadata is persisted", asyn
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 9200 }),
-      destroy: async () => {},
+      destroy: async () => {
+        destroys++;
+      },
     },
   });
 
@@ -189,13 +193,16 @@ test("applied version is marked only after endpoint metadata is persisted", asyn
         entrypoint: "node s.js",
         files: [{ path: "s.js", data: "x" }],
       }),
-    /endpoint write failed/,
+    /activation write failed/,
   );
   const [d] = await baseStore.list();
   assert.equal(d!.appliedVersion, undefined);
+  assert.equal(d!.status, "failed");
+  assert.equal(d!.endpoint, null);
+  assert.equal(destroys, 1);
 });
 
-test("a failed redeploy does not move the hosted git current ref", async () => {
+test("a failed redeploy neither selects the candidate nor moves the hosted git current ref", async () => {
   const deployStore = createDeployStore();
   let applies = 0;
   const deploy = createDeployService({
@@ -228,7 +235,106 @@ test("a failed redeploy does not move the hosted git current ref", async () => {
     /apply failed/,
   );
   const after = (await deployStore.get(d.id))!;
-  assert.equal(after.currentVersion, 2, "the failed candidate remains recorded as the desired version");
+  assert.equal(after.status, "failed");
+  assert.equal(after.currentVersion, 1, "the failed candidate is recorded without becoming current");
   assert.equal(after.appliedVersion, 1);
   assert.equal(await deployStore.refOf(d.id, "refs/heads/current"), v1.commit);
+});
+
+test("a failed git-push deploy restores the hosted current ref", async () => {
+  const deployStore = createDeployStore();
+  let applies = 0;
+  const deploy = createDeployService({
+    deployStore,
+    acl: createAclStore(),
+    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    deployDir: mkdtempSync(join(tmpdir(), "deploy-push-current-ref-")),
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => {
+        const attempt = ++applies;
+        if (attempt === 2) throw new Error("apply failed");
+        return { host: "127.0.0.1", port: 9200, image: `image:${attempt}` };
+      },
+      destroy: async () => {},
+    },
+  });
+  const d = await deploy.deploy({
+    ownerScopeId: owner,
+    createdBy: "U1",
+    entrypoint: "node s.js",
+    files: [{ path: "s.js", data: "v1" }],
+  });
+  const v1 = (await deployStore.versionOf(d.id, 1))!;
+  const work = mkdtempSync(join(tmpdir(), "deploy-push-current-work-"));
+  const repo = await deployStore.repoUrl(d.id);
+  execFileSync("git", ["clone", "--quiet", repo, work]);
+  writeFileSync(join(work, "s.js"), "v2");
+  execFileSync("git", ["add", "s.js"], { cwd: work });
+  execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qm", "v2"], { cwd: work });
+  const v2Commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
+  const push = (ref: string) =>
+    deploy.pushGit(d.id, async () => {
+      execFileSync("git", ["push", "--quiet", "--force", repo, `${ref}:refs/heads/current`], {
+        cwd: work,
+        env: { ...process.env, GIT_NAMESPACE: "pending" },
+      });
+      return { result: undefined, ok: true };
+    });
+
+  await push("HEAD");
+
+  const after = (await deployStore.get(d.id))!;
+  assert.equal(after.status, "failed");
+  assert.equal(after.currentVersion, 1);
+  assert.equal(after.appliedVersion, 1);
+  assert.equal(after.versions.length, 2);
+  assert.equal(await deployStore.refOf(d.id, "refs/heads/current"), v1.commit);
+
+  await push("HEAD");
+  const retried = (await deployStore.get(d.id))!;
+  assert.equal(retried.status, "running");
+  assert.equal(retried.currentVersion, 2);
+  assert.equal(retried.appliedVersion, 2);
+  assert.equal(retried.versions.length, 2);
+  assert.equal(await deployStore.refOf(d.id, "refs/heads/current"), v2Commit);
+
+  await push(v1.commit!);
+  const rolledBack = (await deployStore.get(d.id))!;
+  assert.equal(rolledBack.status, "running");
+  assert.equal(rolledBack.currentVersion, 1);
+  assert.equal(rolledBack.appliedVersion, 1);
+  assert.equal(rolledBack.versions.length, 2);
+  assert.equal(await deployStore.refOf(d.id, "refs/heads/current"), v1.commit);
+});
+
+test("receive-pack discovery does not activate an archived deployment", async () => {
+  const deployStore = createDeployStore();
+  let applies = 0;
+  const deploy = createDeployService({
+    deployStore,
+    acl: createAclStore(),
+    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    deployDir: mkdtempSync(join(tmpdir(), "deploy-push-discovery-")),
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => {
+        applies++;
+        return { host: "127.0.0.1", port: 9200 };
+      },
+      destroy: async () => {},
+    },
+  });
+  const d = await deploy.deploy({
+    ownerScopeId: owner,
+    createdBy: "U1",
+    entrypoint: "node s.js",
+    files: [{ path: "s.js", data: "v1" }],
+  });
+  await deploy.archiveDeployment(d.id);
+
+  await deploy.pushGit(d.id, async () => ({ result: undefined, ok: true }));
+
+  assert.equal(applies, 1);
+  assert.equal((await deployStore.get(d.id))!.status, "archived");
 });

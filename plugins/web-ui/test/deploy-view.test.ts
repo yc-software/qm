@@ -10,6 +10,7 @@ import {
   deploymentListAfterRestoreRefresh,
   deploymentListRefreshCanRedraw,
   deploymentLatestAt,
+  deploymentLiveVersion,
   deploymentSlug,
   deploymentTab,
   deploymentTabEmptyMessage,
@@ -26,6 +27,7 @@ function deployment(patch: Partial<DeploymentView>): DeploymentView {
     ownerScopeId: "personal:blair@example.com",
     createdBy: "blair@example.com",
     currentVersion: 1,
+    appliedVersion: 1,
     permission: "write",
     versions: [{ version: 1, createdAt: 100 }],
     ...patch,
@@ -161,6 +163,15 @@ test("last deployed uses the applied version instead of a pending version", () =
   assert.equal(deploymentLatestAt(d), 200);
 });
 
+test("a deployment that has never applied has no live version or deployed timestamp", () => {
+  const failed = deployment({ status: "failed", appliedVersion: undefined });
+  assert.equal(deploymentLiveVersion(failed), undefined);
+  assert.equal(deploymentLatestAt(failed), 0);
+  const archived = deployment({ status: "archived", appliedVersion: undefined });
+  assert.equal(deploymentLiveVersion(archived), undefined);
+  assert.equal(deploymentLatestAt(archived), 0);
+});
+
 test("list filtering composes tab, context, search, and newest-first sorting", () => {
   const deployments = [
     deployment({
@@ -217,7 +228,13 @@ test("list filtering composes tab, context, search, and newest-first sorting", (
 
 test("sorting supports newest, name, and status without changing the filtered set", () => {
   const deployments = [
-    deployment({ id: "z", displayName: "Zulu", status: "stopped", versions: [{ version: 1, createdAt: 300 }] }),
+    deployment({
+      id: "z",
+      displayName: "Zulu",
+      status: "stopped",
+      appliedVersion: 1,
+      versions: [{ version: 1, createdAt: 300 }],
+    }),
     deployment({ id: "a", displayName: "Alpha", status: "running", versions: [{ version: 1, createdAt: 200 }] }),
   ];
   const options = { tab: "yours" as const, scope: null, query: "", viewer: "blair@example.com" };

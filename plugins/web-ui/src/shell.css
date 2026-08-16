@@ -5775,6 +5775,9 @@ a.chat-row-open {
 .deploy-status.deploying > span {
   background: #b78528;
 }
+.deploy-status.failed > span {
+  background: var(--destructive);
+}
 .deploy-status.archived > span {
   background: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
 }

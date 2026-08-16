@@ -1388,7 +1388,10 @@ export function buildApp(
         leaderLease,
       })
     : null;
-  const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
+  const deployIdleTtlMs =
+    config.deployIdleTtlMs !== undefined && config.deployIdleTtlMs > 0
+      ? config.deployIdleTtlMs
+      : Number.POSITIVE_INFINITY;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
@@ -1397,10 +1400,12 @@ export function buildApp(
     .catch((e) =>
       console.error("[blob-transfer] S3 lifecycle expiry install failed (sweep remains the fallback):", errMessage(e)),
     );
-  const idleSweeper =
-    deployIdleTtlMs && deployIdleTtlMs > 0
-      ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
-      : null;
+  const idleSweeper = createSweeper(
+    () => app.reapIdleDeployments(deployIdleTtlMs),
+    Number.isFinite(deployIdleTtlMs)
+      ? Math.max(5_000, Math.floor(deployIdleTtlMs / 4))
+      : config.processReaperIntervalMs,
+  );
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const sweepFractions = [deepIdleMachineMs, devIdleMachineMs]
@@ -1426,7 +1431,7 @@ export function buildApp(
       monitorPoller?.start(config.monitorPollMs);
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
-      idleSweeper?.start();
+      idleSweeper.start();
       deepIdleSweeper?.start();
       reachDeniedNotifier?.start(config.insightsIntervalMs);
       wakeSweep.start();
@@ -1441,7 +1446,7 @@ export function buildApp(
       processReaper?.stop();
       monitorPoller?.stop();
       skillSyncEngine.stop();
-      idleSweeper?.stop();
+      idleSweeper.stop();
       deepIdleSweeper?.stop();
       reachDeniedNotifier?.stop();
       blobSweeper.stop();

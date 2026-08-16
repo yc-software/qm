@@ -24,6 +24,7 @@ import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { portalSessionSub } from "../../deploy/viewer-session.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+import { deployPushGitNamespace } from "../../deploy/deploy-store.ts";
 
 function isDeployInput(b: unknown): b is DeployInput {
   return (
@@ -758,7 +759,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     if (pathname === "/__claw__/version") {
       const d = await app.getDeployment(slug);
       if (!d) sendJson(res, 404, { error: "not_found" });
-      else sendJson(res, 200, { version: d.appliedVersion ?? d.currentVersion });
+      else sendJson(res, 200, { version: d.appliedVersion ?? null });
       return true;
     }
     sendJson(res, 404, { error: "not_found" });
@@ -986,6 +987,23 @@ function gitQueryString(url: URL): string {
   return qs.toString();
 }
 
+function receivePackCommands(body: Buffer): Array<{ ref: string; newOid: string }> {
+  const commands: Array<{ ref: string; newOid: string }> = [];
+  for (let offset = 0; offset + 4 <= body.length;) {
+    const lengthText = body.subarray(offset, offset + 4).toString("ascii");
+    if (!/^[0-9a-f]{4}$/i.test(lengthText)) break;
+    const length = Number.parseInt(lengthText, 16);
+    if (length === 0) break;
+    if (length < 4 || offset + length > body.length) break;
+    const line = body.subarray(offset + 4, offset + length).toString("utf8");
+    const command = /^[0-9a-f]{40} ([0-9a-f]{40}) ([^\0\n]+)/.exec(line);
+    if (!command) break;
+    commands.push({ newOid: command[1]!, ref: command[2]! });
+    offset += length;
+  }
+  return commands;
+}
+
 function headerEnd(buf: Buffer): { headEnd: number; bodyStart: number } | null {
   const crlf = buf.indexOf("\r\n\r\n");
   if (crlf >= 0) return { headEnd: crlf, bodyStart: crlf + 4 };
@@ -1001,6 +1019,7 @@ async function runGitHttpBackend(input: {
   query: string;
   contentType?: string;
   body: Buffer;
+  namespace?: string;
 }): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
   const repoRoot = dirname(input.repoPath);
   const repoName = basename(input.repoPath);
@@ -1014,6 +1033,7 @@ async function runGitHttpBackend(input: {
     CONTENT_TYPE: input.contentType ?? "",
     CONTENT_LENGTH: String(input.body.length),
     REMOTE_USER: "deployment-git",
+    ...(input.namespace ? { GIT_NAMESPACE: input.namespace } : {}),
   };
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["-c", "http.receivepack=true", "http-backend"], {
@@ -1082,6 +1102,12 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   if (!repoPath) return sendJson(ctx.res, 404, { error: "not_found" });
   try {
     const body = ctx.method === "POST" ? await readRequestBytes(ctx.req) : Buffer.alloc(0);
+    if (
+      isPush &&
+      receivePackCommands(body).some(({ ref, newOid }) => ref !== "refs/heads/current" || /^0+$/.test(newOid))
+    ) {
+      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment pushes must update current" });
+    }
     const runBackend = () =>
       runGitHttpBackend({
         repoPath,
@@ -1090,6 +1116,7 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
         query: gitQueryString(ctx.url),
         contentType: typeof ctx.req.headers["content-type"] === "string" ? ctx.req.headers["content-type"] : undefined,
         body,
+        ...(isPush ? { namespace: deployPushGitNamespace } : {}),
       });
     const result = isPush
       ? await ctx.app.runDeploymentGitPush(parts.id, async () => {
@@ -1110,7 +1137,10 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
             };
           }
           const r = await runBackend();
-          return { result: r, ok: r.status >= 200 && r.status < 300 };
+          return {
+            result: r,
+            ok: r.status >= 200 && r.status < 300,
+          };
         })
       : await runBackend();
     ctx.res.writeHead(result.status, result.headers);
