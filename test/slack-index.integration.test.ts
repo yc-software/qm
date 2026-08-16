@@ -884,6 +884,7 @@ test("a bot-authored stop can abort a live run", async () => {
     });
     assert.deepEqual(f.core.abortedRuns, ["run-active"]);
     assert.equal(f.core.turns.length, 0);
+    assert.equal(f.core.ackPicks.length, 0);
   } finally {
     await f.stop();
   }
@@ -897,6 +898,7 @@ test("a Slack Connect mention is refused ephemerally and never mirrored", async 
     await f.app.emitEvent("app_mention", event);
     assert.equal(f.core.turns.length, 0);
     assert.equal(f.core.abortedRuns.length, 0);
+    assert.equal(f.core.ackPicks.length, 0);
     assert.equal(f.core.ingests.length, 0);
     assert.equal(f.client.posts.length, 0);
     assert.equal(f.client.ephemerals.length, 1);

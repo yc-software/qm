@@ -257,42 +257,6 @@ export function createTurnHandler(deps: {
 
     let queuedRunId: string | undefined;
     let taskList: TaskListPresenter | undefined;
-    const ack = inc.unprompted
-      ? undefined
-      : createAckPresenter({
-          postAck: async (text) => {
-            const rendered = toSlackMrkdwn(text);
-            if (await taskList?.addLead(rendered)) return;
-            const ts = await postReply(rendered);
-            if (ts) await taskList?.attach(ts, rendered);
-          },
-          addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
-          removeReaction: (name) =>
-            client.reactions.remove({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
-          emojiCandidates: [...DEFAULT_ACK_REACTIONS],
-          emojiPick: ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), {
-            channel: inc.channel,
-            ts: inc.ts,
-          }),
-        });
-    if (!inc.unprompted) {
-      taskList = createTaskListPresenter({
-        post: (text, blocks) => postReply(text, blocks),
-        update: (ts, text, blocks) =>
-          client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {
-            mirrorSelfPost(inc.channel, ts, text, { sub: replyThreadTs, editedAt: Date.now() });
-          }),
-        checkpoint: async (ts) => {
-          if (queuedRunId) await checkpointRunEditRef(queuedRunId, ts);
-        },
-        remove: (ts) => client.chat.delete({ channel: inc.channel, ts }).then(() => {}),
-        onSurfacePosted: () => ack?.onSurfacePosted(),
-        onError: (error) => console.error("[slack-plugin] task-list update failed:", (error as Error).message),
-      });
-    }
-    const settleAck = async (): Promise<void> => {
-      await ack?.settle().catch(swallowAs("slack: ack settle", undefined));
-    };
 
     if (inc.kind === "channel") {
       const membership = inc.prefetched
@@ -332,7 +296,6 @@ export function createTurnHandler(deps: {
           };
 
     if (audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) {
-      await settleAck();
       if (!inc.unprompted) {
         await ephemeralOrSay(
           "I can't respond here — this conversation isn't fully internal. Try a DM or a fully-internal channel.",
@@ -352,6 +315,43 @@ export function createTurnHandler(deps: {
       }).catch(swallowAs("slack: abort signal", true));
       if (intercepted) return;
     }
+
+    const ack = inc.unprompted
+      ? undefined
+      : createAckPresenter({
+          postAck: async (text) => {
+            const rendered = toSlackMrkdwn(text);
+            if (await taskList?.addLead(rendered)) return;
+            const ts = await postReply(rendered);
+            if (ts) await taskList?.attach(ts, rendered);
+          },
+          addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
+          removeReaction: (name) =>
+            client.reactions.remove({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
+          emojiCandidates: [...DEFAULT_ACK_REACTIONS],
+          emojiPick: ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), {
+            channel: inc.channel,
+            ts: inc.ts,
+          }),
+        });
+    if (!inc.unprompted) {
+      taskList = createTaskListPresenter({
+        post: (text, blocks) => postReply(text, blocks),
+        update: (ts, text, blocks) =>
+          client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {
+            mirrorSelfPost(inc.channel, ts, text, { sub: replyThreadTs, editedAt: Date.now() });
+          }),
+        checkpoint: async (ts) => {
+          if (queuedRunId) await checkpointRunEditRef(queuedRunId, ts);
+        },
+        remove: (ts) => client.chat.delete({ channel: inc.channel, ts }).then(() => {}),
+        onSurfacePosted: () => ack?.onSurfacePosted(),
+        onError: (error) => console.error("[slack-plugin] task-list update failed:", (error as Error).message),
+      });
+    }
+    const settleAck = async (): Promise<void> => {
+      await ack?.settle().catch(swallowAs("slack: ack settle", undefined));
+    };
 
     {
       const containerName = inc.kind === "dm" ? actor.displayName?.trim() || undefined : channelName;
