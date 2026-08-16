@@ -1429,10 +1429,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : "") +
             ". You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads work only from a DM; admin grant changes are portal-only.";
         }
-        if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.monitors)) {
+        if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
           const nowMs = Date.now();
-          const obligations = await Promise.all([deps.crons?.list() ?? [], deps.monitors?.enabled() ?? []])
-            .then(([crons, mons]) =>
+          const obligations = await Promise.all([
+            deps.crons?.list() ?? [],
+            deps.webhooks?.list() ?? [],
+            deps.monitors?.enabled() ?? [],
+          ])
+            .then(([crons, hooks, mons]) =>
               renderStandingObligations(
                 crons.filter(
                   (c) =>
@@ -1443,6 +1447,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       c.schedule.everyMs != null ||
                       (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
                 ),
+                hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
                 mons.filter((m) => m.ownerScopeId === scopeId && m.expiresAt > nowMs),
               ),
             )
@@ -1904,6 +1909,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           ...(deps.config ? { config: deps.config } : {}),
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
+          ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           memory: deps.memory,
           memoryScopeId,

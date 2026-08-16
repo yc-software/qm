@@ -1,4 +1,4 @@
-import type { CandidateDestination, Cron, Monitor } from "../../types.ts";
+import type { CandidateDestination, Cron, Monitor, Webhook } from "../../types.ts";
 import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 
 export function deliveryMenu(candidates: CandidateDestination[], defaultKey: string | undefined): string {
@@ -36,8 +36,8 @@ function cronSchedulePromptLabel(c: Cron): string {
     : `once at ${new Date(schedule.firstFireAt ?? c.createdAt).toISOString()}`;
 }
 
-export function renderStandingObligations(crons: Cron[], monitors: Monitor[]): string | null {
-  const total = crons.length + monitors.length;
+export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], monitors: Monitor[]): string | null {
+  const total = crons.length + webhooks.length + monitors.length;
   if (total === 0) return null;
   const snippet = (s: string) => (s.length > 100 ? `${s.slice(0, 97)}…` : s).replace(/\s+/g, " ");
   const lines = [
@@ -47,11 +47,12 @@ export function renderStandingObligations(crons: Cron[], monitors: Monitor[]): s
         (c) =>
           `- cron \`${c.id}\`${c.title ? ` "${c.title}"` : ""} (${cronSchedulePromptLabel(c)}, owner ${c.owner}): ${snippet(c.action ?? c.message ?? "")}`,
       ),
+    ...webhooks.slice(0, OBLIGATIONS_CAP).map((w) => `- webhook \`${w.id}\` (owner ${w.owner}): ${snippet(w.action)}`),
     ...monitors.slice(0, OBLIGATIONS_CAP).map((m) => `- job watch on \`${m.processId}\`: ${snippet(m.command)}`),
   ];
   return [
     "## Already scheduled here",
-    "Standing work set up for this conversation — it exists, don't re-create it. Pause one of **yours** that's stale or done with `cron` action=disable.",
+    "Standing work set up for this conversation — it exists, don't re-create it. Pause one of **yours** that's stale or done with `cron` action=disable (webhooks: `webhook` action=disable).",
     ...lines,
     ...(total > lines.length ? [`…and ${total - lines.length} more — \`cron\` action=list.`] : []),
   ].join("\n");

@@ -457,14 +457,17 @@ async function triggerConsent(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: 'decision must be "accept" or "decline"' });
   }
   const cron = await app.getCron(id);
-  if (!cron) return sendJson(res, 404, { error: "not_found" });
-  const decided = decideRecipientConsent(cron.recipientConsent, capability.actorId, decision, Date.now());
+  const webhook = cron ? null : await app.getWebhook(id);
+  const trigger = cron ?? webhook;
+  if (!trigger) return sendJson(res, 404, { error: "not_found" });
+  const decided = decideRecipientConsent(trigger.recipientConsent, capability.actorId, decision, Date.now());
   if (!decided.ok) {
     return decided.reason === "no_consent"
       ? sendJson(res, 400, { error: "bad_request", message: "this trigger has no recipient consent to decide on" })
       : sendJson(res, 403, { error: "forbidden", message: "only the delivery recipient can accept or decline this" });
   }
-  await app.setCronRecipientConsent(id, decided.consent);
+  if (cron) await app.setCronRecipientConsent(id, decided.consent);
+  else await app.setWebhookRecipientConsent(id, decided.consent);
   return sendJson(res, 200, { ok: true, consent: decided.consent });
 }
 

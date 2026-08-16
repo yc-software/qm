@@ -103,6 +103,7 @@ menu. Use:
 
 - a cron `message` for a literal reminder or `action` for a task that re-reads current data;
 - a scheduled follow-up when you promise to check back;
+- a webhook for an external trigger;
 - `publish` for a tool or dashboard worth opening.
 
 Confirm exact behavior and timing before creating anything. List existing crons first and

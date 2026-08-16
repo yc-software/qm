@@ -33,6 +33,7 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
   const sessions = { listByParticipant: async (_p: string) => [] };
   const auditLog = { record: () => undefined };
   const crons = { list: async () => [] };
+  const webhooks = { list: async () => [] };
   const skills = { list: async () => [] };
   const deploy = { listDeployments: async () => [] };
   return createApp({
@@ -43,6 +44,7 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
     sessions,
     auditLog,
     crons,
+    webhooks,
     skills,
     deploy,
   } as unknown as AppDeps);

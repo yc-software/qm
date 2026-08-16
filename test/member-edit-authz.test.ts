@@ -6,6 +6,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
+import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { createMemoryConfigStore, type PersistedSoul, type ScopedConfigStore } from "../src/resolution/config-store.ts";
@@ -36,6 +37,7 @@ const groupMembers = new Set([OWNER, GROUP_MEMBER]);
 function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: AdvisoryLock } = {}) {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const crons = createCronStore();
+  const webhooks = createWebhookStore();
   const acl = createAclStore();
   const config = overrides.config ?? createMemoryConfigStore(ORG);
   const auditLog = createAuditLog();
@@ -61,6 +63,7 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
   return {
     files,
     crons,
+    webhooks,
     acl,
     config,
     auditLog,

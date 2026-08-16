@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { ChevronDown, createElement, type IconNode } from "lucide";
+import { Check, ChevronDown, createElement, type IconNode } from "lucide";
 
 export function brandName(): string {
   if (typeof document === "undefined") return "QM";
@@ -143,4 +143,22 @@ export function toggleFormMenu(e: Event): void {
   control.querySelector<HTMLButtonElement>(".menu-button")?.setAttribute("aria-expanded", open ? "true" : "false");
   const menu = control.querySelector<HTMLElement>(".menu-popover");
   if (menu) menu.hidden = !open;
+}
+
+export function setFormMenuValue(control: HTMLElement | null, value: string, labelText: string): void {
+  if (!control) return;
+  const input = control.querySelector<HTMLInputElement>('input[type="hidden"]');
+  if (input) input.value = value;
+  const label = control.querySelector<HTMLElement>(".menu-label");
+  if (label) label.textContent = labelText;
+  control.querySelectorAll<HTMLButtonElement>(".menu-option").forEach((option) => {
+    const active = option.dataset.value === value;
+    option.classList.toggle("active", active);
+    option.setAttribute("aria-checked", active ? "true" : "false");
+    option.querySelector("svg")?.remove();
+  });
+  const activeOption = Array.from(control.querySelectorAll<HTMLButtonElement>(".menu-option")).find((option) =>
+    option.classList.contains("active"),
+  );
+  if (activeOption) activeOption.append(icon(Check, 15));
 }

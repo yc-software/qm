@@ -832,6 +832,36 @@ test("cron get honors read-only visibility: a delivery-targeted viewer reads, ne
   assert.equal(patched.ok ? "" : patched.code, "forbidden");
 });
 
+test("webhook create surfaces the inbound url + the secret verbatim; list elides; disable is owner-gated", async () => {
+  const { control } = setup();
+  const r = await control.createWebhook(
+    {
+      action: "handle the event",
+      verification: { scheme: "github", secret: "shh-secret" },
+      filters: [{ path: "action", in: ["opened"] }],
+    },
+    claims("U1"),
+    "https://portal.example",
+  );
+  assert.ok(r.ok, JSON.stringify(r));
+  // The url is absolute (publicly reachable) and the secret is returned verbatim ONCE.
+  assert.equal(r.url, `https://portal.example/v1/webhooks/incoming/${r.webhook.id}`);
+  assert.equal(r.secret, "shh-secret");
+  assert.equal(r.webhook.owner, "U1");
+
+  const listed = await control.listWebhooks(claims("U1"));
+  assert.ok(Array.isArray(listed));
+  assert.equal(listed.length, 1);
+
+  // a different owner can't disable it
+  const otherDisable = await control.disableWebhook(r.webhook.id, claims("U9"));
+  assert.equal(otherDisable.ok, false);
+  assert.equal(otherDisable.ok ? "" : otherDisable.code, "forbidden");
+
+  const disabled = await control.disableWebhook(r.webhook.id, claims("U1"));
+  assert.ok(disabled.ok);
+});
+
 test("soul read returns the effective SOUL; write replaces this scope's SOUL and bumps the version", async () => {
   const { control } = setup();
   const before = control.readSoul(claims("U1"));

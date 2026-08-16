@@ -8,8 +8,8 @@ import {
   samePersonMatcher,
 } from "../src/directory/person.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
-import { canAdministerCron, resolveRunAsChange } from "../src/api/control-service.ts";
-import type { Cron } from "../src/types.ts";
+import { canAdministerCron, canAdministerWebhook, resolveRunAsChange } from "../src/api/control-service.ts";
+import type { Cron, Webhook } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 
 describe("personKey / samePerson: the canonical same-person primitive", () => {
@@ -94,6 +94,12 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
       false,
       "without the roster the bridge fails closed",
     );
+  });
+
+  it("webhooks share the same owner rule", async () => {
+    const webhook = { id: "w1", owner: "Regan@YC.com", ownerScopeId: scopeId("personal", "Regan@YC.com") } as Webhook;
+    assert.equal(await canAdministerWebhook(appOver(), webhook, "regan@yc.com"), true);
+    assert.equal(await canAdministerWebhook(appOver(), webhook, "casey@yc.com"), false);
   });
 
   it("the list-path matcher agrees with the per-item check, including the roster bridge", async () => {

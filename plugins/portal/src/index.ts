@@ -35,6 +35,7 @@ import {
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
+  FORWARD_WEBHOOK_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
@@ -952,6 +953,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const rawPath = rawTarget.split("?")[0] ?? "";
   if (/%2f|%5c|%2e%2e|\\|\x00/i.test(rawPath) || rawPath.includes("//") || pathname.includes("/..")) {
     return json(res, 400, { error: "bad_request", message: "illegal path" });
+  }
+
+  if (method === "POST" && /^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname)) {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_WEBHOOK_HEADERS);
   }
 
   const consentBounce = (): void => {

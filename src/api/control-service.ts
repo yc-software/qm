@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import type { Cron, CronFireLogEntry, CronSchedule, Destination, Principal } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronSchedule, Destination, Principal, Webhook } from "../types.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
+import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
@@ -63,6 +64,17 @@ export type CronCreateResult =
       message: string;
       candidates?: Array<{ id: string; label: string }>;
     };
+
+export interface WebhookCreateRequest {
+  action: string;
+  verification: Webhook["verification"];
+  filters?: Webhook["filters"];
+  destinationKey?: string;
+}
+
+export type WebhookCreateResult =
+  | { ok: true; webhook: Webhook; url: string; secret?: string }
+  | { ok: false; code: "bad_request" | "unknown_destination" | "webhook_create_failed"; message: string };
 
 export interface CronPatchRequest {
   title?: string;
@@ -127,6 +139,16 @@ export interface ControlService {
     destinationKey: string,
     claims: CapabilityClaims,
   ): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "unknown_destination">>;
+  createWebhook(
+    req: WebhookCreateRequest,
+    claims: CapabilityClaims,
+    publicBase: string | undefined,
+  ): Promise<WebhookCreateResult>;
+  listWebhooks(claims: CapabilityClaims): Promise<Webhook[]>;
+  disableWebhook(
+    id: string,
+    claims: CapabilityClaims,
+  ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden">>;
   readSoul(claims: CapabilityClaims): { effectiveSoul: string; soul: string | null; soulVersion: number };
   writeSoul(
     content: string,
@@ -147,6 +169,18 @@ export async function canAdministerCron(
   if (!team && (await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))) return true;
   if (team && cron.ownerScopeId === callerScopeId) return true;
   return app.managesScope(actorId, cron.ownerScopeId);
+}
+
+export async function canAdministerWebhook(
+  app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
+  webhook: Webhook,
+  actorId: string,
+  isActor?: (id: string) => Promise<boolean>,
+): Promise<boolean> {
+  if (await app.membershipControlsScope(webhook.ownerScopeId)) {
+    return app.managesScope(actorId, webhook.ownerScopeId);
+  }
+  return isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actorId);
 }
 
 function withDefaultTimezone(schedule: CronSchedule, cap: CapabilityClaims): CronSchedule {
@@ -662,6 +696,79 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         destLabel ? { destinationLabel: destLabel } : undefined,
       );
       return { ok: true, cron: updated ?? cron };
+    },
+
+    async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
+      const resolved = resolveCapabilityDestination(capability, req.destinationKey);
+      if (!resolved.ok) {
+        return {
+          ok: false,
+          code: "unknown_destination",
+          message: "destinationKey is not one of the destinations available for this conversation",
+        };
+      }
+      // A webhook is standing (event-driven); a third-party-principal destination needs the
+      // recipient's consent, same as a recurring cron. (Today destinationKey only resolves the
+      // current conversation, so this won't fire — the gate is here so it stays correct if webhook
+      // addressing ever widens.)
+      const consentRecipient = consentRequiredRecipient({
+        owner: capability.actorId,
+        standing: true,
+        destination: resolved.destination,
+      });
+      const input: CreateWebhookInput = {
+        action: req.action,
+        verification: req.verification,
+        owner: capability.actorId,
+        createdBy: capability.actorId,
+        ownerScopeId: capability.scopeId,
+        ...(req.filters?.length ? { filters: req.filters } : {}),
+        ...(resolved.destination ? { destination: resolved.destination } : {}),
+        ...(consentRecipient
+          ? { recipientConsent: { recipientId: consentRecipient, status: "pending" as const } }
+          : {}),
+      };
+      try {
+        const webhook = await app.createWebhook(input);
+        if (consentRecipient) {
+          const ownerMember = await app.directoryMember(capability.actorId);
+          await sendConsentNotice((i) => app.enqueueDelivery(i), {
+            triggerId: webhook.id,
+            recipientId: consentRecipient,
+            ownerId: capability.actorId,
+            ...(ownerMember?.displayName ? { ownerName: ownerMember.displayName } : {}),
+            what: "an event-triggered message",
+          });
+        }
+        const incomingPath = `/v1/webhooks/incoming/${webhook.id}`;
+        const base = publicBase ? publicBase.replace(/\/$/, "") : "";
+        return {
+          ok: true,
+          webhook,
+          url: base ? `${base}${incomingPath}` : incomingPath,
+          ...(webhook.verification.secret ? { secret: webhook.verification.secret } : {}),
+        };
+      } catch (e) {
+        return { ok: false, code: "webhook_create_failed", message: errMessage(e) };
+      }
+    },
+
+    async listWebhooks(capability) {
+      const all = await app.listWebhooks();
+      const isActor = await app.personMatcher(capability.actorId);
+      const allowed = await Promise.all(
+        all.map((webhook) => canAdministerWebhook(app, webhook, capability.actorId, isActor)),
+      );
+      return all.filter((_webhook, index) => allowed[index]);
+    },
+
+    async disableWebhook(id, capability) {
+      const webhook = (await app.listWebhooks()).find((w) => w.id === id);
+      if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
+      if (!(await canAdministerWebhook(app, webhook, capability.actorId)))
+        return { ok: false, code: "forbidden", message: "not your webhook" };
+      await app.setWebhookEnabled(id, false);
+      return { ok: true };
     },
 
     readSoul(capability) {

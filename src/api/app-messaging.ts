@@ -38,6 +38,11 @@ export function createMessagingMethods(
   | "setCronEnabled"
   | "setCronDestination"
   | "setCronRecipientConsent"
+  | "createWebhook"
+  | "getWebhook"
+  | "listWebhooks"
+  | "setWebhookEnabled"
+  | "setWebhookRecipientConsent"
   | "pendingDeliveries"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
@@ -195,6 +200,29 @@ export function createMessagingMethods(
     },
     setCronRecipientConsent(id, recipientConsent) {
       return deps.crons.setRecipientConsent(id, recipientConsent);
+    },
+    async createWebhook(input) {
+      const webhook = await deps.webhooks.create(input);
+      deps.auditLog.record({
+        at: Date.now(),
+        principalId: webhook.createdBy,
+        action: "webhook_create",
+        resource: webhook.id,
+        scopeLabel: webhook.ownerScopeId,
+      });
+      return webhook;
+    },
+    getWebhook(id) {
+      return deps.webhooks.get(id);
+    },
+    listWebhooks() {
+      return deps.webhooks.list();
+    },
+    setWebhookEnabled(id, enabled) {
+      return deps.webhooks.setEnabled(id, enabled);
+    },
+    setWebhookRecipientConsent(id, recipientConsent) {
+      return deps.webhooks.setRecipientConsent(id, recipientConsent);
     },
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);

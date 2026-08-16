@@ -4,6 +4,7 @@ import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
 import { blobRoutes } from "./blobs.ts";
 import { sessionStateRawRoutes } from "./session-state.ts";
+import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { turnRoutes } from "./turns.ts";
 import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
@@ -37,6 +38,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...deploymentRawRoutes,
   ...blobRoutes,
   ...sessionStateRawRoutes,
+  ...webhookRawRoutes,
 ];
 
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
@@ -53,6 +55,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...contextPolicyRoutes,
   ...cronRoutes,
   ...reachRoutes,
+  ...webhookRoutes,
   ...directoryRoutes,
   ...contextRoutes,
   ...surfaceCacheRoutes,

@@ -109,7 +109,7 @@ test("the events carry the session UUID and a timestamp", async () => {
 test("GET /v1/session-state/events streams transitions as SSE frames", async () => {
   const built = freshApp();
   built.runtime.start();
-  const core = createInsecureTestServer(built.app, {});
+  const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
   core.listen(0);
   const base = `http://localhost:${(core.address() as AddressInfo).port}`;
   try {

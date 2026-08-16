@@ -29,7 +29,8 @@ isn't tied to any single vendor.
 - **Web apps.** Spin up custom internal apps and publish them to the right people.
 - **Shared skills.** Skills are scope-owned and shareable by grant, with admin-gated
   promotion to the whole org and skill packs imported from git repositories.
-- **Background work.** Crons and watches run work while nobody's watching.
+- **Background work.** Crons, watches, and inbound webhooks run work while nobody's
+  watching.
 
 ## What you can do with it
 

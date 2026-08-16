@@ -441,6 +441,7 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
     PORT: "8080",
     REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
     WEB_UI_PUBLIC_URL: "https://agent.acme.example",
+    WEBHOOK_PUBLIC_BASE: "https://agent.acme.example",
   });
   const core = serviceEnvironment(config, "core");
   assert.equal(core.ORG_ID, "acme");

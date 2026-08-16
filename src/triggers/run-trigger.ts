@@ -74,7 +74,7 @@ function isTriggerFailure(outcome: TriggerOutcome): boolean {
 const NO_UPDATE_SENTINEL = "[no-update]";
 const SILENT_POLL_MARKERS = new Set([NO_UPDATE_SENTINEL, "no_reply", "[silent]"]);
 
-const POLL_SURFACES = new Set(["cron", "monitor"]);
+const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
 export const isPollSurface = (surface: string): boolean => POLL_SURFACES.has(surface);
 
 export function isSilentPollReply(reply: string): boolean {

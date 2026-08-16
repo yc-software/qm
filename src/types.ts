@@ -230,6 +230,24 @@ export interface Cron extends TriggerBase {
   fireLog?: CronFireLogEntry[];
 }
 
+interface WebhookVerification {
+  scheme: "hmac-sha256" | "github" | "slack" | "stripe";
+  secret?: string;
+}
+
+interface WebhookFilter {
+  path: string;
+  in: string[];
+}
+
+export interface Webhook extends TriggerBase {
+  action: string;
+  verification: WebhookVerification;
+  filters?: WebhookFilter[];
+  lastDeliveryId?: string;
+  lastError?: string;
+}
+
 export interface Monitor extends TriggerBase {
   processId: string;
   command: string;

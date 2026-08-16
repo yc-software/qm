@@ -198,6 +198,7 @@ interface CronLike {
 const LIST_PAGE_SIZE = 25;
 const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
+const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
 
 const flatText = (s: string): string => s.replace(/[\s\u0085]+/g, " ").trim();
 
@@ -1471,7 +1472,9 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     recordResult(
       callId,
       { tool, error: "control_unavailable" },
-      text(`[error] control-plane tools (crons, standing instructions, sharing) aren't available on this turn.`),
+      text(
+        `[error] control-plane tools (crons, webhooks, standing instructions, sharing) aren't available on this turn.`,
+      ),
       true,
     );
   const isUnavailable = (r: unknown): r is { ok: false; code: "control_unavailable" } =>
@@ -1844,6 +1847,138 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
           return recordResult(callId, { tool: "cron", id }, text(`Retargeted cron ${fmtCronLine(r.cron)}`));
+        }
+      }
+    },
+  });
+
+  const webhook = defineTool({
+    name: "webhook",
+    label: "webhook",
+    description:
+      "Register and manage inbound webhooks — run a turn whenever an external system (GitHub, Stripe, " +
+      "Slack, CI, a vendor — anything that can POST) calls a URL. Confirm with the user before creating one.\n" +
+      "action=create takes `action` (what to do on each event; the event payload is appended " +
+      "automatically), `verification` (how the request is authenticated), optional `filters` (skip the turn " +
+      'unless the event matches — cheap pre-gating, e.g. [{path:"action",in:["opened"]}]), and optional ' +
+      "`destinationKey` (same delivery menu as crons). verification.scheme is one of github | slack | " +
+      "stripe | hmac-sha256: for github/slack/stripe the USER gives you the signing secret from the " +
+      "sender's settings page; for hmac-sha256 generate a strong random secret yourself. A signing secret is always required.\n" +
+      "create returns the inbound `url` and `secret` ONCE. You CANNOT open the sender's settings page, so " +
+      "relay BOTH to the user verbatim — the `url` is already the full public inbound URL (hand it over as-is) " +
+      "and the `secret` — so they can point GitHub/Stripe/etc. at it. Until they do, it never fires.\n" +
+      "action=list pages through your webhooks (secrets elided, task text flattened and capped at 2000 chars, " +
+      "25 per page — a footer line names the offset for the next page when there's more); action=disable pauses one by id.",
+    parameters: Type.Object({
+      action: Type.Union([Type.Literal("create"), Type.Literal("list"), Type.Literal("disable")], {
+        description: "create an inbound webhook, list yours, or disable one by id.",
+      }),
+      id: Type.Optional(Type.String({ description: "disable only: the webhook id." })),
+      task: Type.Optional(
+        Type.String({ description: "create only: what to do on each event (the payload is appended automatically)." }),
+      ),
+      verification: Type.Optional(
+        Type.Object(
+          {
+            scheme: Type.Union(
+              [Type.Literal("github"), Type.Literal("slack"), Type.Literal("stripe"), Type.Literal("hmac-sha256")],
+              { description: "how the inbound request is authenticated." },
+            ),
+            secret: Type.String({
+              description:
+                "the signing secret (from the sender for github/slack/stripe; self-generated for hmac-sha256).",
+            }),
+          },
+          { description: "create only: the inbound authentication scheme + secret." },
+        ),
+      ),
+      filters: Type.Optional(
+        Type.Array(
+          Type.Object({
+            path: Type.String({ description: 'dotted path into the event payload, e.g. "action".' }),
+            in: Type.Array(Type.String(), {
+              description: "values that pass; the turn is skipped unless the path's value is one of these.",
+            }),
+          }),
+          { description: "create only: skip the turn unless the event matches (cheap pre-gating)." },
+        ),
+      ),
+      destinationKey: Type.Optional(
+        Type.String({ description: 'create only: a key from the "Where scheduled tasks post" menu.' }),
+      ),
+      limit: Type.Optional(Type.Integer({ minimum: 1, description: "list only: page size (default 25, max 100)." })),
+      offset: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description: "list only: start the page here — pass the offset the previous page's footer names to continue.",
+        }),
+      ),
+    }),
+    async execute(callId, params) {
+      const tc = ref.current;
+      if (!tc) return text("[error] no active tool context");
+      await recordCall(callId, { tool: "webhook", action: params.action, ...(params.id ? { id: params.id } : {}) });
+      switch (params.action) {
+        case "create": {
+          if (!params.verification || typeof params.task !== "string") {
+            return recordResult(
+              callId,
+              { tool: "webhook", error: "verification and task required" },
+              text(
+                "[error] webhook create requires `task` (what to do per event) and `verification` ({scheme, secret?}).",
+              ),
+              true,
+            );
+          }
+          const r = await tc.webhookCreate({
+            action: params.task,
+            verification: params.verification,
+            ...(params.filters?.length ? { filters: params.filters } : {}),
+            ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
+          });
+          if (isUnavailable(r)) return unavailable(callId, "webhook");
+          if (!r.ok)
+            return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
+          // The url + secret are shown ONCE. Surface BOTH verbatim — the user configures the sender with them.
+          const secretLine = `\nSecret (shown once — store it): ${r.secret}`;
+          return recordResult(
+            callId,
+            { tool: "webhook", id: r.webhook.id, url: r.url, secretShown: !!r.secret },
+            text(
+              `Registered webhook ${r.webhook.id}.\nInbound URL (give to the sender verbatim): ${r.url}${secretLine}\nIt won't fire until the sender is pointed at this URL.`,
+            ),
+          );
+        }
+        case "list": {
+          const r = await tc.webhookList();
+          if (isUnavailable(r)) return unavailable(callId, "webhook");
+          if (!r.length)
+            return recordResult(callId, { tool: "webhook", count: 0 }, text("(no webhooks registered here)"));
+          const { page, offset, note } = pageOf([...r].sort(listOrder), params);
+          const lines = page.map(
+            (w) =>
+              `- ${w.id} (${w.verification.scheme}${w.enabled ? "" : ", paused"}): ${previewText(w.action, WEBHOOK_ACTION_PREVIEW_CHARS)}`,
+          );
+          return recordResult(
+            callId,
+            { tool: "webhook", count: r.length, shown: page.length, ...(offset > 0 ? { offset } : {}) },
+            text([...lines, ...(note ? [`(${note})`] : [])].join("\n")),
+          );
+        }
+        case "disable": {
+          const id = typeof params.id === "string" && params.id ? params.id : null;
+          if (!id)
+            return recordResult(
+              callId,
+              { tool: "webhook", error: "id required" },
+              text("[error] webhook disable requires `id`."),
+              true,
+            );
+          const r = await tc.webhookDisable(id);
+          if (isUnavailable(r)) return unavailable(callId, "webhook");
+          if (!r.ok)
+            return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
+          return recordResult(callId, { tool: "webhook", id, enabled: false }, text(`Disabled webhook ${id}.`));
         }
       }
     },
@@ -2836,7 +2971,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     memory,
     history,
     background,
-    ...(controlTools ? [cron, share] : []),
+    ...(controlTools ? [cron, webhook, share] : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
     ...(surfaceTools ? [surface, staySilent] : [finishSilently]),
     ...mcpTools,

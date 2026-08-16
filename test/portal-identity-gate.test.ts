@@ -211,9 +211,34 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     );
   });
 
-  it("binds deployment and approval routes to the verified actor", async () => {
+  it("binds webhook, deployment, and approval routes to the verified actor", async () => {
     const alice = await token("U1");
     const aliceHeaders = { "content-type": "application/json", "x-portal-identity": alice };
+    const webhook = await built.app.createWebhook({
+      ownerScopeId: "personal:U2",
+      owner: "U2",
+      createdBy: "U2",
+      action: "private webhook",
+      verification: { scheme: "hmac-sha256", secret: "webhook-secret" },
+    });
+    assert.equal((await fetch(`${base}/v1/webhooks?viewer=U2`, { headers: aliceHeaders })).status, 403);
+    assert.deepEqual(
+      (
+        (await (await fetch(`${base}/v1/webhooks?viewer=U1`, { headers: aliceHeaders })).json()) as {
+          webhooks: unknown[];
+        }
+      ).webhooks,
+      [],
+    );
+    assert.equal(
+      (
+        await fetch(`${base}/v1/webhooks/${webhook.id}/disable?principalId=U1`, {
+          method: "POST",
+          headers: aliceHeaders,
+        })
+      ).status,
+      403,
+    );
 
     const deployment = {
       id: "deployment-u2",

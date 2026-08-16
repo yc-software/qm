@@ -306,7 +306,7 @@ test("Codex materializes API-key auth into its isolated home, and never an ambie
 test("Codex children cannot use parent surface, control, or terminal tools", () => {
   assert.equal(codexChildToolAllowed("history"), true);
   assert.equal(codexChildToolAllowed("execute"), true);
-  for (const denied of ["slack", "cron", "guidance", "share", "stay_silent", "finish_silently"]) {
+  for (const denied of ["slack", "cron", "webhook", "guidance", "share", "stay_silent", "finish_silently"]) {
     assert.equal(codexChildToolAllowed(denied), false, denied);
   }
 });

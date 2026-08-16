@@ -149,13 +149,13 @@ const FAMILIES: AgentApiFamily[] = [
   {
     match: (m, p) => m === "POST" && /^\/v1\/triggers\/[^/]+\/consent$/.test(p),
     guidance:
-      "If the person you're helping is told a teammate set up a recurring delivery (a cron that DMs them), THEY control whether it reaches them — not its behavior. When they say yes/no, call this with the ref id from the notice. Reversible anytime; only the recipient can decide.",
+      "If the person you're helping is told a teammate set up a recurring delivery (a cron or webhook that DMs them), THEY control whether it reaches them — not its behavior. When they say yes/no, call this with the ref id from the notice. Reversible anytime; only the recipient can decide.",
     routes: [
       {
         method: "POST",
         path: "/v1/triggers/:id/consent",
         summary:
-          'accept or decline a standing trigger\'s deliveries to you (a teammate\'s cron that DMs you) — body {decision:"accept"|"decline"}; reversible; recipient-only',
+          'accept or decline a standing trigger\'s deliveries to you (a teammate\'s cron/webhook/watch that DMs you) — body {decision:"accept"|"decline"}; reversible; recipient-only',
       },
     ],
   },
@@ -306,6 +306,22 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/deployments/:id/restore",
         summary: "restore an archived app you manage by reapplying its current saved version",
       },
+    ],
+  },
+  {
+    match: (m, p) =>
+      (p === "/v1/webhooks" && (m === "POST" || m === "GET")) ||
+      (m === "POST" && /^\/v1\/webhooks\/[^/]+\/(disable|enable)$/.test(p)),
+    when: () => false,
+    routes: [
+      {
+        method: "POST",
+        path: "/v1/webhooks",
+        summary: "register an inbound webhook that runs a prompt when an external system calls it (secret shown once)",
+      },
+      { method: "GET", path: "/v1/webhooks", summary: "list your webhooks" },
+      { method: "POST", path: "/v1/webhooks/:id/disable", summary: "disable a webhook" },
+      { method: "POST", path: "/v1/webhooks/:id/enable", summary: "re-enable a webhook" },
     ],
   },
   {

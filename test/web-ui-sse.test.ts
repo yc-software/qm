@@ -17,7 +17,7 @@ const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-sse-")) }));
 built.runtime.start();
-const core = createServer(built.app, { signingSecret: SECRET });
+const core = createServer(built.app, { signingSecret: SECRET, webhookReceiver: built.webhookReceiver });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
 

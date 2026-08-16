@@ -114,6 +114,19 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
   });
 }
 
+export const FORWARD_WEBHOOK_HEADERS = [
+  "content-type",
+  "x-hub-signature-256",
+  "x-github-event",
+  "x-github-delivery",
+  "x-github-hook-id",
+  "x-slack-signature",
+  "x-slack-request-timestamp",
+  "stripe-signature",
+  "x-signature",
+  "x-delivery-id",
+];
+
 export const FORWARD_AGENT_API_HEADERS = [
   "content-type",
   "content-length",
@@ -133,6 +146,8 @@ export const FORWARD_DEPLOYMENT_LAYER_HEADERS = [
 
 export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
+// Google Pub/Sub authenticated-push: a public POST carrying the OIDC bearer in Authorization,
+// which core verifies itself. Forward the body + content-type + authorization unchanged.
 export interface DeploymentTarget {
   coreBase: string;
   id: string;

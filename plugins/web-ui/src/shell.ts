@@ -15,6 +15,7 @@ import {
   Rocket,
   Search,
   ShieldCheck,
+  Webhook,
   type IconNode,
 } from "lucide";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
@@ -59,6 +60,7 @@ import {
   toggleWebOnly,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
+import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch, SEARCH_HOTKEY_LABEL } from "./search";
@@ -178,6 +180,7 @@ const ICON = {
   files: Files,
   keychain: KeyRound,
   deploys: Rocket,
+  webhooks: Webhook,
   crons: Clock,
   memory: Brain,
   skills: Box,
@@ -530,8 +533,9 @@ export function renderSidebarTop(): void {
           html`
             ${navRow("contexts", ICON.contexts, "Projects")} ${navRow("chats", ICON.chats, "Chats")}
             ${navRow("files", ICON.files, "Files")} ${navRow("crons", ICON.crons, "Crons")}
-            ${navRow("keychain", ICON.keychain, "Keychain")} ${navRow("deploys", ICON.deploys, "Apps")}
-            ${navRow("memory", ICON.memory, "Memory")} ${navRow("skills", ICON.skills, "Skills")}
+            ${navRow("webhooks", ICON.webhooks, "Webhooks")} ${navRow("keychain", ICON.keychain, "Keychain")}
+            ${navRow("deploys", ICON.deploys, "Apps")} ${navRow("memory", ICON.memory, "Memory")}
+            ${navRow("skills", ICON.skills, "Skills")}
             ${
               can("admin")
                 ? html`<a class="navrow" href=${ADMIN_HOME_URL} title="Admin">
@@ -611,6 +615,10 @@ export function switchView(v: View): void {
       else void renderChatsPage();
       renderList();
       break;
+    case "webhooks":
+      resetActiveWebhook();
+      void renderWebhooksPage();
+      break;
     case "crons":
       resetActiveCron();
       void renderCronsPage();
@@ -644,6 +652,9 @@ function refreshActiveView(v: View): void {
       break;
     case "contexts":
       void renderContexts();
+      break;
+    case "webhooks":
+      void renderWebhooksPage();
       break;
     case "crons":
       void renderCronsPage();
@@ -776,10 +787,11 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
 }
 
 window.addEventListener("popstate", () => {
-  if (appState.currentView !== "crons") return;
+  if (appState.currentView !== "crons" && appState.currentView !== "webhooks") return;
   const { view, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
-  if (view !== "crons") return;
-  routeCronsHistory(item);
+  if (view !== appState.currentView) return;
+  if (view === "crons") routeCronsHistory(item);
+  else routeWebhooksHistory(item);
 });
 
 window.addEventListener("focus", () => {
@@ -897,6 +909,7 @@ export async function boot(): Promise<void> {
       if (scope) contextsState.selected = scope;
     }
     if (wanted === "crons" && wantedItem) openCronById(wantedItem);
+    if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
     switchView(wanted as View);
   } else if (wantedSession) {
     const match = sessionsState.list.find((s) => s.id === wantedSession);

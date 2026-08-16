@@ -25,6 +25,7 @@ import type { SandboxMigrationRunner } from "../sandbox/sandbox-migration-runner
 import type { EgressEnforcement, Sandbox } from "../sandbox/sandbox.ts";
 import type { EnvironmentStore } from "../environments/environment-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
+import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeviceFlowCutoverStore } from "../credentials/device-flow-cutover.ts";
 import type {
@@ -126,6 +127,7 @@ export interface ServerDeps {
   deployAppsSessionSecret?: string;
   deployAppsLoginUrl?: string;
   scheduler?: Scheduler;
+  webhookReceiver?: WebhookReceiver;
   identity?: IdentityService;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;

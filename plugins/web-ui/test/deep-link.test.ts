@@ -11,7 +11,7 @@ test("chats view with no session yields the bare root", () => {
 });
 
 test("non-chat views are path-addressed regardless of any session", () => {
-  assert.equal(deepLinkPath("", "crons", null), "/crons");
+  assert.equal(deepLinkPath("", "webhooks", null), "/webhooks");
   assert.equal(deepLinkPath("", "files", "abc"), "/files");
   assert.equal(deepLinkPath("", "keychain", null), "/keychain");
 });
@@ -21,6 +21,7 @@ test("the contexts view carries its open scope", () => {
 });
 
 test("a non-root base is prefixed, with or without its trailing slash", () => {
+  assert.equal(deepLinkPath("/web-ui/", "webhooks", null), "/web-ui/webhooks");
   assert.equal(deepLinkPath("/web-ui/", "crons", null), "/web-ui/crons");
   assert.equal(deepLinkPath("/web-ui", "chats", "s1"), "/web-ui/?session=s1");
 });
@@ -30,6 +31,7 @@ test("session ids are URI-encoded", () => {
 });
 
 test("parseDeepLink reads the view from the path", () => {
+  assert.deepEqual(parseDeepLink("", "/webhooks", ""), { view: "webhooks", session: null, item: null });
   assert.deepEqual(parseDeepLink("", "/crons", ""), { view: "crons", session: null, item: null });
   assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/crons", ""), { view: "crons", session: null, item: null });
   assert.deepEqual(parseDeepLink("", "/", "?session=s1"), { view: null, session: "s1", item: null });
@@ -59,6 +61,7 @@ test("parseDeepLink degrades a malformed percent-escape to no view instead of th
 
 test("parseDeepLink still honors legacy ?view= links", () => {
   assert.deepEqual(parseDeepLink("", "/", "?view=crons"), { view: "crons", session: null, item: null });
+  assert.deepEqual(parseDeepLink("", "/", "?view=webhooks"), { view: "webhooks", session: null, item: null });
   assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/", "?view=contexts&scope=channel:C1"), {
     view: "contexts",
     session: null,

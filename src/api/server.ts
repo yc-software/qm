@@ -39,7 +39,7 @@ function capabilityAdminDenied(method: string, pathname: string, url: URL, claim
   if (method === "GET" && pathname === "/v1/admin/whoami") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
   if (claims.liveActor !== true && !unattendedAdminReadAllowed(method, pathname, claims)) {
-    return "admin actions through the agent require a turn the admin started themselves — autonomous turns (crons) cannot act as an admin";
+    return "admin actions through the agent require a turn the admin started themselves — autonomous turns (crons, webhooks) cannot act as an admin";
   }
   if (pathname.startsWith("/v1/admin/grants")) {
     return "admin grant changes (promote/revoke) are portal-only — the agent cannot manage who governs the org";

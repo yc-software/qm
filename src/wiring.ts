@@ -48,6 +48,7 @@ import type {
   PendingApprovalRecord,
   ScopeId,
   SurfaceContextRequest,
+  Webhook,
 } from "./types.ts";
 import { scopeId } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
@@ -70,6 +71,8 @@ import {
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
+import { createWebhookStore } from "./webhooks/webhook-store.ts";
+import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
@@ -337,6 +340,7 @@ export interface BuiltApp {
   skillFetcher: SkillPackFetcher;
   auditLog: AuditLog;
   scheduler: Scheduler;
+  webhookReceiver: WebhookReceiver;
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
@@ -945,6 +949,7 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
+  const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"));
   const deliveries = config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore();
   const layerEnv = config.layerEnv ?? {};
   const layerBrokerCache = new Map<string, AwsRoleBroker>();
@@ -1007,6 +1012,7 @@ export function buildApp(
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
+    ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
     memoryStrategy,
     skills,
@@ -1034,6 +1040,7 @@ export function buildApp(
     ...(processes ? { processes } : {}),
     monitors,
     crons,
+    webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     ...(config.sharedOwnerAuthIsolation ? { ownerAuthExec: true, sharedOwnerAuthIsolation: true } : {}),
@@ -1157,6 +1164,7 @@ export function buildApp(
     auditLog,
     config: configStore,
     crons,
+    webhooks,
     deliveries,
     directory,
     projects,
@@ -1336,6 +1344,15 @@ export function buildApp(
     reconcile: (id) => app.syncSkillPack(id),
     leaderLease,
   });
+  const webhookReceiver = createWebhookReceiver({
+    webhooks,
+    deliveries,
+    idempotency,
+    identity,
+    run: (req) => app.turn(req),
+    directory,
+    currentScopeMembers,
+  });
   const reachDeniedNotifier: Sweeper | undefined = config.reachDeniedNotifyChannel
     ? createReachDeniedNotifier({
         auditLog,
@@ -1492,6 +1509,7 @@ export function buildApp(
     skillFetcher,
     auditLog,
     scheduler,
+    webhookReceiver,
     admin,
     rateLimiter,
     errors,
@@ -1585,6 +1603,7 @@ export function serverDeps(
     ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
     ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
     scheduler: built.scheduler,
+    webhookReceiver: built.webhookReceiver,
     identity: built.identity,
     ...(built.keychain ? { keychain: built.keychain } : {}),
     serviceCreds: built.serviceCreds,

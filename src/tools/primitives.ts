@@ -52,11 +52,13 @@ import type {
   CronPatchRequest,
   CronRunsRequest,
   CronRunsResult,
+  WebhookCreateRequest,
+  WebhookCreateResult,
   ControlOk,
   ControlErr,
 } from "../api/control-service.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
-import type { Cron } from "../types.ts";
+import type { Cron, Webhook } from "../types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 
@@ -226,6 +228,11 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<
     ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "unknown_destination"> | ControlUnavailable
   >;
+  webhookCreate(req: WebhookCreateRequest): Promise<WebhookCreateResult | ControlUnavailable>;
+  webhookList(): Promise<Webhook[] | ControlUnavailable>;
+  webhookDisable(
+    id: string,
+  ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden"> | ControlUnavailable>;
   soulRead(): { effectiveSoul: string; soul: string | null; soulVersion: number } | ControlUnavailable;
   soulWrite(
     content: string,
@@ -360,7 +367,7 @@ export interface ControlUnavailable {
 export const CONTROL_UNAVAILABLE: ControlUnavailable = {
   ok: false,
   code: "control_unavailable",
-  message: "the control plane (crons, standing instructions) isn't available on this turn",
+  message: "the control plane (crons, webhooks, standing instructions) isn't available on this turn",
 };
 
 export interface ToolContextDeps {
@@ -419,6 +426,7 @@ export interface ToolContextDeps {
   onGapWork?: (work: GapWork) => void;
   control?: ControlService;
   controlClaims?: CapabilityClaims;
+  webhookPublicUrl?: string;
   surface?: SurfaceToolDeps;
 }
 
@@ -1013,6 +1021,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronRetarget: (id, destinationKey) =>
       controlOp(
         (c, cl) => c.retargetCron(id, destinationKey, cl),
+        (r) => r.ok,
+      ),
+    webhookCreate: (req) =>
+      controlOp(
+        (c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl),
+        (r) => r.ok,
+      ),
+    webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
+    webhookDisable: (id) =>
+      controlOp(
+        (c, cl) => c.disableWebhook(id, cl),
         (r) => r.ok,
       ),
     soulRead() {

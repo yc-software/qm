@@ -156,5 +156,6 @@ test("without control/controlClaims wired, every control method returns CONTROL_
   assert.deepEqual(await ctx.cronCreate({ schedule: { everyMs: 1000 }, action: "x" }), CONTROL_UNAVAILABLE);
   assert.deepEqual(await ctx.cronList(), CONTROL_UNAVAILABLE);
   assert.deepEqual(await ctx.cronRuns("cron-1"), CONTROL_UNAVAILABLE);
+  assert.deepEqual(await ctx.webhookList(), CONTROL_UNAVAILABLE);
   assert.deepEqual(ctx.soulRead(), CONTROL_UNAVAILABLE);
 });

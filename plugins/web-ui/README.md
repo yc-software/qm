@@ -7,7 +7,8 @@ owned by this plugin. Two processes:
 
 - **A zero-dep `node:http` server** (`server/index.ts`) — holds the signed-in principal
   in an `HttpOnly` cookie, injects it as the turn's actor, and proxies a small set of
-  `/api/*` routes to the core (chat turns, unified history, cron management, and more). It never imports the core and never sends a model/API key to the browser.
+  `/api/*` routes to the core (chat turns, unified history, and **webhook management** —
+  see below). It never imports the core and never sends a model/API key to the browser.
 - **A Vite-bundled front-end** (`src/`) — a custom Lit shell + transcript + composer.
   Pi's `Agent` LLM-call boundary (`streamFn`) is swapped for a bridge to the core.
   It `POST`s the turn (`POST /v1/turns?async=1`), then watches the in-flight reply over
@@ -39,6 +40,9 @@ the front-end on :5173 and proxies `/signin`, `/me`, `/api/*` to the node server
 
 Env (see `.env.example`): `CORE_API_URL` (default `http://localhost:8080`),
 `CORE_ORG_ID` (default `acme`), `PORT` (default 8096), `WEB_UI_PUBLIC_URL`,
+`WEBHOOK_PUBLIC_BASE` (the public origin a third-party webhook sender posts to — in prod the
+**portal**, which forwards `/v1/webhooks/incoming/*` to the core's receiver; defaults to the
+core for dev single-host; the prior name `CORE_PUBLIC_URL` is still accepted),
 `WEB_UI_PRINCIPALS` (csv allowlist; empty = any id, **dev only**),
 and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
@@ -94,8 +98,23 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
   (for example, `#engineering`) — the channel name is captured from the surface onto the session record
   (`Session.channelName`, plumbed `conversation.channelName` → `getOrCreateByThread`) and surfaced
   via `GET /v1/sessions`, so you recognize _where_ a conversation happened at a glance.
+- **Webhook management** (the **Webhooks** sidebar view) — register, list, and disable your
+  own incoming webhooks (spec §7). Each registration is created with `owner = createdBy = you`
+  in your `personal:<you>` scope (identity comes from the cookie, **never** the request body —
+  the same trust model as `/api/turn`). The server proxies three routes:
+  - `POST /api/webhooks` → core `POST /v1/webhooks`; returns the webhook + the **absolute**
+    public ingress URL (built against `WEBHOOK_PUBLIC_BASE` — the portal in prod) and surfaces
+    the signing secret **once** (auto-generated if you leave it blank; never shown again).
+  - `GET /api/webhooks` → core `GET /v1/webhooks`, then **filtered to `owner === you`** (core's
+    source-auth list is operator-wide; secrets are already elided by the core).
+  - `POST /api/webhooks/:id/disable` → ownership is **verified here first** (core's operator
+    disable has no ownership check), mirroring the run-ownership gate, then proxied.
+    The inbound ingress (`POST /v1/webhooks/incoming/:id`) is served by the **core** receiver,
+    reached in prod through the **portal**'s one unauthenticated passthrough (the core is not
+    publicly exposed); senders sign with their own per-webhook secret, which is the auth on that
+    path. Dev single-host posts to the core directly.
 - **Cron management** (the **Crons** sidebar view) — create, list, run-now, enable/disable, and
-  delete your own scheduled tasks (spec §7): created with
+  delete your own scheduled tasks (spec §7), same trust model as webhooks: created with
   `owner = createdBy = you` in your `personal:<you>` scope (identity from the cookie, never the
   body), list filtered to `owner === you`, and every per-cron route ownership-gated here first
   (core's source-auth routes are operator-wide). A cron is either a **task** (a prompt the agent

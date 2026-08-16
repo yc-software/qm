@@ -28,6 +28,7 @@ import {
   storeUiState,
   uiStateId,
 } from "../../surfaces/ui-state.ts";
+import { redactWebhook } from "./webhooks.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
@@ -490,6 +491,7 @@ async function listScopeResources(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, {
     files: out.files,
     crons: out.crons,
+    webhooks: out.webhooks.map(redactWebhook),
     deployments: out.deployments,
     skills: out.skills,
     manageable: out.manageable,

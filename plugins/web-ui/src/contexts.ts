@@ -34,6 +34,7 @@ import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } fr
 import { mainConversation } from "./conversations";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
 import { activityOf } from "./session-list";
+import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
 import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron-format";
 import { restoreDialogFocus } from "./dialog-focus";
@@ -64,6 +65,7 @@ interface ScopeSkill {
 }
 interface ScopeResourcesView {
   files: ScopeFile[];
+  webhooks: WebhookView[];
   crons: CronView[];
   deployments: ScopeDeployment[];
   skills: ScopeSkill[];
@@ -518,7 +520,12 @@ function detailTpl(c: CoreContext): TemplateResult {
 function scopeResourcesEmpty(scopeId: string): boolean {
   const r = contextsState.resourcesScope === scopeId ? contextsState.resources : null;
   return Boolean(
-    r && r.files.length === 0 && r.crons.length === 0 && r.deployments.length === 0 && r.skills.length === 0,
+    r &&
+    r.files.length === 0 &&
+    r.webhooks.length === 0 &&
+    r.crons.length === 0 &&
+    r.deployments.length === 0 &&
+    r.skills.length === 0,
   );
 }
 
@@ -841,10 +848,16 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
   const r = contextsState.resources;
   if (!r) {
     return contextsState.resourcesLoading
-      ? html`<div class="empty compact">Loading this context's files, crons, apps and skills…</div>`
+      ? html`<div class="empty compact">Loading this context's files, webhooks, crons, apps and skills…</div>`
       : html``;
   }
-  if (r.files.length === 0 && r.crons.length === 0 && r.deployments.length === 0 && r.skills.length === 0) {
+  if (
+    r.files.length === 0 &&
+    r.webhooks.length === 0 &&
+    r.crons.length === 0 &&
+    r.deployments.length === 0 &&
+    r.skills.length === 0
+  ) {
     return nothing;
   }
   const manage = r.manageable;
@@ -866,6 +879,7 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
           )
         : nothing
     }
+    ${r.webhooks.length ? resourceGroup("Webhooks", r.webhooks.map(webhookRow)) : nothing}
     ${r.deployments.length ? resourceGroup("Apps", r.deployments.map(deploymentRow)) : nothing}
   `;
 }
@@ -943,6 +957,22 @@ function fileRow(f: ScopeFile): TemplateResult {
               >`
             : nothing
         }
+      </span>
+    </div>
+  `;
+}
+
+function webhookRow(w: WebhookView): TemplateResult {
+  let lastRun = "never fired";
+  if (w.lastError) lastRun = "error";
+  else if (w.lastFiredAt) lastRun = relTime(w.lastFiredAt);
+  return html`
+    <div class="context-session-row context-resource-row">
+      <span class="context-session-title">${actionSnippet(w.action)}</span>
+      <span class="context-session-meta">
+        <span class="badge">${w.verification.scheme}</span>
+        <span class="badge">${w.enabled ? "enabled" : "disabled"}</span>
+        <span>${lastRun}</span>
       </span>
     </div>
   `;
@@ -1380,6 +1410,7 @@ async function loadScopeResources(scopeId: string): Promise<void> {
     if (stale()) return;
     contextsState.resources = {
       files: r.files ?? [],
+      webhooks: r.webhooks ?? [],
       crons: r.crons ?? [],
       deployments: r.deployments ?? [],
       skills: r.skills ?? [],

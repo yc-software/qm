@@ -27,7 +27,8 @@
     },
     "admin": { "ADMIN_BASE_PATH": "/admin" },
     "web-ui": {
-      "WEB_UI_PUBLIC_URL": "https://demo-agent.example.com/web-ui"
+      "WEB_UI_PUBLIC_URL": "https://demo-agent.example.com/web-ui",
+      "WEBHOOK_PUBLIC_BASE": "https://demo-agent.example.com"
     },
     "portal": {
       "PORTAL_PUBLIC_URL": "https://demo-agent.example.com",
