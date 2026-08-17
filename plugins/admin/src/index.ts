@@ -7,6 +7,7 @@ import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/cor
 import { json, readBody, cookie } from "../../chassis/src/http.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { errMessage } from "../../chassis/src/errors.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -20,6 +21,9 @@ import { dirname, join } from "node:path";
 
 const PORT = portFromEnv(8090);
 const ADMIN_BASE_PATH = (process.env.ADMIN_BASE_PATH ?? "").replace(/\/$/, "");
+const CORE_WHOAMI_ATTEMPTS = 2;
+const CORE_WHOAMI_TIMEOUT_MS = 2_500;
+const CORE_WHOAMI_RETRY_DELAY_MS = 250;
 function signedHeaders(method: string, corePath: string, rawBody: string): Record<string, string> {
   return signedRequestHeaders(CORE_SIGNING_SECRET, method, corePath, rawBody, { "content-type": "application/json" });
 }
@@ -243,19 +247,37 @@ async function uploadFileFromRequest(
 
 async function coreWhoami(principal: string): Promise<{ isAdmin: boolean; role?: string; scopeId?: string } | null> {
   const corePath = "/v1/admin/whoami";
-  try {
-    const r = await fetch(`${CORE}${corePath}`, {
-      headers: {
-        ...signedHeaders("GET", corePath, ""),
-        ...portalIdentityHeader(),
-        "x-admin-actor": `${principal}@${ORG}`,
-      },
-    });
-    if (!r.ok) return null;
-    return (await r.json()) as { isAdmin: boolean; role?: string; scopeId?: string };
-  } catch {
-    return null;
+  const started = Date.now();
+  let failure = "unknown failure";
+  let attempts = 0;
+  for (; attempts < CORE_WHOAMI_ATTEMPTS; attempts++) {
+    try {
+      const r = await fetch(`${CORE}${corePath}`, {
+        headers: {
+          ...signedHeaders("GET", corePath, ""),
+          ...portalIdentityHeader(),
+          "x-admin-actor": `${principal}@${ORG}`,
+        },
+        signal: AbortSignal.timeout(CORE_WHOAMI_TIMEOUT_MS),
+      });
+      if (r.ok) {
+        const body = (await r.json()) as { isAdmin?: unknown; role?: string; scopeId?: string };
+        if (typeof body.isAdmin !== "boolean") throw new Error("core returned an invalid admin status");
+        return { ...body, isAdmin: body.isAdmin };
+      }
+      failure = `HTTP ${r.status}`;
+      if (r.status < 500 && r.status !== 429) break;
+    } catch (error) {
+      failure = errMessage(error);
+    }
+    if (attempts + 1 < CORE_WHOAMI_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, CORE_WHOAMI_RETRY_DELAY_MS));
+    }
   }
+  console.warn(
+    `[admin] core whoami failed after ${Math.min(attempts + 1, CORE_WHOAMI_ATTEMPTS)} attempt(s) in ${Date.now() - started}ms: ${failure}`,
+  );
+  return null;
 }
 
 const WRITES = new Map<string, string[]>([
