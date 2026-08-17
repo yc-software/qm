@@ -12,6 +12,7 @@ test("reset invalidates identity-bound loads and operations", () => {
   const load = operations.beginLoad();
   const mutation = operations.beginMutation()!;
   const drop = operations.beginDrop()!;
+  const navigation = operations.beginNavigation()!;
 
   operations.reset();
 
@@ -19,12 +20,43 @@ test("reset invalidates identity-bound loads and operations", () => {
   assert.equal(operations.isCurrentEpoch(mutation.epoch), false);
   assert.equal(operations.isCurrentEpoch(drop), false);
   assert.equal(operations.dropInFlight, false);
+  assert.equal(navigation.signal.aborted, true);
+  assert.equal(operations.isCurrentNavigation(navigation), false);
   const currentMutation = operations.beginMutation()!;
   operations.finishMutation(mutation);
   assert.equal(operations.beginMutation(), null);
   operations.finishMutation(currentMutation);
   assert.ok(operations.beginMutation());
   assert.match(shellSource, /resetKeychainState\(\);\s*appState\.me =/);
+});
+
+test("connector navigation is single-flight and cancel-safe", () => {
+  const operations = new KeychainOperations();
+  const first = operations.beginNavigation()!;
+  assert.equal(operations.navigationInFlight, true);
+  assert.equal(operations.beginNavigation(), null);
+  operations.cancelNavigation();
+  assert.equal(first.signal.aborted, true);
+  assert.equal(operations.isCurrentNavigation(first), false);
+  const next = operations.beginNavigation()!;
+  assert.equal(operations.finishNavigation(next), true);
+  assert.equal(operations.navigationInFlight, false);
+});
+
+test("leaving integrations cancels navigation without clearing other operation locks", () => {
+  const operations = new KeychainOperations();
+  const mutation = operations.beginMutation()!;
+  operations.beginDrop();
+  const navigation = operations.beginNavigation()!;
+
+  operations.cancelNavigation();
+
+  assert.equal(navigation.signal.aborted, true);
+  assert.equal(operations.beginMutation(), null);
+  assert.equal(operations.beginDrop(), null);
+  operations.finishMutation(mutation);
+  assert.match(shellSource, /appState\.currentView === "keychain"\) leaveKeychainView\(\)/);
+  assert.doesNotMatch(shellSource, /appState\.currentView === "keychain"\) resetKeychainState\(\)/);
 });
 
 test("a reversed keychain load cannot overwrite the latest response", async () => {
@@ -56,7 +88,7 @@ test("a reversed keychain load cannot overwrite the latest response", async () =
 
 test("identity reset invalidates a pending connector start", async () => {
   const operations = new KeychainOperations();
-  const epoch = operations.captureEpoch();
+  const operation = operations.beginNavigation()!;
   let navigated = false;
   let resolveStart!: () => void;
   const response = new Promise<void>((resolve) => {
@@ -64,7 +96,7 @@ test("identity reset invalidates a pending connector start", async () => {
   });
   const continuation = (async () => {
     await response;
-    if (operations.isCurrentEpoch(epoch)) navigated = true;
+    if (operations.isCurrentNavigation(operation)) navigated = true;
   })();
 
   operations.reset();
@@ -74,7 +106,7 @@ test("identity reset invalidates a pending connector start", async () => {
   assert.equal(navigated, false);
   assert.match(
     connectorsSource,
-    /const stateEpoch = keychainOperations\.captureEpoch\(\);[\s\S]*api<\{ authorizeUrl\?: string \}>[\s\S]*isCurrentEpoch\(stateEpoch\)/,
+    /const operation = keychainOperations\.beginNavigation\(\);[\s\S]*api<\{ authorizeUrl\?: string \}>[\s\S]*isCurrentNavigation\(operation\)/,
   );
 });
 
@@ -141,7 +173,7 @@ test("keychain overview wires managed connector grants into account controls", (
 test("destructive controls settle duplicate attempts while a mutation is busy", () => {
   assert.match(connectorsSource, /\?disabled=\$\{keychainOperations\.mutationInFlight\}/);
   assert.match(connectorsSource, /connectorNotice = "Another keychain change is still in progress\."/);
-  assert.equal(connectorsSource.match(/const operation = beginKeychainMutation\(\)/g)?.length, 3);
+  assert.equal(connectorsSource.match(/const operation = beginKeychainMutation\(\)/g)?.length, 5);
   assert.equal(
     connectorsSource.match(/if \(keychainOperations\.finishMutation\(operation\)\) drawConnectors\(\)/g)?.length,
     3,
@@ -156,7 +188,23 @@ test("keychain rows reserve success badges for actionable states", () => {
 });
 
 test("keychain actions keep secondary weight and compact mobile sizing", () => {
-  assert.match(connectorsSource, /\$\{available \? html`<button class="btn" type="button"/);
+  assert.match(connectorsSource, /available[\s\S]*navigationInFlight[\s\S]*startConnector\(id\)/);
   assert.doesNotMatch(shellCssSource, /\.kc-hero-actions \.btn\s*\{\s*flex:\s*1;/);
   assert.doesNotMatch(shellCssSource, /sidebar-closed \.kc-hero-copy/);
+});
+
+test("integrations degrade clearly when optional secure storage is unavailable", () => {
+  assert.match(connectorsSource, /keys\.reason instanceof ApiError && keys\.reason\.status === 404/);
+  assert.match(connectorsSource, /Secure credential storage is not enabled on this deployment\./);
+  assert.doesNotMatch(connectorsSource, /connectorNotice = "not_found"/);
+});
+
+test("managed integrations choose an app before opening Pipedream Connect", () => {
+  assert.match(connectorsSource, /\/api\/integrations\/apps\?q=/);
+  assert.match(connectorsSource, /JSON\.stringify\(\{ app: appSlug \}\)/);
+  assert.match(connectorsSource, /startManagedIntegration\(connection\.appSlug\)/);
+  assert.doesNotMatch(connectorsSource, /startManagedIntegration\(\)/);
+  assert.match(connectorsSource, /aria-label=\$\{`\$\{managedIntegrationConnecting/);
+  assert.match(connectorsSource, /managedIntegrationSearchError/);
+  assert.match(shellCssSource, /\.kc-app-result > div[\s\S]*overflow-wrap: anywhere/);
 });

@@ -897,7 +897,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy);
+      const approval = await deps.mcp.approvalFor?.(name, args, deps.createdBy, writableScopeId ?? undefined);
+      if (approval && !deps.authorizeCommand(name, approval.approvalKey)) {
+        throw new NeedsApproval(approval.command ?? name, approval.reason, "approval", undefined, approval.approvalKey);
+      }
+      return deps.mcp.call(name, args, deps.createdBy, writableScopeId ?? undefined);
     },
 
     async backgroundStart(command: string, opts?: { ttlSeconds?: number }): Promise<BackgroundStartResult> {

@@ -15,7 +15,10 @@ export function deepLinkPath(
     if (itemId) throw new Error("the contexts view is addressed by scope, not by item id");
     return `${b}/contexts?scope=${encodeURIComponent(contextScope)}`;
   }
-  if (view !== "chats") return `${b}/${encodeURIComponent(view)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
+  if (view !== "chats") {
+    const route = view === "keychain" ? "integrations" : view;
+    return `${b}/${encodeURIComponent(route)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
+  }
   if (itemId) throw new Error("the chats view is addressed by session, not by item id");
   return `${b}/${sessionId ? `?session=${encodeURIComponent(sessionId)}` : ""}`;
 }
@@ -45,7 +48,7 @@ export function parseDeepLink(
     projectItem = projectKind ? decodeSegment(segments[2] ?? "") : decodeSegment(segments[1] ?? "");
   }
   const requestedView = params.get("view") ?? (pathView === "projects" ? "contexts" : pathView);
-  const view = requestedView === "connectors" ? "keychain" : requestedView;
+  const view = requestedView === "connectors" || requestedView === "integrations" ? "keychain" : requestedView;
   return {
     view,
     session: params.get("session"),

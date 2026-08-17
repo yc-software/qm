@@ -3688,6 +3688,99 @@ a.chat-row-open {
   background: color-mix(in srgb, #d99a21 14%, var(--background));
   color: #946000;
 }
+.kc-state.success {
+  background: var(--kc-green-soft);
+  color: var(--kc-green);
+}
+.kc-integration-policy {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 0 40px;
+}
+.kc-app-picker {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+.kc-app-picker .kc-section-head {
+  margin: 0;
+}
+.kc-app-search {
+  display: flex;
+  gap: 8px;
+}
+.kc-app-search input {
+  flex: 1;
+  min-width: 0;
+}
+.kc-app-results {
+  display: grid;
+  gap: 8px;
+}
+.kc-app-result {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+}
+.kc-app-result > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kc-app-result strong {
+  font-size: 13px;
+}
+.kc-app-result span,
+.kc-app-result-empty {
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.kc-app-result-error {
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--destructive, #c00) 28%, var(--border));
+  border-radius: 10px;
+  color: var(--destructive, #a00);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.kc-app-result-empty {
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  text-align: center;
+}
+.kc-integration-policy label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.kc-integration-policy .kc-integration-access {
+  min-width: 210px;
+}
+.kc-integration-policy .kc-integration-access select {
+  height: 32px;
+  font: inherit;
+  font-size: 12px;
+}
+.kc-policy-note {
+  align-self: center;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+}
 .kc-resource-description {
   max-width: 700px;
   margin: 5px 0 0 40px;
@@ -3950,6 +4043,21 @@ a.chat-row-open {
     flex-wrap: wrap;
   }
   .kc-empty .btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .kc-app-search {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .kc-app-search .btn {
+    justify-content: center;
+  }
+  .kc-app-result {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .kc-app-result .btn {
+    grid-column: 1 / -1;
     width: 100%;
     justify-content: center;
   }

@@ -55,17 +55,26 @@ export interface KeychainMutation {
   epoch: number;
 }
 
+export interface KeychainNavigation {
+  token: symbol;
+  epoch: number;
+  signal: AbortSignal;
+}
+
 export class KeychainOperations {
   private latestLoad = 0;
   private epoch = 0;
   private mutation: symbol | null = null;
   private dropEpoch: number | null = null;
+  private navigation: { token: symbol; controller: AbortController } | null = null;
 
   reset(): void {
+    this.navigation?.controller.abort();
     this.latestLoad++;
     this.epoch++;
     this.mutation = null;
     this.dropEpoch = null;
+    this.navigation = null;
   }
 
   beginLoad(): number {
@@ -107,11 +116,38 @@ export class KeychainOperations {
     if (this.isCurrentEpoch(epoch) && this.dropEpoch === epoch) this.dropEpoch = null;
   }
 
+  beginNavigation(): KeychainNavigation | null {
+    if (this.navigation) return null;
+    const token = Symbol();
+    const controller = new AbortController();
+    this.navigation = { token, controller };
+    return { token, epoch: this.epoch, signal: controller.signal };
+  }
+
+  isCurrentNavigation(operation: KeychainNavigation): boolean {
+    return this.isCurrentEpoch(operation.epoch) && this.navigation?.token === operation.token;
+  }
+
+  finishNavigation(operation: KeychainNavigation): boolean {
+    if (!this.isCurrentNavigation(operation)) return false;
+    this.navigation = null;
+    return true;
+  }
+
+  cancelNavigation(): void {
+    this.navigation?.controller.abort();
+    this.navigation = null;
+  }
+
   get dropInFlight(): boolean {
     return this.dropEpoch !== null;
   }
 
   get mutationInFlight(): boolean {
     return this.mutation !== null;
+  }
+
+  get navigationInFlight(): boolean {
+    return this.navigation !== null;
   }
 }

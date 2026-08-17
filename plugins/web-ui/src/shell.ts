@@ -64,7 +64,13 @@ import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch, SEARCH_HOTKEY_LABEL } from "./search";
 import { hideTooltip, showTooltip } from "./tooltip";
-import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
+import {
+  clearConnectorNotice,
+  leaveKeychainView,
+  noteConnectorResult,
+  renderConnectors,
+  resetKeychainState,
+} from "./connectors";
 import { renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderSkills } from "./skills";
@@ -531,7 +537,7 @@ export function renderSidebarTop(): void {
           html`
             ${navRow("contexts", ICON.contexts, "Projects")} ${navRow("chats", ICON.chats, "Chats")}
             ${navRow("files", ICON.files, "Files")} ${navRow("crons", ICON.crons, "Crons")}
-            ${navRow("keychain", ICON.keychain, "Keychain")} ${navRow("deploys", ICON.deploys, "Apps")}
+            ${navRow("keychain", ICON.keychain, "Integrations")} ${navRow("deploys", ICON.deploys, "Apps")}
             ${navRow("memory", ICON.memory, "Memory")} ${navRow("skills", ICON.skills, "Skills")}
             ${
               can("admin")
@@ -596,6 +602,7 @@ export function switchView(v: View): void {
     refreshActiveView(v);
     return;
   }
+  if (appState.currentView === "keychain") leaveKeychainView();
   appState.currentView = v;
   appState.viewRenderSeq++;
   sessionsState.openMenuId = null;

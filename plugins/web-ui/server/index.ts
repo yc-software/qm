@@ -1380,6 +1380,81 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/integrations/status",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/integrations/status?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/integrations/apps",
+    handle: async (c) => {
+      const { res, user } = c;
+      const query = new URL(c.req.url ?? "", "http://localhost").searchParams.get("q") ?? "";
+      return relayCore(
+        res,
+        "GET",
+        `/v1/integrations/apps?principalId=${encodeURIComponent(user)}&q=${encodeURIComponent(query)}`,
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/integrations/connect",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const body = await readJson<{ app?: unknown }>(req, res, false);
+      if (!body) return;
+      if (typeof body.app !== "string" || !body.app.trim()) {
+        return json(res, 400, { error: "bad_request", message: "app is required" });
+      }
+      return relayCore(
+        res,
+        "POST",
+        "/v1/integrations/connect",
+        JSON.stringify({ principalId: user, app: body.app.trim() }),
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/integrations/accounts",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/integrations/accounts?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/integrations/accounts/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const body = await readJson<Record<string, unknown>>(req, res, false);
+      if (!body) return;
+      return relayCore(
+        res,
+        "PUT",
+        `/v1/integrations/accounts/${encodeURIComponent(c.params.id!)}`,
+        JSON.stringify({ ...body, principalId: user }),
+      );
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/integrations/accounts/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(
+        res,
+        "DELETE",
+        `/v1/integrations/accounts/${encodeURIComponent(c.params.id!)}`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
     method: "POST",
     path: "/api/connectors/:provider/start",
     handle: async (c) => {

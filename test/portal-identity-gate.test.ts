@@ -96,6 +96,29 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
+  it("integration routes bind principalId to the portal actor", async () => {
+    const alice = await token("U1");
+    for (const path of ["/v1/integrations/apps", "/v1/integrations/accounts"]) {
+      assert.equal((await fetch(`${base}${path}?principalId=U1`)).status, 401);
+      assert.equal(
+        (
+          await fetch(`${base}${path}?principalId=U2`, {
+            headers: { "x-portal-identity": alice },
+          })
+        ).status,
+        403,
+      );
+      assert.equal(
+        (
+          await fetch(`${base}${path}?principalId=U1`, {
+            headers: { "x-portal-identity": alice },
+          })
+        ).status,
+        501,
+      );
+    }
+  });
+
   it("memory restore binds its body principalId to the portal actor", async () => {
     assert.equal(
       (await post("/v1/memory/restore", { principalId: "U2", revision: "r1", expectedRevision: "r0" })).status,

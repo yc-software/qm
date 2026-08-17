@@ -13,7 +13,7 @@ test("chats view with no session yields the bare root", () => {
 test("non-chat views are path-addressed regardless of any session", () => {
   assert.equal(deepLinkPath("", "crons", null), "/crons");
   assert.equal(deepLinkPath("", "files", "abc"), "/files");
-  assert.equal(deepLinkPath("", "keychain", null), "/keychain");
+  assert.equal(deepLinkPath("", "keychain", null), "/integrations");
 });
 
 test("the contexts view carries its open scope", () => {
@@ -69,6 +69,10 @@ test("parseDeepLink still honors legacy ?view= links", () => {
 test("legacy connectors links resolve to the keychain view", () => {
   assert.deepEqual(parseDeepLink("", "/connectors", ""), { view: "keychain", session: null, item: null });
   assert.deepEqual(parseDeepLink("", "/", "?view=connectors"), { view: "keychain", session: null, item: null });
+});
+
+test("integrations links resolve to the keychain-backed integrations view", () => {
+  assert.deepEqual(parseDeepLink("", "/integrations", ""), { view: "keychain", session: null, item: null });
 });
 
 test("a cron is addressed by /crons/<id>", () => {

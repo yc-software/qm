@@ -47,6 +47,14 @@ the authenticated admin connector URL returned by `qm outputs`. Secrets are
 encrypted in durable storage and are never committed to a deployment directory.
 The agent advertises only connectors whose admin configuration is enabled.
 
+Pipedream Connect can provide the user-facing Integrations catalog for business apps.
+Set `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_PROJECT_ID`, and optionally
+`PIPEDREAM_ENVIRONMENT` in the core service environment, then provision
+`PIPEDREAM_CLIENT_SECRET` through `qm secrets`. Users connect their own accounts from
+the web UI without exposing provider credentials to QM or its agents. Accounts start
+personal and read-only, workspace sharing is explicit, and every external operation
+requires human approval.
+
 `deploy/auth/fly.toml` declares an `[http_service]` like every other surface, but the
 CLI always deploys it `--flycast --no-public-ips`; on AWS the ALB assertions refuse to
 attach it to a load balancer. Never `fly launch` that file by hand — a broker with a

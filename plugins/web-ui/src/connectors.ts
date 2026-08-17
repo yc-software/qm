@@ -1,8 +1,8 @@
 import { html, render, type TemplateResult } from "lit";
 import { Activity, KeyRound, Link, LockKeyhole, Plug, Plus, RefreshCw, ShieldCheck } from "lucide";
-import { api } from "./core-bridge";
+import { api, ApiError } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./ui";
+import { fieldSelect, icon } from "./ui";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
@@ -14,6 +14,22 @@ interface ConnectorProvider {
   refreshError?: string;
   available?: boolean;
   hosts?: Array<{ host?: string } | string>;
+}
+
+interface ManagedIntegration {
+  accountId: string;
+  appSlug: string;
+  appName: string;
+  accountName: string;
+  healthy: boolean;
+  scopes: string[];
+  access: "read" | "read-write";
+}
+
+interface ManagedIntegrationApp {
+  nameSlug: string;
+  name: string;
+  description?: string;
 }
 
 const CONNECTOR_LABELS: Record<string, { name: string; hosts: string; desc?: string }> = {
@@ -128,6 +144,16 @@ interface KeychainUsage {
 }
 
 let connectorProviders: Record<string, ConnectorProvider> = {};
+let managedIntegrations: ManagedIntegration[] = [];
+let managedIntegrationsConfigured = false;
+let managedIntegrationApps: ManagedIntegrationApp[] = [];
+let managedIntegrationPickerOpen = false;
+let managedIntegrationSearch = "";
+let managedIntegrationSearchLoading = false;
+let managedIntegrationSearchError = "";
+let managedIntegrationConnecting = "";
+let managedIntegrationSearchSequence = 0;
+let managedIntegrationPickerOpener: HTMLElement | null = null;
 let keychainCredentials: KeychainCredential[] = [];
 let keychainConnectorCredentials: KeychainConnectorCredential[] = [];
 let keychainGrants: KeychainGrant[] = [];
@@ -144,6 +170,16 @@ const keychainOperations = new KeychainOperations();
 export function resetKeychainState(): void {
   keychainOperations.reset();
   connectorProviders = {};
+  managedIntegrations = [];
+  managedIntegrationsConfigured = false;
+  managedIntegrationApps = [];
+  managedIntegrationPickerOpen = false;
+  managedIntegrationSearch = "";
+  managedIntegrationSearchLoading = false;
+  managedIntegrationSearchError = "";
+  managedIntegrationConnecting = "";
+  managedIntegrationSearchSequence++;
+  managedIntegrationPickerOpener = null;
   keychainCredentials = [];
   keychainConnectorCredentials = [];
   keychainGrants = [];
@@ -155,6 +191,16 @@ export function resetKeychainState(): void {
   secureDropUrl = null;
   confirmation = null;
   confirmationOpener = null;
+}
+
+export function leaveKeychainView(): void {
+  keychainOperations.cancelNavigation();
+  managedIntegrationConnecting = "";
+  managedIntegrationPickerOpen = false;
+  managedIntegrationSearchLoading = false;
+  managedIntegrationSearchError = "";
+  managedIntegrationSearchSequence++;
+  managedIntegrationPickerOpener = null;
 }
 
 function fmtDate(ms?: number): string {
@@ -373,6 +419,69 @@ function addCredentialCard(): TemplateResult {
   </section>`;
 }
 
+function managedIntegrationPicker(): TemplateResult {
+  return html`<section class="kc-app-picker" aria-labelledby="kc-app-picker-title">
+    <div class="kc-section-head">
+      <div>
+        <h2 id="kc-app-picker-title">Connect a business app</h2>
+        <p>Search Pipedream's catalog, then sign in directly with the selected provider.</p>
+      </div>
+      <button class="kc-text-action" type="button" @click=${closeManagedIntegrationPicker}>Cancel</button>
+    </div>
+    <form
+      class="kc-app-search"
+      @submit=${(event: SubmitEvent) => {
+        event.preventDefault();
+        void searchManagedIntegrationApps(managedIntegrationSearch);
+      }}
+    >
+      <input
+        class="skill-desc-input"
+        type="search"
+        data-focus-key="integration-app-search"
+        aria-label="Search business apps"
+        placeholder="Search GoHighLevel, HubSpot, Salesforce…"
+        autocomplete="off"
+        .value=${managedIntegrationSearch}
+        @input=${(event: Event) => {
+          managedIntegrationSearch = (event.target as HTMLInputElement).value;
+        }}
+      />
+      <button class="btn" type="submit" ?disabled=${managedIntegrationSearchLoading}>
+        ${managedIntegrationSearchLoading ? "Searching…" : "Search"}
+      </button>
+    </form>
+    <div class="kc-app-results" aria-live="polite">${managedIntegrationResults()}</div>
+  </section>`;
+}
+
+function managedIntegrationResults(): TemplateResult | TemplateResult[] {
+  if (managedIntegrationSearchLoading) return html`<div class="kc-app-result-empty">Loading apps…</div>`;
+  if (managedIntegrationSearchError)
+    return html`<div class="kc-app-result-error">${managedIntegrationSearchError}</div>`;
+  if (!managedIntegrationApps.length)
+    return html`<div class="kc-app-result-empty">No apps found. Try a different name.</div>`;
+  return managedIntegrationApps.map(
+    (app) =>
+      html`<div class="kc-app-result">
+        <span class="connector-logo">${icon(Plug, 18)}</span>
+        <div>
+          <strong>${app.name}</strong>
+          <span>${app.description || app.nameSlug}</span>
+        </div>
+        <button
+          class="btn primary"
+          type="button"
+          aria-label=${`${managedIntegrationConnecting === app.nameSlug ? "Opening" : "Connect"} ${app.name}`}
+          ?disabled=${Boolean(managedIntegrationConnecting)}
+          @click=${() => void startManagedIntegration(app.nameSlug)}
+        >
+          ${managedIntegrationConnecting === app.nameSlug ? "Opening…" : "Connect"}
+        </button>
+      </div>`,
+  );
+}
+
 function confirmationCard(): TemplateResult {
   const pending = confirmation!;
   return html`<div
@@ -493,8 +602,98 @@ function drawConnectors(loading = false): void {
             : ""
         }
         <div class="kc-resource-actions">
-          ${available ? html`<button class="btn" type="button" @click=${() => void startConnector(id)}>${connected || needsReconnect ? "Reconnect" : "Connect account"}</button>` : ""}
+          ${
+            available
+              ? html`<button
+                  class="btn"
+                  type="button"
+                  ?disabled=${keychainOperations.navigationInFlight}
+                  @click=${() => void startConnector(id)}
+                >
+                  ${connected || needsReconnect ? "Reconnect" : "Connect account"}
+                </button>`
+              : ""
+          }
           ${connected || needsReconnect ? html`<button class="kc-text-action danger" type="button" data-confirm-key=${`disconnect:${id}`} ?disabled=${keychainOperations.mutationInFlight} @click=${() => void revokeConnector(id)}>Disconnect</button>` : ""}
+        </div>
+      </article>
+    `;
+  });
+  const managedCards = managedIntegrations.map((connection) => {
+    const currentScope = scopedSession.active?.scopeId;
+    const sharedHere = currentScope ? connection.scopes.includes(currentScope) : false;
+    return html`
+      <article class="kc-resource kc-account">
+        <div class="kc-resource-main">
+          <span class="connector-logo">${icon(Plug, 18)}</span>
+          <div class="kc-resource-copy">
+            <div class="kc-resource-title-row">
+              <h3>${connection.appName}</h3>
+              ${
+                connection.healthy
+                  ? html`<span class="kc-state success">Ready</span>`
+                  : html`<span class="kc-state warning">Reconnect needed</span>`
+              }
+            </div>
+            <div class="kc-resource-meta">${connection.accountName}</div>
+          </div>
+        </div>
+        <p class="kc-resource-description">
+          Available to agents only within the workspaces you authorize. Changes in external systems always require
+          approval.
+        </p>
+        <div class="kc-integration-policy">
+          <label>
+            <span>Agent access</span>
+            ${fieldSelect({
+              value: connection.access,
+              ariaLabel: "Agent access",
+              disabled: keychainOperations.mutationInFlight,
+              className: "kc-integration-access",
+              onChange: (value) =>
+                void updateManagedIntegration(connection, {
+                  access: value as "read" | "read-write",
+                }),
+              options: [
+                html`<option value="read">Read only</option>`,
+                html`<option value="read-write">Read and write with approval</option>`,
+              ],
+            })}
+          </label>
+          ${
+            currentScope
+              ? html`<button
+                  class="btn"
+                  type="button"
+                  ?disabled=${keychainOperations.mutationInFlight}
+                  @click=${() => void toggleManagedIntegrationScope(connection, currentScope)}
+                >
+                  ${sharedHere ? "Remove from this workspace" : "Allow in this workspace"}
+                </button>`
+              : html`<span class="kc-policy-note">Open Integrations from a project to share this account there.</span>`
+          }
+        </div>
+        <div class="kc-resource-actions">
+          ${
+            !connection.healthy
+              ? html`<button
+                  class="btn"
+                  type="button"
+                  ?disabled=${keychainOperations.navigationInFlight}
+                  @click=${() => void startManagedIntegration(connection.appSlug)}
+                >
+                  Reconnect
+                </button>`
+              : ""
+          }
+          <button
+            class="kc-text-action danger"
+            type="button"
+            ?disabled=${keychainOperations.mutationInFlight}
+            @click=${() => void revokeManagedIntegration(connection)}
+          >
+            Disconnect
+          </button>
         </div>
       </article>
     `;
@@ -508,8 +707,8 @@ function drawConnectors(loading = false): void {
       <div class="kc-page-content" ?inert=${Boolean(confirmation)}>
         <header class="kc-hero">
           <div class="kc-hero-copy">
-            <h1>Keychain</h1>
-            <p>Accounts and credentials your agent may use on your behalf.</p>
+            <h1>Integrations</h1>
+            <p>Connect business apps, API credentials, and control exactly where agents may use them.</p>
             <div class="kc-trust-note">
               ${icon(ShieldCheck, 14)}<span>Secrets stay encrypted and every use or shared grant is audited.</span>
             </div>
@@ -518,8 +717,8 @@ function drawConnectors(loading = false): void {
             <button
               class="pane-refresh"
               type="button"
-              aria-label="Refresh keychain"
-              title="Refresh keychain"
+              aria-label="Refresh integrations"
+              title="Refresh integrations"
               @click=${() => {
                 connectorNotice = "";
                 void renderConnectors();
@@ -527,36 +726,94 @@ function drawConnectors(loading = false): void {
             >
               ${icon(RefreshCw, 17)}
             </button>
-            <button
-              class="btn primary"
-              type="button"
-              @click=${() => {
-                addingCredential = { service: "", envKey: "", purpose: "" };
-                secureDropUrl = null;
-                drawConnectors();
-              }}
-            >
-              ${icon(Plus, 16)} Add credential
-            </button>
+            ${
+              managedIntegrationsConfigured
+                ? html`<button
+                    class="btn primary"
+                    type="button"
+                    data-integration-add
+                    ?disabled=${keychainOperations.navigationInFlight}
+                    @click=${() => void openManagedIntegrationPicker()}
+                  >
+                    ${icon(Plus, 16)} Add integration
+                  </button>`
+                : html`<button
+                    class="btn primary"
+                    type="button"
+                    @click=${() => {
+                      addingCredential = { service: "", envKey: "", purpose: "" };
+                      secureDropUrl = null;
+                      drawConnectors();
+                    }}
+                  >
+                    ${icon(Plus, 16)} Add credential
+                  </button>`
+            }
           </div>
         </header>
-        <div class="kc-summary" aria-label="Keychain summary">
-          <div><span>${loading ? "—" : summary.connected}</span><small>Connected accounts</small></div>
+        <div class="kc-summary" aria-label="Integrations summary">
+          <div>
+            <span>${loading ? "—" : summary.connected + managedIntegrations.length}</span
+            ><small>Connected accounts</small>
+          </div>
           <div><span>${loading ? "—" : keychainCredentials.length}</span><small>Stored credentials</small></div>
           <div><span>${loading ? "—" : summary.activeGrants}</span><small>Active grants</small></div>
           <div class=${summary.attention ? "needs-attention" : ""}>
             <span>${loading ? "—" : summary.attention}</span><small>Need attention</small>
           </div>
         </div>
-        ${connectorNotice || loading ? html`<div class="kc-notice" role="status">${loading ? "Loading your keychain…" : connectorNotice}</div>` : ""}
-        ${addingCredential ? addCredentialCard() : ""}
+        ${connectorNotice || loading ? html`<div class="kc-notice" role="status">${loading ? "Loading integrations…" : connectorNotice}</div>` : ""}
+        ${managedIntegrationPickerOpen ? managedIntegrationPicker() : ""} ${addingCredential ? addCredentialCard() : ""}
+        <section class="kc-section" aria-labelledby="kc-managed-title">
+          <div class="kc-section-head">
+            <div class="kc-section-title">
+              <h2 id="kc-managed-title">Business apps</h2>
+              <span>${managedIntegrations.length}</span>
+            </div>
+            <p>CRM, content, finance, and thousands of other apps through Pipedream Connect.</p>
+          </div>
+          <div class="kc-resource-list">
+            ${
+              managedCards.length
+                ? managedCards
+                : html`<div class="kc-empty">
+                    ${icon(Plug, 20)}
+                    <div>
+                      <strong
+                        >${managedIntegrationsConfigured ? "No business apps connected" : "Managed integrations are not configured"}</strong
+                      >
+                      <span
+                        >${
+                          managedIntegrationsConfigured
+                            ? "Connect an app without sharing its credentials with the agent."
+                            : "Your operator can enable Pipedream Connect for this installation."
+                        }</span
+                      >
+                    </div>
+                    ${
+                      managedIntegrationsConfigured
+                        ? html`<button
+                            class="btn"
+                            type="button"
+                            data-integration-add
+                            ?disabled=${keychainOperations.navigationInFlight}
+                            @click=${() => void openManagedIntegrationPicker()}
+                          >
+                            Add integration
+                          </button>`
+                        : ""
+                    }
+                  </div>`
+            }
+          </div>
+        </section>
         <section class="kc-section" aria-labelledby="kc-accounts-title">
           <div class="kc-section-head">
             <div class="kc-section-title">
-              <h2 id="kc-accounts-title">Linked accounts</h2>
+              <h2 id="kc-accounts-title">Native accounts</h2>
               <span>${entries.length}</span>
             </div>
-            <p>Provider APIs the agent can use as you.</p>
+            <p>QM's built-in OAuth connectors.</p>
           </div>
           <div class="kc-resource-list">
             ${
@@ -618,7 +875,7 @@ export async function renderConnectors(): Promise<void> {
   const seq = appState.viewRenderSeq;
   const load = keychainOperations.beginLoad();
   drawConnectors(true);
-  const [conn, keys] = await Promise.allSettled([
+  const [conn, keys, managedStatus, managedAccounts] = await Promise.allSettled([
     api<{ providers?: Record<string, ConnectorProvider> }>("/api/connectors"),
     api<{
       credentials?: KeychainCredential[];
@@ -628,6 +885,8 @@ export async function renderConnectors(): Promise<void> {
       usage?: KeychainUsage[];
       scopeNames?: Record<string, string>;
     }>("/api/keychain/overview"),
+    api<{ configured?: boolean }>("/api/integrations/status"),
+    api<{ accounts?: ManagedIntegration[] }>("/api/integrations/accounts"),
   ]);
   if (seq !== appState.viewRenderSeq || !keychainOperations.isCurrentLoad(load) || appState.currentView !== "keychain")
     return;
@@ -654,7 +913,19 @@ export async function renderConnectors(): Promise<void> {
     keychainAsks = [];
     keychainUsage = [];
     keychainScopeNames = {};
-    notices.push(errMessage(keys.reason, "Failed to load stored keys."));
+    notices.push(
+      keys.reason instanceof ApiError && keys.reason.status === 404
+        ? "Secure credential storage is not enabled on this deployment."
+        : errMessage(keys.reason, "Failed to load stored keys."),
+    );
+  }
+  managedIntegrationsConfigured = managedStatus.status === "fulfilled" && managedStatus.value.configured === true;
+  if (managedAccounts.status === "fulfilled") {
+    managedIntegrations = managedAccounts.value.accounts ?? [];
+  } else {
+    managedIntegrations = [];
+    if (managedIntegrationsConfigured)
+      notices.push(errMessage(managedAccounts.reason, "Failed to load managed integrations."));
   }
   if (notices.length) connectorNotice = notices.join(" ");
   drawConnectors(false);
@@ -771,23 +1042,162 @@ async function createDrop(): Promise<void> {
 }
 
 async function startConnector(provider: string): Promise<void> {
-  const stateEpoch = keychainOperations.captureEpoch();
+  const operation = keychainOperations.beginNavigation();
+  if (!operation) return;
   connectorNotice = "";
+  drawConnectors();
   try {
     const r = await api<{ authorizeUrl?: string }>(`/api/connectors/${encodeURIComponent(provider)}/start`, {
       method: "POST",
+      signal: operation.signal,
     });
-    if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
+    if (!keychainOperations.isCurrentNavigation(operation)) return;
     if (r.authorizeUrl) {
+      keychainOperations.finishNavigation(operation);
       location.href = r.authorizeUrl;
       return;
     }
     connectorNotice = "No authorization URL was returned.";
   } catch (e) {
-    if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
-    connectorNotice = errMessage(e, "Could not start the connector.");
+    if (!keychainOperations.isCurrentNavigation(operation)) return;
+    if (!isAbortError(e)) connectorNotice = errMessage(e, "Could not start the connector.");
   }
-  drawConnectors(false);
+  if (keychainOperations.finishNavigation(operation)) drawConnectors(false);
+}
+
+async function openManagedIntegrationPicker(): Promise<void> {
+  managedIntegrationPickerOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  managedIntegrationPickerOpen = true;
+  managedIntegrationSearch = "";
+  managedIntegrationApps = [];
+  managedIntegrationSearchError = "";
+  managedIntegrationSearchLoading = true;
+  drawConnectors();
+  requestAnimationFrame(() =>
+    document.querySelector<HTMLInputElement>('[data-focus-key="integration-app-search"]')?.focus(),
+  );
+  await searchManagedIntegrationApps("");
+}
+
+function closeManagedIntegrationPicker(): void {
+  const opener = managedIntegrationPickerOpener;
+  managedIntegrationPickerOpen = false;
+  managedIntegrationPickerOpener = null;
+  managedIntegrationSearchSequence++;
+  managedIntegrationSearchLoading = false;
+  managedIntegrationSearchError = "";
+  managedIntegrationConnecting = "";
+  keychainOperations.cancelNavigation();
+  drawConnectors();
+  restoreDialogFocus(opener, () => document.querySelector<HTMLElement>("[data-integration-add]"));
+}
+
+async function searchManagedIntegrationApps(query: string): Promise<void> {
+  const sequence = ++managedIntegrationSearchSequence;
+  managedIntegrationSearchLoading = true;
+  managedIntegrationSearchError = "";
+  connectorNotice = "";
+  drawConnectors();
+  try {
+    const result = await api<{ apps?: ManagedIntegrationApp[] }>(
+      `/api/integrations/apps?q=${encodeURIComponent(query.trim())}`,
+    );
+    if (sequence !== managedIntegrationSearchSequence) return;
+    managedIntegrationApps = result.apps ?? [];
+  } catch (error) {
+    if (sequence !== managedIntegrationSearchSequence) return;
+    managedIntegrationApps = [];
+    managedIntegrationSearchError = errMessage(error, "Could not load the integration catalog.");
+  } finally {
+    if (sequence === managedIntegrationSearchSequence) {
+      managedIntegrationSearchLoading = false;
+      drawConnectors(false);
+    }
+  }
+}
+
+async function startManagedIntegration(appSlug: string): Promise<void> {
+  const operation = keychainOperations.beginNavigation();
+  if (!operation) return;
+  connectorNotice = "";
+  managedIntegrationConnecting = appSlug;
+  drawConnectors();
+  try {
+    const result = await api<{ url?: string }>("/api/integrations/connect", {
+      method: "POST",
+      body: JSON.stringify({ app: appSlug }),
+      signal: operation.signal,
+    });
+    if (!keychainOperations.isCurrentNavigation(operation)) return;
+    if (!result.url) throw new Error("No connection URL was returned.");
+    keychainOperations.finishNavigation(operation);
+    location.href = result.url;
+    return;
+  } catch (error) {
+    if (!keychainOperations.isCurrentNavigation(operation)) return;
+    if (!isAbortError(error)) connectorNotice = errMessage(error, "Could not start the integration connection.");
+  }
+  if (keychainOperations.finishNavigation(operation)) {
+    managedIntegrationConnecting = "";
+    drawConnectors(false);
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return !!error && typeof error === "object" && "name" in error && error.name === "AbortError";
+}
+
+async function updateManagedIntegration(
+  connection: ManagedIntegration,
+  patch: { access?: "read" | "read-write"; scopes?: string[] },
+): Promise<void> {
+  const operation = beginKeychainMutation();
+  if (!operation) return;
+  try {
+    await api(`/api/integrations/accounts/${encodeURIComponent(connection.accountId)}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    });
+    connectorNotice = `${connection.appName} access updated.`;
+  } catch (error) {
+    connectorNotice = errMessage(error, `Could not update ${connection.appName}.`);
+  } finally {
+    keychainOperations.finishMutation(operation);
+    await renderConnectors();
+  }
+}
+
+async function toggleManagedIntegrationScope(connection: ManagedIntegration, scopeId: string): Promise<void> {
+  const scopes = connection.scopes.includes(scopeId)
+    ? connection.scopes.filter((scope) => scope !== scopeId)
+    : [...connection.scopes, scopeId];
+  return updateManagedIntegration(connection, { scopes });
+}
+
+async function revokeManagedIntegration(connection: ManagedIntegration): Promise<void> {
+  confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  confirmation = {
+    title: `Disconnect ${connection.appName}?`,
+    body: `This removes ${connection.accountName} from Pipedream and immediately stops every agent and automation using it.`,
+    action: "Disconnect account",
+    run: async () => {
+      const operation = beginKeychainMutation();
+      if (!operation) return;
+      confirmation = null;
+      confirmationOpener = null;
+      drawConnectors();
+      try {
+        await api(`/api/integrations/accounts/${encodeURIComponent(connection.accountId)}`, { method: "DELETE" });
+        connectorNotice = `${connection.appName} disconnected.`;
+      } catch (error) {
+        connectorNotice = errMessage(error, `Could not disconnect ${connection.appName}.`);
+      } finally {
+        keychainOperations.finishMutation(operation);
+        await renderConnectors();
+      }
+    },
+  };
+  drawConnectors();
 }
 
 async function revokeConnector(provider: string): Promise<void> {

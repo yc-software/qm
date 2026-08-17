@@ -86,6 +86,14 @@ export interface Config {
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
+  pipedream?: {
+    clientId: string;
+    clientSecret: string;
+    projectId: string;
+    environment: "development" | "production";
+    apiUrl?: string;
+    mcpUrl?: string;
+  };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -588,11 +596,43 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
+function pipedreamCompletenessEnvStrict(env: NodeJS.ProcessEnv): void {
+  const values = [env.PIPEDREAM_CLIENT_ID, env.PIPEDREAM_CLIENT_SECRET, env.PIPEDREAM_PROJECT_ID].map((value) =>
+    value?.trim(),
+  );
+  if (values.some(Boolean) && !values.every(Boolean)) {
+    throw new Error("PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET, and PIPEDREAM_PROJECT_ID must be set together");
+  }
+}
+
+function pipedreamEnvStrict(env: NodeJS.ProcessEnv): Config["pipedream"] {
+  const clientId = env.PIPEDREAM_CLIENT_ID?.trim();
+  const clientSecret = env.PIPEDREAM_CLIENT_SECRET;
+  const projectId = env.PIPEDREAM_PROJECT_ID?.trim();
+  if (!clientId || !clientSecret?.trim() || !projectId) return undefined;
+  if (!/^proj_[a-zA-Z0-9]+$/.test(projectId)) {
+    throw new Error("PIPEDREAM_PROJECT_ID must start with proj_ and contain only letters or digits");
+  }
+  if (env.PIPEDREAM_ENVIRONMENT && !["development", "production"].includes(env.PIPEDREAM_ENVIRONMENT)) {
+    throw new Error('PIPEDREAM_ENVIRONMENT must be "development" or "production"');
+  }
+  return {
+    clientId,
+    clientSecret,
+    projectId,
+    environment: env.PIPEDREAM_ENVIRONMENT === "production" ? "production" : "development",
+    ...(env.PIPEDREAM_API_URL ? { apiUrl: env.PIPEDREAM_API_URL } : {}),
+    ...(env.PIPEDREAM_MCP_URL ? { mcpUrl: env.PIPEDREAM_MCP_URL } : {}),
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  pipedreamCompletenessEnvStrict(env);
   const missingSecrets = validateCoreSecretEnv(env);
   if (missingSecrets.length) {
     throw new Error(`missing or insecure required core secrets: ${missingSecrets.join(", ")}`);
   }
+  const pipedream = pipedreamEnvStrict(env);
   const modelProvider = modelProviderEnvStrict(env);
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
     if (env[key] === "sqlite") {
@@ -823,6 +863,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
+    ...(pipedream ? { pipedream } : {}),
     secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),
     secretsPrefix: env.SECRETS_PREFIX ?? "",
     ...(publicApiUrl ? { apiBaseUrl: publicApiUrl } : {}),
