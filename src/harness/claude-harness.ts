@@ -29,6 +29,7 @@ import type { ScopeId, SessionEntry } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { compactTranscript, deterministicCompactSummary } from "./context-compaction.ts";
+import { claudeProviderEnv } from "./claude-environment.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
 import {
   buildDetectionPrompt,
@@ -103,30 +104,8 @@ type BridgedTool = {
 
 const CHILD_TOOL_NAMES = new Set(["execute", "read", "write", "publish", "memory", "history", "background"]);
 const CLAUDE_CHILD_AGENT_TYPES = new Set(["research", "code", "consult"]);
-const CLAUDE_ENV_PASSTHROUGH = [
-  "PATH",
-  "TMPDIR",
-  "LANG",
-  "LC_ALL",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "NODE_EXTRA_CA_CERTS",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "ALL_PROXY",
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-] as const;
-
 export function claudeChildEnv(source: NodeJS.ProcessEnv, jail: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { HOME: jail, CLAUDE_CONFIG_DIR: join(jail, ".claude") };
-  for (const name of CLAUDE_ENV_PASSTHROUGH) {
-    if (source[name] !== undefined) env[name] = source[name];
-  }
-  return env;
+  return { HOME: jail, CLAUDE_CONFIG_DIR: join(jail, ".claude"), ...claudeProviderEnv(source) };
 }
 
 export function claudeProcessIdentity(uid = process.getuid?.()): { uid: number; gid: number } | undefined {

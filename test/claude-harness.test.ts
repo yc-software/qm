@@ -85,6 +85,8 @@ test("Claude child environment excludes core credentials and user homes", () => 
         CORE_SIGNING_SECRET: "signing-secret",
         DATABASE_URL: "postgres://secret",
         OPENAI_API_KEY: "openai-secret",
+        AWS_ACCESS_KEY_ID: "unrelated-aws-credential",
+        AWS_SECRET_ACCESS_KEY: "unrelated-aws-secret",
         ANTHROPIC_API_KEY: "anthropic-provider-key",
       },
       "/tmp/claude-jail",
@@ -96,6 +98,41 @@ test("Claude child environment excludes core credentials and user homes", () => 
       ANTHROPIC_API_KEY: "anthropic-provider-key",
     },
   );
+});
+
+test("Claude child environment preserves Bedrock routing and AWS credential-chain settings", () => {
+  const source = {
+    CLAUDE_CODE_USE_BEDROCK: "1",
+    AWS_REGION: "us-west-2",
+    AWS_DEFAULT_REGION: "us-east-1",
+    AWS_ACCESS_KEY_ID: "access",
+    AWS_SECRET_ACCESS_KEY: "secret",
+    AWS_SESSION_TOKEN: "session",
+    AWS_PROFILE: "bedrock",
+    AWS_SHARED_CREDENTIALS_FILE: "/run/aws/credentials",
+    AWS_CONFIG_FILE: "/run/aws/config",
+    AWS_WEB_IDENTITY_TOKEN_FILE: "/run/aws/token",
+    AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/bedrock",
+    AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/v2/credentials/abc",
+    AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://169.254.170.2/credentials",
+    AWS_CONTAINER_AUTHORIZATION_TOKEN: "container-token",
+    AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE: "/run/aws/container-token",
+    AWS_EC2_METADATA_SERVICE_ENDPOINT: "http://169.254.169.254",
+    AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE: "IPv4",
+    AWS_BEARER_TOKEN_BEDROCK: "bedrock-token",
+    ANTHROPIC_MODEL: "us.anthropic.claude-sonnet",
+    ANTHROPIC_SMALL_FAST_MODEL: "us.anthropic.claude-haiku",
+    ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION: "us-west-2",
+    ANTHROPIC_BEDROCK_BASE_URL: "https://bedrock-runtime.example.com",
+    ANTHROPIC_BEDROCK_SERVICE_TIER: "priority",
+  } as NodeJS.ProcessEnv;
+
+  const env = claudeChildEnv(source, "/tmp/claude-jail");
+  assert.deepEqual(env, {
+    HOME: "/tmp/claude-jail",
+    CLAUDE_CONFIG_DIR: "/tmp/claude-jail/.claude",
+    ...source,
+  });
 });
 
 test("Claude drops only a root parent process to the unprivileged nobody identity", () => {

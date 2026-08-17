@@ -214,26 +214,63 @@ async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): P
     warn(`${name} is not available locally — skipping the live ${provider} check`);
     return;
   }
-  await modelProviderCheck(provider, key);
+  await modelProviderCheck(provider, key, config.env.core ?? {});
   step(`base model provider ${provider}: ${name} accepted`);
 }
 
 const MODEL_PROVIDER_PROBES: Readonly<
-  Record<ModelProvider, { url: string; headers: (key: string) => Record<string, string> }>
+  Record<ModelProvider, { url: string; path: string; headers: (key: string) => Record<string, string> }>
 > = {
   anthropic: {
     url: "https://api.anthropic.com/v1/models?limit=1",
+    path: "models?limit=1",
     headers: (key) => ({ "x-api-key": key, "anthropic-version": "2023-06-01" }),
   },
-  openai: { url: "https://api.openai.com/v1/models", headers: (key) => ({ authorization: `Bearer ${key}` }) },
-  openrouter: { url: "https://openrouter.ai/api/v1/key", headers: (key) => ({ authorization: `Bearer ${key}` }) },
+  openai: {
+    url: "https://api.openai.com/v1/models",
+    path: "models",
+    headers: (key) => ({ authorization: `Bearer ${key}` }),
+  },
+  openrouter: {
+    url: "https://openrouter.ai/api/v1/key",
+    path: "key",
+    headers: (key) => ({ authorization: `Bearer ${key}` }),
+  },
 };
 
-async function modelProviderCheck(provider: ModelProvider, apiKey: string): Promise<void> {
+const MODEL_PROVIDER_BASE_URLS: Readonly<Record<ModelProvider, string>> = {
+  anthropic: "ANTHROPIC_BASE_URL",
+  openai: "OPENAI_BASE_URL",
+  openrouter: "OPENROUTER_BASE_URL",
+};
+
+export function modelProviderProbeUrl(provider: ModelProvider, env: Record<string, string>): string {
+  const raw = env[MODEL_PROVIDER_BASE_URLS[provider]];
+  if (!raw?.trim()) return MODEL_PROVIDER_PROBES[provider].url;
+
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  let base: URL;
+  try {
+    base = new URL(trimmed);
+  } catch {
+    throw new CliError(`${MODEL_PROVIDER_BASE_URLS[provider]} is not a valid URL`);
+  }
+  if (base.protocol !== "http:" && base.protocol !== "https:")
+    throw new CliError(`${MODEL_PROVIDER_BASE_URLS[provider]} must be an http(s) URL`);
+  if (base.username || base.password)
+    throw new CliError(`${MODEL_PROVIDER_BASE_URLS[provider]} must not contain credentials`);
+  if (base.search) throw new CliError(`${MODEL_PROVIDER_BASE_URLS[provider]} must not contain a query string`);
+  if (base.hash) throw new CliError(`${MODEL_PROVIDER_BASE_URLS[provider]} must not contain a fragment`);
+
+  return new URL(MODEL_PROVIDER_PROBES[provider].path, `${trimmed}/`).toString();
+}
+
+async function modelProviderCheck(provider: ModelProvider, apiKey: string, env: Record<string, string>): Promise<void> {
   const probe = MODEL_PROVIDER_PROBES[provider];
+  const url = modelProviderProbeUrl(provider, env);
   let res: Response;
   try {
-    res = await fetch(probe.url, { headers: probe.headers(apiKey), signal: AbortSignal.timeout(10_000) });
+    res = await fetch(url, { headers: probe.headers(apiKey), signal: AbortSignal.timeout(10_000) });
   } catch (e) {
     throw new CliError(
       `could not reach the ${provider} API: ${errMessage(e)} — check network access (and any proxy) and retry`,

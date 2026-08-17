@@ -114,6 +114,18 @@ operator's own cloud account; initialization does not generate or enable deploym
 and this repository has no production deployment workflow. See
 [`deployment.md`](./deployment.md) for the details.
 
+### Alternative model backends
+
+The Codex harness can use a Responses-compatible endpoint by setting
+`OPENAI_BASE_URL` alongside `OPENAI_API_KEY`. The URL must be HTTP(S) and cannot
+contain credentials, a query, or a fragment; qm writes the matching provider config
+inside Codex's isolated home.
+
+The Claude harness can use Amazon Bedrock by setting
+`CLAUDE_CODE_USE_BEDROCK=1`, `AWS_REGION`, and the standard AWS credential-chain
+variables. `ANTHROPIC_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL` can override the
+Bedrock model ids. AWS credentials are passed to Claude only when Bedrock is enabled.
+
 ## Contributing
 
 We take contributions as _human-written_ text, not code — see

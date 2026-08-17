@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { providerBaseUrlsFromEnv, type ProviderBaseUrls } from "./model/provider-endpoints.ts";
+import { claudeProviderEnv } from "./harness/claude-environment.ts";
 import { join, resolve } from "node:path";
 import {
   parseMemoryCaptureMode,
@@ -694,24 +695,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "CODEX_HOME",
     ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
   ) as NodeJS.ProcessEnv;
-  const claudeProcessEnv = Object.fromEntries(
-    [
-      "PATH",
-      "TMPDIR",
-      "LANG",
-      "LC_ALL",
-      "SSL_CERT_FILE",
-      "SSL_CERT_DIR",
-      "NODE_EXTRA_CA_CERTS",
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "NO_PROXY",
-      "ALL_PROXY",
-      "ANTHROPIC_API_KEY",
-      "ANTHROPIC_AUTH_TOKEN",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-    ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
-  ) as NodeJS.ProcessEnv;
+  const claudeProcessEnv = claudeProviderEnv(env);
   if (providerBaseUrls.openai) codexProcessEnv.OPENAI_BASE_URL = providerBaseUrls.openai;
   if (providerBaseUrls.anthropic) claudeProcessEnv.ANTHROPIC_BASE_URL = providerBaseUrls.anthropic;
   const turnWallClockMs =

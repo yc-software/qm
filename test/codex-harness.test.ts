@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
@@ -287,6 +287,30 @@ test("Codex child environment excludes core credentials and user homes", () => {
     OPENAI_API_KEY: "openai-needed-by-provider",
     CODEX_ACCESS_TOKEN: "codex-access-token",
   });
+});
+
+test("Codex materializes an OpenAI-compatible provider in its isolated home", (t) => {
+  const jail = mkdtempSync(join(tmpdir(), "qm-codex-provider-test-"));
+  t.after(() => rmSync(jail, { recursive: true, force: true }));
+
+  const home = prepareCodexHome(
+    { OPENAI_API_KEY: "sk-test", OPENAI_BASE_URL: "https://foundry.example.com/openai/v1" },
+    jail,
+  );
+  const configPath = join(home, "config.toml");
+  assert.equal(
+    readFileSync(configPath, "utf8"),
+    `model_provider = "qm-openai-compatible"
+
+[model_providers.qm-openai-compatible]
+name = "OpenAI-compatible"
+base_url = "https://foundry.example.com/openai/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+`,
+  );
+  assert.equal(statSync(configPath).mode & 0o777, 0o600);
 });
 
 test("Codex materializes API-key auth into its isolated home, and never an ambient login", (t) => {
@@ -614,16 +638,21 @@ const realCodexBinary = (() => {
 })();
 
 test(
-  "the installed Codex app-server accepts the exact thread/start this adapter sends",
+  "the installed Codex app-server accepts the adapter's custom-provider config and thread/start",
   { skip: realCodexBinary && existsSync(realCodexBinary) ? false : "@openai/codex is not resolvable" },
   async (t) => {
     const jail = mkdtempSync(join(tmpdir(), "qm-codex-real-"));
-    prepareCodexHome({ CODEX_HOME: join(jail, "empty-source") }, jail);
+    const providerEnv = {
+      PATH: process.env.PATH,
+      OPENAI_API_KEY: "sk-live-test",
+      OPENAI_BASE_URL: "http://127.0.0.1:9/openai/v1",
+    };
+    prepareCodexHome(providerEnv, jail);
     const requests: string[] = [];
     const server = new CodexAppServer({
       binaryPath: realCodexBinary!,
       cwd: jail,
-      env: codexChildEnv({ PATH: process.env.PATH }, jail),
+      env: codexChildEnv(providerEnv, jail),
       onNotification: () => {},
       onRequest: async (method) => {
         requests.push(method);

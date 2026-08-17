@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { parseProviderBaseUrl } from "../model/provider-endpoints.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
@@ -205,6 +206,24 @@ export function prepareCodexHome(source: NodeJS.ProcessEnv, jail: string): strin
     writeFileSync(
       join(target, "auth.json"),
       JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: source.OPENAI_API_KEY }),
+      { mode: 0o600 },
+    );
+  }
+  if (source.OPENAI_BASE_URL) {
+    const baseUrl = parseProviderBaseUrl("OPENAI_BASE_URL", source.OPENAI_BASE_URL);
+    writeFileSync(
+      join(target, "config.toml"),
+      [
+        'model_provider = "qm-openai-compatible"',
+        "",
+        "[model_providers.qm-openai-compatible]",
+        'name = "OpenAI-compatible"',
+        `base_url = ${JSON.stringify(baseUrl)}`,
+        'env_key = "OPENAI_API_KEY"',
+        'wire_api = "responses"',
+        "supports_websockets = false",
+        "",
+      ].join("\n"),
       { mode: 0o600 },
     );
   }

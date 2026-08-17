@@ -69,6 +69,28 @@ test("loadConfig parses provider base URLs and feeds the child harness envs", ()
   assert.equal(config.codexProcessEnv.OPENAI_BASE_URL, "https://o.example.com/v1");
 });
 
+test("loadConfig feeds Bedrock routing and AWS credential-chain settings to Claude", () => {
+  const config = loadConfig({
+    ...BASE_ENV,
+    CLAUDE_CODE_USE_BEDROCK: "1",
+    AWS_REGION: "us-west-2",
+    AWS_ACCESS_KEY_ID: "access",
+    AWS_SECRET_ACCESS_KEY: "secret",
+    AWS_SESSION_TOKEN: "session",
+    ANTHROPIC_MODEL: "us.anthropic.claude-sonnet",
+    ANTHROPIC_SMALL_FAST_MODEL: "us.anthropic.claude-haiku",
+  });
+  assert.deepEqual(config.claudeProcessEnv, {
+    CLAUDE_CODE_USE_BEDROCK: "1",
+    AWS_REGION: "us-west-2",
+    AWS_ACCESS_KEY_ID: "access",
+    AWS_SECRET_ACCESS_KEY: "secret",
+    AWS_SESSION_TOKEN: "session",
+    ANTHROPIC_MODEL: "us.anthropic.claude-sonnet",
+    ANTHROPIC_SMALL_FAST_MODEL: "us.anthropic.claude-haiku",
+  });
+});
+
 test("loadConfig rejects an invalid provider base URL", () => {
   assert.throws(() => loadConfig({ ...BASE_ENV, OPENAI_BASE_URL: "nope" } as NodeJS.ProcessEnv));
 });

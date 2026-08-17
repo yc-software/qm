@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   doctorCommon,
   localDoctorSecrets,
+  modelProviderProbeUrl,
   requiredSlackScopes,
   slackManifestBotScopes,
 } from "../src/backends/doctor.ts";
@@ -24,6 +25,25 @@ const config: QmConfig = {
   imageOverrides: {},
   sandbox: { app: "acme-sandboxes" },
 };
+
+test("doctor probes validated provider endpoint overrides", () => {
+  assert.equal(
+    modelProviderProbeUrl("openai", { OPENAI_BASE_URL: " https://foundry.example.com/openai/v1/ " }),
+    "https://foundry.example.com/openai/v1/models",
+  );
+  assert.equal(
+    modelProviderProbeUrl("anthropic", { ANTHROPIC_BASE_URL: "https://gateway.example.com/v1" }),
+    "https://gateway.example.com/v1/models?limit=1",
+  );
+  assert.throws(
+    () => modelProviderProbeUrl("openai", { OPENAI_BASE_URL: "https://user:pw@foundry.example.com/v1" }),
+    /must not contain credentials/,
+  );
+  assert.throws(
+    () => modelProviderProbeUrl("openai", { OPENAI_BASE_URL: "https://foundry.example.com/v1?api-version=x" }),
+    /must not contain a query string/,
+  );
+});
 
 test("Docker doctor rejects missing and placeholder required secrets before external probes", async () => {
   const prior = process.env.ANTHROPIC_API_KEY;
