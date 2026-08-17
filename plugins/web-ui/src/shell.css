@@ -2375,15 +2375,16 @@ a.chat-row-open {
   overscroll-behavior: contain;
 }
 .composer-approval {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 12px;
   min-height: 48px;
   padding: 4px 4px 8px;
 }
 .composer-approval-copy {
   display: grid;
+  width: 100%;
   gap: 5px;
   min-width: 0;
 }
@@ -2397,6 +2398,7 @@ a.chat-row-open {
   max-width: 100%;
 }
 .composer-approval .approval-actions {
+  width: 100%;
   justify-content: flex-end;
 }
 .composer-toolbar {
@@ -4402,9 +4404,6 @@ a.chat-row-open {
   .message-bubble {
     max-width: 88%;
   }
-  .composer-approval {
-    grid-template-columns: 1fr;
-  }
   .composer-approval .approval-actions {
     justify-content: flex-start;
   }
@@ -4469,6 +4468,7 @@ a.chat-row-open {
   }
   .composer-approval .approval-btn {
     width: 100%;
+    min-height: 44px;
   }
   .composer-toolbar {
     flex-wrap: wrap;
