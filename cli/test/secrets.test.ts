@@ -192,6 +192,42 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
   );
 });
 
+test("a Fly deployment relying on the implicit sprites default is required to configure SPRITES_TOKEN (#423)", () => {
+  const implicitBackend = makeConfig({
+    target: "fly",
+    sandbox: {
+      app: "acme-sb",
+      image: "registry.fly.io/acme-sb@sha256:4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+    },
+  });
+  assert.ok(
+    secretByName(implicitBackend, "SPRITES_TOKEN").required,
+    "qm check must require SPRITES_TOKEN for a Fly deployment that boots with the implicit sprites default",
+  );
+
+  const explicitBackend = makeConfig({
+    target: "fly",
+    sandbox: {
+      app: "acme-sb",
+      backend: "sprites",
+      image: "registry.fly.io/acme-sb@sha256:5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    },
+  });
+  assert.ok(secretByName(explicitBackend, "SPRITES_TOKEN").required, "an explicit sandbox.backend keeps requiring it");
+
+  const noSandboxApp = makeConfig({ target: "fly" });
+  assert.ok(
+    !computedSecrets(noSandboxApp).some((secret) => secret.name === "SPRITES_TOKEN"),
+    "a Fly target with no sandbox.app configured has no sandbox backend to require a token for",
+  );
+
+  const awsImplicitBackend = makeConfig({ target: "aws", sandbox: { app: "acme-sb" } });
+  assert.ok(
+    !computedSecrets(awsImplicitBackend).some((secret) => secret.name === "SPRITES_TOKEN"),
+    'AWS\'s own implicit SANDBOX_BACKEND default resolves to "aws", never "sprites", so it must stay unaffected',
+  );
+});
+
 test("naming a base model provider makes that provider's key a required deployment secret", () => {
   for (const [provider, key] of [
     ["anthropic", "ANTHROPIC_API_KEY"],

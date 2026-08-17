@@ -265,6 +265,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
       "PORTAL_IDENTITY_SECRET=identity",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=f",
+      "SPRITES_TOKEN=spr",
       "PUBLIC_API_URL=https://core.example.test",
       "SLACK_BOT_TOKEN=xoxb",
       "SLACK_APP_TOKEN=xapp",
@@ -342,6 +343,7 @@ test("fly secrets push warns that staged secrets are not live when machines are 
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
+      "SPRITES_TOKEN=spr",
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -398,6 +400,7 @@ test("fly secrets push stays quiet about staging when no machines are running", 
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
+      "SPRITES_TOKEN=spr",
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -450,6 +453,7 @@ test("fly secrets push removes the disabled Fly app publisher token", async () =
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
+      "SPRITES_TOKEN=spr",
     ].join("\n"),
   );
   const fake = fakeFly(

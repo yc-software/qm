@@ -24,7 +24,7 @@ if (args[0] === "apps" && args[1] === "create") {
 } else if (args[0] === "secrets" && args[1] === "set") {
   console.log("staged");
 } else if (args[0] === "secrets" && args[1] === "list") {
-  console.log("ADMIN_GRANTS\\nANTHROPIC_API_KEY\\nAWS_ACCESS_KEY_ID\\nAWS_ENDPOINT_URL_S3\\nAWS_SECRET_ACCESS_KEY\\nCAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nPUBLIC_API_URL\\n" + (process.env.FAKE_FLY_FRESH_PG ? "" : "DATABASE_URL\\n") + "SLACK_BOT_TOKEN\\nSLACK_APP_TOKEN");
+  console.log("ADMIN_GRANTS\\nANTHROPIC_API_KEY\\nAWS_ACCESS_KEY_ID\\nAWS_ENDPOINT_URL_S3\\nAWS_SECRET_ACCESS_KEY\\nCAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nSPRITES_TOKEN\\nFLY_API_TOKEN\\nPUBLIC_API_URL\\n" + (process.env.FAKE_FLY_FRESH_PG ? "" : "DATABASE_URL\\n") + "SLACK_BOT_TOKEN\\nSLACK_APP_TOKEN");
 } else if (args[0] === "mpg" && args[1] === "list") {
   console.log(process.env.FAKE_FLY_FRESH_PG ? "" : "pg-1 test-pg");
 } else if (args[0] === "mpg" && args[1] === "create") {
