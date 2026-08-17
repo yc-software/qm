@@ -63,7 +63,7 @@ test("a pane is an element in this document — never a second copy of the app",
     "a pane loads its transcript once, and never after it closes",
   );
   assert.match(load, /if \(this\.disposed\) return;/, "and drops the continuation if the pane closed mid-load");
-  assert.match(split, /onDidVisibilityChange\(\(e\) => \{\s*\n\s*if \(e\.isVisible\) void this\.load\(\);/);
+  assert.match(split, /onDidVisibilityChange\(\(e\) => \{\s*\n\s*if \(!e\.isVisible\) return;/);
 });
 
 test("a conversation dropped on a pane's tab strip joins that pane — and only there", () => {

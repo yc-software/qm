@@ -879,7 +879,13 @@ class PaneContent implements IContentRenderer {
     this.syncZones();
     p.api.onDidDimensionsChange(() => this.syncDensity());
     p.api.onDidVisibilityChange((e) => {
-      if (e.isVisible) void this.load();
+      if (!e.isVisible) return;
+      if (!this.loaded) {
+        void this.load();
+        return;
+      }
+      this.syncDensity();
+      this.conversation.drawActiveChat(undefined, { forceScroll: true });
     });
     if (p.api.isVisible) void this.load();
   }
