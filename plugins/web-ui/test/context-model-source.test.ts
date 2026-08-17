@@ -9,7 +9,7 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 test("the scope's model panel writes through the same endpoint the composer's default does", () => {
   assert.match(panel, /updateRuntimeConfig\(\s*scope,/);
   assert.match(panel, /\{ inherit: true \}/);
-  assert.match(panel, /\{ harnessId: value\.slice\(0, sep\), modelId: value\.slice\(sep \+ 1\) \}/);
+  assert.match(panel, /harnessId,\n\s+modelId: value\.slice\(sep \+ 1\)/);
   assert.doesNotMatch(panel, /applyRuntimeOptions/);
 });
 
@@ -39,4 +39,31 @@ test("model panel styles use the shell theme contract", () => {
   assert.match(block, /color: var\(--muted-foreground\)/);
   assert.match(block, /color: var\(--destructive/);
   assert.doesNotMatch(block, /#[0-9a-f]{6}(?![^)]*\))/i);
+});
+
+test("the model dropdown marks the pinned option selected so the first paint is honest", () => {
+  assert.match(panel, /\?selected=\$\{selected === INHERIT\}/);
+  assert.match(panel, /\?selected=\$\{o\.value === selected\}/);
+  assert.match(panel, /option value=\$\{selected\} selected/);
+});
+
+test("an in-flight pick wins the saving re-render — no snap-back while the save runs", () => {
+  assert.match(panel, /pending: null as string \| null/);
+  assert.match(panel, /contextModelState\.pending = value/);
+  assert.match(panel, /const selected = contextModelState\.pending \?\? selectedValue\(config\)/);
+  // pending is cleared with saving, in the same guarded finally
+  assert.match(panel, /contextModelState\.saving = false;\n\s+contextModelState\.pending = null;/);
+});
+
+test("a pinned model offers a default effort level on the panel", () => {
+  assert.match(panel, /harnessSupportsEffort\(pinnedHarness\)/);
+  assert.match(panel, /ariaLabel: "Default effort level for this project"/);
+  assert.match(panel, /focusKey: "context-effort"/);
+  // effort choices are filtered to what the pinned harness accepts
+  assert.match(panel, /if \(value === "ultracode"\) return harnessId === "pi"/);
+  assert.match(panel, /if \(value === "max"\) return harnessId !== "codex"/);
+  // switching models carries a still-valid effort, drops an invalid one
+  assert.match(panel, /effortLevelsFor\(nextHarness\)\.some\(\(o\) => o\.value === effort\) \? effort : undefined/);
+  // the effort styles exist
+  assert.ok(css.includes(".context-model-effort {"));
 });

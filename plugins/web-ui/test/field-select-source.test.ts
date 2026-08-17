@@ -41,3 +41,11 @@ test("no page keeps its own select chrome now that one rule owns it", () => {
   assert.doesNotMatch(css, /\.list-select select \{/);
   assert.doesNotMatch(css, /\.deploy-sort select \{/);
 });
+
+test("the dropdown holds the caller's value against re-renders (live) and stale DOM state", () => {
+  // .value on a <select> commits before its <option> children exist on first render,
+  // and lit's default dirty-check skips re-asserting it when the DOM has drifted —
+  // so the caller's value must go through live(), and options mark their own selected.
+  assert.match(ui, /import \{ live \} from "lit\/directives\/live\.js"/);
+  assert.match(ui, /\.value=\$\{props\.value === undefined \? nothing : live\(props\.value\)\}/);
+});

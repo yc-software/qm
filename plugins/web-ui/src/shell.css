@@ -6346,6 +6346,16 @@ a.chat-row-open {
   align-self: flex-start;
   min-width: min(260px, 100%);
 }
+.context-model-effort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+}
+.context-model-effort-label {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
 .context-model-hint {
   margin: 0;
   color: var(--muted-foreground);
