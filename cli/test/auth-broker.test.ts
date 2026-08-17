@@ -133,6 +133,20 @@ test("docker and AWS wire the broker with parity", () => {
   assert.equal(serviceEnvironment(aws, "auth").PORT, "8080");
 });
 
+test("docker + SANDBOX_BACKEND=local wires DOCKER_HOST into core so the local sandbox can reach the host daemon", () => {
+  const local = configWith(configText({
+    env: '{ "core": { "HARNESS": "pi", "SANDBOX_BACKEND": "local" }, "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" } }',
+  }));
+  const sprites = configWith(configText());
+  assert.equal(
+    dockerServiceEnv(local, "core").DOCKER_HOST,
+    "unix:///var/run/docker.sock",
+    "core needs the host docker socket to spawn sandbox containers",
+  );
+  assert.equal(dockerServiceEnv(sprites, "core").DOCKER_HOST, undefined, "sprites runs sandboxes on Fly, not the host");
+  assert.equal(dockerServiceEnv(local, "portal").DOCKER_HOST, undefined, "only core talks to the daemon");
+});
+
 test("the broker's generated secrets reach both sides under the right names", () => {
   const config = brokerConfig();
   const secrets = computedSecrets(config);

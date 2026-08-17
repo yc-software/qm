@@ -31,7 +31,7 @@ import {
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
-import { dockerBasePort, sandboxCoreEnv, securityScreenEnv, type QmConfig } from "../config.ts";
+import { dockerBasePort, localSandboxActive, sandboxCoreEnv, securityScreenEnv, type QmConfig } from "../config.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../secrets.ts";
 import { readDeploymentState, withDeploymentLock, writeDeploymentState, type DeploymentState } from "../state.ts";
@@ -65,6 +65,14 @@ interface DockerCtx {
 const dockerPrefix = (config: QmConfig): string => `qm-${safe(config.orgId)}`;
 const cname = (ctx: DockerCtx, name: string): string => `${ctx.prefix}-${name}`;
 const pgVolume = (ctx: DockerCtx): string => `${ctx.prefix}-pgdata`;
+
+function hostDockerSocketGid(): string | undefined {
+  try {
+    return capture("stat", ["-c", "%g", "/var/run/docker.sock"]).trim();
+  } catch {
+    return undefined;
+  }
+}
 
 function requireDocker(): void {
   if (!which("docker")) die("docker not found on PATH (the docker target needs a running Docker daemon).");
@@ -290,6 +298,9 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
     CORE_API_URL: "http://core:8080",
     ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
   };
+  if (service === "core" && localSandboxActive(config)) {
+    out.DOCKER_HOST = "unix:///var/run/docker.sock";
+  }
   if (service === "portal") {
     if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
     if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://admin:8080";
@@ -416,6 +427,11 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     args.push("-v", `${ctx.prefix}-coredata:/data`);
     for (const m of layerMounts(ctx)) args.push("-v", m);
     for (const m of skillMounts(ctx)) args.push("-v", m);
+    if (localSandboxActive(ctx.config)) {
+      args.push("-v", "/var/run/docker.sock:/var/run/docker.sock");
+      const gid = hostDockerSocketGid();
+      if (gid) args.push("--group-add", gid);
+    }
   }
   if (def.docker.hostPortOffset !== undefined) {
     args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
