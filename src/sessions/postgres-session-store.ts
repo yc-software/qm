@@ -39,6 +39,10 @@ import {
   userMessagePreview,
 } from "./session-store.ts";
 
+export const SESSION_ENTRIES_SEARCH_INDEX_SQL = `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_search_fts
+  ON session_entries USING GIN (to_tsvector('simple', COALESCE(entry_search_text(payload), '')))
+  WHERE type IN ('user', 'assistant', 'text')`;
+
 export function rowToSession(r: Record<string, unknown>): Session {
   return {
     id: r.id as string,
@@ -269,9 +273,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                       ELSE NULL END;
         EXCEPTION WHEN others THEN RETURN NULL;
         END $entry_search_text$`,
-    `CREATE INDEX IF NOT EXISTS session_entries_search_fts
-        ON session_entries USING GIN (to_tsvector('simple', COALESCE(entry_search_text(payload), '')))
-        WHERE type IN ('user', 'assistant', 'text')`,
+    SESSION_ENTRIES_SEARCH_INDEX_SQL,
     `DELETE FROM session_entries WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
     `DELETE FROM participants WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
     `DELETE FROM session_leases WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,

@@ -89,21 +89,23 @@ export async function checkSlackCredentials(
 }
 
 export async function stagingApiHeaders(
-  orgId: string,
   principalId: string,
   sourceSecret: string,
   portalIdentitySecret: string,
+  method: string,
   path: string,
+  body = "",
+  base: Record<string, string> = {},
   nowMs = Date.now(),
 ): Promise<Record<string, string>> {
   const portalIdentity = await mintSignedPayload({ p: principalId, exp: nowMs + 60_000 }, portalIdentitySecret);
   return signedRequestHeaders(
     sourceSecret,
-    "GET",
+    method,
     path,
-    "",
+    body,
     {
-      "x-admin-actor": `${principalId}@${orgId}`,
+      ...base,
       [PORTAL_IDENTITY_HEADER]: portalIdentity,
     },
     Math.floor(nowMs / 1000),
@@ -125,9 +127,15 @@ export async function checkLiveSession(
   const root = baseUrl.replace(/\/+$/, "");
   const request = async (method: "GET" | "POST", path: string, body?: unknown, admin = false): Promise<unknown> => {
     const raw = body === undefined ? "" : JSON.stringify(body);
-    const headers = admin
-      ? await stagingApiHeaders(orgId, principalId, sourceSecret, portalIdentitySecret, path)
-      : signedRequestHeaders(sourceSecret, method, path, raw);
+    const headers = await stagingApiHeaders(
+      principalId,
+      sourceSecret,
+      portalIdentitySecret,
+      method,
+      path,
+      raw,
+      admin ? { "x-admin-actor": `${principalId}@${orgId}` } : {},
+    );
     const response = await fetchImpl(`${root}${path}`, {
       method,
       headers: { ...headers, ...(raw ? { "content-type": "application/json" } : {}) },
@@ -226,7 +234,9 @@ async function checkApi(
 ): Promise<void> {
   const path = `/v1/admin/sessions?scope=${encodeURIComponent(`org:${orgId}`)}&limit=5&_smoke=${randomUUID()}`;
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-    headers: await stagingApiHeaders(orgId, principalId, sourceSecret, portalIdentitySecret, path),
+    headers: await stagingApiHeaders(principalId, sourceSecret, portalIdentitySecret, "GET", path, "", {
+      "x-admin-actor": `${principalId}@${orgId}`,
+    }),
   });
   const body = await response.text();
   if (!response.ok) throw new Error(`staging session API returned ${response.status}: ${body.slice(0, 500)}`);

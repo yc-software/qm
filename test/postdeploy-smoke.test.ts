@@ -31,11 +31,13 @@ test("deployed API smoke uses a configured real org admin", () => {
 test("deployed API smoke proves the production portal-identity boundary", async () => {
   const now = Date.now();
   const headers = await stagingApiHeaders(
-    "acme",
     "josh@example.com",
     "source-secret",
     "portal-secret",
+    "GET",
     "/v1/admin/sessions",
+    "",
+    { "x-admin-actor": "josh@example.com@acme" },
     now,
   );
   assert.equal(headers["x-admin-actor"], "josh@example.com@acme");
@@ -85,7 +87,7 @@ test("deployed staging smoke verifies its own Slack bot and Socket Mode credenti
 });
 
 test("live session smoke proves a model turn, persistence, title, error log, and cleanup", async () => {
-  const calls: Array<{ method: string; path: string; body: string }> = [];
+  const calls: Array<{ method: string; path: string; body: string; portalIdentity: string | null }> = [];
   const config = {
     adminGrants: "josh@example.com:org_admin",
     orgId: "acme",
@@ -95,7 +97,12 @@ test("live session smoke proves a model turn, persistence, title, error log, and
   await checkLiveSession(config, "http://core.internal:8080", async (input, init) => {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
-    calls.push({ method, path: `${url.pathname}${url.search}`, body: String(init?.body ?? "") });
+    calls.push({
+      method,
+      path: `${url.pathname}${url.search}`,
+      body: String(init?.body ?? ""),
+      portalIdentity: new Headers(init?.headers).get(PORTAL_IDENTITY_HEADER),
+    });
     if (url.pathname === "/v1/turns")
       return Response.json({ status: "ok", sessionId: "sess-1", reply: "QM deployment canary passed." });
     if (url.pathname === "/v1/admin/errors") return Response.json({ errors: [] });
@@ -117,6 +124,10 @@ test("live session smoke proves a model turn, persistence, title, error log, and
   assert.equal(JSON.parse(calls[0]!.body).readOnly, true);
   assert.equal(JSON.parse(calls[0]!.body).skipMemory, true);
   assert.deepEqual(JSON.parse(calls[3]!.body), { principalId: "josh@example.com", archived: true });
+  for (const call of calls) {
+    const identity = await verifyPortalIdentity(call.portalIdentity ?? "", "portal-secret", Date.now());
+    assert.equal(identity?.p, "josh@example.com", `${call.method} ${call.path} carries the canary identity`);
+  }
 
   let archivedFailedSession = false;
   await assert.rejects(

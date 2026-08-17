@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { SESSION_ENTRIES_SEARCH_INDEX_SQL } from "../src/sessions/postgres-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -25,6 +26,10 @@ async function seed(sessions: SessionStore, threadRef: string, principal: string
   await sessions.releaseLease(lease!);
   return s.id;
 }
+
+test("Postgres builds the full-text index without blocking writes", () => {
+  assert.match(SESSION_ENTRIES_SEARCH_INDEX_SQL, /^CREATE INDEX CONCURRENTLY IF NOT EXISTS/);
+});
 
 test("memory store: searchEntries matches user and assistant text, newest first", async () => {
   const store = createMemorySessionStore();
