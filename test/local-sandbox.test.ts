@@ -267,3 +267,32 @@ test("concurrent teardown and provision for one scope serialize (no stop of a fr
   await sb.teardown(h2);
   assert.equal(fake.containers.get(h2.id)!.running, false);
 });
+
+test("host-gateway is added by default for local dev", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake);
+  const h = await sb.provision(rw(scopeId("personal", "U30")));
+  const args = fake.containers.get(h.id)!.args;
+  assert.equal(args.includes("--add-host=host.docker.internal:host-gateway"), true);
+  await sb.teardown(h);
+});
+
+test("hostGateway:false omits the host-gateway flag", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake, { hostGateway: false });
+  const h = await sb.provision(rw(scopeId("personal", "U31")));
+  const args = fake.containers.get(h.id)!.args;
+  assert.equal(args.includes("--add-host=host.docker.internal:host-gateway"), false);
+  await sb.teardown(h);
+});
+
+test("diskGb applies a per-container storage quota", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake, { diskGb: 20 });
+  const h = await sb.provision(rw(scopeId("personal", "U32")));
+  const args = fake.containers.get(h.id)!.args;
+  const i = args.indexOf("--storage-opt");
+  assert.equal(i >= 0, true);
+  assert.equal(args[i + 1], "size=20g");
+  await sb.teardown(h);
+});

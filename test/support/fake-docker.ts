@@ -6,6 +6,7 @@ export interface FakeContainer {
   running: boolean;
   labels: Record<string, string>;
   volume?: string;
+  args: string[];
 }
 
 export interface FakeDocker {
@@ -40,7 +41,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
   const fail = (stderr: string) => ({ code: 1, stdout: "", stderr });
 
   function parseRun(args: string[]): FakeContainer {
-    const c: FakeContainer = { name: "", imageId: self.imageId, running: true, labels: {} };
+    const c: FakeContainer = { name: "", imageId: self.imageId, running: true, labels: {}, args };
     for (let i = 0; i < args.length; i++) {
       const a = args[i]!;
       if (a === "--name") c.name = args[++i]!;
@@ -48,7 +49,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         const [k = "", v = ""] = args[++i]!.split("=");
         c.labels[k] = v;
       } else if (a === "-v") c.volume = args[++i]!.split(":")[0]!;
-      else if (a === "-p" || a === "--cpus" || a === "--memory") i++;
+      else if (a === "-p" || a === "--cpus" || a === "--memory" || a === "--storage-opt" || a === "--add-host") i++;
     }
     return c;
   }

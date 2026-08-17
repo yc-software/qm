@@ -43,6 +43,8 @@ export interface LocalSandboxOptions {
   dockerBin?: string;
   cpus?: number;
   memoryMb?: number;
+  diskGb?: number;
+  hostGateway?: boolean;
   defaultTimeoutSec?: number;
   homeDir?: string;
   repoRoot?: string;
@@ -255,9 +257,10 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       ...(withVolume && scope ? ["-v", `${localVolumeName(scope)}:${homeDir}`] : []),
       "-p",
       `127.0.0.1:0:${AGENT_PORT}`,
-      "--add-host=host.docker.internal:host-gateway",
+      ...(opts.hostGateway === false ? [] : ["--add-host=host.docker.internal:host-gateway"]),
       ...(opts.cpus ? ["--cpus", String(opts.cpus)] : []),
       ...(opts.memoryMb ? ["--memory", `${opts.memoryMb}m`] : []),
+      ...(opts.diskGb ? ["--storage-opt", `size=${opts.diskGb}g`] : []),
       image,
     ];
     const r = await dexec(args, 120_000);

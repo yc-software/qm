@@ -249,6 +249,8 @@ interface LocalSandboxEnv {
   dockerBin?: string;
   cpus?: number;
   memoryMb?: number;
+  diskGb?: number;
+  hostGateway?: boolean;
   defaultTimeoutSec?: number;
 }
 
@@ -261,6 +263,12 @@ function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
       : {}),
     ...(numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) !== undefined
       ? { memoryMb: numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) }
+      : {}),
+    ...(numEnvStrict("LOCAL_SANDBOX_DISK_GB", env.LOCAL_SANDBOX_DISK_GB) !== undefined
+      ? { diskGb: numEnvStrict("LOCAL_SANDBOX_DISK_GB", env.LOCAL_SANDBOX_DISK_GB) }
+      : {}),
+    ...(boolEnvStrict("LOCAL_SANDBOX_HOST_GATEWAY", env.LOCAL_SANDBOX_HOST_GATEWAY) !== undefined
+      ? { hostGateway: boolEnvStrict("LOCAL_SANDBOX_HOST_GATEWAY", env.LOCAL_SANDBOX_HOST_GATEWAY) }
       : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }

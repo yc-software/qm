@@ -412,3 +412,22 @@ test("baseModelProviders constrains the base model only when a provider is decla
     "with no declaration the shipped default stands, so upgrading never moves a deployment's model or its billing",
   );
 });
+
+test("localSandbox env: diskGb and hostGateway parse from their vars", () => {
+  const c = loadConfig({
+    LOCAL_SANDBOX_DISK_GB: "25",
+    LOCAL_SANDBOX_HOST_GATEWAY: "0",
+    LOCAL_SANDBOX_CPUS: "2",
+    LOCAL_SANDBOX_MEMORY_MB: "1024",
+  });
+  assert.equal(c.localSandbox.diskGb, 25);
+  assert.equal(c.localSandbox.hostGateway, false);
+  assert.equal(c.localSandbox.cpus, 2);
+  assert.equal(c.localSandbox.memoryMb, 1024);
+});
+
+test("localSandbox env: unset diskGb and hostGateway stay undefined", () => {
+  const c = loadConfig({});
+  assert.equal(c.localSandbox.diskGb, undefined);
+  assert.equal(c.localSandbox.hostGateway, undefined);
+});
