@@ -296,3 +296,35 @@ test("diskGb applies a per-container storage quota", async () => {
   assert.equal(args[i + 1], "size=20g");
   await sb.teardown(h);
 });
+
+test("coreContainer mode: core joins the sandbox network and the daemon is reached by name, not a host port", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const seenUrls: string[] = [];
+  const fetchImpl: typeof fetch = (input, init) => {
+    const url = typeof input === "string" ? input : (input as URL).toString();
+    seenUrls.push(url);
+    if (url.endsWith("/health"))
+      return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "" }), { status: 200 }));
+  };
+  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const h = await sb.provision(rw(scopeId("personal", "U40")));
+  const args = fake.containers.get(h.id)!.args;
+  assert.equal(args.includes("-p"), false, "no host port mapping when core reaches the sandbox by name");
+  assert.equal(args.includes("127.0.0.1"), false, "no loopback binding in container mode");
+  assert.equal(
+    [...fake.connections].some((k) => k.endsWith("|qm-test-core")),
+    true,
+    "core was connected to the sandbox network",
+  );
+  assert.ok(
+    seenUrls.some((u) => u === `http://${h.id}:8080/health`),
+    `daemon reached by container name, got: ${seenUrls.join(", ")}`,
+  );
+  await sb.teardown(h, { destroy: true });
+  assert.equal(
+    [...fake.connections].some((k) => k.endsWith("|qm-test-core")),
+    false,
+    "core was disconnected from the sandbox network on destroy",
+  );
+});

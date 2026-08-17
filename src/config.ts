@@ -251,6 +251,7 @@ interface LocalSandboxEnv {
   memoryMb?: number;
   diskGb?: number;
   hostGateway?: boolean;
+  coreContainer?: string;
   defaultTimeoutSec?: number;
 }
 
@@ -270,6 +271,7 @@ function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
     ...(boolEnvStrict("LOCAL_SANDBOX_HOST_GATEWAY", env.LOCAL_SANDBOX_HOST_GATEWAY) !== undefined
       ? { hostGateway: boolEnvStrict("LOCAL_SANDBOX_HOST_GATEWAY", env.LOCAL_SANDBOX_HOST_GATEWAY) }
       : {}),
+    ...(env.QM_CORE_CONTAINER ? { coreContainer: env.QM_CORE_CONTAINER } : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),

@@ -300,6 +300,7 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
   };
   if (service === "core" && localSandboxActive(config)) {
     out.DOCKER_HOST = "unix:///var/run/docker.sock";
+    out.QM_CORE_CONTAINER = `${dockerPrefix(config)}-core`;
   }
   if (service === "portal") {
     if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
@@ -339,6 +340,10 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     const layerSubs = existingLayerSubdirs(ctx);
     if (layerSubs.length) out.DEPLOYMENT_LAYER = "/layer";
     Object.assign(out, ctx.sandboxEnv);
+    if (localSandboxActive(config)) {
+      out.DOCKER_HOST = "unix:///var/run/docker.sock";
+      out.QM_CORE_CONTAINER = `${ctx.prefix}-core`;
+    }
   } else {
     Object.assign(out, dockerServiceEnv(config, service));
   }

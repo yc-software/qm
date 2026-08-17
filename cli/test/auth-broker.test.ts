@@ -143,8 +143,15 @@ test("docker + SANDBOX_BACKEND=local wires DOCKER_HOST into core so the local sa
     "unix:///var/run/docker.sock",
     "core needs the host docker socket to spawn sandbox containers",
   );
+  assert.equal(
+    dockerServiceEnv(local, "core").QM_CORE_CONTAINER,
+    "qm-acme-core",
+    "core must know its own container name to join each sandbox's private network",
+  );
   assert.equal(dockerServiceEnv(sprites, "core").DOCKER_HOST, undefined, "sprites runs sandboxes on Fly, not the host");
+  assert.equal(dockerServiceEnv(sprites, "core").QM_CORE_CONTAINER, undefined);
   assert.equal(dockerServiceEnv(local, "portal").DOCKER_HOST, undefined, "only core talks to the daemon");
+  assert.equal(dockerServiceEnv(local, "portal").QM_CORE_CONTAINER, undefined);
 });
 
 test("the broker's generated secrets reach both sides under the right names", () => {

@@ -45,6 +45,7 @@ export interface LocalSandboxOptions {
   memoryMb?: number;
   diskGb?: number;
   hostGateway?: boolean;
+  coreContainer?: string;
   defaultTimeoutSec?: number;
   homeDir?: string;
   repoRoot?: string;
@@ -167,9 +168,11 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<{ status: number; text: string }> {
-    const port = await resolvePort(name);
+    const base = opts.coreContainer
+      ? `http://${name}:${AGENT_PORT}${path}`
+      : `http://127.0.0.1:${await resolvePort(name)}${path}`;
     const signals = [AbortSignal.timeout(timeoutMs ?? 30_000), ...(signal ? [signal] : [])];
-    const res = await fetchImpl(`http://127.0.0.1:${port}${path}`, {
+    const res = await fetchImpl(base, {
       method: body === undefined ? "GET" : "POST",
       ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
       signal: AbortSignal.any(signals),
@@ -197,6 +200,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     portByName.delete(name);
     const r = await dexec(["start", name]);
     if (r.code !== 0) throw new Error(`docker start ${name} failed: ${r.stderr.trim()}`);
+    await connectCore(await ensureNetwork(name));
     await waitDaemon(name);
   }
 
@@ -238,6 +242,20 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     return net;
   }
 
+  async function connectCore(net: string): Promise<void> {
+    if (!opts.coreContainer) return;
+    await dexec(["network", "connect", net, opts.coreContainer]).catch(
+      swallowAs("local-sandbox: network connect", undefined),
+    );
+  }
+
+  async function disconnectCore(net: string): Promise<void> {
+    if (!opts.coreContainer) return;
+    await dexec(["network", "disconnect", net, opts.coreContainer]).catch(
+      swallowAs("local-sandbox: network disconnect", undefined),
+    );
+  }
+
   async function runContainer(name: string, scope: string | undefined, withVolume: boolean): Promise<void> {
     const net = await ensureNetwork(name);
     const args = [
@@ -255,8 +273,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       "--network",
       net,
       ...(withVolume && scope ? ["-v", `${localVolumeName(scope)}:${homeDir}`] : []),
-      "-p",
-      `127.0.0.1:0:${AGENT_PORT}`,
+      ...(opts.coreContainer ? [] : ["-p", `127.0.0.1:0:${AGENT_PORT}`]),
       ...(opts.hostGateway === false ? [] : ["--add-host=host.docker.internal:host-gateway"]),
       ...(opts.cpus ? ["--cpus", String(opts.cpus)] : []),
       ...(opts.memoryMb ? ["--memory", `${opts.memoryMb}m`] : []),
@@ -266,6 +283,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     const r = await dexec(args, 120_000);
     if (r.code !== 0) throw new Error(`docker run ${name} failed: ${r.stderr.trim()}`);
     portByName.delete(name);
+    await connectCore(net);
     await waitDaemon(name);
   }
 
@@ -459,6 +477,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
           for (const [k, name] of scratchByKey) if (name === handle.id) scratchByKey.delete(k);
           if (tdOpts?.destroy) await dexec(["rm", "-f", handle.id]);
           else await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: scratch rm", undefined));
+          await disconnectCore(localNetworkName(handle.id));
           await dexec(["network", "rm", localNetworkName(handle.id)]).catch(
             swallowAs("local-sandbox: scratch network rm", undefined),
           );
@@ -470,6 +489,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
         if (tdOpts?.destroy) {
           await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: destroy rm", undefined));
+          await disconnectCore(localNetworkName(handle.id));
           await dexec(["network", "rm", localNetworkName(handle.id)]).catch(
             swallowAs("local-sandbox: destroy network rm", undefined),
           );
