@@ -306,8 +306,8 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = loadConfig();
   if (process.argv[2] === "session") {
-    if (config.databaseUrl) await checkDatabase(config);
     await checkLiveSession(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
+    if (config.databaseUrl) await checkDatabase(config);
     console.log("database and live session smoke passed");
   } else {
     await runPostdeploySmoke(config);
