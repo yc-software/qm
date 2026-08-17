@@ -205,10 +205,14 @@ export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.
 
 const SANDBOX_PIN_PENDING = `"sandbox.app" is set but no sandbox layer image is pinned; run \`qm sandbox publish\` to build and record the digest-pinned "sandbox.image" agents boot from`;
 
+export const localSandboxActive = (config: QmConfig): boolean =>
+  config.target === "docker" && config.env.core?.SANDBOX_BACKEND === "local";
+
 export const sandboxPinPending = (config: QmConfig): boolean =>
-  config.target !== "aws" && Boolean(config.sandbox?.app && !config.sandbox.image);
+  config.target !== "aws" && !localSandboxActive(config) && Boolean(config.sandbox?.app && !config.sandbox.image);
 
 export function sandboxImagePinErrors(config: QmConfig): Array<{ clause: string; message: string }> {
+  if (localSandboxActive(config)) return [];
   const sb = config.sandbox;
   if (!sb?.app || !sb.image || isDigestPinned(sb.image)) return [];
   return [
@@ -226,7 +230,7 @@ export function sandboxCoreEnv(
   const env: Record<string, string> = {};
   const missingSecrets: string[] = [];
   const sb = config.sandbox;
-  if (!sb) return { env, missingSecrets };
+  if (!sb || localSandboxActive(config)) return { env, missingSecrets };
   if (sb.app) {
     if (!sb.image) throw new CliError(SANDBOX_PIN_PENDING, { clause: "config.v1" });
     const violation = sandboxImagePinErrors(config)[0];

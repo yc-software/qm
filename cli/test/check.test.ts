@@ -178,6 +178,51 @@ test("a bare deployment (no sandbox/, no plugins) passes", () => {
   }
 });
 
+test("docker target without sandbox.app fails the Fly agent-computer requirement", () => {
+  const d = deployment(() => {}, { sandbox: undefined });
+  try {
+    assert.throws(() => check(d), /Fly agent-computer app is required/);
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
+test("docker target with SANDBOX_BACKEND=local passes without sandbox.app", () => {
+  const d = deployment(
+    () => {},
+    { sandbox: undefined, env: { core: { SANDBOX_BACKEND: "local" } } },
+  );
+  try {
+    assert.doesNotThrow(() => check(d));
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
+test("fly target with SANDBOX_BACKEND=local still requires sandbox.app (local is docker-only)", () => {
+  const d = deployment(
+    () => {},
+    { target: "fly", sandbox: undefined, env: { core: { SANDBOX_BACKEND: "local" } } },
+  );
+  try {
+    assert.throws(() => check(d), /Fly agent-computer app is required/);
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
+test("docker target with SANDBOX_BACKEND=local passes even with a scaffolded sandbox.app", () => {
+  const d = deployment(
+    () => {},
+    { sandbox: { app: "acme-sandboxes" }, env: { core: { SANDBOX_BACKEND: "local" } } },
+  );
+  try {
+    assert.doesNotThrow(() => check(d), "a scaffolded sandbox.app must not block docker+local");
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS requires exact ECS/ECR coordinates for discovered plugins", () => {
   const plugin = { name: "linear", image: "ghcr.io/acme/linear:1" };
   const aws = {

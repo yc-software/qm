@@ -5,7 +5,7 @@ import { readEnvFile } from "../util.ts";
 import { CliError, errMessage, header, note, ok, step, warn } from "../log.ts";
 import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
-import { mockHarnessWarning, sandboxPinPending, type QmConfig } from "../config.ts";
+import { localSandboxActive, mockHarnessWarning, sandboxPinPending, type QmConfig } from "../config.ts";
 import { computedSecrets, runtimeSecretNames, type ComputedSecret } from "../secrets.ts";
 import { isVirtualService, runnableServices } from "../services.ts";
 import { serviceEnvironment } from "../backends/aws.ts";
@@ -30,8 +30,8 @@ export function runChecks(
   const configError = (message: string, clause = "config.v1"): void => void configErrors.push({ clause, message });
   const provider = hostingProvider(config.target);
   configErrors.push(...provider.validateConfig(config, plugins));
-  if (provider.requiresSandboxApp && !config.sandbox?.app?.trim()) {
-    configError("contract sandbox.app: a Fly agent-computer app is required for docker and fly targets");
+  if (provider.requiresSandboxApp && !localSandboxActive(config) && !config.sandbox?.app?.trim()) {
+    configError("contract sandbox.app: a Fly agent-computer app is required for docker and fly targets (or set env.core.SANDBOX_BACKEND=\"local\" with target docker to run agent computers on the host without a Fly app)");
   }
   for (const skill of config.skills) {
     const path = resolve(configDir, skill);

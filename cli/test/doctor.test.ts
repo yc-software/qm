@@ -490,6 +490,44 @@ test("doctor treats a missing sandbox block as info (no Fly checks), not a failu
   }
 });
 
+test("doctor reports the local Docker sandbox as configured (SANDBOX_BACKEND=local)", async () => {
+  const localConfig: QmConfig = {
+    ...config,
+    env: { core: { HARNESS: "pi", SANDBOX_BACKEND: "local" } },
+  };
+  const priorFly = process.env.FLY_BIN;
+  process.env.FLY_BIN = "/nonexistent/fly-should-never-run";
+  const log = console.log;
+  const lines: string[] = [];
+  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
+  try {
+    await doctorCommon(
+      localConfig,
+      new Map([
+        ["CAPABILITY_SECRET", "capability-value"],
+        ["CONNECTOR_SECRET_KEY", "connector-value".repeat(3)],
+        ["CORE_SIGNING_SECRET", "source-value".repeat(4)],
+        ["PORTAL_IDENTITY_SECRET", "identity-value"],
+        ["PUBLIC_API_URL", "http://host.docker.internal:8080"],
+        ["SKILL_SIGNING_SECRET", "skill-value".repeat(4)],
+      ]),
+      { requiredSecretValues: true },
+    );
+    assert.ok(
+      lines.some((line) => line.includes("local Docker sandbox: configured")),
+      `printed: ${lines.join(" | ")}`,
+    );
+    assert.ok(
+      !lines.some((line) => line.includes("sandbox: not configured")),
+      "local must not be reported as unconfigured",
+    );
+  } finally {
+    console.log = log;
+    if (priorFly === undefined) delete process.env.FLY_BIN;
+    else process.env.FLY_BIN = priorFly;
+  }
+});
+
 test("an explicitly named --env-file that does not exist is a bad-path error, not 'secrets missing'", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-doctor-envfile-"));
   try {

@@ -753,6 +753,15 @@ test("a sandbox.app with no pinned image fails closed instead of fabricating a m
   });
 });
 
+test("docker + SANDBOX_BACKEND=local ignores a scaffolded sandbox.app (no throw, no Fly env, no pin warning)", () => {
+  withConfig({ sandbox: { app: "acme-sandboxes" }, env: { core: { SANDBOX_BACKEND: "local" } } }, ({ path }) => {
+    const { config } = loadConfigAt(path);
+    assert.equal(sandboxPinPending(config), false, "no pin-pending warning for docker+local even with sandbox.app");
+    assert.deepEqual(sandboxImagePinErrors(config), []);
+    assert.deepEqual(sandboxCoreEnv(config), { env: {}, missingSecrets: [] }, "the local backend ignores the sandbox block");
+  });
+});
+
 test("a tag-pinned sandbox.image is refused: staleness compares image references", () => {
   withConfig({ sandbox: { app: "acme-sandboxes", image: "registry.fly.io/shared-sandboxes:latest" } }, ({ path }) => {
     const { config } = loadConfigAt(path);
