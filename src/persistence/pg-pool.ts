@@ -91,6 +91,22 @@ export function pgCaOptions(): { ssl?: { ca: string } } {
   return installedCaTrust;
 }
 
+/**
+ * Managed Postgres poolers/proxies can drop idle or in-flight connections
+ * (rebalancing, failover, idle reaping); the network can do the same. pg
+ * surfaces these as "Connection terminated" errors, ECONNRESET/EPIPE socket
+ * errors, or 57P01 (terminating connection due to administrator command).
+ * These indicate a dead connection rather than a bad statement, so a single
+ * retry on a fresh client from the pool is safe for the simple-query path.
+ */
+export function isConnectionDropError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: unknown }).code;
+  if (code === "57P01" || code === "ECONNRESET" || code === "EPIPE") return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === "string" && message.includes("Connection terminated");
+}
+
 export function createPgPool(connectionString: string, statements: string[]): PgPool {
   const schema = statements.map((s) => s.trim()).filter((s) => s.length > 0);
   for (const stmt of schema) assertOneStatement(stmt);
@@ -99,7 +115,7 @@ export function createPgPool(connectionString: string, statements: string[]): Pg
     if (!poolP) {
       poolP = (async () => {
         const pg = (await import("pg")).default;
-        const p = new pg.Pool({ connectionString, ...pgCaOptions() });
+        const p = new pg.Pool({ connectionString, keepAlive: true, ...pgCaOptions() });
         p.on("error", (err) => console.error("[pg] idle client error:", errMessage(err)));
         try {
           await applyDdl(p, schema);
@@ -116,7 +132,15 @@ export function createPgPool(connectionString: string, statements: string[]): Pg
     return poolP;
   }
   async function query(text: string, params: unknown[] = []): Promise<{ rows: Rows; rowCount: number }> {
-    const res = await (await pool()).query(text, params);
+    const p = await pool();
+    let res;
+    try {
+      res = await p.query(text, params);
+    } catch (e) {
+      if (!isConnectionDropError(e)) throw e;
+      console.error("[pg] connection dropped mid-query; retrying once:", errMessage(e));
+      res = await p.query(text, params);
+    }
     return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
   }
   async function q(text: string, params: unknown[] = []): Promise<Rows> {

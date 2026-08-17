@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createPgPool, assertOneStatement } from "../src/persistence/pg-pool.ts";
+import { createPgPool, assertOneStatement, isConnectionDropError } from "../src/persistence/pg-pool.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
   const pg = createPgPool("postgres://does-not-exist:0/none", ["SELECT 1"]);
@@ -70,3 +70,15 @@ test("assertOneStatement: an apostrophe in a line comment can't hide a following
 function pathToUrl(p: string): string {
   return new URL(`file://${p}`).href;
 }
+
+test("isConnectionDropError: recognizes connection-drop shapes and nothing else", () => {
+  assert.equal(isConnectionDropError(new Error("Connection terminated unexpectedly")), true);
+  assert.equal(isConnectionDropError(new Error("Connection terminated")), true);
+  assert.equal(isConnectionDropError(Object.assign(new Error("boom"), { code: "57P01" })), true);
+  assert.equal(isConnectionDropError(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })), true);
+  assert.equal(isConnectionDropError(Object.assign(new Error("write EPIPE"), { code: "EPIPE" })), true);
+  assert.equal(isConnectionDropError(Object.assign(new Error("syntax error"), { code: "42601" })), false);
+  assert.equal(isConnectionDropError(new Error("duplicate key value violates unique constraint")), false);
+  assert.equal(isConnectionDropError(null), false);
+  assert.equal(isConnectionDropError("Connection terminated"), false);
+});
