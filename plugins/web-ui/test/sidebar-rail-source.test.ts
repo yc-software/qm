@@ -9,7 +9,7 @@ test("collapsed sidebar is an in-flow rail, not a floating button", () => {
   assert.doesNotMatch(shell, /sidebar-peek-toggle/);
   assert.doesNotMatch(css, /sidebar-peek-toggle/);
   assert.match(css, /--rail-w: 50px/);
-  assert.match(css, /\.layout\.sidebar-closed \.sidebar \{\s*width: var\(--rail-w\);\s*\}/);
+  assert.match(css, /\.layout\.sidebar-closed \.sidebar \{\s*width: var\(--rail-w\);\s*padding-right: 8px;\s*\}/);
   assert.match(css, /\.sidebar \{[^}]*transition: width 0\.18s ease;/);
   assert.match(css, /body\.resizing-sidebar \.sidebar \{\s*transition: none;/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.sidebar \{\s*transition: none;/);
@@ -32,15 +32,11 @@ test("the collapsed rail keeps icon-only navigation instead of going empty", () 
   );
   assert.match(
     css,
-    /\.layout\.sidebar-closed #sidebar-top \.new-chat span,\s*\.layout\.sidebar-closed #sidebar-top \.navrow span,\s*\.layout\.sidebar-closed #sidebar-top \.nav-section-toggle,\s*\.layout\.sidebar-closed #sidebar-top \.section-label \{\s*display: none;/,
+    /\.layout\.sidebar-closed #sidebar-top \.navrow span,\s*\.layout\.sidebar-closed #sidebar-top \.section-label \{\s*display: none;/,
   );
-  assert.match(css, /\.layout\.sidebar-closed #sidebar-top \.nav-group\.collapsed \{[^}]*grid-template-rows: 1fr;/);
-  assert.match(
-    css,
-    /\.layout\.sidebar-closed #sidebar-top \.new-chat,\s*\.layout\.sidebar-closed #sidebar-top \.navrow \{\s*justify-content: center;/,
-  );
+  assert.match(css, /\.layout\.sidebar-closed #sidebar-top \.navrow \{\s*justify-content: center;/);
   // Icon-only rows need tooltips to carry their labels.
-  assert.match(shell, /class="navrow[^`]*title=\$\{label\}/);
+  assert.match(shell, /class="navrow[^`]*\$\{tip\(sidebarOpen \? "" : label\)\}/);
 });
 
 test("narrow viewports keep the rail in flow and size it for touch + safe area", () => {

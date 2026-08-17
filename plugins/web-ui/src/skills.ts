@@ -28,6 +28,7 @@ import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { SkillsRefreshSequence } from "./skills-refresh";
 import { SkillsMutationSequence } from "./skills-mutation";
+import { tip } from "./tooltip";
 
 let skillRows: SkillItem[] = [];
 let skillsNotice = "";
@@ -185,7 +186,7 @@ function skillVariant(s: SkillItem, hasScopeVariants: boolean): TemplateResult {
     <div class="skill-variant ${archived ? "archived" : ""}">
       <span class="skill-variant-icon">${icon(Box, 16)}</span>
       <div class="skill-variant-copy">
-        <div class="skill-variant-description" title=${s.description}>${s.description}</div>
+        <div class="skill-variant-description" ${tip(s.description)}>${s.description}</div>
         <div class="skill-variant-meta">
           ${skillMeta(s)}${s.assetCount ? ` · ${s.assetCount} asset${s.assetCount === 1 ? "" : "s"}` : ""}
         </div>

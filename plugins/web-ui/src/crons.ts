@@ -16,6 +16,7 @@ import {
   cronScheduleDetail,
   cronScheduleSummary,
 } from "./cron-format";
+import { tip } from "./tooltip";
 
 export interface CronView {
   id: string;
@@ -359,7 +360,7 @@ function cronPageRow(c: CronView, mine: boolean): TemplateResult {
         ${preview ? html`<span class="cron-preview">${preview}</span>` : nothing}
         <span class="list-row-meta">
           ${isPersonalScope(c) ? nothing : scopeChip(c.ownerScopeId, c.scopeName ?? null)}
-          <span class="cron-meta-line" title=${cronRunSummaryTitle(c)}>${meta}</span>
+          <span class="cron-meta-line" ${tip(cronRunSummaryTitle(c))}>${meta}</span>
         </span>
       </a>
       ${canManageCron(c, mine) ? cronRowActions(c) : nothing}
@@ -372,7 +373,7 @@ function cronRowActions(c: CronView): TemplateResult {
     <button
       class="icon-btn subtle cron-action-btn"
       type="button"
-      title="Enable"
+      ${tip("Enable")}
       aria-label="Enable cron"
       @click=${() => void setCronEnabled(c.id, true)}
     >
@@ -384,7 +385,7 @@ function cronRowActions(c: CronView): TemplateResult {
       <button
         class="icon-btn subtle cron-action-btn"
         type="button"
-        title="Unarchive"
+        ${tip("Unarchive")}
         aria-label="Unarchive cron"
         @click=${() => void archiveCron(c.id, false)}
       >
@@ -396,7 +397,7 @@ function cronRowActions(c: CronView): TemplateResult {
       <button
         class="icon-btn subtle cron-action-btn"
         type="button"
-        title="Disable"
+        ${tip("Disable")}
         aria-label="Disable cron"
         @click=${() => void setCronEnabled(c.id, false)}
       >
@@ -409,7 +410,7 @@ function cronRowActions(c: CronView): TemplateResult {
       <button
         class="icon-btn subtle cron-action-btn"
         type="button"
-        title="Edit"
+        ${tip("Edit")}
         aria-label="Edit cron"
         @click=${() => {
           openCron(c);
@@ -426,7 +427,7 @@ function cronRowActions(c: CronView): TemplateResult {
               <button
                 class="icon-btn subtle cron-action-btn"
                 type="button"
-                title="Archive"
+                ${tip("Archive")}
                 aria-label="Archive cron"
                 @click=${() => void archiveCron(c.id, true)}
               >
@@ -579,7 +580,7 @@ function cronRunHistory(c: CronView): TemplateResult {
         return html` <div class="cron-run-row">
           <span class="badge">${run.status ?? "completed"}</span>
           <span class="cron-run-time">${new Date(run.firedAt).toLocaleString()}</span>
-          <span class=${run.note ? "cron-run-detail cron-run-error" : "cron-run-detail"} title=${detail}>
+          <span class=${run.note ? "cron-run-detail cron-run-error" : "cron-run-detail"} ${tip(detail)}>
             ${detail}
           </span>
           ${

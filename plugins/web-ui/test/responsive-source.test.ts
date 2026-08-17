@@ -18,7 +18,8 @@ test("mobile shell follows the visual viewport and device safe areas", () => {
 });
 
 test("mobile sidebar is modal, dismissible, and sized for touch", () => {
-  assert.match(shell, /class="new-chat[\s\S]{0,200}closeSidebarOnNarrowView\(\);/);
+  assert.match(shell, /actionRow\(ICON\.newChat[\s\S]{0,200}startNewChatInLastScope\(\);/);
+  assert.match(sessions, /export function startNewChat\([\s\S]{0,120}closeSidebarOnNarrowView\(\);/);
   assert.match(shell, /class="sidebar-scrim"[^>]+aria-label="Close sidebar"[^>]+@click=\$\{toggleSidebar\}/);
   assert.match(shell, /main\.inert = modal/);
   assert.match(
@@ -45,7 +46,7 @@ test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(compactCss, /\.layout\.sidebar-closed \.sidebar-scrim \{\s*display: none;/);
   assert.match(
     compactCss,
-    /\.new-chat,[\s\S]*\.navrow,[\s\S]*\.nav-section-toggle,[\s\S]*\.web-only-toggle,[\s\S]*\.session-menu-option,[\s\S]*\.archived-toggle \{\s*min-height: 44px;/,
+    /\.navrow,[\s\S]*\.browse-tile,[\s\S]*\.web-only-toggle,[\s\S]*\.session-menu-option,[\s\S]*\.archived-toggle \{\s*min-height: 44px;/,
   );
   assert.match(compactCss, /\.session-menu-btn,[\s\S]*\.recent-project-new-chat \{\s*width: 44px;\s*height: 44px;/);
   assert.match(compactCss, /\.session-menu\s*\{\s*right:\s*0;\s*margin-top:\s*-22px;\s*\}/);
@@ -56,15 +57,22 @@ test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(compactCss, /\.recent-project-head \.recent-project-count \{ opacity: 0; \}/);
 });
 
-test("the sidebar's new-session action keeps the shared outline treatment", () => {
-  assert.match(shell, /class="new-chat"/);
+test("the sidebar's quick actions share the navrow treatment", () => {
+  assert.match(shell, /const actionRow = \([\s\S]{0,160}class="navrow" type="button"/);
+  assert.doesNotMatch(shell, /class="new-chat"/);
   assert.doesNotMatch(shell, /split-new-session/);
-  assert.match(
-    css,
-    /\.new-chat \{[^}]*border: 1px solid var\(--border\);[^}]*background: transparent;[^}]*color: var\(--foreground\);/,
-  );
-  assert.match(css, /\.new-chat:hover \{[^}]*background: var\(--secondary\);/);
+  assert.doesNotMatch(css, /(^|\n)\.new-chat[ ,:{]/);
   assert.doesNotMatch(css, /split-new-session/);
+});
+
+test("the quick nav is home, create, search, browse — four rows of the same kind", () => {
+  assert.match(
+    shell,
+    /<nav class="nav quick-nav"[\s\S]*?navRow\("chats", ICON\.home, "Home"\)[\s\S]*?actionRow\(ICON\.newChat[\s\S]*?actionRow\(Search, "Search"[\s\S]*?actionRow\(ICON\.browse, "Browse"[\s\S]*?<\/nav>/,
+  );
+  assert.doesNotMatch(shell, /navRow\("chats", ICON\.chats/);
+  assert.doesNotMatch(shell, /nav-section-toggle|nav-group|navWorkspaceOpen/);
+  assert.doesNotMatch(css, /\.nav-section-toggle|\.nav-group/);
 });
 
 test("a top banner keeps its critical action below the top safe area", () => {

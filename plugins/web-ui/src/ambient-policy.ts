@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
+import { tip } from "./tooltip";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export type BotMode = (typeof BOT_MODES)[number];
@@ -204,7 +205,7 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
         class="project-icon-button danger"
         type="button"
         aria-label=${`Remove ${b.name} from the ledger`}
-        title="Remove"
+        ${tip("Remove")}
         ?disabled=${ambientPolicyState.saving}
         @click=${() => {
           ambientPolicyState.bots = ambientPolicyState.bots.filter((_, j) => j !== i);

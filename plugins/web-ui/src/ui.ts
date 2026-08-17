@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { ChevronDown, createElement, type IconNode } from "lucide";
+import { Check, ChevronDown, createElement, type IconNode } from "lucide";
 
 export function brandName(): string {
   if (typeof document === "undefined") return "QM";
@@ -8,6 +8,41 @@ export function brandName(): string {
 
 export function brandMark(): TemplateResult {
   return html`<span class="brand-mark" aria-hidden="true"></span>`;
+}
+
+const SWELL_PATH =
+  "M-24 24 c4 -8 8 -8 12 0 c4 8 8 8 12 0 c4 -8 8 -8 12 0 c4 8 8 8 12 0 c4 -8 8 -8 12 0 c4 8 8 8 12 0 c4 -8 8 -8 12 0 c4 8 8 8 12 0";
+
+const SWELL_VIEWBOX = "0 0 38.4 48";
+
+export function waveLoader(
+  o: { width?: number; height?: number; viewBox?: string; label?: string; cls?: string } = {},
+): TemplateResult {
+  const width = o.width ?? 24.5;
+  return html`<svg
+    class="wl wl-swell ${o.cls ?? ""}"
+    width=${width}
+    height=${o.height ?? width * 1.25}
+    viewBox=${o.viewBox ?? SWELL_VIEWBOX}
+    fill="none"
+    role="img"
+    aria-label=${o.label ?? "Loading"}
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <g class="wl-row">
+      <path d=${SWELL_PATH} fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2.6" />
+    </g>
+  </svg>`;
+}
+
+export function workingWave(): TemplateResult {
+  return waveLoader({
+    width: 13.6,
+    height: 5.7,
+    viewBox: "0 16 38.4 16",
+    label: "Agent is working",
+    cls: "working-wave",
+  });
 }
 
 export function icon(node: IconNode, size = 18): SVGElement {
@@ -50,6 +85,51 @@ export function fieldSelect(props: {
     </select>
     ${icon(ChevronDown, 16)}
   </span>`;
+}
+
+export function selectMenu(props: {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+  ariaLabel?: string;
+  className?: string;
+  disabled?: boolean;
+}): TemplateResult {
+  const current = props.options.find((o) => o.value === props.value);
+  return html`<div
+    class=${`menu-control form-menu-control select-menu${props.className ? ` ${props.className}` : ""}`}
+    data-drop="down"
+  >
+    <button
+      class="menu-button"
+      type="button"
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label=${props.ariaLabel ?? nothing}
+      ?disabled=${props.disabled ?? false}
+      @click=${toggleFormMenu}
+    >
+      <span class="menu-label">${current?.label ?? ""}</span>${icon(ChevronDown, 14)}
+    </button>
+    <div class="menu-popover" role="menu" hidden>
+      ${props.options.map((o) => {
+        const active = o.value === props.value;
+        return html`<button
+          class="menu-option ${active ? "active" : ""}"
+          type="button"
+          role="menuitemradio"
+          aria-checked=${active ? "true" : "false"}
+          @click=${(e: Event) => {
+            e.stopPropagation();
+            closeFormMenus();
+            props.onChange(o.value);
+          }}
+        >
+          <span class="menu-option-label">${o.label}</span>${active ? icon(Check, 15) : nothing}
+        </button>`;
+      })}
+    </div>
+  </div>`;
 }
 
 export function initials(s: string): string {
@@ -125,10 +205,30 @@ export function closeFormMenus(): boolean {
     control.classList.remove("open");
     control.querySelector<HTMLButtonElement>(".menu-button")?.setAttribute("aria-expanded", "false");
     const menu = control.querySelector<HTMLElement>(".menu-popover");
-    if (menu) menu.hidden = true;
+    if (menu) {
+      menu.hidden = true;
+      menu.style.transform = "";
+      menu.classList.remove("drop-up");
+    }
     closed = true;
   });
   return closed;
+}
+
+function placeMenuPopover(menu: HTMLElement): void {
+  const margin = 8;
+  menu.style.transform = "";
+  menu.classList.remove("drop-up");
+  const rect = menu.getBoundingClientRect();
+  const overflowRight = rect.right - (window.innerWidth - margin);
+  const overflowLeft = margin - rect.left;
+  if (overflowRight > 0)
+    menu.style.transform = `translateX(${-Math.min(overflowRight, Math.max(0, rect.left - margin))}px)`;
+  else if (overflowLeft > 0)
+    menu.style.transform = `translateX(${Math.min(overflowLeft, window.innerWidth - margin - rect.right)}px)`;
+  const anchorTop = menu.parentElement?.getBoundingClientRect().top ?? rect.top;
+  if (rect.bottom > window.innerHeight - margin && anchorTop - rect.height - margin >= margin)
+    menu.classList.add("drop-up");
 }
 
 export function toggleFormMenu(e: Event): void {
@@ -141,5 +241,7 @@ export function toggleFormMenu(e: Event): void {
   const open = !wasOpen;
   control.querySelector<HTMLButtonElement>(".menu-button")?.setAttribute("aria-expanded", open ? "true" : "false");
   const menu = control.querySelector<HTMLElement>(".menu-popover");
-  if (menu) menu.hidden = !open;
+  if (!menu) return;
+  menu.hidden = !open;
+  if (open) placeMenuPopover(menu);
 }

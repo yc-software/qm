@@ -81,7 +81,7 @@ import {
   harnessSupportsEffort,
   harnessSupportsFastMode,
 } from "./model-options";
-import { browserRenderableImage, formatBytes, icon, relTime } from "./ui";
+import { browserRenderableImage, formatBytes, icon, relTime, waveLoader } from "./ui";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
@@ -100,6 +100,7 @@ import { backgroundLabel, clearWorking, conversationBackground, isAbandonedNewCh
 import { liveTurnThreadRef } from "./working-dot";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
+import { tip } from "./tooltip";
 
 installMarkdownSanitizer();
 
@@ -118,6 +119,26 @@ interface SettledRowKey {
   tpl: TemplateResult | typeof nothing;
 }
 const settledRowCache = new WeakMap<object, SettledRowKey>();
+const CHAT_CTAS = [
+  "What can I help with?",
+  "Ahoy — what are we after?",
+  "What are we charting today?",
+  "Where shall we set sail?",
+  "What's the heading, captain?",
+];
+const CTA_INDEX_KEY = "web-ui:chat-cta";
+
+function nextChatCta(): string {
+  let index = 0;
+  try {
+    const stored = Number(localStorage.getItem(CTA_INDEX_KEY));
+    index = (Number.isInteger(stored) ? stored + 1 : 0) % CHAT_CTAS.length;
+    localStorage.setItem(CTA_INDEX_KEY, String(index));
+  } catch {
+    void 0;
+  }
+  return CHAT_CTAS[index]!;
+}
 const connectedConnectors = new Set<string>();
 const redrawHooks = new Set<() => void>();
 let proactiveOpenerStarted = false;
@@ -189,6 +210,8 @@ export function createChatSurface(
     },
   });
 
+  let ctaThreadRef: string | null = null;
+  let ctaText = CHAT_CTAS[0]!;
   let workTicker: ReturnType<typeof setInterval> | null = null;
   let revealedTailLen = 0;
   let liveWorkExpanded = false;
@@ -770,7 +793,7 @@ export function createChatSurface(
     host.className = "custom-chat";
     render(
       html`<div class="custom-chat-shell">
-        <div class="chat-loading"><span class="spinner"></span></div>
+        <div class="chat-loading">${waveLoader()}</div>
       </div>`,
       host,
     );
@@ -921,6 +944,14 @@ export function createChatSurface(
     `;
   }
 
+  function chatCta(): string {
+    if (chatState.threadRef !== ctaThreadRef) {
+      ctaThreadRef = chatState.threadRef;
+      ctaText = nextChatCta();
+    }
+    return ctaText;
+  }
+
   function setTranscriptWindow(anchorSeq: number | null, earlierCount: number, hasEarlier = earlierCount > 0): void {
     chatState.transcriptAnchorSeq = hasEarlier ? anchorSeq : null;
     chatState.earlierCount = earlierCount;
@@ -1003,7 +1034,7 @@ export function createChatSurface(
     const snippet = last ? messageText(last).trim() : "";
     if (tier === "strip") {
       return html`
-        <button type="button" class="pane-strip" title="Expand this pane" @click=${() => ctx.onExpand?.()}>
+        <button type="button" class="pane-strip" ${tip("Expand this pane")} @click=${() => ctx.onExpand?.()}>
           <span class="pane-strip-text">${now ?? snippet}</span>
           ${icon(Maximize2, 13)}
         </button>
@@ -1048,10 +1079,13 @@ export function createChatSurface(
     }
     const tier = ctx.density();
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
+    const emptyChat = !messages.length && !chatState.forkSession;
     render(
       html`
         <div
-          class="custom-chat-shell ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""}"
+          class="custom-chat-shell ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""} ${
+            emptyChat && !glanceTier ? "empty-chat" : ""
+          }"
           @dragenter=${(e: DragEvent) => ctx.composer.onDragEnter(e)}
           @dragover=${(e: DragEvent) => ctx.composer.onDragOver(e)}
           @dragleave=${(e: DragEvent) => ctx.composer.onDragLeave(e)}
@@ -1069,9 +1103,9 @@ export function createChatSurface(
             glanceTier
               ? paneGlance(agent, messages, glanceTier)
               : html`<section class="chat-scroll" @scroll=${onTranscriptScroll}>
-                  <div class="message-stack ${messages.length || chatState.forkSession ? "" : "empty-stack"}">
+                  <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
                     ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing}
-                    ${messageContent}
+                    ${messageContent} ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
                     ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
                   </div>
                 </section>`
@@ -1133,7 +1167,7 @@ export function createChatSurface(
         ? s.id === chatState.sessionId
         : Boolean(chatState.threadRef) && s.threadRef === chatState.threadRef,
     );
-    const title = session?.title?.trim() || "New chat";
+    const title = session?.title?.trim() ?? "";
     const crumb = scope && !scope.startsWith("personal:") ? scopeTitle(scope, chatState.contextName) : null;
     const forkedFrom =
       chatState.forkSession && chatState.sessionId === chatState.forkSession.id
@@ -1155,7 +1189,7 @@ export function createChatSurface(
           scopeId: scope ?? "",
           sessionId: chatState.sessionId,
           threadRef: chatState.threadRef,
-          title,
+          title: title || "New chat",
           crumb,
         });
         if (scope && tool !== "memory") contextsState.selected = scope;
@@ -1174,7 +1208,8 @@ export function createChatSurface(
         <div class="topbar-actions">
           <button
             class="icon-btn subtle"
-            title="Refresh conversations"
+            aria-label="Refresh conversations"
+            ${tip("Refresh conversations")}
             @click=${() => void refreshSessions({ refreshContexts: true })}
           >
             ${icon(RefreshCw, 17)}
@@ -1291,7 +1326,7 @@ export function createChatSurface(
             ? html`<button
                 class="msg-copy"
                 type="button"
-                title="Copy"
+                ${tip("Copy")}
                 aria-label="Copy message"
                 @click=${(e: Event) => void copyMessage(text, e.currentTarget as HTMLButtonElement)}
               >
@@ -1304,7 +1339,7 @@ export function createChatSurface(
             ? html`<button
                 class="msg-copy msg-fork"
                 type="button"
-                title="Fork conversation from here"
+                ${tip("Fork conversation from here")}
                 aria-label="Fork conversation from here"
                 @click=${() => void forkFromMessage(index)}
               >
@@ -1486,7 +1521,9 @@ export function createChatSurface(
   }
 
   function typingRow(): TemplateResult {
-    return html`<div class="thinking-placeholder">${sheenLabel("Thinking", true)}</div>`;
+    return html`<div class="thinking-placeholder">
+      ${waveLoader({ width: 14.1, label: "Thinking" })}${sheenLabel("Thinking", true)}
+    </div>`;
   }
 
   function syncWorkTicker(): void {
@@ -1695,7 +1732,7 @@ export function createChatSurface(
           type="button"
           class="bg-activity-strip"
           aria-expanded=${String(bgPanel.open)}
-          title=${bgPanel.open ? "Hide background activity" : "Work continuing on the agent's computer — click to inspect"}
+          ${tip(bgPanel.open ? "Hide background activity" : "Work continuing on the agent's computer — click to inspect")}
           @click=${toggleBackgroundPanel}
         >
           ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
@@ -1732,7 +1769,7 @@ export function createChatSurface(
           type="button"
           class="bg-row-head"
           aria-expanded=${String(open)}
-          title=${open ? "Hide output" : "Show live output"}
+          ${tip(open ? "Hide output" : "Show live output")}
           @click=${() => toggleJobOutput(j.processId)}
         >
           ${icon(Terminal, 13)}
@@ -1798,7 +1835,7 @@ export function createChatSurface(
           class="live-work-line ${expandable ? "" : "static"}"
           ?disabled=${!expandable}
           aria-expanded=${expandable ? String(liveWorkExpanded) : nothing}
-          title=${title}
+          ${tip(title)}
           @click=${toggleLiveWorkExpanded}
         >
           ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
@@ -1961,7 +1998,7 @@ export function createChatSurface(
       ${
         expanded
           ? html`<code class="approval-cmd approval-cmd-full">${a.command}</code>`
-          : html`<code class="approval-summary" title=${a.command}>${summary}</code>`
+          : html`<code class="approval-summary" ${tip(a.command)}>${summary}</code>`
       }
       ${
         a.matched
@@ -2189,10 +2226,10 @@ export function createChatSurface(
       if (src) {
         const img = html`<img src=${src} alt=${a.fileName} loading="lazy" />`;
         return artifactHref
-          ? html`<a class="file-image" href=${artifactHref} target="_blank" rel="noreferrer" title=${a.fileName}
+          ? html`<a class="file-image" href=${artifactHref} target="_blank" rel="noreferrer" ${tip(a.fileName)}
               >${img}</a
             >`
-          : html`<span class="file-image" title=${a.fileName}>${img}</span>`;
+          : html`<span class="file-image" ${tip(a.fileName)}>${img}</span>`;
       }
     }
     return fileChip(a.fileName, a.size, artifactHref);
@@ -2203,7 +2240,7 @@ export function createChatSurface(
     const href = withBase(`/api/files/${encodeURIComponent(file.artifactId)}/content`);
     if (file.mimetype?.startsWith("image/")) {
       if (!browserRenderableImage(file.mimetype)) return imageChip(file.name, file.sizeBytes, href);
-      return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" title=${file.name}
+      return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" ${tip(file.name)}
         ><img src=${href} alt=${file.name} loading="lazy"
       /></a>`;
     }

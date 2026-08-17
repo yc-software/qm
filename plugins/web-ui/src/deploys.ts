@@ -36,6 +36,7 @@ import {
   type DeploymentTab,
   type DeploymentView,
 } from "./deploy-view";
+import { tip } from "./tooltip";
 
 const DEPLOY_TABS: Array<{ value: DeploymentTab; label: string }> = [
   { value: "yours", label: "Yours" },
@@ -91,7 +92,7 @@ function permissionBadge(d: DeploymentView): TemplateResult {
   const title = manage
     ? "You own this app or have permission to manage it."
     : "This app is shared with a context you can access. You can open and clone it, but not change it.";
-  return html`<span class="deploy-permission ${manage ? "manage" : "view"}" title=${title}
+  return html`<span class="deploy-permission ${manage ? "manage" : "view"}" ${tip(title)}
     >${manage ? "Can manage" : "Can view"}</span
   >`;
 }
@@ -179,7 +180,7 @@ function deploymentRow(d: DeploymentView): TemplateResult {
             ? html`<button
                 class="icon-btn subtle"
                 type="button"
-                title="Copy app URL"
+                ${tip("Copy app URL")}
                 aria-label="Copy app URL"
                 @click=${(event: Event) => void copyText(new URL(withBase(d.webUrl!), window.location.href).href, event.currentTarget as HTMLButtonElement)}
               >
@@ -437,7 +438,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                     ><button
                       class="icon-btn subtle"
                       type="button"
-                      title="Copy Git remote"
+                      ${tip("Copy Git remote")}
                       aria-label="Copy Git remote"
                       @click=${(event: Event) => void copyText(d.gitUrl!, event.currentTarget as HTMLButtonElement)}
                     >
@@ -501,7 +502,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                         </div>
                         <div>
                           <span>${new Date(version.createdAt).toLocaleString()}</span
-                          >${version.commit ? html`<code title=${version.commit}>${version.commit.slice(0, 10)}</code>` : nothing}
+                          >${version.commit ? html`<code ${tip(version.commit)}>${version.commit.slice(0, 10)}</code>` : nothing}
                         </div>
                       </div>
                     `,
@@ -550,13 +551,13 @@ function deployEditForm(d: DeploymentView, field: "displayName" | "name"): Templ
           />${slug ? html`<span>/</span>` : nothing}</span
         >
       </label>
-      <button class="icon-btn" type="submit" title="Save" aria-label="Save" ?disabled=${deploySaving}>
+      <button class="icon-btn" type="submit" aria-label="Save" ${tip("Save")} ?disabled=${deploySaving}>
         ${icon(Check, 14)}
       </button>
       <button
         class="icon-btn"
         type="button"
-        title="Cancel"
+        ${tip("Cancel")}
         aria-label="Cancel"
         ?disabled=${deploySaving}
         @click=${cancelEditDeploy}
@@ -822,7 +823,7 @@ function undoToast(toast: { deployment: DeploymentView; text: string; undo?: boo
     >${archived ? html`<button type="button" ?disabled=${deploySaving} @click=${() => void restoreDeploy(toast.deployment)}>Undo</button>` : nothing}<button
       class="icon-btn"
       type="button"
-      title="Dismiss"
+      ${tip("Dismiss")}
       aria-label="Dismiss notification"
       @click=${() => {
         deployToast = null;

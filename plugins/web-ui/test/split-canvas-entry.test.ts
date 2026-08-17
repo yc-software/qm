@@ -25,15 +25,22 @@ test("no new-chat affordance can cost the user their canvas", () => {
   assert.match(add, /return true;\n\}$/, "having split, the canvas owns the click");
   assert.doesNotMatch(add.slice(add.indexOf("splitPane(")), /return false/, "a full canvas must not fall through");
 
-  assert.match(shell, /if \(!addBlankPane\(\)\) mainConversation\(\)\.newChat\(\);/);
-  const plus = fn(sessions, "startProjectChat");
-  const claimed = plus.indexOf("addBlankPane(scopeId)");
-  assert.ok(claimed > 0, "the project + must offer the click to the canvas");
-  assert.match(plus.slice(claimed), /^addBlankPane\(scopeId\)\) return;/m, "and bail out when the canvas takes it");
+  assert.match(shell, /startNewChatInLastScope\(\);/, "the sidebar routes its click through the shared starter");
+  assert.doesNotMatch(shell, /addBlankPane/, "and never mounts a chat behind the canvas' back");
+  const start = fn(sessions, "startNewChat");
+  const claimed = start.indexOf("addBlankPane(scopeId ?? undefined)");
+  assert.ok(claimed > 0, "every new-chat affordance must offer the click to the canvas");
+  assert.match(
+    start.slice(claimed),
+    /^addBlankPane\(scopeId \?\? undefined\)\) return;/m,
+    "and bail out when it takes it",
+  );
   assert.ok(
-    plus.indexOf("addPendingSession(mainConversation().newChat(") > claimed,
+    start.indexOf("addPendingSession(mainConversation().newChat(") > claimed,
     "only then may it mount a single chat",
   );
+  assert.match(fn(sessions, "startProjectChat"), /startNewChat\(scopeId, name\);/, "the project + shares that path");
+  assert.match(fn(sessions, "startNewChatInLastScope"), /startNewChat\(/, "so does the sidebar's Create New Chat");
 
   assert.match(fn(split, "exitSplitIfActive"), /splitState\.active = false;/);
   assert.doesNotMatch(fn(split, "exitSplitIfActive"), /removeItem|lastLayout = null/);

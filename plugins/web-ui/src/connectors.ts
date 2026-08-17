@@ -7,6 +7,7 @@ import { appState, replacePanePreservingFocus } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { isActiveGrant, isExpiredCredential, KeychainOperations, keychainSummary } from "./keychain-state";
+import { tip } from "./tooltip";
 
 interface ConnectorProvider {
   connected?: boolean;
@@ -519,7 +520,7 @@ function drawConnectors(loading = false): void {
               class="pane-refresh"
               type="button"
               aria-label="Refresh keychain"
-              title="Refresh keychain"
+              ${tip("Refresh keychain")}
               @click=${() => {
                 connectorNotice = "";
                 void renderConnectors();

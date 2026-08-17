@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { Box, Brain, Clock3, Files, GitFork, KeyRound, Rocket } from "lucide";
 import { api } from "./core-bridge";
 import { icon } from "./ui";
+import { tip } from "./tooltip";
 
 /** A session's context carried into the crons/files/memory views so the whole
  * view stays scoped to that project and keeps the session top bar. */
@@ -101,7 +102,7 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
     return html`<button
         class="session-crumb as-link"
         type="button"
-        title="Open the ${o.crumb} project"
+        ${tip(`Open the ${o.crumb} project`)}
         @click=${(e: Event) => {
           e.stopPropagation();
           o.onCrumb!();
@@ -111,14 +112,13 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
       ><span class="session-crumb-sep">/</span>`;
   })();
   const heading = html`
-    ${crumbTpl}
-    <span class="session-title">${o.title}</span>
+    ${crumbTpl} ${o.title ? html`<span class="session-title">${o.title}</span>` : nothing}
     ${
       o.fork
         ? html`<button
             class="session-fork-badge"
             type="button"
-            title="Forked from ${o.fork.title}${o.fork.onClick ? " — open the original" : ""}"
+            ${tip(`Forked from ${o.fork.title}${o.fork.onClick ? " — open the original" : ""}`)}
             ?disabled=${!o.fork.onClick}
             @click=${(e: Event) => {
               e.stopPropagation();
@@ -130,9 +130,6 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
         : nothing
     }
   `;
-  const headingTitle = o.crumb
-    ? `This chat runs in the ${o.crumb} context — the agent works with that context's files and memory, separate from your personal context.`
-    : o.title;
   const tool = (t: SessionTool, glyph: Parameters<typeof icon>[0], hint: string) => {
     const count = o.toolCount?.(t) ?? null;
     return html`
@@ -151,10 +148,10 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
     <header class="chat-topbar session-topbar">
       ${
         o.onTitle
-          ? html`<button class="session-heading as-link" type="button" title="Back to this chat" @click=${o.onTitle}>
+          ? html`<button class="session-heading as-link" type="button" ${tip("Back to this chat")} @click=${o.onTitle}>
               ${heading}
             </button>`
-          : html`<div class="session-heading" title=${headingTitle}>${heading}</div>`
+          : html`<div class="session-heading">${heading}</div>`
       }
       <div class="topbar-actions session-tools">
         ${tool("crons", Clock3, "Crons")} ${tool("files", Files, "Files")} ${tool("apps", Rocket, "Apps")}

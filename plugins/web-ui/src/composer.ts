@@ -54,6 +54,7 @@ import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions"
 import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
+import { tip } from "./tooltip";
 
 export type ComposerMenu = "effort" | "harness" | "model" | "settings";
 
@@ -428,7 +429,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                                 <button
                                   type="button"
                                   class="chip-open"
-                                  title="View pasted text"
+                                  aria-label="View pasted text"
+                                  ${tip("View pasted text")}
                                   @click=${() => openPasteView(a.id, agent)}
                                 >
                                   ${icon(FileText, 14)}
@@ -440,7 +442,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                         <button
                           type="button"
                           class="chip-x"
-                          title="Remove"
+                          aria-label="Remove attachment"
+                          ${tip("Remove")}
                           @click=${() => removeAttachment(a.id, agent)}
                         >
                           ${icon(X, 13)}
@@ -482,7 +485,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
             <button
               class="icon-btn"
               type="button"
-              title="Attach files"
+              aria-label="Attach files"
+              ${tip("Attach files")}
               ?disabled=${attachingDisabled}
               @click=${() => pickFiles()}
             >
@@ -511,7 +515,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                         ? html`<button
                             class="fast-toggle ${fastOn ? "active" : ""} ${fastCharging ? "charging" : ""} ${fastAvailable ? "" : "unavailable"}"
                             type="button"
-                            title=${fastTitle}
                             aria-label=${fastTitle}
                             aria-pressed=${fastOn ? "true" : "false"}
                             aria-disabled=${fastAvailable ? "false" : "true"}
@@ -538,7 +541,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                             type="button"
                             aria-label="Make default"
                             data-mobile-label="Default"
-                            title="Use this harness, model, effort, and fast setting as the default for this scope"
+                            ${tip("Use this harness, model, effort, and fast setting as the default for this scope")}
                             ?disabled=${inputBlocked}
                             @click=${() => changeScopeRuntime({ harnessId: selectedModel.harnessId, modelId: selectedModel.model.id, effortLevel: composerState.effortLevel, fastMode: fastOn }, agent)}
                           >
@@ -606,7 +609,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         <div class="project-dialog paste-dialog" role="dialog" aria-modal="true" aria-labelledby="paste-dialog-title">
           <div class="project-dialog-head">
             <div><h2 id="paste-dialog-title">Pasted text</h2></div>
-            <button class="chip-x" type="button" aria-label="Close" title="Close" @click=${() => closePasteView(agent)}>
+            <button
+              class="chip-x"
+              type="button"
+              aria-label="Close"
+              ${tip("Close")}
+              @click=${() => closePasteView(agent)}
+            >
               ${icon(X, 16)}
             </button>
           </div>
@@ -671,19 +680,25 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function sendControls(agent: Agent): TemplateResult {
     if (!agent.state.isStreaming) {
-      return html`<button class="send-btn" type="submit" title="Send" ?disabled=${!composerCanSend()}>
+      return html`<button
+        class="send-btn"
+        type="submit"
+        aria-label="Send"
+        ${tip("Send")}
+        ?disabled=${!composerCanSend()}
+      >
         ${icon(ArrowUp, 17)}
       </button>`;
     }
     const canQueue = Boolean(composerState.draft.trim());
     return html`
-      <button class="stop-btn" type="button" title="Stop" aria-label="Stop" @click=${() => stopStreaming(agent)}>
+      <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
       <button
         class="send-btn"
         type="submit"
-        title="Queue for after this turn"
+        ${tip("Queue for after this turn")}
         aria-label="Queue for after this turn"
         ?disabled=${!canQueue}
       >
@@ -703,16 +718,16 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           (q) => html`
             <div class="queued-chip" role="listitem">
               <span class="queued-tag">Queued</span>
-              <span class="queued-text" title=${q.text}>${q.text}</span>
+              <span class="queued-text" ${tip(q.text)}>${q.text}</span>
               <button
                 type="button"
                 class="queued-steer"
                 ?disabled=${!steerable}
-                title=${
+                ${tip(
                   steerable
                     ? "Steer the running task with this instead of waiting"
-                    : "Nothing running can take this — it will go out as its own turn"
-                }
+                    : "Nothing running can take this — it will go out as its own turn",
+                )}
                 @click=${() => void steerQueued(agent, q)}
               >
                 ${icon(CornerDownRight, 13)}<span>Steer</span>
@@ -720,8 +735,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               <button
                 type="button"
                 class="chip-x"
-                title="Remove"
                 aria-label="Remove queued message"
+                ${tip("Remove")}
                 @click=${() => void removeQueued(agent, q)}
               >
                 ${icon(X, 13)}
@@ -801,7 +816,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         <button
           class="menu-button settings-button"
           type="button"
-          title="Session settings — ${summary}"
+          ${tip(`Session settings — ${summary}`)}
           aria-label="Session settings — ${summary}"
           aria-haspopup="menu"
           aria-expanded=${open ? "true" : "false"}
@@ -920,7 +935,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         <button
           class="menu-button"
           type="button"
-          title=${args.title}
+          ${tip(args.title)}
           aria-haspopup="menu"
           aria-expanded=${open ? "true" : "false"}
           aria-controls=${menuId}
@@ -1059,7 +1074,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         role="option"
         aria-selected=${active ? "true" : "false"}
         class="slash-option ${active ? "active" : ""}"
-        title=${m.skill.description}
+        ${tip(m.skill.description)}
         @mousedown=${(e: Event) => e.preventDefault()}
         @click=${() => acceptSkill(m.skill, agent)}
       >

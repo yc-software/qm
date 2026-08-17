@@ -3,11 +3,18 @@ import { live } from "lit/directives/live.js";
 import { ArrowLeft, Plus, RefreshCw, Search } from "lucide";
 import { icon } from "./ui";
 import { scopeFilterControl } from "./contexts";
+import { tip } from "./tooltip";
 
 export function listBackLink(label: string, onBack: () => void): TemplateResult {
   return html`<button class="context-back" type="button" @click=${onBack}>
     ${icon(ArrowLeft, 15)}<span>${label}</span>
   </button>`;
+}
+
+export function listRowsTpl(rows: TemplateResult[], className = ""): TemplateResult {
+  return html`<div class="list-rows ${className}">
+    ${rows.flatMap((row, i) => (i ? [html`<div class="list-divider" role="presentation"></div>`, row] : row))}
+  </div>`;
 }
 
 export interface ListPageOpts {
@@ -34,8 +41,8 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
             ? html`<button
                 class="pane-refresh"
                 type="button"
-                title="Refresh"
                 aria-label="Refresh"
+                ${tip("Refresh")}
                 @click=${o.onRefresh}
               >
                 ${icon(RefreshCw, 17)}
@@ -65,7 +72,6 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
           </label>`
         : nothing
     }
-    ${o.filters ?? nothing}
-    ${o.rows.length ? html`<div class="list-rows">${o.rows}</div>` : html`<div class="empty compact">${o.empty}</div>`}
+    ${o.filters ?? nothing} ${o.rows.length ? listRowsTpl(o.rows) : html`<div class="empty compact">${o.empty}</div>`}
   `;
 }

@@ -43,8 +43,8 @@ import {
   type SplitEdge,
 } from "./split-layout";
 import { preservingFocus } from "./pane-focus";
-import { hideTooltip, showTooltip } from "./tooltip";
-import { icon } from "./ui";
+import { attachTooltip, tip } from "./tooltip";
+import { icon, workingWave } from "./ui";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
 import { appState } from "./shell-state";
@@ -931,7 +931,7 @@ class PaneContent implements IContentRenderer {
   }
 
   syncTitle(): void {
-    if (this.panel) this.element.title = paneTitle(this.panel);
+    if (this.panel) attachTooltip(this.element, paneTitle(this.panel));
   }
 
   syncZones(): void {
@@ -977,18 +977,14 @@ class PaneTab implements ITabRenderer {
     const working = paneIsWorking(panel);
     const awaiting = paneAwaitsInput(panel);
     const background = paneBackground(panel);
-    this.element.title = crumb ? `${crumb} / ${title}` : title;
+    attachTooltip(this.element, crumb ? `${crumb} / ${title}` : title);
     render(
       html`
-        ${working ? html`<span class="working-dot" ${ref(syncWorkingPulse)} title="Agent is working"></span>` : nothing}
-        ${awaiting ? html`<span class="awaiting-dot" title="Waiting for your reply" aria-label="Waiting for your reply"></span>` : nothing}
+        ${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
+        ${awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing}
         ${
           background
-            ? html`<span
-                class="bg-chip"
-                aria-label=${background.label}
-                @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, background.label)}
-                @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+            ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}
                 >${background.jobs > 0 ? icon(Cog, 11) : nothing}${
                   background.watches > 0 ? icon(Binoculars, 11) : nothing
                 }${background.crons > 0 ? icon(Clock3, 11) : nothing}</span
@@ -1006,7 +1002,7 @@ class PaneTab implements ITabRenderer {
             ? html`<button
                 class="icon-btn subtle split-tab-close"
                 type="button"
-                title="Close pane"
+                ${tip("Close pane")}
                 aria-label="Close pane"
                 @click=${(e: Event) => {
                   e.stopPropagation();
@@ -1141,7 +1137,7 @@ class GroupActions implements IHeaderActionsRenderer {
           <button
             class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
             type="button"
-            title="Tools"
+            ${tip("Tools")}
             aria-label="Tools"
             aria-haspopup="menu"
             aria-expanded=${this.menuOpen ? "true" : "false"}
@@ -1159,7 +1155,7 @@ class GroupActions implements IHeaderActionsRenderer {
             html`<button
               class="icon-btn subtle${b.cls ?? ""}"
               type="button"
-              title=${b.label}
+              ${tip(b.label)}
               aria-label=${b.label}
               @click=${b.run}
             >

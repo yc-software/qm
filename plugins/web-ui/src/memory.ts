@@ -5,6 +5,7 @@ import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
+import { tip } from "./tooltip";
 
 interface RevisionRow {
   revision: string;
@@ -90,7 +91,7 @@ function drawMemory(loading = false): void {
             class="pane-refresh"
             type="button"
             aria-label="Refresh memory"
-            title="Refresh memory"
+            ${tip("Refresh memory")}
             @click=${() => void renderMemory(true)}
           >
             ${icon(RefreshCw, 17)}
@@ -142,7 +143,7 @@ function drawMemory(loading = false): void {
                                 class="icon-btn"
                                 type="button"
                                 aria-label="Forget this fact"
-                                title="Forget this fact"
+                                ${tip("Forget this fact")}
                                 @click=${() => removeFact(fact.line)}
                               >
                                 ${icon(Trash2, 15)}

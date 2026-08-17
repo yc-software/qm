@@ -1,24 +1,5 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import {
-  ArrowLeft,
-  Box,
-  Brain,
-  ChevronDown,
-  Clock,
-  Files,
-  Folder,
-  KeyRound,
-  LogOut,
-  MessageSquare,
-  PanelLeft,
-  Plus,
-  RefreshCw,
-  Rocket,
-  Search,
-  ShieldCheck,
-  type IconNode,
-} from "lucide";
-import "@mariozechner/mini-lit/dist/ThemeToggle.js";
+import { House, LayoutGrid, LogOut, PanelLeft, Plus, RefreshCw, Search, Settings, type IconNode } from "lucide";
 import {
   api,
   fetchRuntimeConfig,
@@ -30,14 +11,13 @@ import {
 } from "./core-bridge";
 import { applyRuntimeOptions } from "./model-options";
 import { errMessage, swallow } from "../../chassis/src/errors";
-import { brandMark, brandName, icon, initials } from "./ui";
+import { brandMark, brandName, icon } from "./ui";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection, seedRuntimeConfig } from "./composer";
 import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
 import {
-  addBlankPane,
   adoptRemoteSplit,
   canvasToast,
   drawCanvas,
@@ -57,24 +37,50 @@ import {
   renderList,
   resetSessionsState,
   sessionsState,
+  startNewChatInLastScope,
   toggleWebOnly,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
-import { openChatSearch, SEARCH_HOTKEY_LABEL } from "./search";
-import { hideTooltip, showTooltip } from "./tooltip";
+import { openChatSearch } from "./search";
+import { closeBrowse, openBrowse } from "./browse";
+import { hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderSkills } from "./skills";
+import { applyTheme, renderSettings, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
-import { appState, can, isView, type AuthMode, type Me, type View } from "./shell-state";
+import { appState, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let authMode: AuthMode = "portal";
 let shellMounted = false;
+let userMenuOpen = false;
+let footerEl: HTMLElement | null = null;
+
+applyTheme();
+watchSystemTheme();
+
+function toggleUserMenu(e: Event): void {
+  e.stopPropagation();
+  userMenuOpen = !userMenuOpen;
+  renderSidebarFooter();
+}
+
+export function closeUserMenu(): void {
+  if (!userMenuOpen) return;
+  userMenuOpen = false;
+  renderSidebarFooter();
+}
+
+function signOutFromMenu(): void {
+  userMenuOpen = false;
+  renderSidebarFooter();
+  void signOut();
+}
 
 setSigninRequiredHandler((detail) => {
   authMode = detail.mode ?? authMode;
@@ -146,42 +152,10 @@ function resetSidebarWidth(): void {
   localStorage.removeItem(SIDEBAR_W_KEY);
 }
 
-const NAV_WORKSPACE_KEY = "web-ui:nav-workspace";
-
-function loadNavOpen(key: string): boolean {
-  try {
-    return localStorage.getItem(key) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function saveNavOpen(key: string, open: boolean): void {
-  try {
-    localStorage.setItem(key, open ? "1" : "0");
-  } catch {
-    void 0;
-  }
-}
-
-let navWorkspaceOpen = loadNavOpen(NAV_WORKSPACE_KEY);
-
-function toggleNavWorkspace(): void {
-  navWorkspaceOpen = !navWorkspaceOpen;
-  saveNavOpen(NAV_WORKSPACE_KEY, navWorkspaceOpen);
-  renderSidebarTop();
-}
-
 const ICON = {
   newChat: Plus,
-  chats: MessageSquare,
-  contexts: Folder,
-  files: Files,
-  keychain: KeyRound,
-  deploys: Rocket,
-  crons: Clock,
-  memory: Brain,
-  skills: Box,
+  home: House,
+  browse: LayoutGrid,
 };
 
 export async function signOut(): Promise<void> {
@@ -194,6 +168,7 @@ export async function signOut(): Promise<void> {
     }
   }
   appState.me = null;
+  closeBrowse();
   clearAllDrafts();
   exitSplitIfActive();
   mainConversation().resetChatState();
@@ -434,8 +409,8 @@ export function mountShell(): void {
             <button
               class="icon-btn subtle sidebar-toggle sidebar-collapse-toggle"
               type="button"
-              title="Hide sidebar"
-              aria-label="Hide sidebar"
+              aria-label=${sidebarToggleLabel()}
+              ${tip(sidebarToggleLabel())}
               @click=${toggleSidebar}
             >
               ${icon(PanelLeft, 17)}
@@ -443,19 +418,7 @@ export function mountShell(): void {
           </div>
           <div id="sidebar-top"></div>
           <div class="list" id="sidebar-body"></div>
-          <div class="sidebar-footer">
-            <div class="user-pill" title=${appState.me?.user ?? ""}>
-              <span class="avatar">${initials(appState.me?.user ?? "?")}</span>
-              <span class="user-name">${appState.me?.user ?? ""}</span>
-            </div>
-            <a class="icon-btn subtle" href=${ADMIN_HOME_URL} title="Back to admin" aria-label="Back to admin"
-              >${icon(ArrowLeft, 17)}</a
-            >
-            <theme-toggle .includeSystem=${true} title="Color scheme: light / dark / system"></theme-toggle>
-            <button class="icon-btn subtle" title="Sign out" aria-label="Sign out" @click=${signOut}>
-              ${icon(LogOut, 17)}
-            </button>
-          </div>
+          <div class="sidebar-footer" id="sidebar-footer"></div>
         </aside>
         <button class="sidebar-scrim" type="button" aria-label="Close sidebar" @click=${toggleSidebar}></button>
         <div
@@ -463,7 +426,7 @@ export function mountShell(): void {
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar"
-          title="Drag to resize · double-click to reset"
+          ${tip("Drag to resize · double-click to reset")}
           @pointerdown=${startSidebarResize}
           @dblclick=${resetSidebarWidth}
         ></div>
@@ -477,96 +440,90 @@ export function mountShell(): void {
   appState.topEl = (appEl as HTMLElement).querySelector("#sidebar-top");
   appState.listEl = (appEl as HTMLElement).querySelector("#sidebar-body");
   appState.mainEl = (appEl as HTMLElement).querySelector("#main");
+  footerEl = (appEl as HTMLElement).querySelector("#sidebar-footer");
+  renderSidebarFooter();
   renderSidebarTop();
   updateSidebarToggleLabels();
   syncSidebarAccessibility(false);
   shellMounted = true;
 }
 
+export function renderSidebarFooter(): void {
+  if (!footerEl) return;
+  render(
+    html`
+      <div class="user-menu ${userMenuOpen ? "menu-open" : ""}">
+        <button
+          class="user-pill"
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded=${userMenuOpen ? "true" : "false"}
+          @click=${toggleUserMenu}
+        >
+          <span class="user-name">${appState.me?.user ?? ""}</span>
+        </button>
+        ${
+          userMenuOpen
+            ? html`<div class="session-menu-popover user-menu-popover" role="menu">
+                <button class="session-menu-option" type="button" role="menuitem" @click=${signOutFromMenu}>
+                  ${icon(LogOut, 15)}<span>Sign out</span>
+                </button>
+              </div>`
+            : nothing
+        }
+      </div>
+      <button class="icon-btn subtle" aria-label="Settings" ${tip("Settings")} @click=${() => switchView("settings")}>
+        ${icon(Settings, 17)}
+      </button>
+    `,
+    footerEl,
+  );
+}
+
 export function renderSidebarTop(): void {
   if (!appState.topEl) return;
+  const highlighted = (v: View) => v !== "chats" && appState.currentView === v;
   const navRow = (v: View, glyph: IconNode, label: string) =>
     html`<a
-      class="navrow ${appState.currentView === v ? "active" : ""}"
+      class="navrow ${highlighted(v) ? "active" : ""}"
       href=${deepLinkPath(UI_BASE, v, null)}
       data-view=${v}
-      title=${label}
+      aria-label=${label}
+      ${tip(sidebarOpen ? "" : label)}
     >
       ${icon(glyph, 17)}<span>${label}</span>
     </a>`;
-  const navGroup = (id: string, title: string, open: boolean, toggle: () => void, rows: TemplateResult) => html`
-    <button
-      class="nav-section-toggle"
-      type="button"
-      aria-expanded=${open ? "true" : "false"}
-      aria-controls=${id}
-      title=${open ? `Hide ${title}` : `Show ${title}`}
-      @click=${toggle}
-    >
-      <span>${title}</span>
-      <span class="nav-section-chevron">${icon(ChevronDown, 14)}</span>
-    </button>
-    <div id=${id} class="nav-group ${open ? "" : "collapsed"}">
-      <div class="nav-group-inner">${rows}</div>
-    </div>
-  `;
+  const actionRow = (glyph: IconNode, label: string, run: () => void) =>
+    html`<button class="navrow" type="button" aria-label=${label} ${tip(sidebarOpen ? "" : label)} @click=${run}>
+      ${icon(glyph, 17)}<span>${label}</span>
+    </button>`;
+  const newChatLabel = splitState.active ? "New session" : "Create New Chat";
   render(
     html`
-      <button
-        class="new-chat"
-        title=${splitState.active ? "New session" : "New chat"}
-        @click=${() => {
-          closeSidebarOnNarrowView();
-          if (!addBlankPane()) mainConversation().newChat();
-        }}
-      >
-        ${icon(ICON.newChat, 17)}<span>${splitState.active ? "New session" : "New chat"}</span>
-      </button>
-      <nav class="nav" @click=${onNavClick}>
-        ${navGroup(
-          "nav-workspace",
-          "Browse",
-          navWorkspaceOpen,
-          toggleNavWorkspace,
-          html`
-            ${navRow("contexts", ICON.contexts, "Projects")} ${navRow("chats", ICON.chats, "Chats")}
-            ${navRow("files", ICON.files, "Files")} ${navRow("crons", ICON.crons, "Crons")}
-            ${navRow("keychain", ICON.keychain, "Keychain")} ${navRow("deploys", ICON.deploys, "Apps")}
-            ${navRow("memory", ICON.memory, "Memory")} ${navRow("skills", ICON.skills, "Skills")}
-            ${
-              can("admin")
-                ? html`<a class="navrow" href=${ADMIN_HOME_URL} title="Admin">
-                    ${icon(ShieldCheck, 17)}<span>Admin</span>
-                  </a>`
-                : nothing
-            }
-          `,
-        )}
+      <nav class="nav quick-nav" @click=${onNavClick}>
+        ${navRow("chats", ICON.home, "Home")}
+        ${actionRow(ICON.newChat, newChatLabel, () => {
+          hideTooltip();
+          startNewChatInLastScope();
+        })}
+        ${actionRow(Search, "Search", () => {
+          hideTooltip();
+          openChatSearch();
+        })}
+        ${actionRow(ICON.browse, "Browse", () => {
+          hideTooltip();
+          openBrowse();
+        })}
       </nav>
       ${html`
         <div class="section-label recents-label">
           <span>Sessions</span>
           <button
-            class="chat-search-open"
-            type="button"
-            aria-label="Search your chats"
-            @click=${() => {
-              hideTooltip();
-              openChatSearch();
-            }}
-            @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
-            @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
-            @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
-            @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
-          >
-            ${icon(Search, 13)}
-          </button>
-          <button
             class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
             type="button"
             role="switch"
             aria-checked=${sessionsState.webOnly ? "true" : "false"}
-            title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
+            ${tip(sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations")}
             @click=${toggleWebOnly}
           >
             <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
@@ -634,6 +591,9 @@ export function switchView(v: View): void {
     case "skills":
       void renderSkills();
       break;
+    case "settings":
+      renderSettings();
+      break;
   }
 }
 
@@ -664,6 +624,9 @@ function refreshActiveView(v: View): void {
       break;
     case "skills":
       void renderSkills();
+      break;
+    case "settings":
+      renderSettings();
       break;
   }
 }
@@ -696,6 +659,7 @@ function setSidebarOpen(open: boolean, moveFocus = true): void {
   sidebarOpen = open;
   (appEl as HTMLElement).querySelector(".layout")?.classList.toggle("sidebar-closed", !sidebarOpen);
   updateSidebarToggleLabels();
+  renderSidebarTop();
   syncSidebarAccessibility(moveFocus);
 }
 
@@ -726,11 +690,14 @@ function onSidebarKeydown(event: KeyboardEvent): void {
   trapDialogFocus(event, () => setSidebarOpen(false));
 }
 
+function sidebarToggleLabel(): string {
+  return sidebarOpen ? "Hide sidebar" : "Show sidebar";
+}
+
 function updateSidebarToggleLabels(): void {
-  const collapseLabel = sidebarOpen ? "Hide sidebar" : "Show sidebar";
+  const collapseLabel = sidebarToggleLabel();
   (appEl as HTMLElement).querySelectorAll<HTMLButtonElement>(".sidebar-toggle").forEach((btn) => {
     btn.setAttribute("aria-expanded", sidebarOpen ? "true" : "false");
-    btn.setAttribute("title", collapseLabel);
     btn.setAttribute("aria-label", collapseLabel);
   });
 }
@@ -756,7 +723,7 @@ export function renderPane(
             class="pane-refresh"
             type="button"
             aria-label=${refreshLabel}
-            title=${refreshLabel}
+            ${tip(refreshLabel)}
             @click=${onRefresh}
           >
             ${icon(RefreshCw, 17)}
