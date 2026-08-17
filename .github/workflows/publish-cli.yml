@@ -89,8 +89,11 @@ jobs:
               exit 1
             fi
             echo "@yc-software/qm@$version is already on npm pinning these digests; keeping it"
-            exit 0
+          else
+            npm publish --provenance --access public
           fi
-          npm publish --provenance --access public
+          if [ "$version" = 0.1.5 ]; then
+            npm deprecate @yc-software/qm@1.0.5 "Published with an incorrect version number; use 0.1.5."
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
