@@ -41,11 +41,23 @@ export function assertOneStatement(stmt: string): void {
   }
 }
 
+export function concurrentIndexName(stmt: string): string | undefined {
+  return /^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_$]*)\b/i.exec(stmt)?.[1];
+}
+
 async function applyDdl(pool: Pool, statements: string[]): Promise<void> {
   const ddl = await pool.connect();
   try {
     await ddl.query("SELECT pg_advisory_lock(hashtext('agent-platform:schema-init'))");
     for (const stmt of statements) {
+      const indexName = concurrentIndexName(stmt);
+      if (indexName) {
+        const existing = await ddl.query(
+          "SELECT NOT indisvalid OR NOT indisready AS invalid FROM pg_index WHERE indexrelid = to_regclass($1)",
+          [indexName],
+        );
+        if (existing.rows[0]?.invalid) await ddl.query(`DROP INDEX CONCURRENTLY ${indexName}`);
+      }
       await ddl.query(stmt);
     }
   } finally {

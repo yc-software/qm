@@ -72,3 +72,27 @@ test("pg pool: an idle-client 'error' is logged, not fatal", { skip }, async () 
   assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }], "pool keeps serving queries");
   await pg.close();
 });
+
+test("pg pool: concurrent index creation recovers an invalid prior attempt", { skip }, async () => {
+  const pg = createPgPool(URL!, ["DROP TABLE IF EXISTS qm_concurrent_index_retry CASCADE"]);
+  try {
+    await pg.schema!("CREATE TABLE qm_concurrent_index_retry(value INT NOT NULL)");
+    await pg.query("INSERT INTO qm_concurrent_index_retry(value) VALUES (1), (1)");
+    await assert.rejects(
+      pg.schema!("CREATE UNIQUE INDEX CONCURRENTLY qm_concurrent_index_retry_idx ON qm_concurrent_index_retry(value)"),
+      /could not create unique index/,
+    );
+    await pg.schema!(
+      "CREATE INDEX CONCURRENTLY IF NOT EXISTS qm_concurrent_index_retry_idx ON qm_concurrent_index_retry(value)",
+    );
+    assert.deepEqual(
+      await pg.q(
+        "SELECT indisvalid, indisready FROM pg_index WHERE indexrelid = to_regclass('qm_concurrent_index_retry_idx')",
+      ),
+      [{ indisvalid: true, indisready: true }],
+    );
+  } finally {
+    await pg.query("DROP TABLE IF EXISTS qm_concurrent_index_retry CASCADE");
+    await pg.close();
+  }
+});

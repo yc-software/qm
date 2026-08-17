@@ -259,13 +259,9 @@ type PostdeployConfig = Pick<
   | "slack"
 >;
 
-async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
-  const { databaseUrl, orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
+async function checkDatabase(config: PostdeployConfig): Promise<void> {
+  const { databaseUrl } = config;
   if (!databaseUrl) throw new Error("postdeploy smoke requires DATABASE_URL");
-  if (!orgId) throw new Error("postdeploy smoke requires ORG_ID");
-  if (!sourceSecret) throw new Error("postdeploy smoke requires CORE_SIGNING_SECRET");
-  if (!portalIdentitySecret) throw new Error("postdeploy smoke requires PORTAL_IDENTITY_SECRET");
-
   const pg = (await import("pg")).default;
   const client = new pg.Client({
     connectionString: databaseUrl,
@@ -285,6 +281,15 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
   } finally {
     await client.end();
   }
+}
+
+async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
+  const { orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
+  if (!orgId) throw new Error("postdeploy smoke requires ORG_ID");
+  if (!sourceSecret) throw new Error("postdeploy smoke requires CORE_SIGNING_SECRET");
+  if (!portalIdentitySecret) throw new Error("postdeploy smoke requires PORTAL_IDENTITY_SECRET");
+
+  await checkDatabase(config);
 
   await checkApi(
     orgId,
@@ -301,8 +306,9 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = loadConfig();
   if (process.argv[2] === "session") {
+    if (config.databaseUrl) await checkDatabase(config);
     await checkLiveSession(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
-    console.log("live session smoke passed");
+    console.log("database and live session smoke passed");
   } else {
     await runPostdeploySmoke(config);
   }

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createPgPool, assertOneStatement } from "../src/persistence/pg-pool.ts";
+import { createPgPool, assertOneStatement, concurrentIndexName } from "../src/persistence/pg-pool.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
   const pg = createPgPool("postgres://does-not-exist:0/none", ["SELECT 1"]);
@@ -65,6 +65,14 @@ test("assertOneStatement: a single-quoted literal or line comment containing ';'
 
 test("assertOneStatement: an apostrophe in a line comment can't hide a following statement's ';'", () => {
   assert.throws(() => assertOneStatement("SELECT 1 -- don't\n; SELECT 'x'"), /single statement/);
+});
+
+test("concurrentIndexName recognizes retryable concurrent index creation", () => {
+  assert.equal(
+    concurrentIndexName("CREATE INDEX CONCURRENTLY IF NOT EXISTS session_search ON sessions(id)"),
+    "session_search",
+  );
+  assert.equal(concurrentIndexName("CREATE INDEX IF NOT EXISTS session_search ON sessions(id)"), undefined);
 });
 
 function pathToUrl(p: string): string {
