@@ -37,7 +37,7 @@ export interface Config {
   securityPosture: SecurityPosture;
   sandboxBackend: "aws" | "local" | "sprites" | "smolmachines";
   sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines";
-  deployProvider: "docker" | "aws";
+  deployProvider: "docker" | "aws" | "fly";
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
@@ -148,6 +148,7 @@ export interface Config {
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
   awsDeploy: AwsDeployEnv;
+  flyDeploy: FlyDeployEnv;
 }
 
 export function configuredModelForHarness(config: Config, harness: string): string | undefined {
@@ -407,6 +408,24 @@ function awsDeployEnv(env: NodeJS.ProcessEnv): AwsDeployEnv {
           ),
         }
       : {}),
+  };
+}
+
+interface FlyDeployEnv {
+  token: string;
+  appPrefix: string;
+  baseImage: string;
+  org: string;
+  region?: string;
+}
+
+function flyDeployEnv(env: NodeJS.ProcessEnv): FlyDeployEnv {
+  return {
+    token: env.FLY_DEPLOY_API_TOKEN ?? "",
+    appPrefix: env.FLY_DEPLOY_APP_PREFIX ?? "",
+    baseImage: env.FLY_DEPLOY_BASE_IMAGE ?? "",
+    org: env.FLY_ORG ?? "",
+    ...(env.FLY_REGION ? { region: env.FLY_REGION } : {}),
   };
 }
 
@@ -671,7 +690,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL ?? publicApiUrl;
-  const deployProvider: "aws" | "docker" = env.DEPLOY_PROVIDER === "aws" ? "aws" : "docker";
+  const deployProvider: "aws" | "docker" | "fly" =
+    env.DEPLOY_PROVIDER === "aws" || env.DEPLOY_PROVIDER === "fly" ? env.DEPLOY_PROVIDER : "docker";
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
   if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
@@ -894,5 +914,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
     awsDeploy: awsDeployEnv(env),
+    flyDeploy: flyDeployEnv(env),
   };
 }
