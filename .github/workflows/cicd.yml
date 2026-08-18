@@ -139,7 +139,7 @@ jobs:
           set -euo pipefail
           base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           offenders=""
-          for sha in $(git rev-list "$base..$HEAD_SHA"); do
+          for sha in $(git rev-list --first-parent "$base..$HEAD_SHA"); do
             if git log -1 --format='%(trailers:key=Co-authored-by,valueonly)' "$sha" \
               | grep -qi '@users\.noreply\.github\.com'; then
               offenders="$offenders $sha"
@@ -151,6 +151,7 @@ jobs:
           echo "GitHub credits them to whichever account owns that username, which may be a stranger." >&2
           echo "This repo bans all such addresses, including your own privacy address;" >&2
           echo "use the contributor's real email, or drop the trailer." >&2
+          echo "Only commits this PR itself adds are checked; commits merged in from another branch are not." >&2
           exit 1
 
   lint:
