@@ -21,26 +21,23 @@ Slack  ⇄ (WebSocket)  slack surface (in core)  ── direct calls ──▶  
 
 (Socket Mode is already enabled by the manifest. No request URLs to configure.)
 
-### Slack Agents (top-bar split pane)
+### Slack Agents (top-bar pin)
 
 The manifest enables Slack's [Agents & AI Apps](https://docs.slack.dev/ai/developing-agents)
-feature (`agent_view`), so users can pin the app to the Slack top bar and talk to it in
-the split pane. Those conversations are ordinary DM threads and flow through the normal
-DM machinery; on top of that the surface shows a working status while it thinks, titles
-each thread from its first message, and passes what the user is currently viewing
-(channel/thread) into the turn, so "summarize this" works.
+feature (`agent_view`) for one reason: users can pin the app to the Slack top bar and open
+it anywhere. Conversations in the resulting split pane are ordinary DM thread messages and
+flow through the normal DM machinery unchanged — none of the extra agent UI (status
+indicators, thread titles, context passing, suggested prompts) is implemented.
 
 Two caveats:
 
 - **Paid plan required.** Slack only serves the AI-apps experience on paid plans (the
   Developer Program sandbox also works).
 - **Existing installs must update the manifest and reinstall** to pick up the
-  `assistant:write` scope and the `assistant_thread_started`,
-  `assistant_thread_context_changed`, and `app_context_changed` events. Installs that
-  don't update keep working exactly as before — the feature is detected at runtime and
-  never hard-fails.
-
-Message streaming into the pane is not implemented; `agent-pane.ts` marks the seam.
+  `assistant:write` scope and the `assistant_thread_started` and
+  `assistant_thread_context_changed` events (Slack requires both to enable the feature;
+  the plugin acknowledges them as no-ops). Installs that don't update keep working
+  exactly as before.
 
 > **Running locally alongside another developer? Each dev needs their OWN app.**
 > See [Local dev with multiple developers](#local-dev-with-multiple-developers)

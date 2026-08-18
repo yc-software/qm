@@ -11,7 +11,6 @@ import {
   shouldProcessMessage,
 } from "./lib.ts";
 import type { AckGate } from "./deferred-ack.ts";
-import type { AgentPane, AppContextChangedEvent, AssistantThreadEvent } from "./agent-pane.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { Mirror } from "./mirror.ts";
 import type { SlackReactionEvent, TurnHandler } from "./turn-handler.ts";
@@ -27,7 +26,6 @@ export function registerSlackEvents(
     directory: Directory;
     ids: BotIdentity;
     deduper: ReturnType<typeof createDeduper>;
-    agentPane?: AgentPane;
     webUiPublicUrl?: string;
     ensureHeader?: (
       client: SurfaceHeaderClient,
@@ -38,8 +36,7 @@ export function registerSlackEvents(
     ) => void;
   },
 ): void {
-  const { handler, mirror, directory, ids, deduper, agentPane } = deps;
-  const activeAgentTurns = new Map<string, number>();
+  const { handler, mirror, directory, ids, deduper } = deps;
   const { dispatch, handleReactionEvent, botHasStakeInThread } = handler;
   const { mirrorMessageEvent, pushSurfaceEvents } = mirror;
   const { syncForUnseenGroup, forceDirectorySync } = directory;
@@ -141,51 +138,23 @@ export function registerSlackEvents(
         channel: m.channel,
         ts: m.ts,
       });
-      const inAgentThread = Boolean(agentPane?.isAgentThread(m.channel, m.thread_ts));
-      const contextNote =
-        inAgentThread || m.app_context
-          ? agentPane?.contextNote({
-              channel: m.channel,
-              threadTs: m.thread_ts,
-              userId: m.user,
-              ...(m.app_context ? { messageContext: m.app_context } : {}),
-            })
-          : undefined;
-      const turnKey = `${m.channel}:${m.thread_ts}`;
-      if (inAgentThread) {
-        activeAgentTurns.set(turnKey, (activeAgentTurns.get(turnKey) ?? 0) + 1);
-        void agentPane!.setStatus(client, m.channel, m.thread_ts, "thinking…");
-        void agentPane!.maybeSetTitle(client, m.channel, m.thread_ts, m.text ?? "");
-      }
-      try {
-        await dispatch(
-          key,
-          {
-            kind: "dm",
-            channel: m.channel,
-            userId: identity.userId,
-            ...(identity.actor ? { actor: identity.actor } : {}),
-            ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
-            rawText: m.text ?? "",
-            files: (m.files as SlackFile[]) ?? [],
-            threadTs: m.thread_ts,
-            ts: m.ts,
-            ...(contextNote ? { contextNote } : {}),
-            ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
-            ackGate,
-          },
-          client,
-        );
-      } finally {
-        if (inAgentThread) {
-          const left = (activeAgentTurns.get(turnKey) ?? 1) - 1;
-          if (left > 0) activeAgentTurns.set(turnKey, left);
-          else {
-            activeAgentTurns.delete(turnKey);
-            void agentPane!.setStatus(client, m.channel, m.thread_ts, "");
-          }
-        }
-      }
+      await dispatch(
+        key,
+        {
+          kind: "dm",
+          channel: m.channel,
+          userId: identity.userId,
+          ...(identity.actor ? { actor: identity.actor } : {}),
+          ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
+          rawText: m.text ?? "",
+          files: (m.files as SlackFile[]) ?? [],
+          threadTs: m.thread_ts,
+          ts: m.ts,
+          ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+          ackGate,
+        },
+        client,
+      );
       return;
     }
 
@@ -283,17 +252,8 @@ export function registerSlackEvents(
     await forceDirectorySync(client, e.channel, principalId);
   });
 
-  if (agentPane) {
-    app.event("assistant_thread_started", async ({ event }: any) => {
-      agentPane.noteThreadStarted(event as AssistantThreadEvent);
-    });
-    app.event("assistant_thread_context_changed", async ({ event }: any) => {
-      agentPane.noteThreadContextChanged(event as AssistantThreadEvent);
-    });
-    app.event("app_context_changed", async ({ event }: any) => {
-      agentPane.noteAppContextChanged(event as AppContextChangedEvent);
-    });
-  }
+  app.event("assistant_thread_started", async () => {});
+  app.event("assistant_thread_context_changed", async () => {});
 
   app.event("reaction_added", async ({ event, body, client }: any) => {
     await handleReactionEvent(event as SlackReactionEvent, body as any, client, true);
