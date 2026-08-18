@@ -108,6 +108,22 @@ test("runResultDelivery recovers a security quarantine without exposing its inte
   assert.doesNotMatch(d?.text ?? "", /internal screening details/);
 });
 
+test("runResultDelivery surfaces the session id holding the quarantine record (#574)", () => {
+  const d = runResultDelivery(
+    run({
+      request: { ...turn("hi", "C9:171.001"), addressed: true },
+      result: {
+        status: "refused",
+        refusalKind: "security_quarantine",
+        reason: "internal screening details",
+        sessionId: "sess-5678",
+      },
+    }),
+  );
+  assert.match(d?.text ?? "", /quarantine record: session sess-5678/);
+  assert.doesNotMatch(d?.text ?? "", /internal screening details/);
+});
+
 test("runResultDelivery keeps an unprompted quarantine silent — a replay has no live handler to suppress it", () => {
   const spine = run({ result: { status: "refused", refusalKind: "security_quarantine" } });
   spine.request = { ...spine.request, surfaceTools: true, origin: { kind: "ambient" } };

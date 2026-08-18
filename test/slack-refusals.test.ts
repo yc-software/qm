@@ -90,3 +90,25 @@ test("isBoundaryRefusal: only internal-only reasons are boundary refusals", () =
   assert.equal(isBoundaryRefusal("An unknown error occurred"), false);
   assert.equal(isBoundaryRefusal(undefined), false);
 });
+
+test("refusalNote: a quarantine refusal surfaces the session that holds the quarantine record (#574)", () => {
+  const note = refusalNote(
+    {
+      refusalKind: "security_quarantine",
+      reason: "Auto quarantined suspicious or unscreenable external input before the agent ran.",
+      sessionId: "sess-1234",
+    },
+    "channel",
+  );
+  assert.match(note, /quarantine record: session sess-1234/);
+  assert.match(note, /ask an admin to review the quarantine/);
+  assert.doesNotMatch(note, /Auto quarantined|unscreenable/);
+});
+
+test("refusalNote: a quarantine refusal without a session keeps the plain text", () => {
+  const note = refusalNote({ refusalKind: "security_quarantine" }, "channel");
+  assert.equal(
+    note,
+    "I couldn't act because my security screen flagged part of this message or its conversation context. Please retry without the flagged context, or ask an admin to review the quarantine.",
+  );
+});

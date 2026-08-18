@@ -1,4 +1,4 @@
-import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
+import { quarantineRefusalText } from "../../plugins/chassis/src/security-quarantine.ts";
 
 export function isBoundaryRefusal(reason: string | undefined): boolean {
   return (reason ?? "").startsWith("internal-only");
@@ -27,11 +27,16 @@ export async function postThenAckRunDelivery(opts: {
 }
 
 export function refusalNote(
-  result: { reason?: string; adminUrl?: string; refusalKind?: "security_quarantine" },
+  result: {
+    reason?: string;
+    adminUrl?: string;
+    refusalKind?: "security_quarantine";
+    sessionId?: string;
+  },
   kind: "dm" | "channel",
 ): string {
   if (result.refusalKind === "security_quarantine") {
-    return SECURITY_QUARANTINE_REFUSAL_TEXT;
+    return quarantineRefusalText(result.sessionId);
   }
   const reason = result.reason ?? "refused";
   if (isBoundaryRefusal(reason)) {
