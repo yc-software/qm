@@ -214,26 +214,70 @@ async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): P
     warn(`${name} is not available locally — skipping the live ${provider} check`);
     return;
   }
-  await modelProviderCheck(provider, key);
+  await modelProviderCheck(provider, key, secrets);
   step(`base model provider ${provider}: ${name} accepted`);
 }
 
 const MODEL_PROVIDER_PROBES: Readonly<
-  Record<ModelProvider, { url: string; headers: (key: string) => Record<string, string> }>
+  Record<ModelProvider, { baseUrl: string; path: string; headers: (key: string) => Record<string, string> }>
 > = {
   anthropic: {
-    url: "https://api.anthropic.com/v1/models?limit=1",
+    baseUrl: "https://api.anthropic.com",
+    path: "/v1/models?limit=1",
     headers: (key) => ({ "x-api-key": key, "anthropic-version": "2023-06-01" }),
   },
-  openai: { url: "https://api.openai.com/v1/models", headers: (key) => ({ authorization: `Bearer ${key}` }) },
-  openrouter: { url: "https://openrouter.ai/api/v1/key", headers: (key) => ({ authorization: `Bearer ${key}` }) },
+  openai: {
+    baseUrl: "https://api.openai.com/v1",
+    path: "/models",
+    headers: (key) => ({ authorization: `Bearer ${key}` }),
+  },
+  openrouter: {
+    baseUrl: "https://openrouter.ai/api/v1",
+    path: "/key",
+    headers: (key) => ({ authorization: `Bearer ${key}` }),
+  },
 };
 
-async function modelProviderCheck(provider: ModelProvider, apiKey: string): Promise<void> {
+const MODEL_PROVIDER_BASE_URL_ENV: Readonly<Record<ModelProvider, string>> = {
+  anthropic: "ANTHROPIC_BASE_URL",
+  openai: "OPENAI_BASE_URL",
+  openrouter: "OPENROUTER_BASE_URL",
+};
+
+/**
+ * Resolves the probe URL for a provider, honouring its `*_BASE_URL` override
+ * the way the runtime does (src/api/routes/admin/model-providers.ts resolves
+ * through the shared provider-endpoints module; the CLI package cannot import
+ * it, so the validation rules are mirrored here and must stay aligned):
+ * http(s) only, no embedded credentials, no query string, no fragment,
+ * trailing slashes trimmed. Loopback and private hosts stay allowed.
+ */
+export function modelProviderProbeUrl(provider: ModelProvider, baseUrlEnvValue: string | undefined): string {
   const probe = MODEL_PROVIDER_PROBES[provider];
+  const envName = MODEL_PROVIDER_BASE_URL_ENV[provider];
+  const raw = baseUrlEnvValue?.trim();
+  if (!raw) return `${probe.baseUrl}${probe.path}`;
+  const trimmed = raw.replace(/\/+$/, "");
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new CliError(`${envName} is not a valid URL: ${raw}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:")
+    throw new CliError(`${envName} must be an http(s) URL, got ${url.protocol}//`);
+  if (url.username || url.password) throw new CliError(`${envName} must not contain credentials`);
+  if (url.search) throw new CliError(`${envName} must not contain a query string`);
+  if (url.hash) throw new CliError(`${envName} must not contain a fragment`);
+  return `${trimmed}${probe.path}`;
+}
+
+async function modelProviderCheck(provider: ModelProvider, apiKey: string, secrets: Map<string, string>): Promise<void> {
+  const probe = MODEL_PROVIDER_PROBES[provider];
+  const url = modelProviderProbeUrl(provider, secrets.get(MODEL_PROVIDER_BASE_URL_ENV[provider]));
   let res: Response;
   try {
-    res = await fetch(probe.url, { headers: probe.headers(apiKey), signal: AbortSignal.timeout(10_000) });
+    res = await fetch(url, { headers: probe.headers(apiKey), signal: AbortSignal.timeout(10_000) });
   } catch (e) {
     throw new CliError(
       `could not reach the ${provider} API: ${errMessage(e)} — check network access (and any proxy) and retry`,
