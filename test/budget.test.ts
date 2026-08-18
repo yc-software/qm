@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBudgetTracker, estimateCostUsd } from "../src/ratelimit/budget.ts";
+import { createBudgetTracker, estimateCostUsd, modelCallCostUsd } from "../src/ratelimit/budget.ts";
 import { DEFAULT_AGENT_INPUT_USD_PER_MTOK } from "../src/model/pi-models.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -58,4 +58,25 @@ test("a principal over budget is refused by the app", async () => {
   const second = await app.turn(dm("again"));
   assert.equal(second.status, "refused");
   assert.match(second.reason ?? "", /budget exceeded/);
+});
+
+test("modelCallCostUsd prefers provider-metered cost, then metered tokens, then the estimate (#586)", () => {
+  const rec = { model: "gpt-5.6-sol", inputTokens: 1000 };
+
+  // Provider computed the cost: used verbatim.
+  assert.equal(
+    modelCallCostUsd(rec, { input: 1000, output: 2000, cacheRead: 0, cacheWrite: 0, totalTokens: 3000, costUsd: 0.07 }),
+    0.07,
+  );
+
+  // Metered tokens but no provider cost: input+output at the fixed rate
+  // (output no longer invisible).
+  assert.equal(
+    modelCallCostUsd(rec, { input: 1000, output: 2000, cacheRead: 0, cacheWrite: 0, totalTokens: 3000, costUsd: 0 }),
+    estimateCostUsd(3000),
+  );
+
+  // No metered usage at all: the legacy input-only estimate.
+  assert.equal(modelCallCostUsd(rec, null), estimateCostUsd(1000));
+  assert.equal(modelCallCostUsd(rec, undefined), estimateCostUsd(1000));
 });

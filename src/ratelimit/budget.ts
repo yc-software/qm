@@ -16,6 +16,32 @@ export function estimateCostUsd(inputTokens: number, usdPerMTok = DEFAULT_AGENT_
   return (inputTokens / 1_000_000) * usdPerMTok;
 }
 
+/**
+ * Cost attribution for one model call, preferring the provider-metered usage
+ * the harnesses already report through recordLlmRequest (LlmCallUsage) and
+ * falling back to the input-only fixed-rate estimate when no metered numbers
+ * exist (#586).
+ */
+export function modelCallCostUsd(
+  rec: { model: string; inputTokens: number },
+  usage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    costUsd: number;
+  } | null,
+): number {
+  if (usage) {
+    if (Number.isFinite(usage.costUsd) && usage.costUsd > 0) return usage.costUsd;
+    // Metered tokens without a provider-computed cost: price input+output at
+    // the conservative fixed rate instead of dropping the output share.
+    return estimateCostUsd(usage.input + usage.output);
+  }
+  return estimateCostUsd(rec.inputTokens);
+}
+
 export function createBudgetTracker(
   opts: { limitUsd?: number; orgLimitUsd?: number; windowMs?: number } = {},
 ): BudgetTracker {
