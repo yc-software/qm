@@ -1,26 +1,38 @@
+import { mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { spawnDockerExec, type DockerExec } from "../sandbox/docker-exec.ts";
 
 const APP_PORT = 8080;
+const DATA_DIR = "/data";
 const LEGACY_NETWORK = "agent-deploynet";
 
 export interface DockerDeployProviderOptions {
   image?: string;
   docker?: string;
   basePort?: number;
+  dataRoot?: string;
   dockerExec?: DockerExec;
+  mkdir?: (path: string) => void;
 }
 
 export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {}): DeployProvider {
   const docker = opts.docker ?? "docker";
   const image = opts.image ?? "node:24-alpine";
+  const dataRoot = resolve(opts.dataRoot ?? "./data/deployments-data");
+  const mkdir = opts.mkdir ?? ((path: string) => void mkdirSync(path, { recursive: true }));
   let nextPort = opts.basePort ?? 9200;
   const ports = new Map<string, number>();
   const freed: number[] = [];
-  const allocPort = (n: string): number => {
+  const allocPort = (n: string, assigned?: number): number => {
     const existing = ports.get(n);
     if (existing !== undefined) return existing;
+    if (assigned !== undefined) {
+      ports.set(n, assigned);
+      nextPort = Math.max(nextPort, assigned + 1);
+      return assigned;
+    }
     const port = freed.pop() ?? nextPort++;
     ports.set(n, port);
     return port;
@@ -81,12 +93,14 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
   };
 
   return {
-    profile: { managedScaleToZero: false },
+    profile: { managedScaleToZero: false, dataDir: DATA_DIR },
 
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
       const net = await ensureNetwork(network(d));
       await dexec(["rm", "-f", name(d)]);
-      const hostPort = allocPort(name(d));
+      const hostPort = allocPort(name(d), d.endpoint?.port);
+      const dataPath = join(dataRoot, d.id);
+      mkdir(dataPath);
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
       const r = await dexec([
         "run",
@@ -105,10 +119,14 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
         `127.0.0.1:${hostPort}:${APP_PORT}`,
         "-v",
         `${version.snapshotDir}:/app:ro`,
+        "-v",
+        `${dataPath}:${DATA_DIR}`,
         "-w",
         "/app",
         "-e",
         `PORT=${APP_PORT}`,
+        "-e",
+        `DATA_DIR=${DATA_DIR}`,
         ...envArgs,
         image,
         "sh",
