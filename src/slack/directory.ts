@@ -28,6 +28,7 @@ export interface BotIdentity {
   botHandle: string;
   ownWorkspaceUrl: string;
   identityMode: SlackIdentityMode;
+  isEnterpriseInstall?: boolean;
 }
 
 interface UserSnapshot {
@@ -104,6 +105,10 @@ export function createDirectory(deps: {
   let userSnapshot: UserSnapshot | undefined;
   let userSnapshotInFlight: Promise<UserSnapshot> | undefined;
 
+  function reportHealth(patch: Parameters<SlackCoreClient["reportSurfaceHealth"]>[0]): void {
+    void core.reportSurfaceHealth(patch).catch(swallowAs("slack: surface health report", undefined));
+  }
+
   async function refreshUserSnapshot(client: any): Promise<UserSnapshot> {
     const fetchedAt = Date.now();
     const byId = new Map<string, CachedUser>();
@@ -154,6 +159,7 @@ export function createDirectory(deps: {
       types: "public_channel,private_channel",
       exclude_archived: true,
       limit: 1000,
+      ...(ids.isEnterpriseInstall && ids.ownTeamId ? { team_id: ids.ownTeamId } : {}),
     }) as AsyncIterable<any>) {
       for (const c of (res.channels ?? []) as Array<{
         id?: string;
@@ -359,6 +365,7 @@ export function createDirectory(deps: {
       listed = await listBotChannels(client);
     } catch (err) {
       console.error("[slack-plugin] channel list failed:", (err as Error).message);
+      reportHealth({ lastSyncAt: fetchedAt, lastSyncOk: false, lastSyncError: errMessage(err) });
       return null;
     }
     const listedChannels = [...listed.publicChannels, ...listed.privateChannels];
@@ -494,9 +501,17 @@ export function createDirectory(deps: {
           : {}),
         ...(ids.ownWorkspaceUrl ? { workspaceUrl: ids.ownWorkspaceUrl } : {}),
       });
+      if (fetched)
+        reportHealth({
+          lastSyncAt: fetched.fetchedAt,
+          lastSyncOk: true,
+          lastSyncError: "",
+          channelsSynced: fetched.channels.length,
+        });
       return fetched !== null;
     } catch (err) {
       console.error("[slack-plugin] directory push failed:", (err as Error).message);
+      reportHealth({ lastSyncAt: Date.now(), lastSyncOk: false, lastSyncError: errMessage(err) });
       return false;
     }
   }
@@ -599,7 +614,9 @@ export function createDirectory(deps: {
   async function getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined> {
     try {
       return (await client.conversations.info({ channel })).channel as ChannelMeta;
-    } catch {
+    } catch (err) {
+      console.error(`[slack-plugin] conversations.info failed for ${channel}:`, errMessage(err));
+      reportHealth({ lastChannelInfoError: errMessage(err) });
       return undefined;
     }
   }

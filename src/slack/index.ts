@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import bolt from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
@@ -211,6 +212,7 @@ export async function startSlackPlugin(
   try {
     auth = (await app.client.auth.test()) as any;
     ids.ownTeamId = auth.team_id ?? "";
+    ids.isEnterpriseInstall = auth.is_enterprise_install === true;
     ids.botUserId = auth.user_id ?? "";
     ids.ownBotId = auth.bot_id ?? "";
     ids.botHandle = typeof auth.user === "string" ? auth.user : "";
@@ -239,6 +241,26 @@ export async function startSlackPlugin(
     `[slack-plugin] connected as @${auth.user} (bot ${ids.botUserId}) in team ${auth.team} (${ids.ownTeamId}); in-process core`,
   );
   ackEmoji.refreshAckEmoji(app.client);
+  {
+    const granted: string[] = Array.isArray(auth?.response_metadata?.scopes) ? auth.response_metadata.scopes : [];
+    let missing: string[] = [];
+    if (granted.length) {
+      try {
+        const manifest = JSON.parse(readFileSync(new URL("./manifest.json", import.meta.url), "utf8"));
+        const required: string[] = manifest?.oauth_config?.scopes?.bot ?? [];
+        missing = required.filter((scope) => !granted.includes(scope));
+      } catch (err) {
+        console.error("[slack-plugin] could not read manifest.json for the scope check:", errMessage(err));
+      }
+    }
+    if (missing.length)
+      console.error(
+        `[slack-plugin] the installed Slack app is missing ${missing.length} scope(s) from manifest.json: ${missing.join(", ")} — update the app from the manifest and reinstall it to the workspace; directory sync and channel-name resolution may fail without them`,
+      );
+    void core
+      .reportSurfaceHealth({ grantedScopes: granted, missingScopes: missing, connectedAt: Date.now() })
+      .catch(swallowAs("slack: surface health report", undefined));
+  }
 
   let deliveriesPollInFlight = false;
   let deliveriesPollAgain = false;

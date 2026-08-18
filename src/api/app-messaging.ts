@@ -18,7 +18,7 @@ import { isVisible } from "../directory/visibility.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
-import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
+import type { App, AppDeps, ReachNowResult, SurfaceHealth, SurfaceHealthPatch } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
@@ -78,11 +78,14 @@ export function createMessagingMethods(
   | "personMatcher"
   | "cronAdminUrl"
   | "channelName"
+  | "mergeSurfaceHealth"
+  | "surfaceHealth"
   | "ambientJudge"
   | "recordPrincipalDelivery"
   | "reachNow"
   | "resolveReachTarget"
 > {
+  const surfaceHealthBySurface = new Map<string, SurfaceHealth>();
   const { adminBase, projectsForViewer, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
@@ -376,6 +379,13 @@ export function createMessagingMethods(
     },
     async setDirectoryWorkspaceUrl(url) {
       await deps.directory.setWorkspaceUrl(url);
+    },
+    async mergeSurfaceHealth(surface: string, patch: SurfaceHealthPatch) {
+      const prev = surfaceHealthBySurface.get(surface);
+      surfaceHealthBySurface.set(surface, { ...prev, ...patch, updatedAt: Date.now() });
+    },
+    async surfaceHealth() {
+      return Object.fromEntries(surfaceHealthBySurface);
     },
     directoryMeta() {
       return deps.directory.meta();

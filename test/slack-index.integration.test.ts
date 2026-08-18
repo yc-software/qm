@@ -302,6 +302,10 @@ class FakeCore implements SlackCoreClient {
   async getApproval(): Promise<null> {
     return null;
   }
+  readonly healthReports: any[] = [];
+  async reportSurfaceHealth(patch: any): Promise<void> {
+    this.healthReports.push(patch);
+  }
   async pushDirectory(body: any): Promise<void> {
     this.directories.push(body);
   }

@@ -218,7 +218,22 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
       b.backgroundSessions - a.backgroundSessions ||
       a.scopeId.localeCompare(b.scopeId),
   );
-  return sendJson(res, 200, { scopeId: scope, scopes, environments });
+  const surfaceHealth = await app.surfaceHealth();
+  return sendJson(res, 200, {
+    scopeId: scope,
+    scopes,
+    environments,
+    ...(Object.keys(surfaceHealth).length ? { surfaceHealth } : {}),
+  });
+}
+
+export async function getSurfaceHealth(ctx: ApiCtx): Promise<void> {
+  const { res, app, deps } = ctx;
+  const scope = orgScope(deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  audit(deps, { principalId: actor.id, action: "surface_health.read", resource: "surface-health", scopeLabel: scope });
+  return sendJson(res, 200, { surfaceHealth: await app.surfaceHealth() });
 }
 
 interface ScopeEnvironmentMetadata {

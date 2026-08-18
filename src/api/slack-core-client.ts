@@ -3,6 +3,7 @@ import { resolveBranding } from "../resolution/branding.ts";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { buffer } from "node:stream/consumers";
+import type { SurfaceHealthPatch } from "./app-types.ts";
 import type { App } from "./app.ts";
 import type {
   Delivery,
@@ -77,6 +78,7 @@ export interface SlackCoreClient {
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<void>;
+  reportSurfaceHealth(patch: SurfaceHealthPatch): Promise<void>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   onDeliveryEnqueued(listener: () => void): () => void;
@@ -301,6 +303,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         ...(record.summary !== undefined ? { summary: record.summary } : {}),
         ...(record.request !== undefined ? { request: record.request as unknown as Record<string, unknown> } : {}),
       };
+    },
+
+    async reportSurfaceHealth(patch) {
+      await deps.app.mergeSurfaceHealth("slack", patch);
     },
 
     async pushDirectory(body) {

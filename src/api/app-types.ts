@@ -233,6 +233,21 @@ export interface SessionSearchHit {
   archived?: boolean;
 }
 
+export interface SurfaceHealthPatch {
+  grantedScopes?: string[];
+  missingScopes?: string[];
+  connectedAt?: number;
+  lastSyncAt?: number;
+  lastSyncOk?: boolean;
+  lastSyncError?: string;
+  channelsSynced?: number;
+  lastChannelInfoError?: string;
+}
+
+export interface SurfaceHealth extends SurfaceHealthPatch {
+  updatedAt: number;
+}
+
 export interface App {
   turn(req: TurnRequest): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
@@ -409,6 +424,8 @@ export interface App {
     groupRosterIds?: string[],
   ): Promise<void>;
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
+  mergeSurfaceHealth(surface: string, patch: SurfaceHealthPatch): Promise<void>;
+  surfaceHealth(): Promise<Record<string, SurfaceHealth>>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
