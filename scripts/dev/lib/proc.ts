@@ -1,7 +1,55 @@
 import { spawn, spawnSync } from "node:child_process";
-import { openSync } from "node:fs";
+import { openSync, statSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { connect } from "node:net";
 import { bestEffort, sleep } from "./util.ts";
+
+/**
+ * On Windows, child_process.spawn cannot execute the `.cmd`/`.bat` shims that
+ * npm, tsx & co. place on PATH: the bare name fails with ENOENT and the
+ * explicit `.cmd` fails with EINVAL (current Node rejects batch files without a
+ * shell). Resolve the command against PATH ourselves and route batch shims
+ * through cmd.exe, the way npm's own CLI does (#551). `.exe`/`.com` resolves to
+ * its full path and spawns directly; non-Windows platforms are untouched.
+ */
+function resolveWindowsCommand(cmd: string): string | null {
+  // PATHEXT extensions come first, extensionless last: Node's install dir ships
+  // an extensionless `npm` sh-script for bash environments, and matching it
+  // before npm.cmd would hand spawn a non-executable file.
+  const exts = [...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean), ""];
+  const dirs = /[\\/]/.test(cmd)
+    ? [""]
+    : (process.env.PATH ?? "")
+        .split(delimiter)
+        .filter(Boolean);
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = dir ? join(dir, cmd + ext) : cmd + ext;
+      try {
+        if (statSync(candidate).isFile()) return candidate;
+      } catch {
+        // Not present at this candidate; keep scanning.
+      }
+    }
+  }
+  return null;
+}
+
+export function winSpawnArgv(cmd: string, args: string[]): { cmd: string; args: string[]; verbatim: boolean } {
+  if (process.platform !== "win32") return { cmd, args, verbatim: false };
+  const resolved = resolveWindowsCommand(cmd);
+  if (resolved && /\.(cmd|bat)$/i.test(resolved)) {
+    // cmd.exe re-parses everything after /c as one command line: when the shim
+    // path contains spaces (e.g. "C:\Program Files\nodejs\npm.cmd"), per-argument
+    // quoting makes cmd execute only up to the first quote. Quote each part
+    // ourselves and hand cmd a single pre-quoted command line, wrapped in an
+    // outer pair of quotes that /s strips. `verbatim` keeps Node from escaping
+    // the embedded quotes with backslashes, which cmd.exe cannot parse.
+    const commandLine = [resolved, ...args].map((part) => (/\s/.test(part) ? `"${part}"` : part)).join(" ");
+    return { cmd: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", `"${commandLine}"`], verbatim: true };
+  }
+  return { cmd: resolved ?? cmd, args, verbatim: false };
+}
 
 export function run(
   cmd: string,
@@ -9,11 +57,13 @@ export function run(
   opts: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, {
+    const spawnArgv = winSpawnArgv(cmd, args);
+    const child = spawn(spawnArgv.cmd, spawnArgv.args, {
       cwd: opts.cwd,
       env: opts.env,
       timeout: opts.timeoutMs ?? 120_000,
       killSignal: "SIGKILL",
+      windowsVerbatimArguments: spawnArgv.verbatim,
       stdio: [opts.input !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -58,11 +108,13 @@ export function spawnDetached(opts: {
   const [cmd, ...rest] = opts.argv;
   if (!cmd) throw new Error("spawnDetached: empty argv");
   const fd = openSync(opts.logFile, "a");
-  const child = spawn(cmd, rest, {
+  const spawnArgv = winSpawnArgv(cmd, rest);
+  const child = spawn(spawnArgv.cmd, spawnArgv.args, {
     cwd: opts.cwd,
     detached: true,
     stdio: ["ignore", fd, fd],
     env: opts.env,
+    windowsVerbatimArguments: spawnArgv.verbatim,
   });
   child.unref();
   if (!child.pid) throw new Error(`failed to spawn ${opts.argv.join(" ")}`);
