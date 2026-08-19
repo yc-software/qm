@@ -44,6 +44,7 @@ function start(harnessId = "pi"): { base: string; built: BuiltApp; close: () => 
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
+    sessions: built.sessions,
     acl: built.acl,
     serviceCreds: built.serviceCreds,
     deviceFlowCutover: built.deviceFlowCutover,
@@ -55,6 +56,59 @@ function start(harnessId = "pi"): { base: string; built: BuiltApp; close: () => 
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
+
+test("security flags are visible and legacy session taint can be released by an org admin", async () => {
+  const srv = start();
+  try {
+    srv.built.auditLog.record({
+      at: 123,
+      principalId: "U1",
+      action: "security_posture.flagged",
+      resource: "slack",
+      scopeLabel: "channel:C1",
+      status: "pending_approval",
+      detail: JSON.stringify({ cause: "strict-verdict", source: ["overheard"] }),
+    });
+    const flags = await fetch(`${srv.base}/v1/admin/security/flags?limit=1`, { headers: ADMIN });
+    assert.equal(flags.status, 200);
+    assert.deepEqual((await flags.json()) as unknown, {
+      flags: [
+        {
+          at: 123,
+          principal: "U1",
+          scope: "channel:C1",
+          surface: "slack",
+          detail: '{"cause":"strict-verdict","source":["overheard"]}',
+        },
+      ],
+    });
+
+    const session = await srv.built.sessions.getOrCreateByThread("legacy-taint", "dm", "personal:U1");
+    const lease = (await srv.built.sessions.acquireLease(session.id)).lease!;
+    await srv.built.sessions.append(lease, {
+      type: "user",
+      payload: { text: "legacy", securityTainted: true },
+      scopeLabel: "personal:U1",
+    });
+    await srv.built.sessions.releaseLease(lease);
+    const denied = await fetch(`${srv.base}/v1/admin/security/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
+      body: JSON.stringify({ sessionId: session.id }),
+    });
+    assert.equal(denied.status, 403);
+    const released = await fetch(`${srv.base}/v1/admin/security/release`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ sessionId: session.id }),
+    });
+    assert.equal(released.status, 200);
+    const payload = (await srv.built.sessions.getEntries(session.id))[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.securityTainted, undefined);
+  } finally {
+    await srv.close();
+  }
+});
 
 test("GET /v1/admin/resources returns a manifest entry for every registered resource", async () => {
   const srv = start();

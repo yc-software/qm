@@ -10,6 +10,7 @@ export interface PendingApproval {
   reason: string;
   purpose?: string;
   summary?: string;
+  kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
 }
 
@@ -50,19 +51,22 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
   const items = approvals.length
     ? approvals
     : [{ requestId: "", command: "unknown command", reason: "requires approval" }];
-  const text = items
-    .map((p) =>
-      p.purpose
-        ? `Approval needed: ${clip(p.purpose, 400)}`
-        : `Approval needed before I can run ${inlineCode(p.command)}.`,
-    )
-    .join("\n");
+  const describe = (p: (typeof items)[number]): string => {
+    if (p.kind === "input") return "My security screen flagged part of this message. Allow it?";
+    if (p.purpose) return `Approval needed: ${clip(p.purpose, 400)}`;
+    return `Approval needed before I can run ${inlineCode(p.command)}.`;
+  };
+  const text = items.map(describe).join("\n");
   const blocks: Array<Record<string, unknown>> = [];
   for (const p of items) {
-    const lines = [":lock: *Approval needed.*"];
+    const lines = [
+      p.kind === "input"
+        ? ":lock: *My security screen flagged part of this message. Allow it?*"
+        : ":lock: *Approval needed.*",
+    ];
     if (p.summary) lines.push(clip(p.summary, 400));
     if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, 400)}`);
-    lines.push(`*Command:* ${inlineCode(p.command)}`);
+    if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${clip(p.reason, 200)}`);
     blocks.push({
       type: "section",

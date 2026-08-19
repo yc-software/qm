@@ -476,6 +476,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
+    async clearSecurityTaint(sessionId) {
+      const updated = await q(
+        "UPDATE session_entries SET payload = (payload::jsonb - 'securityTainted')::text " +
+          "WHERE session_id = $1 AND payload LIKE '%\"securityTainted\"%' RETURNING 1",
+        [sessionId],
+      );
+      if (updated.length > 0) return true;
+      return (await q("SELECT 1 FROM sessions WHERE id = $1", [sessionId])).length === 1;
+    },
+
     async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {
       return withLease(lease, "tape append without a valid session lease", (client) =>
         insertTapeRow(client, lease.sessionId, rec),

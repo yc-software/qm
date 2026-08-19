@@ -93,6 +93,7 @@ function isAdminContentRead(pathname: string): boolean {
   if (
     pathname === "/v1/admin/runs" ||
     pathname === "/v1/admin/audit" ||
+    pathname === "/v1/admin/security/flags" ||
     pathname === "/v1/admin/errors" ||
     pathname === "/v1/admin/egress"
   )

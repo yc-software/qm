@@ -74,7 +74,7 @@ test("a prompt-injected ambient judge reason is screened even when the shown mes
     ]);
     await sleep(250);
     assert.equal((await built.deliveries.pending("slack")).length, 0);
-    assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.quarantine"));
+    assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.flagged"));
   } finally {
     await built.runtime.stop();
   }

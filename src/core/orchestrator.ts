@@ -63,7 +63,7 @@ import {
   UNSCREENED_REASON,
   unscreenedNotice,
 } from "../security/security-posture.ts";
-import { commandApprovalId } from "./approval-id.ts";
+import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY, recallMemoryScopes, writableMemoryScope } from "../memory/policy.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
@@ -118,7 +118,6 @@ import { parseRef } from "../acl/resource-ref.ts";
 import { findTrailingPartialTurn, resumeNote } from "./turn-resume.ts";
 import {
   coverageImportEvent,
-  reconstructMessagesFromHistory,
   recordedMessageTimestamps,
   renderOverheard,
   selectOverheardToImport,
@@ -290,7 +289,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   function recordSessionBusy(busy: {
-    site: "turn" | "quarantined_input";
+    site: "turn" | "quarantined_input" | "flagged_input";
     attempt: LeaseAttempt;
     sessionId: string;
     scopeId: ScopeId;
@@ -509,6 +508,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         await deps.harness.turns.resetSession?.(sessionId);
       };
       const securityPolicy = resolution.securityPolicy;
+      const approvalSession = input.approval ? await deps.sessions.getByThread(conversation.threadRef) : null;
+      const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
+      const approvalReplaysFlaggedRequest =
+        !!approvalRecord?.request &&
+        approvalRecord.request.text === input.text &&
+        JSON.stringify(approvalRecord.request.overheard ?? []) === JSON.stringify(input.overheard ?? []) &&
+        JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
+        (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
+      const screenInbound =
+        securityPolicy.inboundScreening === "external" &&
+        !(
+          approvalSession &&
+          approvalRecord?.sessionId === approvalSession.id &&
+          approvalRecord.kind === "input" &&
+          approvalReplaysFlaggedRequest
+        );
       const screenSession: { id?: string } = {};
       const pendingScreenRequests: HarnessLlmRequestRecord[] = [];
       const recordScreenRequest = async (rec: HarnessLlmRequestRecord): Promise<void> => {
@@ -523,8 +538,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       let screenedOverheard: OverheardEntryPayload[] = [];
-      let seedPriorTurns = false;
-      if (securityPolicy.inboundScreening === "external") {
+      if (screenInbound) {
         const existingSession = await deps.sessions.getByThread(conversation.threadRef);
         const existingEntries = existingSession ? await deps.sessions.getEntries(existingSession.id) : [];
         const quarantinedAttachmentSourceIds = new Set(
@@ -545,21 +559,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         const recorded = recordedMessageTimestamps(existingEntries);
         screenedOverheard = conversation.kind === "dm" ? [] : selectOverheardToImport(input.overheard ?? [], recorded);
-        const tainted = existingEntries.some(
-          (entry) => (entry.payload as { securityTainted?: unknown } | null)?.securityTainted === true,
-        );
-        if (!tainted && input.priorTurns?.length) {
-          try {
-            const cleanHistory = filterHistory(forModelContext(existingEntries, { includeSecurityTainted: false }));
-            seedPriorTurns = reconstructMessagesFromHistory(cleanHistory).length === 0;
-          } catch {
-            seedPriorTurns = true;
-          }
-        }
       }
       let hasUnscreenableAttachment = false;
       const attachmentPromptData: Array<{ source: string; content: string }> = [];
-      if (securityPolicy.inboundScreening === "external") {
+      if (screenInbound) {
         for (const attachment of input.attachments ?? []) {
           attachmentPromptData.push({
             source: "attachment-metadata",
@@ -593,38 +596,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
         }
       }
-      const externalPromptData =
-        securityPolicy.inboundScreening === "external"
-          ? [
-              ...(ambientTurn && actor.displayName?.trim()
-                ? [{ source: "sender", content: senderNote(actor.displayName) }]
-                : []),
-              ...(input.conversationHeader?.trim()
-                ? [{ source: "conversation-header", content: input.conversationHeader }]
-                : []),
-              ...(seedPriorTurns && conversation.kind !== "dm"
-                ? (input.priorTurns ?? [])
-                    .filter((turn) => turn.role === "user")
-                    .map((turn) => ({
-                      source: `prior-turn:${turn.role}${turn.name ? `:${turn.name}` : ""}`,
-                      content: turn.text,
-                    }))
-                : []),
-              ...screenedOverheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
-              ...attachmentPromptData,
-              ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
-            ]
-          : [];
-      const screenPayload =
-        securityPolicy.inboundScreening === "external"
-          ? securityScreenPayload({
-              ...input,
-              ...turnOriginRequestFields(input.origin),
-              overheard: [],
-              externalPromptData,
-            })
-          : null;
-      let quarantineScreenedInput = false;
+      const externalPromptData = screenInbound
+        ? [
+            ...(ambientTurn && actor.displayName?.trim()
+              ? [{ source: "sender", content: senderNote(actor.displayName) }]
+              : []),
+            ...(input.conversationHeader?.trim()
+              ? [{ source: "conversation-header", content: input.conversationHeader }]
+              : []),
+            ...screenedOverheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
+            ...attachmentPromptData,
+            ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
+          ]
+        : [];
+      const screenPayload = screenInbound
+        ? securityScreenPayload({
+            ...input,
+            ...turnOriginRequestFields(input.origin),
+            overheard: [],
+            externalPromptData,
+          })
+        : null;
+      let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
       let inputUnscreened = false;
       if (screenPayload || hasUnscreenableAttachment) {
         const canScreenText =
@@ -643,15 +636,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         else if (screenPayload.truncated) unscreenableCause = "oversize-input";
         else if (!deps.securityScreener && !deps.harness.models.screenSecurity) unscreenableCause = "no-screener";
         if (verdict?.decision === "strict") {
-          quarantineScreenedInput = true;
+          const sources = externalPromptData.map((item) => item.source);
+          flaggedScreenedInput = {
+            reason: verdict.reason ?? "strict security screen verdict",
+            sources,
+          };
           deps.auditLog.record({
             at: Date.now(),
             principalId: actor.id,
-            action: "security_posture.quarantine",
+            action: "security_posture.flagged",
             resource: input.surface ?? "unknown",
             scopeLabel: scopeId,
-            status: "refused",
-            detail: JSON.stringify({ cause: "strict-verdict", ...(verdict.reason ? { reason: verdict.reason } : {}) }),
+            status: "pending_approval",
+            detail: JSON.stringify({ cause: "strict-verdict", reason: flaggedScreenedInput.reason, source: sources }),
           });
         } else if (unscreenableCause || verdict?.unscreened) {
           inputUnscreened = true;
@@ -666,7 +663,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
         }
       }
-      if (quarantineScreenedInput) {
+      if (flaggedScreenedInput) {
+        const existing = await deps.sessions.getByThread(conversation.threadRef);
+        const flagGrantKey = `security-screen:${input.surface ?? "unknown"}`;
+        for (const grant of await approvalGrants.all()) {
+          if (!samePerson(grant.actorId, actor.id)) continue;
+          if (!resolution.approvalGrantModes[grant.scope]) continue;
+          if (grant.scope === "session" && grant.sessionId !== existing?.id) continue;
+          if ((grant.approvalKey ?? grant.command) !== flagGrantKey && grant.command !== "security-screen") continue;
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId: actor.id,
+            action: "security_posture.flag_allowed_by_grant",
+            resource: input.surface ?? "unknown",
+            scopeLabel: scopeId,
+            status: "allowed",
+            detail: JSON.stringify({ scope: grant.scope, reason: flaggedScreenedInput.reason }),
+          });
+          flaggedScreenedInput = undefined;
+          break;
+        }
+      }
+      if (flaggedScreenedInput) {
         let type: SessionType = "channel";
         if (conversation.kind === "dm") type = "dm";
         else if (conversation.kind === "group") type = "group";
@@ -684,7 +702,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const lease = attempt.lease;
         if (!lease) {
           recordSessionBusy({
-            site: "quarantined_input",
+            site: "flagged_input",
             attempt,
             sessionId: session.id,
             scopeId,
@@ -715,11 +733,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   entrySeq: imported.seq,
                   meta: { overheard: true, ts: overheard.ts, ...(overheard.name ? { author: overheard.name } : {}) },
                 })
-                .catch(swallowAs("tape: quarantined overheard import", undefined));
+                .catch(swallowAs("tape: flagged overheard import", undefined));
             }
-            const payload: Record<string, unknown> = {
+            const taintedPayload: Record<string, unknown> = {
               text: input.text,
               securityTainted: true,
+              hidden: true,
               ...((input.attachments ?? []).some((attachment) => attachment.sourceId)
                 ? {
                     quarantinedAttachmentSourceIds: input.attachments!.flatMap((attachment) =>
@@ -727,12 +746,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     ),
                   }
                 : {}),
-              ...(automatedTurn ? { hidden: true } : {}),
               ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
               ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
-              ...(input.displayText?.trim() ? { display: input.displayText } : {}),
             };
-            await deps.sessions.append(lease, { type: "user", payload, scopeLabel: scopeId });
+            await deps.sessions.append(lease, { type: "user", payload: taintedPayload, scopeLabel: scopeId });
+            const command = "security-screen";
+            const requestId = inputApprovalId(session.id, replayableRequest(input));
+            const grantModesField =
+              resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
+                ? {}
+                : { grantModes: resolution.approvalGrantModes };
+            const reason = `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`;
+            await pending.put(requestId, {
+              sessionId: session.id,
+              command,
+              createdAt: Date.now(),
+              reason,
+              request: replayableRequest(input),
+              blocksInput: true,
+              kind: "input",
+              approvalKey: `security-screen:${input.surface ?? "unknown"}`,
+              ...grantModesField,
+            });
             return true;
           });
         } catch (err) {
@@ -748,10 +783,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.sessions.releaseLease(lease);
         }
         return {
-          status: "refused",
+          status: "pending_approval",
           sessionId: session.id,
-          refusalKind: "security_quarantine",
-          reason: "Auto quarantined suspicious or unscreenable external input before the agent ran.",
+          pendingApprovals: [
+            {
+              requestId: inputApprovalId(session.id, replayableRequest(input)),
+              command: "security-screen",
+              reason: `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
+              blocksInput: true,
+              kind: "input",
+              approvalKey: `security-screen:${input.surface ?? "unknown"}`,
+              ...(resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
+                ? {}
+                : { grantModes: resolution.approvalGrantModes }),
+            },
+          ],
         };
       }
       const strictReadOnly = input.readOnly === true;
@@ -1389,12 +1435,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     ...(p.purpose ? { purpose: p.purpose } : {}),
                     ...(p.summary ? { summary: p.summary } : {}),
                     ...(p.approvalKey ? { approvalKey: p.approvalKey } : {}),
-                    ...(p.kind === "approval" ? { kind: p.kind } : {}),
+                    ...(p.kind ? { kind: p.kind } : {}),
                   },
                 ],
               };
             }
             await pending.delete(input.approval.requestId);
+            if (p.kind === "input") {
+              await deps.sessions
+                .clearSecurityTaint(session.id)
+                .catch(swallowAs("clearSecurityTaint on input approval", false));
+            }
             const useKey = p.approvalKey ?? p.command;
             commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" ? 1 : Infinity));
             if (scope === "session" || scope === "always") {
@@ -3024,6 +3075,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(err.matched ? { matched: err.matched } : {}),
             ...(summary ? { summary } : {}),
             ...(err.approvalKey ? { approvalKey: err.approvalKey } : {}),
+            ...(err.kind ? { kind: err.kind } : {}),
             blocksInput: true,
           };
           return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };

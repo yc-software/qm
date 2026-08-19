@@ -7,6 +7,7 @@ import {
   type SlackFile,
   type ThreadMessage,
   MAX_RECENT_MESSAGES,
+  MAX_TOP_LEVEL_CONTEXT_AGE_S,
   collectEarlierThreadFiles,
   decodeSlackEntities,
   isOversize,
@@ -199,8 +200,12 @@ export function createConversationSerializer(deps: {
       if (slackId) nameById.set(slackId, a.displayName);
     }
     const raw = await fetchRawConversation(client, inc.channel, inc.threadTs);
-    const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, nameById), RECENT_MESSAGE_WINDOW);
-    const earlierFiles = collectEarlierThreadFiles(raw as ThreadMessage[], {
+    const messages = recentWindow(
+      await shapeRecentMessages(client, raw, inc.ts, nameById),
+      RECENT_MESSAGE_WINDOW,
+      inc.threadTs ? undefined : { triggerTs: inc.ts, maxAgeSeconds: MAX_TOP_LEVEL_CONTEXT_AGE_S },
+    );
+    const earlierFiles = collectEarlierThreadFiles(raw, {
       triggerTs: inc.ts,
       botUserId: ids.botUserId,
       ownBotId: ids.ownBotId,

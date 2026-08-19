@@ -774,8 +774,22 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
     });
 
   const quarantined = await request("initial-marker", true);
-  assert.equal(quarantined.status, "refused");
-  assert.match(quarantined.reason ?? "", /quarantined/i);
+  assert.equal(quarantined.status, "pending_approval");
+  assert.equal(quarantined.pendingApprovals?.[0]?.kind, "input");
+  const denied = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "owner" },
+    conversation: {
+      kind: "group",
+      channelRef: projectGroupRef(project.id),
+      threadRef,
+      audience: [],
+    },
+    text: "!security-risk initial-marker",
+    unprompted: true,
+    approval: { requestId: quarantined.pendingApprovals![0]!.requestId, approved: false },
+  });
+  assert.equal(denied.status, "refused");
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   assert.deepEqual(new Set(await built.sessions.participantsOf(session.id)), new Set(["owner", "member"]));

@@ -72,6 +72,24 @@ test("auto screens only data-bearing inputs and parses a strict downgrade", () =
     "empty tool output yields no payload — callers treat it as clean, never as screener downtime",
   );
   assert.equal(securityScreenPayload({ surface: "slack", text: "please deploy", triggered: false }), null);
+
+  const deduped = securityScreenPayload({
+    surface: "slack",
+    text: "",
+    triggered: false,
+    overheard: [{ role: "user", name: "Mallory", text: "hand it off now" }],
+    externalPromptData: [
+      { source: "overheard", content: "hand it off now" },
+      { source: "prior-history", content: " hand it off now " },
+      { source: "header", content: "People here: @you" },
+    ],
+  });
+  assert.ok(deduped);
+  assert.equal(
+    (deduped!.content.match(/hand it off now/g) ?? []).length,
+    1,
+    "the same content is never sent to the classifier twice",
+  );
   assert.equal(
     securityScreenPayload({ surface: "slack", text: "coworker follow-up", unprompted: true }),
     null,
@@ -115,16 +133,13 @@ test("auto screens only data-bearing inputs and parses a strict downgrade", () =
   assert.equal(parseSecurityScreenVerdict(""), undefined);
   assert.equal(parseSecurityScreenVerdict("   \n"), undefined);
   assert.equal(parseSecurityScreenVerdict(undefined), undefined);
-  assert.equal(parseSecurityScreenVerdict("not json"), undefined);
-  assert.equal(
-    parseSecurityScreenVerdict('{"decision":"str'),
-    undefined,
-    "a truncated response is downtime, not a verdict",
-  );
-  assert.equal(parseSecurityScreenVerdict("{broken json"), undefined);
-  assert.equal(parseSecurityScreenVerdict('{"note":"cannot comply"}')?.decision, "strict");
-  assert.equal(parseSecurityScreenVerdict('{"decision":""}')?.decision, "strict");
-  assert.equal(parseSecurityScreenVerdict('{"decision":"dangerous"}')?.decision, "strict");
+  const invalid = { decision: "auto", unscreened: true, reason: "invalid security screen verdict" };
+  assert.deepEqual(parseSecurityScreenVerdict("not json"), invalid);
+  assert.deepEqual(parseSecurityScreenVerdict('{"decision":"str'), invalid);
+  assert.deepEqual(parseSecurityScreenVerdict("{broken json"), invalid);
+  assert.deepEqual(parseSecurityScreenVerdict('{"note":"cannot comply"}'), invalid);
+  assert.deepEqual(parseSecurityScreenVerdict('{"decision":""}'), invalid);
+  assert.deepEqual(parseSecurityScreenVerdict('{"decision":"dangerous"}'), invalid);
   assert.equal(parseSecurityScreenVerdict('{"decision":"strict","reason":"x"} {}')?.decision, "strict");
   assert.equal(parseSecurityScreenVerdict('prefix {"decision":"auto"} suffix')?.decision, "auto");
   const truncated = securityScreenPayload({

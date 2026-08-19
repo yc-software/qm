@@ -190,6 +190,18 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
+    async clearSecurityTaint(sessionId) {
+      const log = entries.get(sessionId);
+      if (!log) return false;
+      for (const entry of log) {
+        if (!entry.payload || typeof entry.payload !== "object") continue;
+        const payload = { ...(entry.payload as Record<string, unknown>) };
+        delete payload.securityTainted;
+        entry.payload = payload;
+      }
+      return true;
+    },
+
     async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {
       const held = leases.get(lease.sessionId);
       if (!held || held.token !== lease.token) throw new Error("tape append without a valid session lease");

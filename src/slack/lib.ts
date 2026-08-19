@@ -102,6 +102,7 @@ export {
   buildContextWindow,
   type RecentMessage,
   MAX_RECENT_MESSAGES,
+  MAX_TOP_LEVEL_CONTEXT_AGE_S,
   recentWindow,
   resolveMentions,
   type ConversationView,

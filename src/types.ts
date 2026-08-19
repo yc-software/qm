@@ -461,7 +461,7 @@ export interface PendingApproval {
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   blocksInput?: boolean;
-  kind?: "approval";
+  kind?: "approval" | "input";
 }
 
 export interface PendingApprovalRecord {

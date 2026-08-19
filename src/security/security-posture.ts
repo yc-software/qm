@@ -83,11 +83,12 @@ function firstJsonObject(text: string): { decision?: unknown; reason?: unknown }
 export function parseSecurityScreenVerdict(output: string | undefined): SecurityScreenVerdict | undefined {
   if (!output || !output.trim()) return undefined;
   const parsed = firstJsonObject(output);
-  if (!parsed) return undefined;
+  if (!parsed) return { decision: "auto", unscreened: true, reason: "invalid security screen verdict" };
   if (parsed.decision === "auto") return { decision: "auto" };
   if (typeof parsed.decision !== "string" || !parsed.decision)
-    return { decision: "strict", reason: "invalid security screen verdict" };
-  if (parsed.decision !== "strict") return { decision: "strict", reason: "invalid security screen verdict" };
+    return { decision: "auto", unscreened: true, reason: "invalid security screen verdict" };
+  if (parsed.decision !== "strict")
+    return { decision: "auto", unscreened: true, reason: "invalid security screen verdict" };
   const reason =
     typeof parsed.reason === "string"
       ? parsed.reason
@@ -134,8 +135,15 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
   for (const datum of input.externalPromptData ?? []) {
     if (datum.content.trim()) payloads.push(datum);
   }
-  if (!payloads.length) return null;
-  const serialized = JSON.stringify(payloads);
+  const seen = new Set<string>();
+  const unique = payloads.filter((p) => {
+    const key = p.content.trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (!unique.length) return null;
+  const serialized = JSON.stringify(unique);
   if (serialized.length <= MAX_SCREEN_CHARS) return { content: serialized, truncated: false };
   const marker = "\n...[security screen input truncated]...\n";
   const half = Math.floor((MAX_SCREEN_CHARS - marker.length) / 2);
