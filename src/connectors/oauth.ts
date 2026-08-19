@@ -213,6 +213,30 @@ const notionExchange: OAuthExchangeAdapter = async ({ provider, client, code, re
 };
 
 export const PROVIDERS: Record<string, OAuthProviderConfig> = {
+  bluenexus: {
+    hosts: ["bluenexus.ai"],
+    authUrl: "https://app.bluenexus.ai/oauth/authorize",
+    tokenUrl: "https://api.bluenexus.ai/api/v1/auth/token",
+    scopes: ["universal-mcp-read-write"],
+    clientIdEnv: "BLUENEXUS_OAUTH_CLIENT_ID",
+    clientSecretEnv: "BLUENEXUS_OAUTH_CLIENT_SECRET",
+    redirectPath: "bluenexus/callback",
+    consentMode: "standard",
+    egressRule: ["api.bluenexus.ai", "app.bluenexus.ai"],
+    pkce: true,
+    setupGuide: {
+      console: "BlueNexus → Developer → My Apps → Add App",
+      url: "https://app.bluenexus.ai/developer/clients",
+      steps: [
+        "Create an OAuth client in Third-Party Integration mode.",
+        "Add the redirect URI shown below to that client.",
+        "Paste the Client ID + Client secret below.",
+        "Clients can also be registered over the API — the registration_endpoint in https://api.bluenexus.ai/.well-known/oauth-authorization-server accepts RFC 7591 requests.",
+      ],
+      scopesRationale:
+        "universal-mcp-read-write exposes all six Universal MCP tools. The server filters tools/list by scope, so universal-mcp-read yields only the four read tools and cannot write to connected services.",
+    },
+  },
   google: {
     hosts: [
       "gmail.googleapis.com",

@@ -52,6 +52,11 @@ const CONNECTOR_LABELS: Record<string, { name: string; hosts: string; desc?: str
     hosts: "Posts & profile",
     desc: "Lets the agent read X and post, like, and follow as you — used when an action should come from your account rather than the org's.",
   },
+  bluenexus: {
+    name: "BlueNexus",
+    hosts: "Every service you connected there",
+    desc: "Lets the agent reach the services you connected to BlueNexus — Slack, Notion, GitHub, Google Workspace, Telegram and more — through that one account, reading and acting on your behalf.",
+  },
 };
 
 const CONNECTOR_LOGOS: Record<string, string> = {
