@@ -5,7 +5,6 @@ import {
   type ReactionTally,
   type RecentMessage,
   type SlackFile,
-  type ThreadMessage,
   MAX_RECENT_MESSAGES,
   MAX_TOP_LEVEL_CONTEXT_AGE_S,
   collectEarlierThreadFiles,
