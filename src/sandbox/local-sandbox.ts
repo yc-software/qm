@@ -165,14 +165,28 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<{ status: number; text: string }> {
-    const port = await resolvePort(name);
-    const signals = [AbortSignal.timeout(timeoutMs ?? 30_000), ...(signal ? [signal] : [])];
-    const res = await fetchImpl(`http://127.0.0.1:${port}${path}`, {
-      method: body === undefined ? "GET" : "POST",
-      ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
-      signal: AbortSignal.any(signals),
-    });
-    return { status: res.status, text: await res.text() };
+    const port = await resolvePort(name).catch(() => null);
+    const targets: string[] = [];
+    if (port) {
+      targets.push(`http://127.0.0.1:${port}`);
+      targets.push(`http://host.docker.internal:${port}`);
+    }
+    targets.push(`http://${name}:${AGENT_PORT}`);
+    let lastErr: unknown;
+    for (const base of targets) {
+      try {
+        const signals = [AbortSignal.timeout(timeoutMs ?? 5000), ...(signal ? [signal] : [])];
+        const res = await fetchImpl(`${base}${path}`, {
+          method: body === undefined ? "GET" : "POST",
+          ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
+          signal: AbortSignal.any(signals),
+        });
+        return { status: res.status, text: await res.text() };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr ?? new Error(`local sandbox ${name}: unreachable`);
   }
 
   async function waitDaemon(name: string): Promise<void> {
