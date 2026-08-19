@@ -6537,6 +6537,7 @@
                 webuiModelIds = webuiModelIds.filter((v) => v !== id);
                 renderChips();
                 syncDefault();
+                updateSectionDirty("webui-models");
               };
               chip.appendChild(label);
               chip.appendChild(x);
@@ -6562,6 +6563,7 @@
             addInput.value = "";
             renderChips();
             syncDefault();
+            updateSectionDirty("webui-models");
           };
           addInput.onchange = addModel;
           addInput.onkeydown = (e) => {
@@ -6570,6 +6572,7 @@
               addModel();
             }
           };
+          $("webui-models-default").onchange = () => updateSectionDirty("webui-models");
           renderChips();
           syncDefault();
         }
