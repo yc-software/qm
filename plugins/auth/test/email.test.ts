@@ -102,4 +102,18 @@ test("the Resend transport reports the provider's message id and surfaces refusa
 
   const badKey = resendMailer(cfg, (async () => new Response("{}", { status: 401 })) as unknown as typeof fetch);
   await assert.rejects(() => badKey.verify(), /rejected RESEND_API_KEY/);
+
+  const sendingOnlyKey = resendMailer(
+    cfg,
+    (async () =>
+      new Response(
+        JSON.stringify({
+          statusCode: 401,
+          message: "This API key is restricted to only send emails",
+          name: "restricted_api_key",
+        }),
+        { status: 401, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch,
+  );
+  assert.equal(await sendingOnlyKey.verify(), "Resend API key accepted");
 });
