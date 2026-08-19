@@ -55,6 +55,7 @@ export interface ClaudeHarnessOptions {
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
   turnWallClockMs?: number;
+  modelInactivityMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
@@ -103,6 +104,7 @@ type BridgedTool = {
 
 const CHILD_TOOL_NAMES = new Set(["execute", "read", "write", "publish", "memory", "history", "background"]);
 const CLAUDE_CHILD_AGENT_TYPES = new Set(["research", "code", "consult"]);
+const CLAUDE_MODEL_INACTIVITY_MS = 5 * 60_000;
 const CLAUDE_ENV_PASSTHROUGH = [
   "PATH",
   "TMPDIR",
@@ -357,6 +359,9 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       consult: { description: "Provide an independent expert analysis.", prompt: childPolicy, tools: childToolNames },
     };
     const queue = new MessageQueue();
+    let toolStarted = () => {};
+    let toolFinished = () => {};
+    let stopInactivity = () => {};
     let terminateProvider = () => {
       queue.close();
       controller.abort();
@@ -367,6 +372,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         const callId = String(
           (extra as { toolUseId?: string } | undefined)?.toolUseId ?? randomBytes(8).toString("hex"),
         );
+        toolStarted();
         try {
           const result = await definition.execute(callId, args);
           if (result.terminate || ref.pausedOnApproval || ref.silentRequested) setImmediate(terminateProvider);
@@ -376,6 +382,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
             isError: true,
           };
+        } finally {
+          toolFinished();
         }
       });
     });
@@ -400,7 +408,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       for (const value of thinking.splice(0))
         await turn.emit({ type: "thinking", payload: { thinking: value }, scopeLabel: turn.scopeLabel });
     };
-    const taskStates = new Map<string, { callId: string; status: TaskStatus; resultEmitted: boolean }>();
+    const taskStates = new Map<
+      string,
+      { callId: string; status: TaskStatus; resultEmitted: boolean; active: boolean }
+    >();
     const callUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>();
     let stepCallIds = new Set<string>();
     let recordedSteps = 0;
@@ -489,9 +500,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     active.add(sdkQuery);
     const interrupt = async (fromUser: boolean) => {
       stopped ||= fromUser;
+      stopInactivity();
       queue.close();
-      await sdkQuery.interrupt().catch(() => undefined);
       controller.abort();
+      await sdkQuery.interrupt().catch(() => undefined);
     };
     terminateProvider = () => {
       void interrupt(false);
@@ -527,6 +539,43 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         : null;
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
     let timer: NodeJS.Timeout | undefined;
+    let inactivityTimer: NodeJS.Timeout | undefined;
+    let activeTools = 0;
+    let inactivityStopped = false;
+    let waitingForModel = false;
+    let inactivityError: Error | undefined;
+    let rejectInactivity = (_error: Error) => {};
+    const inactivity = new Promise<never>((_, reject) => {
+      rejectInactivity = reject;
+    });
+    const resetInactivity = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      if (settled || inactivityStopped || !waitingForModel || activeTools > 0) return;
+      inactivityTimer = setTimeout(() => {
+        inactivityError = new Error(
+          `Claude model produced no activity for ${Math.round((opts.modelInactivityMs ?? CLAUDE_MODEL_INACTIVITY_MS) / 1000)}s`,
+        );
+        rejectInactivity(inactivityError);
+        void interrupt(false);
+      }, opts.modelInactivityMs ?? CLAUDE_MODEL_INACTIVITY_MS);
+    };
+    const pauseInactivity = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+    };
+    toolStarted = () => {
+      if (settled || inactivityStopped) return;
+      activeTools++;
+      pauseInactivity();
+    };
+    toolFinished = () => {
+      if (settled || inactivityStopped) return;
+      activeTools = Math.max(0, activeTools - 1);
+      resetInactivity();
+    };
+    stopInactivity = () => {
+      inactivityStopped = true;
+      pauseInactivity();
+    };
     let signalsStopped = false;
     const recordedEnvelope = {
       system: turn.systemPrompt,
@@ -580,11 +629,23 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       }
     };
     try {
-      await sdkQuery.initializationResult();
-      await appendTape(initial, true);
-      queue.push(initial);
       const consume = (async () => {
-        for await (const message of sdkQuery) {
+        waitingForModel = true;
+        resetInactivity();
+        await sdkQuery.initializationResult();
+        waitingForModel = false;
+        pauseInactivity();
+        await appendTape(initial, true);
+        queue.push(initial);
+        const iterator = sdkQuery[Symbol.asyncIterator]();
+        while (!settled) {
+          waitingForModel = true;
+          resetInactivity();
+          const next = await iterator.next();
+          waitingForModel = false;
+          pauseInactivity();
+          if (next.done) break;
+          const message = next.value;
           if (settled) break;
           if (message.type === "assistant") {
             const usage = message.message.usage;
@@ -628,7 +689,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                   title: message.description || message.prompt || "subagent task",
                   status: "in_progress",
                 });
-              taskStates.set(message.task_id, { callId, status: "in_progress", resultEmitted: false });
+              taskStates.set(message.task_id, { callId, status: "in_progress", resultEmitted: false, active: true });
+              toolStarted();
               if (!message.skip_transcript) {
                 await turn.emit({
                   type: "tool_call",
@@ -652,6 +714,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             if (tracked && next && next !== tracked.status) {
               await transitionTask(opts.tasks, message.task_id, tracked.status, next, turn.runId ?? turn.session.id);
               tracked.status = next;
+              if (next !== "in_progress" && tracked.active) {
+                tracked.active = false;
+                toolFinished();
+              }
             }
           }
           if (message.type === "system" && message.subtype === "task_notification") {
@@ -661,6 +727,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               if (tracked.status !== next) {
                 await transitionTask(opts.tasks, message.task_id, tracked.status, next, turn.runId ?? turn.session.id);
                 tracked.status = next;
+              }
+              if (tracked.active) {
+                tracked.active = false;
+                toolFinished();
               }
               if (!tracked.resultEmitted && !message.skip_transcript) {
                 tracked.resultEmitted = true;
@@ -707,18 +777,19 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         }
       })();
       try {
-        await (wallMs > 0
-          ? Promise.race([
-              consume,
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(() => {
-                  void interrupt(false);
-                  reject(new NonRetryableTurnError(`Claude turn exceeded ${Math.round(wallMs / 1000)}s wall clock`));
-                }, wallMs);
-              }),
-            ])
-          : consume);
+        const completion: Array<Promise<void> | Promise<never>> = [consume, inactivity];
+        if (wallMs > 0)
+          completion.push(
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                void interrupt(false);
+                reject(new NonRetryableTurnError(`Claude turn exceeded ${Math.round(wallMs / 1000)}s wall clock`));
+              }, wallMs);
+            }),
+          );
+        await Promise.race(completion);
       } catch (error) {
+        if (error === inactivityError) throw error;
         if (!controller.signal.aborted || error instanceof NonRetryableTurnError) throw error;
         const reply = streamedText.trim();
         await flushThinking();
@@ -798,6 +869,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     } finally {
       settled = true;
       if (timer) clearTimeout(timer);
+      stopInactivity();
       if (recordedSteps === 0) {
         recordedSteps++;
         try {
