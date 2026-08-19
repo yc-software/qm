@@ -136,11 +136,23 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     return preflightDone;
   }
 
-  async function containerState(name: string): Promise<{ running: boolean; imageId: string } | null> {
-    const r = await dexec(["inspect", "-f", "{{.State.Running}} {{.Image}}", name]);
+  async function containerState(
+    name: string,
+  ): Promise<{ running: boolean; imageId: string; networkId: string } | null> {
+    const r = await dexec([
+      "inspect",
+      "-f",
+      "{{.State.Running}} {{.Image}} {{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}",
+      name,
+    ]);
     if (r.code !== 0) return null;
-    const [running = "", imageId = ""] = r.stdout.trim().split(/\s+/);
-    return { running: running === "true", imageId };
+    const [running = "", imageId = "", networkId = ""] = r.stdout.trim().split(/\s+/);
+    return { running: running === "true", imageId, networkId };
+  }
+
+  async function containerNetworkIsCurrent(name: string, networkId: string): Promise<boolean> {
+    const r = await dexec(["network", "inspect", "-f", "{{.Id}}", localNetworkName(name)]);
+    return r.code === 0 && !!networkId && r.stdout.trim() === networkId;
   }
 
   async function resolvePort(name: string): Promise<number> {
@@ -272,7 +284,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       const name = localContainerName(scope);
       scopeByContainer.set(name, scope);
       const state = await containerState(name);
-      if (state && state.imageId === imageId) {
+      if (state && state.imageId === imageId && (await containerNetworkIsCurrent(name, state.networkId))) {
         if (!state.running) await startContainer(name);
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
@@ -296,11 +308,12 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       const name = localScratchName(key);
       scratchByKey.set(key, name);
       const state = await containerState(name);
-      if (state) {
+      if (state && (await containerNetworkIsCurrent(name, state.networkId))) {
         if (!state.running) await startContainer(name);
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
+      if (state) await dexec(["rm", "-f", name]);
       await runContainer(name, undefined, false);
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: true };
