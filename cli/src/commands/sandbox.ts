@@ -288,9 +288,9 @@ function prepare(opts: SandboxBuildOpts): PreparedBuild {
   } else {
     const copies = layer.tools
       .filter((tool) => tool.executablePath)
-      .map((tool) => `COPY tools/${tool.dir}/${tool.binary} /usr/local/bin/${tool.binary}`)
+      .map((tool) => `COPY --chmod=0755 tools/${tool.dir}/${tool.binary} /usr/local/bin/${tool.binary}`)
       .join("\n");
-    dockerfileBody = `FROM ${base}\n${copies}\nRUN chmod -R a+rx /usr/local/bin\n${presenceCheck}`;
+    dockerfileBody = `FROM ${base}\n${copies}\n${presenceCheck}`;
   }
   const dockerfilePath = join(mkdtempSync(join(tmpdir(), "qm-sandbox-")), "Dockerfile");
   writeFileSync(dockerfilePath, dockerfileBody);

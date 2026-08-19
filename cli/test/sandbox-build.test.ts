@@ -56,7 +56,8 @@ test("generates a Dockerfile that COPYs each tool executable onto PATH + bakes t
   try {
     const out = dryRun({ sandboxDir: sb });
     assert.match(out, /FROM registry\.invalid\/qm\/qm-sandbox-base@sha256:a{64}/);
-    assert.match(out, /COPY tools\/example-tool\/example-tool \/usr\/local\/bin\/example-tool/);
+    assert.match(out, /COPY --chmod=0755 tools\/example-tool\/example-tool \/usr\/local\/bin\/example-tool/);
+    assert.doesNotMatch(out, /chmod -R/);
     assert.match(out, /command -v "\$b"/);
     assert.match(out, /'example-tool'/);
     assert.match(out, /acme-sandbox:local/);
