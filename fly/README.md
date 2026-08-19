@@ -177,27 +177,6 @@ For resident X tooling use the same prefix for native tool env, for example
 
 ## Smoke test
 
-```bash
-FLY_API_TOKEN="$(fly tokens create deploy -a "$FLY_SANDBOX_APP_NAME")" npm run smoke:fly
-```
-
-For image-resident X helper readiness:
-
-```bash
-FLY_API_TOKEN=... npm run smoke:x
-```
-
-This verifies `x-api` is on PATH and reports `missing_auth=auth_missing` when no
-resident X token is installed. Add `X_SMOKE_REQUIRE_AUTH=1` after configuring
-`X_BEARER_TOKEN` / `X_ACCESS_TOKEN`, or `X_SMOKE_REQUIRE_FIREHOSE=1` when a vendored
-`x-firehose` binary should be present.
-
-The smoke test uses a timestamped personal smoke-test scope, writes
-workspace and resident-home state, backs it up, deletes the Fly machine, recreates it,
-restores the backup, verifies `.aws/*` stayed excluded, then deletes the smoke
-machine. Add `SNAPSHOT_STORE=s3 S3_BUCKET=...` to exercise the real S3 object store;
-without those vars it uses the same backup-store code over an in-memory blob store.
-
 For GitHub/GitLab resident CLI readiness:
 
 ```bash

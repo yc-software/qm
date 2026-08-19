@@ -177,6 +177,8 @@ jobs:
         run: npm run lint:knip
       - name: Oxlint
         run: npm run lint:ox
+      - name: Documented npm commands exist
+        run: npm run lint:docs
 
   core-postgres:
     name: Core Postgres tests
