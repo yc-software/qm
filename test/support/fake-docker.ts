@@ -13,6 +13,7 @@ export interface FakeDocker {
   containers: Map<string, FakeContainer>;
   volumes: Set<string>;
   networks: Set<string>;
+  networkMembers: Map<string, Set<string>>;
   runCount: number;
   daemonDown: boolean;
   imageMissing: boolean;
@@ -24,10 +25,12 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
   const containers = new Map<string, FakeContainer>();
   const volumes = new Set<string>();
   const networks = new Set<string>();
+  const networkMembers = new Map<string, Set<string>>();
   const self: FakeDocker = {
     containers,
     volumes,
     networks,
+    networkMembers,
     runCount: 0,
     daemonDown: false,
     imageMissing: false,
@@ -77,7 +80,26 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
           networks.add(name);
           return ok(name);
         }
-        if (sub === "rm") return networks.delete(name) ? ok(name) : fail(`Error: No such network: ${name}`);
+        if (sub === "connect") {
+          const member = rest[2]!;
+          if (!networks.has(name)) return fail(`Error: No such network: ${name}`);
+          const members = networkMembers.get(name) ?? new Set<string>();
+          if (members.has(member)) return fail(`endpoint with name ${member} already exists in network ${name}`);
+          members.add(member);
+          networkMembers.set(name, members);
+          return ok();
+        }
+        if (sub === "disconnect") {
+          const member = rest[rest.length - 1]!;
+          const netName = rest[rest.length - 2]!;
+          if (!networkMembers.get(netName)?.delete(member)) return fail(`Error: container ${member} is not connected`);
+          return ok();
+        }
+        if (sub === "rm") {
+          if (networkMembers.get(name)?.size) return fail(`error while removing network: ${name} has active endpoints`);
+          networkMembers.delete(name);
+          return networks.delete(name) ? ok(name) : fail(`Error: No such network: ${name}`);
+        }
         return fail(`unknown network subcommand ${sub}`);
       }
       case "volume": {

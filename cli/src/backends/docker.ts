@@ -1,7 +1,7 @@
 import { httpDeploymentLayerTransport, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CliError, bold, die, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
@@ -323,6 +323,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     out.SESSION_STORE = "postgres";
     out.RUN_STORE = "postgres";
     out.DATABASE_URL = ctx.databaseUrl;
+    out.LOCAL_SANDBOX_CORE_CONTAINER = cname(ctx, "core");
     if (config.model) out.PI_MODEL = config.model;
     if (config.modelProvider) out.MODEL_PROVIDER = config.modelProvider;
     const layerSubs = existingLayerSubdirs(ctx);
@@ -394,6 +395,15 @@ function pushEnvArgs(args: string[], env: Record<string, string>, secretKeys: Se
   return file.cleanup;
 }
 
+export function dockerSocketGroupArgs(socketPath = "/var/run/docker.sock"): string[] {
+  try {
+    const gid = statSync(socketPath).gid;
+    return gid > 0 ? ["--group-add", String(gid)] : [];
+  } catch {
+    return [];
+  }
+}
+
 function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: string[]; cleanup: () => void } {
   const def = serviceDef(service);
   const args = [
@@ -411,6 +421,8 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
   ];
   const cleanup = pushEnvArgs(args, serviceEnv(ctx, service), secretEnvKeys(ctx, service));
   if (service === "core") {
+    args.push("-v", "/var/run/docker.sock:/var/run/docker.sock");
+    args.push(...dockerSocketGroupArgs());
     args.push("-v", `${ctx.prefix}-coredata:/data`);
     for (const m of layerMounts(ctx)) args.push("-v", m);
     for (const m of skillMounts(ctx)) args.push("-v", m);
