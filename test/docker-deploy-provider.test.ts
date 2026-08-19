@@ -144,3 +144,71 @@ test("a transient target inspection failure does not report the deployment missi
 
   await assert.rejects(provider.resolveEndpoint!(running, running.versions[0]!), /daemon unavailable/);
 });
+
+test("deployed apps get a writable /data mount and are told where it is", async () => {
+  const calls: string[][] = [];
+  const made: string[] = [];
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    return { code: args[1] === "inspect" ? 1 : 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const d = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/app",
+  });
+  const provider = createDockerDeployProvider({ dockerExec, dataRoot: "/var/qm-data", mkdir: (p) => made.push(p) });
+
+  await provider.apply(d, d.versions[0]!);
+
+  const run = calls.find((args) => args[0] === "run")!;
+  const joined = run.join(" ");
+  assert.equal(provider.profile.dataDir, "/data");
+  assert.ok(made.includes(`/var/qm-data/${d.id}`), "per-deployment data directory is created on the host");
+  assert.ok(joined.includes(`-v /var/qm-data/${d.id}:/data`), "the data directory is mounted writable");
+  assert.ok(joined.includes("-v /snap/app:/app:ro"), "the snapshot stays read-only");
+  assert.ok(joined.includes("-e DATA_DIR=/data"), "the app is told where its writable directory is");
+});
+
+test("a redeploy reuses the port already recorded on the deployment", async () => {
+  const calls: string[][] = [];
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    return { code: args[1] === "inspect" ? 1 : 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const first = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/one",
+  });
+  const second = await store.create({
+    ownerScopeId: scopeId("personal", "U2"),
+    createdBy: "U2",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/two",
+  });
+
+  const before = createDockerDeployProvider({ dockerExec, mkdir: () => {} });
+  const firstEndpoint = await before.apply(first, first.versions[0]!);
+  const secondEndpoint = await before.apply(second, second.versions[0]!);
+  assert.notEqual(firstEndpoint.port, secondEndpoint.port);
+
+  // A fresh provider models a process restart: the in-memory counter is gone,
+  // but the ports the deployments already hold are still on their records.
+  const after = createDockerDeployProvider({ dockerExec, mkdir: () => {} });
+  const rebound = await after.apply({ ...second, endpoint: secondEndpoint }, second.versions[0]!);
+  assert.equal(rebound.port, secondEndpoint.port, "a restart does not re-hand out a port that is already taken");
+
+  const third = await store.create({
+    ownerScopeId: scopeId("personal", "U3"),
+    createdBy: "U3",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/three",
+  });
+  const fresh = await after.apply(third, third.versions[0]!);
+  assert.notEqual(fresh.port, secondEndpoint.port, "a new deployment does not collide with a reused port");
+});
