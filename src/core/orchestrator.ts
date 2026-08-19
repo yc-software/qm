@@ -2281,9 +2281,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
             ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
-            ...(input.surfaceTools && surfaceToolDeps
+            ...(surfaceToolDeps
               ? {
-                  surfaceTools: true,
+                  ...(input.surfaceTools ? { surfaceTools: true } : { surfaceDmTools: true }),
                   surfaceName:
                     input.origin.kind === "automation" && input.origin.destination
                       ? "slack"

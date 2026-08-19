@@ -11,7 +11,7 @@ import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type Destination } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -22,9 +22,14 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
   let base: string;
   let built: BuiltApp;
 
-  const capDm = async (actorId: string) =>
+  const capDm = async (actorId: string, destination?: Destination) =>
     await mintCapabilityToken(
-      { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
+      {
+        actorId,
+        scopeId: scopeId("personal", actorId),
+        ...(destination ? { destination } : {}),
+        exp: Date.now() + CAPABILITY_TTL_MS,
+      },
       SECRET,
     );
   const capChannel = async (actorId: string) =>
@@ -327,6 +332,36 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     assert.ok(d, "delivery is in the principal queue");
     assert.equal(d!.text, "Carol asked me to pass on:\nship it 🚀");
     assert.equal(d!.destination.onBehalfOf, "U-carol");
+  });
+
+  it("POST /v1/reach cannot duplicate the current DM by targeting the sender", async () => {
+    const before = (await built.app.pendingDeliveries("principal")).length;
+    const res = await post(
+      "/v1/reach",
+      { text: "hidden duplicate", recipient: "Carol" },
+      {
+        "x-agent-capability": await capDm("U-carol", {
+          type: "slack",
+          target: "D-carol",
+          audienceScopeId: scopeId("personal", "U-carol"),
+        }),
+      },
+    );
+
+    assert.equal(res.status, 400);
+    assert.equal(((await res.json()) as any).error, "same_conversation");
+    assert.equal((await built.app.pendingDeliveries("principal")).length, before);
+  });
+
+  it("POST /v1/reach can target the requester when their current context is not that DM", async () => {
+    const res = await post(
+      "/v1/reach",
+      { text: "channel follow-up", recipient: "Carol" },
+      { "x-agent-capability": await capChannel("U-carol") },
+    );
+
+    assert.equal(res.status, 200);
+    assert.equal(((await res.json()) as any).recipient.principalId, "U-carol");
   });
 
   it("POST /v1/reach posts the EXACT text to a public channel immediately (from a personal scope — not withheld)", async () => {

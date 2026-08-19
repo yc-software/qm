@@ -238,6 +238,7 @@ function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiTool
       ? {
           readOnly: turn.readOnly,
           surfaceTools: turn.surfaceTools,
+          surfaceDmTools: turn.surfaceDmTools,
           surfaceName: turn.surfaceName,
           credentialExecServices: turn.credentialExecServices,
         }

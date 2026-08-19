@@ -651,6 +651,75 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   assert.equal(read.count, 0);
 });
 
+test("DM surface tools expose reads while rejecting every Slack mutation", async () => {
+  const emitted: Emitted[] = [];
+  const calls: Array<[string, unknown[]]> = [];
+  const spy =
+    (name: string, result: unknown) =>
+    (...args: unknown[]) => {
+      calls.push([name, args]);
+      return Promise.resolve(result);
+    };
+  const context = {
+    ...fakeToolContext(),
+    post: spy("post", { ok: true, deliveryId: "post-1" }),
+    reach: spy("reach", { ok: true, deliveryId: "reach-1", matched: "Bob" }),
+    react: spy("react", { ok: true, deliveryId: "react-1" }),
+    edit: spy("edit", { ok: true, deliveryId: "edit-1" }),
+    delete: spy("delete", { ok: true, deliveryId: "delete-1" }),
+    readThread: spy("readThread", { ok: true, messages: [{ text: "channel update" }] }),
+    search: spy("search", { ok: true, hits: [{ snippet: "latest update" }], source: "slack" }),
+  } as unknown as ToolContext;
+  const ref: ToolContextRef = {
+    current: context,
+    emit: (entry) => {
+      emitted.push(entry as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const slack = createPiTools(ref, { surfaceDmTools: true }).find((tool) => tool.name === "slack");
+  assert.ok(slack);
+  assert.match(slack.description ?? "", /what you write is already the reply/i);
+
+  const actionSchema = (
+    slack.parameters as {
+      properties: { action: { anyOf: Array<{ const: string }> } };
+    }
+  ).properties.action;
+  assert.deepEqual(
+    actionSchema.anyOf.map((option) => option.const),
+    ["read_thread", "whats_new", "search", "read_members", "read_file"],
+  );
+
+  const denied = [
+    { action: "post", text: "hello" },
+    { action: "reach", text: "hello", recipient: "Bob" },
+    { action: "react", ts: "1.1", emoji: "eyes" },
+    { action: "edit", ref: "1.1", text: "changed" },
+    { action: "delete", ref: "1.1" },
+  ];
+  for (const params of denied) {
+    const result = (await call(slack, params)) as { content: Array<{ text: string }> };
+    assert.match(result.content[0]!.text, /can only read Slack history/);
+  }
+  assert.equal(calls.length, 0);
+  assert.deepEqual(
+    emitted
+      .filter((entry) => entry.type === "tool_result" && denied.some(({ action }) => action === entry.payload.action))
+      .map((entry) => entry.payload.error),
+    denied.map(() => "dm_action_unavailable"),
+  );
+
+  await call(slack, { action: "read_thread", channel: "eng", limit: 20 });
+  await call(slack, { action: "search", query: "latest", source: "slack" });
+  assert.deepEqual(
+    calls.map(([name]) => name),
+    ["readThread", "search"],
+  );
+  assert.deepEqual(calls[0], ["readThread", [{ channel: "eng", limit: 20 }]]);
+  assert.deepEqual(calls[1], ["search", ["latest", { source: "slack" }]]);
+});
+
 test("surface reads fail closed without persisting blocked content", async () => {
   const emitted: Emitted[] = [];
   const external = {
@@ -1666,6 +1735,11 @@ test("cron/webhook register only when controlTools is on; guidance registers wit
   const surfaceOnly = createPiTools({ current: fakeToolContext() }, { surfaceTools: true }).map((t) => t.name);
   assert.ok(surfaceOnly.includes("guidance"), "guidance registers when surfaceTools is on");
   assert.ok(!surfaceOnly.includes("cron") && !surfaceOnly.includes("webhook"), "cron/webhook stay control-only");
+  const dmTools = createPiTools({ current: fakeToolContext() }, { surfaceDmTools: true }).map((t) => t.name);
+  assert.ok(!dmTools.includes("guidance"));
+  assert.ok(dmTools.includes("slack"));
+  assert.ok(!dmTools.includes("stay_silent"));
+  assert.ok(dmTools.includes("finish_silently"));
 });
 
 const tool = (name: string, tc = fakeToolContext()) => {

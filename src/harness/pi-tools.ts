@@ -131,6 +131,21 @@ function capText(t: string): string {
   return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
 }
 
+const SURFACE_ACTIONS = [
+  "post",
+  "reach",
+  "react",
+  "edit",
+  "delete",
+  "read_thread",
+  "whats_new",
+  "search",
+  "read_members",
+  "read_file",
+] as const;
+const DM_SURFACE_ACTIONS = ["read_thread", "whats_new", "search", "read_members", "read_file"] as const;
+const DM_SURFACE_ACTION_NAMES = new Set<string>(DM_SURFACE_ACTIONS);
+
 function contentFactLines(content: string): string[] {
   return content
     .split(/\r?\n/)
@@ -291,10 +306,11 @@ export interface PiToolsOptions {
   controlTools?: boolean;
   readOnly?: boolean;
   surfaceTools?: boolean;
+  surfaceDmTools?: boolean;
   surfaceName?: string;
 }
 
-export type CoreToolOptions = Omit<PiToolsOptions, "readOnly" | "surfaceTools" | "surfaceName">;
+export type CoreToolOptions = Omit<PiToolsOptions, "readOnly" | "surfaceTools" | "surfaceDmTools" | "surfaceName">;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
@@ -332,6 +348,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
   const controlTools = !!opts?.controlTools;
   const credentialExecServices = opts?.credentialExecServices ?? ref.current?.credentialExecServices ?? [];
   const surfaceTools = !!opts?.surfaceTools;
+  const surfaceDmTools = !!opts?.surfaceDmTools;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
@@ -2193,36 +2210,31 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
 
   const surfaceName = opts?.surfaceName ?? "slack";
   const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
+  const dmSurface = surfaceDmTools && !surfaceTools;
   const surface = defineTool({
     name: surfaceName,
     label: surfaceName,
-    description:
-      `Everything you do on ${surfaceLabel} goes through this tool — posting (the ONLY way your words ` +
-      "reach people; end the turn without a post and you stay silent), reacting, editing/deleting your " +
-      "own messages, reading threads, checking what's new, searching, listing members, fetching files. " +
-      "Pick an `action`.",
+    description: dmSurface
+      ? `Read through Pulse's managed ${surfaceLabel} surface. In this private conversation, what you write is already the reply sent by the bot, so this surface does not post. ` +
+        "Use `read_thread` with `channel` for the Pulse app's fast channel history, or `search` with source `slack` for full-history search as the asking person's connected Slack login. The owner's separate Keychain connector keeps its user-authorized Slack actions. Pick an `action`."
+      : `Everything you do on ${surfaceLabel} goes through this tool — posting (the ONLY way your words ` +
+        "reach people; end the turn without a post and you stay silent), reacting, editing/deleting your " +
+        "own messages, reading threads, checking what's new, searching, listing members, fetching files. " +
+        "Pick an `action`.",
     parameters: Type.Object({
       action: Type.Union(
-        [
-          Type.Literal("post"),
-          Type.Literal("reach"),
-          Type.Literal("react"),
-          Type.Literal("edit"),
-          Type.Literal("delete"),
-          Type.Literal("read_thread"),
-          Type.Literal("whats_new"),
-          Type.Literal("search"),
-          Type.Literal("read_members"),
-          Type.Literal("read_file"),
-        ],
+        (dmSurface ? DM_SURFACE_ACTIONS : SURFACE_ACTIONS).map((action) => Type.Literal(action)),
         {
-          description:
-            "What to do: post (reply HERE, in this conversation — the normal way to answer), reach " +
-            "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to " +
-            "leave this conversation), react (emoji on a message), edit/delete (revise/retract your " +
-            "OWN message), read_thread (pull this thread's live messages), whats_new (pointers to what " +
-            "changed), search (find messages), read_members (the roster), read_file (a shared file's " +
-            "contents by reference).",
+          description: dmSurface
+            ? "What to do: read_thread (pull this DM's live messages), whats_new (pointers to what changed), " +
+              "search (find messages), read_members (the roster), or " +
+              "read_file (a shared file's contents by reference)."
+            : "What to do: post (reply HERE, in this conversation — the normal way to answer), reach " +
+              "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to " +
+              "leave this conversation), react (emoji on a message), edit/delete (revise/retract your " +
+              "OWN message), read_thread (pull this thread's live messages), whats_new (pointers to what " +
+              "changed), search (find messages), read_members (the roster), read_file (a shared file's " +
+              "contents by reference).",
         },
       ),
       text: Type.Optional(
@@ -2233,8 +2245,9 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       ),
       channel: Type.Optional(
         Type.String({
-          description:
-            "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room. react/edit/delete: which channel the target message is in (omit for the current one). NOT valid on post — post only ever replies in the current conversation.",
+          description: dmSurface
+            ? "read_thread: a channel name or id to fetch through the Pulse Slack app, limited to channels the asking person can see and the app can read. Omit to read this DM."
+            : "read_thread: a channel name or id to fetch through the Pulse Slack app. reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room. react/edit/delete: which channel the target message is in (omit for the current one). NOT valid on post — post only ever replies in the current conversation.",
         }),
       ),
       recipient: Type.Optional(Type.String({ description: "reach: DM this teammate (by name). NOT valid on post." })),
@@ -2256,17 +2269,18 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
             "post: set true to post at THIS channel's top level instead of in the current thread — a deliberate wider-audience announcement. Default (unset) replies in the thread you're in. Ignored in a DM.",
         }),
       ),
+      emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
       files: Type.Optional(
         Type.Array(Type.String(), {
           description:
             'post/reach: workspace-relative file paths to upload WITH your message — images, PDFs, code snippets, whatever. Write the file to an ordinary workspace path (e.g. "work/cover.png") and list that path here; it\'s attached to the message at its destination, like a person attaching a file. Short code can just go in `text` as a ``` block; use a file for anything downloadable.',
         }),
       ),
-      emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
       ref: Type.Optional(
         Type.String({
-          description:
-            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the file's reference (its id from an earlier read result).",
+          description: dmSurface
+            ? "read_file: the file's reference from an earlier read result."
+            : "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the file's reference (its id from an earlier read result).",
         }),
       ),
       limit: Type.Optional(
@@ -2299,6 +2313,18 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
+      if (dmSurface && !DM_SURFACE_ACTION_NAMES.has(params.action)) {
+        await recordCall(callId, { tool: surfaceName, action: params.action });
+        return recordResult(
+          callId,
+          { tool: surfaceName, action: params.action, error: "dm_action_unavailable" },
+          text(
+            "[not sent] in this private conversation the Slack tool can only read Slack history; " +
+              "your written text is already the reply here.",
+          ),
+          true,
+        );
+      }
       const missing = (field: string) =>
         recordResult(
           callId,
@@ -2324,8 +2350,8 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
             );
           }
           const opts = {
-            ...(params.ts !== undefined ? { ts: params.ts } : {}),
-            ...(params.broadcast !== undefined ? { broadcast: params.broadcast } : {}),
+            ...(typeof params.ts === "string" ? { ts: params.ts } : {}),
+            ...(typeof params.broadcast === "boolean" ? { broadcast: params.broadcast } : {}),
           };
           await recordCall(callId, {
             tool: surfaceName,
@@ -2396,8 +2422,8 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
           );
         }
         case "react": {
-          if (params.ts === undefined) return missing("ts");
-          if (params.emoji === undefined) return missing("emoji");
+          if (typeof params.ts !== "string") return missing("ts");
+          if (typeof params.emoji !== "string") return missing("emoji");
           await recordCall(callId, {
             tool: surfaceName,
             action: "react",
@@ -2447,8 +2473,13 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
             tool: surfaceName,
             action: "read_thread",
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params.channel !== undefined ? { channel: params.channel } : {}),
           });
-          const r = await tc.readThread(params.limit !== undefined ? { limit: params.limit } : undefined);
+          const readOpts = {
+            ...(params.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params.channel !== undefined ? { channel: params.channel } : {}),
+          };
+          const r = await tc.readThread(Object.keys(readOpts).length ? readOpts : undefined);
           if (!r.ok)
             return recordResult(
               callId,
@@ -2962,6 +2993,9 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       );
     },
   });
+  const surfaceLifecycleTools = surfaceTools ? [surface, staySilent] : [finishSilently];
+  if (!surfaceTools && surfaceDmTools) surfaceLifecycleTools.unshift(surface);
+
   const tools = [
     execute,
     ...(credentialExecServices.length ? [credentialExec] : []),
@@ -2973,7 +3007,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     background,
     ...(controlTools ? [cron, webhook, share] : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
-    ...(surfaceTools ? [surface, staySilent] : [finishSilently]),
+    ...surfaceLifecycleTools,
     ...mcpTools,
     createGoal,
     getGoal,

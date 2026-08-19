@@ -23,6 +23,32 @@ function fakeSandbox(files: Record<string, Uint8Array>, outboxListing: string[])
 const handle = { rootDir: "/root/workspace" } as SandboxHandle;
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 
+test("surface dependencies auto-enable only for writable Slack DMs", () => {
+  const build = (surface: string, kind: "dm" | "channel", strictReadOnly = false) =>
+    createSurfaceToolDeps({
+      deps: { deliveries: {} },
+      input: { surface },
+      actor: { id: "U1" },
+      conversation: { kind },
+      session: { id: "S1" },
+      scopeId: "personal:U1",
+      defaultDestination: { type: surface, target: "destination" },
+      strictReadOnly,
+      blobTransfer: {},
+      fileRegistration: {},
+      provision: async () => handle,
+      postProvenance() {
+        return {};
+      },
+      spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    } as unknown as SurfaceToolsContext);
+
+  assert.ok(build("slack", "dm"));
+  assert.equal(build("web", "dm"), undefined);
+  assert.equal(build("slack", "channel"), undefined);
+  assert.equal(build("slack", "dm", true), undefined);
+});
+
 test("collectNamedOutbound: resolves workspace-relative paths into blob-backed attachments", async () => {
   const transfer = createMemoryBlobTransferStore();
   const sandbox = fakeSandbox({ "outbox/cover.png": bytes("PNGDATA"), "report.pdf": bytes("PDF") }, []);

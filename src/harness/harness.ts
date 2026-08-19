@@ -64,6 +64,7 @@ export interface HarnessTurnInput {
   fastMode?: boolean;
   readOnly?: boolean;
   surfaceTools?: boolean;
+  surfaceDmTools?: boolean;
   surfaceName?: string;
   pollFire?: boolean;
   turnWallClockMs?: number;

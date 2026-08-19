@@ -206,6 +206,7 @@ function toolOptions(opts: ClaudeHarnessOptions, turn?: HarnessTurnInput): PiToo
       ? {
           readOnly: turn.readOnly,
           surfaceTools: turn.surfaceTools,
+          surfaceDmTools: turn.surfaceDmTools,
           surfaceName: turn.surfaceName,
           credentialExecServices: turn.credentialExecServices,
         }

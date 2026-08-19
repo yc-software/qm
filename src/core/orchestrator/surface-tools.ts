@@ -90,7 +90,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     postProvenance,
     spine,
   } = ctx;
-  if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
+  const surfaceDmTools = input.surface === "slack" && conversation.kind === "dm";
+  const readOnlyDm = surfaceDmTools && !input.surfaceTools;
+  if (strictReadOnly || !((input.surfaceTools || surfaceDmTools) && defaultDestination && deps.deliveries)) {
+    return undefined;
+  }
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
   let editRefConsumed = false;
@@ -207,6 +211,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   };
   return {
     post: async (postText, opts, files) => {
+      if (readOnlyDm)
+        return { ok: false, message: "The Pulse Slack DM surface is read-only; reply normally in this DM." };
       let destination = currentDestination;
       if (opts?.ts && destination.type !== "principal") {
         destination = { ...destination, target: replaceThreadSegment(destination.target, opts.ts) };
@@ -231,6 +237,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       return sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
     },
     reach: async (postText, target, files) => {
+      if (readOnlyDm)
+        return { ok: false, message: "The Pulse Slack DM surface is read-only; reply normally in this DM." };
       if (spine.crossConversationPosts >= 5) return { ok: false, message: "outbound limit reached for this turn" };
       const selectors = [
         target.channel !== undefined,
@@ -254,6 +262,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       return { ...r, matched: label };
     },
     react: async (input: SurfaceReactInput) => {
+      if (readOnlyDm)
+        return { ok: false, message: "The Pulse Slack DM surface is read-only; reply normally in this DM." };
       const d = await resolveDestination({
         ...(input.channel !== undefined ? { channel: input.channel } : {}),
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
@@ -264,6 +274,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       return enqueue(withReact(d.destination, { messageTs: input.ts, emoji: input.emoji }), "");
     },
     edit: async (input: SurfaceEditInput) => {
+      if (readOnlyDm)
+        return { ok: false, message: "The Pulse Slack DM surface is read-only; reply normally in this DM." };
       const d = await resolveDestination({
         ...(input.channel !== undefined ? { channel: input.channel } : {}),
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
@@ -272,6 +284,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       return enqueue(withEdit(d.destination, input.ref), input.text);
     },
     delete: async (input: SurfaceDeleteInput) => {
+      if (readOnlyDm)
+        return { ok: false, message: "The Pulse Slack DM surface is read-only; reply normally in this DM." };
       const d = await resolveDestination({
         ...(input.channel !== undefined ? { channel: input.channel } : {}),
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
@@ -279,12 +293,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!d.ok) return { ok: false, message: d.message };
       return enqueue(withDelete(d.destination, { messageTs: input.ref }), "");
     },
-    readThread: async (opts?: { limit?: number }) => {
+    readThread: async (opts?: { limit?: number; channel?: string }) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
-      if (!currentDestination.target) return { ok: false, message: "this conversation has no thread to read" };
+      const destination = opts?.channel
+        ? await resolveDestination({ channel: opts.channel })
+        : { ok: true as const, destination: currentDestination };
+      if (!destination.ok) return { ok: false, message: destination.message };
+      if (!destination.destination.target) return { ok: false, message: "this conversation has no thread to read" };
       const count = Math.max(1, Math.min(SURFACE_READ_MAX, opts?.limit ?? SURFACE_READ_DEFAULT));
       const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
-        conversationTarget: currentDestination.target,
+        conversationTarget: destination.destination.target,
         viewer: actor.id,
         count,
       });
@@ -354,7 +372,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         const result = await deps.surfaceContext.searchLive(input.surface ?? "unknown", {
           conversationTarget: dest.target,
           viewer: actor.id,
-          count: SURFACE_READ_MAX,
+          count: limit,
           searchAll: q,
         });
         if (!result) return { ok: false, message: "the surface didn't answer in time" };

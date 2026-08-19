@@ -1,10 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
-import { createOpenCodeHarness } from "../src/harness/opencode-harness.ts";
+import { bridgeTurnToolName, createOpenCodeHarness } from "../src/harness/opencode-harness.ts";
 import { createCodexHarness } from "../src/harness/codex-harness.ts";
 import { createClaudeHarness } from "../src/harness/claude-harness.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
+
+test("limited DM surface tools propagate through every production harness", () => {
+  const contract = readFileSync(new URL("../src/harness/harness.ts", import.meta.url), "utf8");
+  assert.match(contract, /surfaceDmTools\?:/);
+  const adapters = [
+    "../src/harness/pi-harness.ts",
+    "../src/harness/codex-harness.ts",
+    "../src/harness/claude-harness.ts",
+    "../src/harness/opencode-harness.ts",
+  ];
+  for (const file of adapters) {
+    const source = readFileSync(new URL(file, import.meta.url), "utf8");
+    assert.match(source, /turn\.surfaceDmTools/);
+  }
+  assert.equal(bridgeTurnToolName("slack", { surfaceDmTools: true, surfaceName: "slack" }), "slack_read");
+  assert.equal(bridgeTurnToolName("slack", { surfaceDmTools: false, surfaceName: "slack" }), "slack");
+});
 
 test("harness adapters declare their native control and tool transports", async (t) => {
   const mock = createMockHarness();

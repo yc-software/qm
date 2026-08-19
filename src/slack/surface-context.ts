@@ -29,23 +29,51 @@ export function createSurfaceContextFulfiller(deps: {
   botToken: string;
   trustedFileHost?: string;
   userToken?: string;
+  userClientFactory?: (token: string, options: Record<string, unknown>) => WebClient;
   clientOptions: Record<string, unknown>;
 }): { fulfillSurfaceContext(client: any, r: SurfaceContextRequest): Promise<void> } {
   const { core, bridge, directory, serializer, botToken, trustedFileHost, userToken, clientOptions } = deps;
+  const userClientFactory = deps.userClientFactory ?? ((token, options) => new WebClient(token, { ...options }));
+  let configuredUserOwner: Promise<{ slackId: string; actorId: string } | null> | undefined;
+
+  async function configuredUserTokenForViewer(client: any, viewer: string | undefined): Promise<string | undefined> {
+    if (!userToken || !viewer) return undefined;
+    configuredUserOwner ??= (async () => {
+      const auth = (await userClientFactory(userToken, clientOptions).auth.test()) as { user_id?: string };
+      const slackId = String(auth.user_id ?? "").trim();
+      if (!slackId) return null;
+      const classified = await directory.classifyUserCached(client, slackId);
+      return { slackId, actorId: classified.actor.externalId || slackId };
+    })().then(
+      (owner) => {
+        if (!owner) configuredUserOwner = undefined;
+        return owner;
+      },
+      (err) => {
+        configuredUserOwner = undefined;
+        swallow("slack: configured user token owner", err);
+        return null;
+      },
+    );
+    const owner = await configuredUserOwner;
+    return owner && (viewer === owner.actorId || viewer === owner.slackId) ? userToken : undefined;
+  }
 
   async function fulfillLiveSearch(
+    client: any,
     query: string,
     count: number,
     post: (body: unknown) => Promise<void>,
+    viewer: string | undefined,
     viewerToken?: string,
   ): Promise<void> {
-    const token = viewerToken || userToken;
+    const token = viewerToken ?? (await configuredUserTokenForViewer(client, viewer));
     if (!token) {
       await post({ messages: [], note: "live-search-unconnected" });
       return;
     }
     try {
-      const userClient = new WebClient(token, { ...clientOptions });
+      const userClient = userClientFactory(token, clientOptions);
       const res = (await userClient.search.messages({ query, count: Math.min(count, 100) })) as any;
       const matches: any[] = res?.messages?.matches ?? [];
       const shaped: RecentMessage[] = matches
@@ -59,7 +87,7 @@ export function createSurfaceContextFulfiller(deps: {
       await post(buildContextWindow(shaped, { count }));
     } catch (err) {
       const msg = (err as Error).message;
-      if (viewerToken && /invalid_auth|token_revoked|account_inactive|token_expired/.test(msg)) {
+      if (/invalid_auth|token_revoked|account_inactive|token_expired/.test(msg)) {
         await post({ messages: [], note: "live-search-unconnected" });
         return;
       }
@@ -197,9 +225,11 @@ export function createSurfaceContextFulfiller(deps: {
       if (q.openGroup) return await post(await openGroupDm(client, q.openGroup.participants ?? []));
       if (typeof q.searchAll === "string" && q.searchAll) {
         return fulfillLiveSearch(
+          client,
           q.searchAll,
           Math.max(1, Math.min(RECENT_THREAD_LIMIT, Number(q.count) || 100)),
           post,
+          typeof q.viewer === "string" && q.viewer ? q.viewer : undefined,
           typeof q.viewerToken === "string" && q.viewerToken ? q.viewerToken : undefined,
         );
       }
@@ -209,14 +239,14 @@ export function createSurfaceContextFulfiller(deps: {
         ({ channel, threadTs } = parseDeliveryTarget(q.conversationTarget));
       } else if (typeof q.channelId === "string" && q.channelId) {
         channel = q.channelId;
-        const info = await directory.getChannelInfo(client, channel);
-        if (!info) return post({ error: "I can't see that channel" });
-        if (isExternallyShared(info)) return post({ error: "that channel is externally shared, so I won't read it" });
-        if ((info as any).is_member === false)
-          return post({ error: "I'm not a member of that channel — ask someone to /invite me there" });
       } else {
         return post({ error: "malformed context request" });
       }
+      const info = await directory.getChannelInfo(client, channel);
+      if (!info) return post({ error: "I can't see that channel" });
+      if (isExternallyShared(info)) return post({ error: "that channel is externally shared, so I won't read it" });
+      if ((info as any).is_member === false)
+        return post({ error: "I'm not a member of that channel — ask someone to /invite me there" });
       if (q.file && typeof q.file.ts === "string" && q.file.ts) {
         return await post(await fetchSurfaceFile(client, channel, threadTs, q.file));
       }

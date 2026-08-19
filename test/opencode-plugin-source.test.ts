@@ -55,7 +55,12 @@ test("OpenCode plugin recognizes imported non-empty history", () => {
 test("OpenCode prompt disables bridged tools absent from this turn", () => {
   assert.match(harnessSource, /\.\.\.asTools\(definitionRef, \{ \.\.\.toolOptions\(opts\), surfaceTools: false \}\)/);
   assert.match(harnessSource, /Object\.fromEntries\(definitions\.map\(\(tool\) => \[tool\.name, false\]\)\)/);
-  assert.match(harnessSource, /for \(const tool of tools\) enabled\[bridgeToolName\(tool\.name\)\] = true/);
+  assert.match(harnessSource, /for \(const tool of tools\) enabled\[bridgeTurnToolName\(tool\.name, turn\)\] = true/);
+  assert.match(harnessSource, /\[bridgeToolName\("slack"\)\]: false/);
+  assert.match(
+    harnessSource,
+    /\[bridgeTurnToolName\("slack", \{ surfaceDmTools: true, surfaceName: "slack" \}\)\]: false/,
+  );
 });
 
 test("OpenCode observes cancellation before runtime startup, session creation, and prompt dispatch", () => {

@@ -32,6 +32,18 @@ function mention(text: string, channel: string, root: string): TurnRequest {
   };
 }
 
+function slackDm(text: string, channel = "D90"): TurnRequest {
+  return {
+    surface: "slack",
+    actor,
+    conversation: { kind: "dm", threadRef: `dm:${channel}`, channelRef: channel, audience: [actor] },
+    deliveryTarget: channel,
+    text,
+    liveActor: true,
+    async: true,
+  };
+}
+
 function startFulfiller(app: any, messages: unknown[]) {
   let running = true;
   const loop = (async () => {
@@ -298,6 +310,96 @@ test("search source=slack with no connected login for the asker tells the agent 
     const reply = await subToolResult(built, root, "search");
     assert.match(reply, /no connected one/, "the miss explains the missing login");
     assert.match(reply, /self-connect|Connectors page/, "and points at the session-gated self-connect page");
+  } finally {
+    running = false;
+    await loop;
+    await built.runtime.stop();
+  }
+});
+
+test("Slack DM search uses live Slack history without enabling channel posting tools", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  let running = true;
+  const loop = (async () => {
+    while (running) {
+      for (const request of await built.app.pendingContextRequests("slack")) {
+        const query = (request as any).query ?? {};
+        const result = query.searchAll
+          ? { messages: [{ ts: "1.0", author: "Ada", text: "the release is ready" }] }
+          : { messages: [] };
+        await built.app.fulfillContextRequest(request.id, { result });
+      }
+      await sleep(20);
+    }
+  })();
+  try {
+    await built.app.turn(slackDm("!search source=slack roadmap"));
+    const deadline = Date.now() + 6_000;
+    let reply = "";
+    while (Date.now() < deadline) {
+      const session = await built.sessions.getByThread("dm:D90");
+      if (session) {
+        const entries = await built.sessions.getEntries(session.id);
+        const hit = entries.find(
+          (entry) =>
+            entry.type === "assistant" && typeof (entry.payload as { text?: unknown } | undefined)?.text === "string",
+        );
+        if (hit) {
+          reply = (hit.payload as { text: string }).text;
+          break;
+        }
+      }
+      await sleep(50);
+    }
+    assert.match(reply, /search\(slack\)/);
+    assert.doesNotMatch(reply, /couldn't search|isn't available/);
+  } finally {
+    running = false;
+    await loop;
+    await built.runtime.stop();
+  }
+});
+
+test("Slack DM reads a named channel through the Pulse app without a Keychain token", async () => {
+  const built = freshApp();
+  await built.app.upsertDirectory([{ principalId: "U1", displayName: "Ada", type: "internal" }]);
+  await built.app.upsertChannels([{ channelId: "C-AXB", name: "axb", isPrivate: false }]);
+  built.runtime.start();
+  const queries: Array<Record<string, unknown>> = [];
+  let running = true;
+  const loop = (async () => {
+    while (running) {
+      for (const request of await built.app.pendingContextRequests("slack")) {
+        queries.push(((request as any).query ?? {}) as Record<string, unknown>);
+        await built.app.fulfillContextRequest(request.id, {
+          result: { messages: [{ ts: "2.0", author: "Bob", text: "the latest AXB update" }] },
+        });
+      }
+      await sleep(20);
+    }
+  })();
+  try {
+    await built.app.turn(slackDm("!read_thread axb"));
+    const deadline = Date.now() + 6_000;
+    let reply = "";
+    while (Date.now() < deadline) {
+      const session = await built.sessions.getByThread("dm:D90");
+      if (session) {
+        const entries = await built.sessions.getEntries(session.id);
+        const hit = entries.find(
+          (entry) =>
+            entry.type === "assistant" && typeof (entry.payload as { text?: unknown } | undefined)?.text === "string",
+        );
+        if (hit) {
+          reply = (hit.payload as { text: string }).text;
+          break;
+        }
+      }
+      await sleep(50);
+    }
+    assert.match(reply, /read 1 message/);
+    assert.deepEqual(queries, [{ conversationTarget: "C-AXB", viewer: "U1", count: 100 }]);
   } finally {
     running = false;
     await loop;

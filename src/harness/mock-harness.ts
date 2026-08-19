@@ -545,7 +545,8 @@ export function createMockHarness(): Harness {
           usedTool = true;
           reply = r.ok ? "(deleted)" : `[not deleted] ${r.message ?? "failed"}`;
         } else if (command0 === "!read_thread" || command0.startsWith("!read_thread ")) {
-          const r = await turn.tools.readThread();
+          const [, channel] = command0.split(/\s+/, 2);
+          const r = await turn.tools.readThread(channel ? { channel } : undefined);
           await turn.emit({
             type: "tool_result",
             payload: { tool: "read_thread", ok: r.ok, count: (r.messages ?? []).length },

@@ -121,6 +121,7 @@ function toolOptions(opts: OpenCodeHarnessOptions, turn?: HarnessTurnInput): PiT
       ? {
           readOnly: turn.readOnly,
           surfaceTools: turn.surfaceTools,
+          surfaceDmTools: turn.surfaceDmTools,
           surfaceName: turn.surfaceName,
           credentialExecServices: turn.credentialExecServices,
         }
@@ -137,6 +138,14 @@ export function bridgeToolName(name: string): string {
   if (name === "read") return "workspace_read";
   if (name === "write") return "workspace_write";
   return name;
+}
+
+export function bridgeTurnToolName(
+  name: string,
+  turn: Pick<HarnessTurnInput, "surfaceDmTools" | "surfaceName">,
+): string {
+  const bridged = bridgeToolName(name);
+  return turn.surfaceDmTools && name === (turn.surfaceName ?? "slack") ? `${bridged}_read` : bridged;
 }
 
 function body(req: IncomingMessage, max = 16 * 1024 * 1024): Promise<Buffer> {
@@ -453,15 +462,22 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
   const active = new Map<string, ActiveTurn>();
   const definitionRef: ToolContextRef = { current: null };
   const definitionTools = [
-    ...asTools(definitionRef, toolOptions(opts)),
-    ...asTools(definitionRef, { ...toolOptions(opts), surfaceTools: false }),
+    ...asTools(definitionRef, toolOptions(opts)).map((tool) => ({ tool, name: bridgeToolName(tool.name) })),
+    ...asTools(definitionRef, { ...toolOptions(opts), surfaceTools: false }).map((tool) => ({
+      tool,
+      name: bridgeToolName(tool.name),
+    })),
+    ...asTools(definitionRef, { ...toolOptions(opts), surfaceTools: false, surfaceDmTools: true }).map((tool) => ({
+      tool,
+      name: bridgeTurnToolName(tool.name, { surfaceDmTools: true, surfaceName: "slack" }),
+    })),
   ];
   const definitions = [
     ...new Map(
-      definitionTools.map((tool) => [
-        bridgeToolName(tool.name),
+      definitionTools.map(({ tool, name }) => [
+        name,
         {
-          name: bridgeToolName(tool.name),
+          name,
           description: tool.description,
           parameters: tool.parameters,
         },
@@ -657,6 +673,12 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         const bridgeUrl = `http://127.0.0.1:${address.port}`;
         const pluginUrl = pathToFileURL(join(import.meta.dirname, "opencode-plugin.ts")).href;
         const enabledTools = Object.fromEntries(definitions.map((item) => [item.name, true]));
+        const subagentTools = {
+          ...enabledTools,
+          [bridgeToolName("slack")]: false,
+          [bridgeTurnToolName("slack", { surfaceDmTools: true, surfaceName: "slack" })]: false,
+          task: false,
+        };
         const custom = (await opts.resolveCustomProviders?.()) ?? [];
         const customProviderConfig = Object.fromEntries(
           custom.map(({ spec, apiKey }) => [
@@ -736,19 +758,19 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
               mode: "subagent",
               description: "Research a bounded question and report evidence.",
               prompt: "Complete only the delegated research task.",
-              tools: { ...enabledTools, task: false },
+              tools: subagentTools,
             },
             code: {
               mode: "subagent",
               description: "Implement or inspect a bounded code task.",
               prompt: "Complete only the delegated code task.",
-              tools: { ...enabledTools, task: false },
+              tools: subagentTools,
             },
             consult: {
               mode: "subagent",
               description: "Provide an independent expert analysis.",
               prompt: "Complete only the delegated consultation.",
-              tools: { ...enabledTools, task: false },
+              tools: subagentTools,
             },
           },
         };
@@ -873,7 +895,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const state: ActiveTurn = {
       turn,
       ref,
-      tools: new Map(tools.map((tool) => [bridgeToolName(tool.name), tool])),
+      tools: new Map(tools.map((tool) => [bridgeTurnToolName(tool.name, turn), tool])),
       system: `${turn.systemPrompt}\n\nOpenCode tool aliases: workspace_execute is foreground \`execute\`; workspace_read reads workspace files; workspace_write writes workspace files.`,
       history: replayMessages(reconstructMessagesFromHistory(turn.history), sessionId, model),
       userSeq: userEntry.seq,
@@ -997,7 +1019,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       })),
     ];
     const enabled = Object.fromEntries(definitions.map((tool) => [tool.name, false]));
-    for (const tool of tools) enabled[bridgeToolName(tool.name)] = true;
+    for (const tool of tools) enabled[bridgeTurnToolName(tool.name, turn)] = true;
     enabled.task = !turn.readOnly;
     let timer: NodeJS.Timeout | undefined;
     let signalsStopped = false;

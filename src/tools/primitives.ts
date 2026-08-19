@@ -245,6 +245,11 @@ interface SurfaceSearchToolOpts {
   source?: "mirror" | "slack";
 }
 
+interface SurfaceReadToolOpts {
+  limit?: number;
+  channel?: string;
+}
+
 interface SurfacePostOpts {
   ts?: string;
   broadcast?: boolean;
@@ -345,7 +350,7 @@ export interface SurfaceToolDeps {
   react(input: SurfaceReactInput): Promise<SurfacePostResult>;
   edit(input: SurfaceEditInput): Promise<SurfacePostResult>;
   delete(input: SurfaceDeleteInput): Promise<SurfacePostResult>;
-  readThread(opts?: { limit?: number }): Promise<SurfaceReadResult>;
+  readThread(opts?: SurfaceReadToolOpts): Promise<SurfaceReadResult>;
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
   readMembers(): Promise<SurfaceMembersResult>;

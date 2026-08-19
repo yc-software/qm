@@ -461,6 +461,20 @@ export function createMessagingMethods(
           { mayOpenGroup: !input.react && !input.delete },
         );
         if (!r.ok) return r;
+        const senderScope = parseScopeId(input.senderScope);
+        if (
+          r.recipient?.principalId === input.senderId &&
+          senderScope.kind === "personal" &&
+          senderScope.ref === input.senderId &&
+          input.currentDestination?.type === "slack"
+        ) {
+          return {
+            ok: false,
+            status: 400,
+            error: "same_conversation",
+            message: "reach is for another conversation; reply normally in the current DM",
+          };
+        }
         baseDestination = r.destination;
         if (r.recipient) extra.recipient = r.recipient;
         if (r.channel) extra.channel = r.channel;

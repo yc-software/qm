@@ -15,6 +15,7 @@ import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
+import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -25,6 +26,7 @@ import type { LivenessCache } from "../src/credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 
 const ORG = "default-org";
@@ -81,6 +83,7 @@ function buildOrchestrator(
     scopeSoulFor?: { conversation: Conversation; soul: string };
     branding?: OrgBranding;
     brandingDefault?: OrgBranding;
+    captureTurn?: (turn: HarnessTurnInput) => void;
   } = {},
 ) {
   const config = createMemoryConfigStore(ORG);
@@ -99,6 +102,14 @@ function buildOrchestrator(
     acl,
   });
   const resolution = createResolutionService(ORG, config, acl);
+  const harness = createMockHarness();
+  if (opts.captureTurn) {
+    const runTurn = harness.turns.runTurn;
+    harness.turns.runTurn = async (turn) => {
+      opts.captureTurn?.(turn);
+      return runTurn(turn);
+    };
+  }
 
   if (opts.scopeSoulFor) {
     const scope = resolution.scopeFor(opts.scopeSoulFor.conversation, actor);
@@ -115,7 +126,7 @@ function buildOrchestrator(
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness: createMockHarness(),
+    harness,
     memory,
     deploy,
     acl,
@@ -125,6 +136,7 @@ function buildOrchestrator(
     livenessCache,
     connectorTokens,
     connectorStatusCache,
+    deliveries: createDeliveryStore(),
     signingSecret: "test-signing-secret",
     apiBaseUrl: "https://api.test",
   });
@@ -208,6 +220,37 @@ test("Mode 1 (DM): live-conversation frame, org policy once, no template leaks, 
   assert.doesNotMatch(prompt, /no one ever reads this transcript/);
   assert.doesNotMatch(prompt, /stay_silent/);
   assert.match(prompt, /You are QM/);
+  assert.match(prompt, /`read_thread` with `channel`/);
+  assert.match(prompt, /`search` with `source: "slack"`/);
+  assert.match(prompt, /do not treat a computer or missing environment variable as Slack being unavailable/);
+});
+
+test("Mode 1 (Slack DM): the harness receives limited live Slack tools", async () => {
+  let captured: HarnessTurnInput | undefined;
+  const orch = buildOrchestrator({ captureTurn: (turn) => (captured = turn) });
+  const result = await orch.handleTurn(slackDm("latest updates", { deliveryTarget: "D1" }));
+
+  assert.equal(result.status, "ok");
+  assert.equal(captured?.surfaceDmTools, true);
+  assert.equal(captured?.surfaceTools, undefined);
+  assert.equal(captured?.surfaceName, "slack");
+});
+
+test("Mode 1 (Slack DM): core rejects surface mutations even when a harness dispatches them", async () => {
+  const orch = buildOrchestrator();
+  const commands = [
+    "!post duplicate",
+    "!reachchan general duplicate",
+    "!react 1.0 eyes",
+    "!edit 1.0 changed",
+    "!delete 1.0",
+  ];
+
+  for (const text of commands) {
+    const result = await orch.handleTurn(slackDm(text, { deliveryTarget: "D1" }));
+    assert.equal(result.status, "ok");
+    assert.match(result.reply ?? "", /Pulse Slack DM surface is read-only/);
+  }
 });
 
 test("Mode 1 (DM): org policy still renders exactly once when the scope soul duplicates it verbatim", async () => {

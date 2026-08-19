@@ -287,6 +287,263 @@ describe("the Slack surface opening a group DM", () => {
   });
 });
 
+describe("Slack surface history isolation", () => {
+  it("refuses an externally shared channel supplied as a conversation target", async () => {
+    const fulfilled: Array<{ id: string; outcome: unknown }> = [];
+    let historyCalls = 0;
+    const surface = createSurfaceContextFulfiller({
+      core: {
+        fulfillContextRequest: async (id: string, outcome: unknown) => void fulfilled.push({ id, outcome }),
+      } as never,
+      bridge: {} as never,
+      directory: {
+        getChannelInfo: async () => ({ id: "C-connect", is_ext_shared: true, is_member: true }),
+      } as never,
+      serializer: {} as never,
+      botToken: "xoxb-test",
+      clientOptions: {},
+    });
+    const client = {
+      conversations: {
+        history: async () => {
+          historyCalls++;
+          return { messages: [] };
+        },
+      },
+    };
+
+    await surface.fulfillSurfaceContext(client, {
+      id: "history-external",
+      source: "slack",
+      createdAt: Date.now(),
+      status: "pending",
+      query: { conversationTarget: "C-connect", viewer: "alice@acme.dev", count: 10 },
+    });
+
+    assert.match(String((fulfilled[0]!.outcome as any).error), /externally shared/);
+    assert.equal(historyCalls, 0);
+  });
+});
+
+describe("live Slack search identity", () => {
+  it("requires the asking person's connected token", async () => {
+    const fulfilled: Array<{ id: string; outcome: unknown }> = [];
+    const surface = createSurfaceContextFulfiller({
+      core: {
+        fulfillContextRequest: async (id: string, outcome: unknown) => void fulfilled.push({ id, outcome }),
+      } as never,
+      bridge: {} as never,
+      directory: {} as never,
+      serializer: {} as never,
+      botToken: "xoxb-test",
+      clientOptions: {},
+    });
+
+    await surface.fulfillSurfaceContext(
+      {},
+      {
+        id: "search-1",
+        source: "slack",
+        createdAt: Date.now(),
+        status: "pending",
+        query: { searchAll: "roadmap", count: 10 },
+      },
+    );
+
+    assert.deepEqual(fulfilled, [
+      {
+        id: "search-1",
+        outcome: { result: { messages: [], note: "live-search-unconnected" } },
+      },
+    ]);
+  });
+
+  it("uses the configured app user token only for the Slack member who owns it", async () => {
+    const fulfilled: Array<{ id: string; outcome: unknown }> = [];
+    const searchedWith: string[] = [];
+    const surface = createSurfaceContextFulfiller({
+      core: {
+        fulfillContextRequest: async (id: string, outcome: unknown) => void fulfilled.push({ id, outcome }),
+      } as never,
+      bridge: {} as never,
+      directory: {
+        classifyUserCached: async (_client: unknown, slackId: string) => ({
+          ok: true,
+          actor: { externalId: slackId === "U-OWNER" ? "owner@example.com" : slackId },
+        }),
+      } as never,
+      serializer: {} as never,
+      botToken: "xoxb-test",
+      userToken: "xoxp-operator",
+      userClientFactory: (token) =>
+        ({
+          auth: { test: async () => ({ user_id: "U-OWNER" }) },
+          search: {
+            messages: async () => {
+              searchedWith.push(token);
+              return { messages: { matches: [{ ts: "1.0", text: "latest", user: "U2" }] } };
+            },
+          },
+        }) as never,
+      clientOptions: {},
+    });
+
+    await surface.fulfillSurfaceContext(
+      {},
+      {
+        id: "search-owner",
+        source: "slack",
+        createdAt: Date.now(),
+        status: "pending",
+        query: { searchAll: "roadmap", count: 10, viewer: "owner@example.com" },
+      },
+    );
+
+    assert.deepEqual(searchedWith, ["xoxp-operator"]);
+    assert.match(JSON.stringify(fulfilled[0]!.outcome), /latest/);
+  });
+
+  it("retries configured user-token ownership after a transient identity failure", async () => {
+    const fulfilled: Array<{ id: string; outcome: unknown }> = [];
+    let authCalls = 0;
+    let searches = 0;
+    const surface = createSurfaceContextFulfiller({
+      core: {
+        fulfillContextRequest: async (id: string, outcome: unknown) => void fulfilled.push({ id, outcome }),
+      } as never,
+      bridge: {} as never,
+      directory: {
+        classifyUserCached: async () => ({ ok: true, actor: { externalId: "owner@example.com" } }),
+      } as never,
+      serializer: {} as never,
+      botToken: "xoxb-test",
+      userToken: "xoxp-operator",
+      userClientFactory: () =>
+        ({
+          auth: {
+            test: async () => {
+              authCalls++;
+              if (authCalls === 1) throw new Error("temporary failure");
+              return { user_id: "U-OWNER" };
+            },
+          },
+          search: {
+            messages: async () => {
+              searches++;
+              return { messages: { matches: [{ ts: "1.0", text: "recovered", user: "U2" }] } };
+            },
+          },
+        }) as never,
+      clientOptions: {},
+    });
+
+    for (const id of ["search-retry-1", "search-retry-2"]) {
+      await surface.fulfillSurfaceContext(
+        {},
+        {
+          id,
+          source: "slack",
+          createdAt: Date.now(),
+          status: "pending",
+          query: { searchAll: "roadmap", count: 10, viewer: "owner@example.com" },
+        },
+      );
+    }
+
+    assert.equal(authCalls, 2);
+    assert.equal(searches, 1);
+    assert.match(JSON.stringify(fulfilled[1]!.outcome), /recovered/);
+  });
+
+  it("does not lend the configured app user token to another Slack member", async () => {
+    const fulfilled: Array<{ id: string; outcome: unknown }> = [];
+    let searches = 0;
+    const surface = createSurfaceContextFulfiller({
+      core: {
+        fulfillContextRequest: async (id: string, outcome: unknown) => void fulfilled.push({ id, outcome }),
+      } as never,
+      bridge: {} as never,
+      directory: {
+        classifyUserCached: async () => ({ ok: true, actor: { externalId: "owner@example.com" } }),
+      } as never,
+      serializer: {} as never,
+      botToken: "xoxb-test",
+      userToken: "xoxp-operator",
+      userClientFactory: () =>
+        ({
+          auth: { test: async () => ({ user_id: "U-OWNER" }) },
+          search: { messages: async () => void searches++ },
+        }) as never,
+      clientOptions: {},
+    });
+
+    await surface.fulfillSurfaceContext(
+      {},
+      {
+        id: "search-other",
+        source: "slack",
+        createdAt: Date.now(),
+        status: "pending",
+        query: { searchAll: "roadmap", count: 10, viewer: "other@example.com" },
+      },
+    );
+
+    assert.equal(searches, 0);
+    assert.deepEqual(fulfilled[0], {
+      id: "search-other",
+      outcome: { result: { messages: [], note: "live-search-unconnected" } },
+    });
+  });
+
+  it("prefers the exact viewer's Keychain token over the configured app user token", async () => {
+    const fulfilled: Array<{ id: string; outcome: unknown }> = [];
+    const searchedWith: string[] = [];
+    const surface = createSurfaceContextFulfiller({
+      core: {
+        fulfillContextRequest: async (id: string, outcome: unknown) => void fulfilled.push({ id, outcome }),
+      } as never,
+      bridge: {} as never,
+      directory: {} as never,
+      serializer: {} as never,
+      botToken: "xoxb-test",
+      userToken: "xoxp-operator",
+      userClientFactory: (token) =>
+        ({
+          auth: { test: async () => ({ user_id: "U-OWNER" }) },
+          search: {
+            messages: async () => {
+              searchedWith.push(token);
+              return { messages: { matches: [] } };
+            },
+          },
+        }) as never,
+      clientOptions: {},
+    });
+
+    await surface.fulfillSurfaceContext(
+      {},
+      {
+        id: "search-viewer",
+        source: "slack",
+        createdAt: Date.now(),
+        status: "pending",
+        query: {
+          searchAll: "roadmap",
+          count: 10,
+          viewer: "other@example.com",
+          viewerToken: "xoxp-other",
+        },
+      },
+    );
+
+    assert.deepEqual(searchedWith, ["xoxp-other"]);
+    assert.deepEqual(fulfilled[0], {
+      id: "search-viewer",
+      outcome: { result: { messages: [], hasMore: false } },
+    });
+  });
+});
+
 describe("pushing the group roster when Slack won't list group DMs", () => {
   it("omits the roster rather than replacing it with an empty one", async () => {
     const pushes: Array<Record<string, unknown>> = [];
