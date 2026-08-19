@@ -38,6 +38,8 @@ export {
   channelPrivacyChange,
   createRefreshCoalescer,
   hasContent,
+  messageBodyText,
+  type LegacyAttachment,
   isThreadReply,
   createThreadTracker,
   dmThreadRef,

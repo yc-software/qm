@@ -1,5 +1,5 @@
 import { swallow } from "../util/errors.ts";
-import { decodeSlackEntities, mentionsBot, resolveMentionsInText } from "./lib.ts";
+import { decodeSlackEntities, mentionsBot, messageBodyText, resolveMentionsInText } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -104,7 +104,7 @@ export function createMirror(deps: {
       }
       if (!gate.allowed) return;
     }
-    const raw = String(m.text ?? "");
+    const raw = messageBodyText(m);
     const { text, mentions } = await resolveTextMentions(client, decodeSlackEntities(raw));
     await pushSurfaceEvents([
       {
