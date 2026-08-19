@@ -12,11 +12,17 @@ export function searchTerms(query: string): string[] {
     .slice(0, MAX_TERMS);
 }
 
-/** A `to_tsquery('simple', …)` expression: every term required, last-token-friendly prefix match. */
+/** Terms shorter than this match whole words only — 1-2 char prefixes expand to
+ * enormous GIN key sets and dominate search latency. */
+const MIN_PREFIX_LEN = 3;
+
+/** A `to_tsquery('simple', …)` expression: every term required; terms long
+ * enough to be selective prefix-match (last-token-friendly), shorter ones
+ * match exactly. */
 export function tsPrefixQuery(query: string): string | null {
   const terms = searchTerms(query);
   if (!terms.length) return null;
-  return terms.map((t) => `${t}:*`).join(" & ");
+  return terms.map((t) => (t.length >= MIN_PREFIX_LEN ? `${t}:*` : t)).join(" & ");
 }
 
 /** The searchable text of an entry payload — mirrors the Postgres `entry_search_text` function. */
@@ -32,11 +38,14 @@ export function entrySearchAuthor(entry: Pick<SessionEntry, "type" | "payload">)
   return typeof name === "string" && name.trim() ? name.trim() : undefined;
 }
 
-/** In-memory mirror of the tsquery semantics: every term prefix-matches some word. */
+/** In-memory mirror of the tsquery semantics: every term matches some word —
+ * by prefix when long enough, exactly otherwise. */
 export function matchesSearchTerms(text: string, terms: readonly string[]): boolean {
   if (!terms.length) return false;
   const words = text.toLowerCase().split(/[^\p{L}\p{N}]+/u);
-  return terms.every((term) => words.some((w) => w.startsWith(term)));
+  return terms.every((term) =>
+    words.some((w) => (term.length >= MIN_PREFIX_LEN ? w.startsWith(term) : w === term)),
+  );
 }
 
 /** First occurrence of `term` in `lower` that starts at a word boundary —

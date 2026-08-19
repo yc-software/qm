@@ -39,8 +39,8 @@ import {
   userMessagePreview,
 } from "./session-store.ts";
 
-export const SESSION_ENTRIES_SEARCH_INDEX_SQL = `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_search_fts
-  ON session_entries USING GIN (to_tsvector('simple', COALESCE(entry_search_text(payload), '')))
+export const SESSION_ENTRIES_SEARCH_INDEX_SQL = `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_search_tsv
+  ON session_entries USING GIN (search_tsv)
   WHERE type IN ('user', 'assistant', 'text')`;
 
 export function rowToSession(r: Record<string, unknown>): Session {
@@ -264,7 +264,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     `CREATE INDEX IF NOT EXISTS session_entries_user_ts ON session_entries(created_at) WHERE type = 'user'`,
     `CREATE INDEX IF NOT EXISTS session_entries_session_created ON session_entries(session_id, created_at DESC)`,
     `CREATE OR REPLACE FUNCTION entry_search_text(payload text) RETURNS text
-        LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $entry_search_text$
+        LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $entry_search_text$
         DECLARE j json;
         BEGIN
           j := replace(payload, '\\u0000', '')::json;
@@ -273,7 +273,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                       ELSE NULL END;
         EXCEPTION WHEN others THEN RETURN NULL;
         END $entry_search_text$`,
+    `ALTER TABLE session_entries ADD COLUMN IF NOT EXISTS search_tsv tsvector
+        GENERATED ALWAYS AS (to_tsvector('simple', COALESCE(entry_search_text(payload), ''))) STORED`,
     SESSION_ENTRIES_SEARCH_INDEX_SQL,
+    `DROP INDEX IF EXISTS session_entries_search_fts`,
     `DELETE FROM session_entries WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
     `DELETE FROM participants WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
     `DELETE FROM session_leases WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
@@ -748,7 +751,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            JOIN participants p ON p.session_id = e.session_id AND p.principal_id = $1
           WHERE e.type IN ('user', 'assistant', 'text')
             AND ${withinParticipantWindow("e", "p")}
-            AND to_tsvector('simple', COALESCE(entry_search_text(e.payload), '')) @@ to_tsquery('simple', $2)
+            AND e.search_tsv @@ to_tsquery('simple', $2)
           ORDER BY e.created_at DESC, e.session_id, e.seq DESC
           LIMIT $3`,
         [principalId, ts, Math.max(1, Math.min(limit, 200))],

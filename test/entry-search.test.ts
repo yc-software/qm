@@ -20,11 +20,18 @@ test("tsPrefixQuery builds an AND-of-prefixes tsquery", () => {
   assert.equal(tsPrefixQuery("!!!"), null);
 });
 
+test("tsPrefixQuery keeps short terms exact — tiny prefixes are too expensive to expand", () => {
+  assert.equal(tsPrefixQuery("qm deploy"), "qm & deploy:*");
+  assert.equal(tsPrefixQuery("de"), "de");
+});
+
 test("matchesSearchTerms mirrors prefix semantics", () => {
   assert.ok(matchesSearchTerms("Refreshed the memo board data", ["memo", "boar"]));
   assert.ok(!matchesSearchTerms("Refreshed the memo board data", ["memo", "missing"]));
   assert.ok(!matchesSearchTerms("emoboard", ["memo"]), "prefix, not substring");
   assert.ok(!matchesSearchTerms("anything", []));
+  assert.ok(matchesSearchTerms("the qm deployment", ["qm"]), "short terms match whole words");
+  assert.ok(!matchesSearchTerms("the deployment", ["de"]), "short terms do not prefix-match");
 });
 
 test("entrySearchText reads string payloads and payload.text", () => {
