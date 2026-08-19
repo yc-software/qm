@@ -41,6 +41,7 @@ import {
   configuredConnectorProviders,
   connectorStatusIsStale,
   refreshConnectorStatus,
+  CONNECTOR_STATUS_ACCOUNT_TYPES,
 } from "../credentials/connector-status.ts";
 import { renderComputerBlock, renderResidentLoginsBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
@@ -1069,11 +1070,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       if (!strictReadOnly && deps.connectorTokens && conversation.kind === "dm") {
         for (const host of CONNECTOR_HOSTS) {
-          const token =
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
+          const slots = new Map<string, string>();
+          for (const accountType of CONNECTOR_STATUS_ACCOUNT_TYPES) {
+            const slotToken = await deps.connectorTokens.connectorAccessToken(host, actor.id, accountType);
+            if (slotToken) slots.set(accountType ?? "default", slotToken);
+          }
+          const token = slots.get("personal") ?? slots.get("default") ?? slots.get("company");
           if (token) connectorEnv[envKey(host)] = token;
+          if (slots.size > 1) {
+            for (const [slot, slotToken] of slots) connectorEnv[`${envKey(host)}__${slot.toUpperCase()}`] = slotToken;
+          }
         }
       }
       perf.credsMs += Date.now() - credsStart;
