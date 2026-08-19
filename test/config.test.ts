@@ -174,12 +174,19 @@ test("boolEnv: one vocabulary for every boolean env knob", () => {
 });
 
 test("every boolean knob accepts the shared vocabulary (off means off)", () => {
-  const off = loadConfig({ SEED_SKILLS: "off", EXECUTE_SCRATCH: "off", REACH_EXEC: "off", PI_CAPTURE_REQUESTS: "off" });
+  const off = loadConfig({
+    SEED_SKILLS: "off",
+    EXECUTE_SCRATCH: "off",
+    REACH_EXEC: "off",
+    PI_CAPTURE_REQUESTS: "off",
+    S3_FORCE_PATH_STYLE: "off",
+  });
   assert.equal(off.seedSkills, false);
   assert.equal(off.scratchExecEnabled, false);
   assert.equal(off.reachExecEnabled, false);
   assert.equal(off.sharedOwnerAuthIsolation, false);
   assert.equal(off.piCaptureRequests, false);
+  assert.equal(off.s3ForcePathStyle, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
@@ -187,12 +194,14 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
     REACH_EXEC: "1",
     SHARED_OWNER_AUTH_ISOLATION: "yes",
     PI_SYSTEM_CACHE_SPLIT: "on",
+    S3_FORCE_PATH_STYLE: "on",
   });
   assert.equal(on.seedSkills, true);
   assert.equal(on.scratchExecEnabled, true);
   assert.equal(on.reachExecEnabled, true);
   assert.equal(on.sharedOwnerAuthIsolation, true);
   assert.equal(on.piSystemCacheSplit, true);
+  assert.equal(on.s3ForcePathStyle, true);
 
   const unset = loadConfig({});
   assert.equal(unset.piCaptureRequests, true, "capture defaults on");
@@ -210,6 +219,10 @@ test("a set-but-unparseable env value refuses to boot instead of silently taking
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
   assert.throws(() => loadConfig({ EXECUTE_SCRATCH: "2" }), /EXECUTE_SCRATCH="2" is not a recognized boolean/);
+  assert.throws(
+    () => loadConfig({ S3_FORCE_PATH_STYLE: "enabled" }),
+    /S3_FORCE_PATH_STYLE="enabled" is not a recognized boolean/,
+  );
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
   assert.equal(loadConfig({ EXECUTE_SCRATCH: "" }).scratchExecEnabled, false);

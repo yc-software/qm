@@ -105,6 +105,7 @@ export interface Config {
   s3Bucket?: string;
   s3Region?: string;
   s3Prefix?: string;
+  s3ForcePathStyle: boolean;
   deployIdleTtlMs?: number;
   deployGitDir: string;
   deployDialTimeoutMs: number;
@@ -434,6 +435,7 @@ export const CONFIG_DEFAULTS = {
   backgroundJobTtlSec: 1800,
   backgroundJobTtlMaxSec: 3600,
   backgroundWorkEnabled: true,
+  s3ForcePathStyle: false,
   monitorPollMs: 10_000,
   skillSyncPollMs: 0,
   deployDialTimeoutMs: 20_000,
@@ -853,6 +855,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),
     ...(env.S3_PREFIX ? { s3Prefix: env.S3_PREFIX } : {}),
+    s3ForcePathStyle: boolEnvStrict("S3_FORCE_PATH_STYLE", env.S3_FORCE_PATH_STYLE) ?? CONFIG_DEFAULTS.s3ForcePathStyle,
     ...(numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) !== undefined
       ? { deployIdleTtlMs: numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) }
       : {}),

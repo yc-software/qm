@@ -563,6 +563,7 @@ export function buildApp(
           bucket: config.s3Bucket,
           ...(config.s3Region ? { region: config.s3Region } : {}),
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+          forcePathStyle: config.s3ForcePathStyle,
         })
       : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
   const fileBytes: DurableByteStore =
@@ -571,6 +572,7 @@ export function buildApp(
           bucket: config.s3Bucket,
           ...(config.s3Region ? { region: config.s3Region } : {}),
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+          forcePathStyle: config.s3ForcePathStyle,
         })
       : createLocalDurableByteStore(join(config.dataDir, "docstore"));
   const files: FileArtifactStore = config.databaseUrl
@@ -622,6 +624,7 @@ export function buildApp(
     return createAwsSandbox(workspace, {
       ...config.awsSandbox,
       s3Bucket: config.awsSandbox.s3Bucket,
+      forcePathStyle: config.s3ForcePathStyle,
       advisoryLock,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
@@ -864,6 +867,7 @@ export function buildApp(
               bucket: config.s3Bucket,
               ...(config.s3Region ? { region: config.s3Region } : {}),
               prefix: `${config.s3Prefix ?? ""}deploy-git/`,
+              forcePathStyle: config.s3ForcePathStyle,
             }),
           }
         : {}),
@@ -876,6 +880,7 @@ export function buildApp(
           ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket
             ? { dataBucket: config.awsSandbox.s3Bucket }
             : {}),
+          forcePathStyle: config.s3ForcePathStyle,
           advisoryLock,
           store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
         })

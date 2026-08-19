@@ -7,6 +7,7 @@ import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { s3Client } from "../persistence/s3.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
 import { swallow } from "../util/errors.ts";
@@ -78,6 +79,7 @@ export interface AwsDeployProviderOptions {
   tokenTtlMinutes?: number;
   dataBucket?: string;
   dataPrefix?: string;
+  forcePathStyle?: boolean;
   snapshotIntervalMs?: number;
   dataRoleArn?: string;
   store?: DurableMap<StoredDeployBody>;
@@ -131,7 +133,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const dataPrefix = (opts.dataPrefix ?? "deploy-data").replace(/\/+$/, "");
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 5 * 60_000;
   const s3: Pick<S3Client, "send"> | undefined = dataBucket
-    ? (opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
+    ? (opts.s3 ??
+      s3Client({
+        region,
+        ...(opts.profile ? { profile: opts.profile } : {}),
+        forcePathStyle: opts.forcePathStyle,
+      }))
     : undefined;
   const dataRoleArn = opts.dataRoleArn;
   const litestream = !!(dataBucket && dataRoleArn);

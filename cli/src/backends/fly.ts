@@ -427,6 +427,7 @@ const key = "qm-health/" + randomUUID();
 const client = new S3Client({
   region: process.env.S3_REGION || "auto",
   ...(process.env.AWS_ENDPOINT_URL_S3 ? { endpoint: process.env.AWS_ENDPOINT_URL_S3 } : {}),
+  forcePathStyle: ["1", "true", "yes", "on"].includes((process.env.S3_FORCE_PATH_STYLE || "").trim().toLowerCase()),
 });
 try {
   await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body }));

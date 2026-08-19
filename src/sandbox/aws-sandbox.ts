@@ -4,6 +4,7 @@ import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { s3Client } from "../persistence/s3.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { scopeStorageKey } from "../util/scope-storage-key.ts";
 import { swallow, swallowAs, errMessage } from "../util/errors.ts";
@@ -72,6 +73,7 @@ export interface AwsSandboxOptions {
   egressConnectorArns?: string[];
   s3Bucket: string;
   s3Prefix?: string;
+  forcePathStyle?: boolean;
   agentPort?: number;
   maxIdleDurationSeconds?: number;
   suspendedDurationSeconds?: number;
@@ -107,7 +109,12 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     });
   const s3: Pick<S3Client, "send"> =
-    opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) });
+    opts.s3 ??
+    s3Client({
+      region,
+      ...(opts.profile ? { profile: opts.profile } : {}),
+      forcePathStyle: opts.forcePathStyle,
+    });
   const store = opts.store ?? createMemoryMap<StoredMicrovm>();
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
   const provisionQueue = createKeyedQueue<string>();
