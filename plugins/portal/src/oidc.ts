@@ -137,7 +137,13 @@ export function resolvePrincipal(
   const email = rawEmail.trim().toLowerCase();
   if (
     rule.allowedEmails?.length &&
-    !rule.allowedEmails.map((allowed) => allowed.trim().toLowerCase()).includes(email)
+    rule.allowedEmails.map((allowed) => allowed.trim().toLowerCase()).includes(email)
+  ) {
+    return email;
+  }
+  if (
+    rule.allowedEmails?.length &&
+    !rule.allowedEmailDomain
   ) {
     throw new Error("account is not on the permitted email list");
   }
