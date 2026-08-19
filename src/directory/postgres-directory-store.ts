@@ -523,6 +523,19 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length > 0;
     },
 
+    async groupMemberIds(groupId) {
+      const known = await q("SELECT roster_known FROM directory_groups WHERE org_id = $1 AND group_id = $2", [
+        orgId,
+        groupId,
+      ]);
+      if (known[0]?.roster_known !== true) return undefined;
+      const rows = await q(
+        "SELECT principal_id FROM directory_group_members WHERE org_id = $1 AND group_id = $2 ORDER BY principal_id",
+        [orgId, groupId],
+      );
+      return rows.map((row) => row.principal_id as string);
+    },
+
     async groupMembership(groupId, principalId) {
       const rows = await q(
         `SELECT EXISTS (

@@ -154,12 +154,14 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
     assert.equal(await d.groupMember("G-2", "U-sam"), false);
     assert.equal(await d.groupMember("G-unknown", "U-alice"), false);
     assert.deepEqual(await d.listGroupsFor("U-sam"), ["G-1"]);
+    assert.deepEqual((await d.groupMemberIds("G-1"))?.sort(), ["U-alice", "U-carol", "U-sam"]);
     assert.equal(await d.groupMembership("G-2", "U-sam"), false);
   });
 
   it("distinguishes an unavailable group roster from a definitive nonmember", async () => {
     const d = createDirectoryStore();
     assert.equal(await d.groupMembership("G-1", "U-alice"), undefined);
+    assert.equal(await d.groupMemberIds("G-1"), undefined);
     await d.replaceGroups([]);
     assert.equal(await d.groupMembership("G-1", "U-alice"), false);
   });

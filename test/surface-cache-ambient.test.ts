@@ -772,7 +772,10 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
     await built.directory.replace([
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
-    await built.directory.replaceChannels([{ channelId: container, name: "solicited-chan", isPrivate: false }]);
+    await built.directory.replaceChannels(
+      [{ channelId: container, name: "solicited-chan", isPrivate: false }],
+      [{ channelId: container, principalId: "alice@acme.com" }],
+    );
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "300.1", authorId: "U1", authorName: "Alice", text: "!post solicited reply", createdAt: 1 },
@@ -788,6 +791,36 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.askedBy, "300.1", "asked_by is a first-class judgment field");
     assert.ok(!(rows[0]!.reason ?? "").includes("[asked_by"), "the reason carries no asked_by splice");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a solicited ambient wake carries the complete channel roster", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const container = "C-solicited-roster";
+    await built.directory.replace([
+      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
+      { principalId: "bob@acme.com", displayName: "Bob", type: "internal", slackId: "U2" },
+    ]);
+    await built.directory.replaceChannels(
+      [{ channelId: container, name: "solicited-roster", isPrivate: false }],
+      [
+        { channelId: container, principalId: "alice@acme.com" },
+        { channelId: container, principalId: "bob@acme.com" },
+      ],
+    );
+    await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "350.1", authorId: "U1", authorName: "Alice", text: "!sysprompt", createdAt: 1 },
+    ]);
+
+    const pending = await pollDeliveries(built.deliveries);
+    assert.equal(pending.length, 1);
+    assert.match(pending[0].text, /Alice \(alice@acme\.com\)/);
+    assert.match(pending[0].text, /Bob \(bob@acme\.com\)/);
   } finally {
     await built.runtime.stop();
   }

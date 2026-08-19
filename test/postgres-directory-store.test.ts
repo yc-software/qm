@@ -229,6 +229,7 @@ test(
     assert.equal(await store.groupMember("G-1", "U-sam"), true);
     assert.equal(await store.groupMember("G-2", "U-sam"), false);
     assert.equal(await store.groupMembership("G-2", "U-sam"), false);
+    assert.deepEqual(await store.groupMemberIds("G-1"), ["U-alice", "U-carol", "U-sam"]);
     assert.deepEqual(await store.listGroupsFor("U-sam"), ["G-1"]);
 
     const direct = (await freshPg(URL!)).query;

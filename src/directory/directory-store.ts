@@ -68,6 +68,7 @@ export interface DirectoryStore {
   upsertGroup(groupId: string, principalIds: readonly string[]): Promise<void>;
   resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
   groupMember(groupId: string, principalId: string): Promise<boolean>;
+  groupMemberIds(groupId: string): Promise<string[] | undefined>;
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
   listGroupsFor(principalId: string): Promise<string[]>;
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
@@ -227,6 +228,10 @@ export function createDirectoryStore(): DirectoryStore {
     },
     async groupMember(groupId, principalId) {
       return groupMembers?.get(groupId)?.has(principalId) ?? false;
+    },
+    async groupMemberIds(groupId) {
+      if (!knownGroupRosters?.has(groupId)) return undefined;
+      return [...(groupMembers?.get(groupId) ?? [])];
     },
     async groupMembership(groupId, principalId) {
       if (!groupsSynced) return undefined;
