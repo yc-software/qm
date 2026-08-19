@@ -33,9 +33,20 @@ const BASE_HTML = readFileSync(
   "utf8",
 ).replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH);
 const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+
+/**
+ * Browsers normalize line endings (CRLF and lone CR to LF) in inline scripts
+ * before hashing them for CSP `sha256-` sources. A Windows checkout reads the
+ * HTML file with CRLF, so hashing the raw bytes yields a hash no browser will
+ * ever compute and the SPA is blocked by its own CSP (#552).
+ */
+export function cspScriptHash(script: string): string {
+  return createHash("sha256").update(script.replace(/\r\n?/g, "\n")).digest("base64");
+}
+
 const ADMIN_CSP = [
   "default-src 'self'",
-  `script-src 'sha256-${createHash("sha256").update(ADMIN_SCRIPT).digest("base64")}'`,
+  `script-src 'sha256-${cspScriptHash(ADMIN_SCRIPT)}'`,
   "style-src 'unsafe-inline'",
   "img-src 'self' data:",
   "connect-src 'self'",
