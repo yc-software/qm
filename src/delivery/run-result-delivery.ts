@@ -2,7 +2,7 @@ import type { Destination, OutgoingAttachment } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import type { Task, TaskStore } from "../tasks/task-store.ts";
-import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
+import { quarantineRefusalText } from "../../plugins/chassis/src/security-quarantine.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errMessage } from "../util/errors.ts";
 
@@ -31,7 +31,7 @@ export function runResultDelivery(run: Run, taskList: Task[] = []): RunResultDel
     run.result.refusalKind === "security_quarantine" &&
     run.request.addressed
   ) {
-    return { destination, text: SECURITY_QUARANTINE_REFUSAL_TEXT, idempotencyKey };
+    return { destination, text: quarantineRefusalText(run.result.sessionId), idempotencyKey };
   }
   if (run.request.surfaceTools && run.result?.status !== "failed" && !run.result?.attachments?.length) return null;
   if (run.status === "failed") {
