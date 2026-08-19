@@ -66,9 +66,13 @@ npm exec --yes --package=@yc-software/qm@latest -- \
 npm install
 ```
 
-`qm init` writes the version it resolved to as an exact dependency, so the pin
-lands in the deployment repository and its lockfile rather than in the command
-that bootstraps it.
+`qm init` pins `@yc-software/qm` to the version it resolved to as an exact
+dependency, so the pin lands in the deployment repository and its lockfile
+rather than in the command that bootstraps it. It overwrites any existing
+exact, ranged, or tagged registry specification already in `package.json`,
+but leaves a local dependency (`file:` or `link:`) untouched, since that form
+is intentional — used for development against an unpublished CLI or for
+packed-artifact tests.
 
 `--model-provider` takes `anthropic`, `openai`, or `openrouter` and defaults to
 `anthropic`. It writes `modelProvider` into the scaffolded config, which is what
