@@ -18,6 +18,9 @@ export interface FakeDocker {
   imageMissing: boolean;
   imageId: string;
   imageFingerprint: string;
+  /** Mimics a buildx attestation image: `{{.Id}}` inspects fine, but the
+   * fingerprint template fails because the OCI index's Config has no Labels key. */
+  imageLabelsTemplateError: boolean;
 }
 
 export function installFakeDocker(daemonPort: number): FakeDocker {
@@ -31,6 +34,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
     runCount: 0,
     daemonDown: false,
     imageMissing: false,
+    imageLabelsTemplateError: false,
     imageId: "sha256:image-v1",
     imageFingerprint: "",
     dockerExec: async (args) => exec(args),
@@ -61,7 +65,17 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         return ok("Docker version fake");
       case "image": {
         if (self.imageMissing) return fail("Error: No such image");
-        return ok(`${self.imageId} ${self.imageFingerprint}`);
+        if (rest[0] === "inspect") {
+          const format = rest[rest.indexOf("-f") + 1] ?? "";
+          if (format === "{{.Id}}") return ok(self.imageId);
+          if (self.imageLabelsTemplateError) {
+            return fail(
+              'template parsing error: template: :1:20: executing "" at <.Config.Labels>: map has no entry for key "Labels"',
+            );
+          }
+          return ok(self.imageFingerprint);
+        }
+        return fail(`unknown image subcommand ${rest.join(" ")}`);
       }
       case "inspect": {
         const name = rest[rest.length - 1]!;

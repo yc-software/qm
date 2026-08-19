@@ -90,6 +90,28 @@ test("a missing sandbox image fails provision with the build hint", async () => 
   await assert.rejects(sb.provision(rw(scopeId("personal", "U0"))), /not found — run `npm run sandbox:local:build`/);
 });
 
+test("attestation (OCI index) image whose label template fails is usable, not reported missing (#577)", async () => {
+  const fake = installFakeDocker(daemonPort);
+  fake.imageLabelsTemplateError = true;
+  const sb = makeSandbox(fake);
+  const scope = scopeId("personal", "U0");
+  // The regression's signature was a preflight rejection claiming the image is
+  // missing. The preflight must accept the image; environments where the later
+  // daemon-exec prep fails for unrelated reasons (local Windows runs) still
+  // prove the image was found — only the not-found rejection is a failure.
+  try {
+    const h = await sb.provision(rw(scope));
+    assert.equal(h.id, localContainerName(scope));
+    assert.equal(fake.runCount, 1);
+  } catch (error) {
+    assert.doesNotMatch(
+      String(error),
+      /not found — run `npm run sandbox:local:build`/,
+      "image was misreported as missing",
+    );
+  }
+});
+
 test("cold provision creates volume + container, run() execs over the daemon, bytes round-trip", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);

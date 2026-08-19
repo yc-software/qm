@@ -112,21 +112,28 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         preflightDone = undefined;
         throw new Error("SANDBOX_BACKEND=local requires a running Docker daemon (is Docker Desktop running?)");
       }
-      const img = await dexec([
-        "image",
-        "inspect",
-        "-f",
-        `{{.Id}} {{if .Config.Labels}}{{index .Config.Labels "${FINGERPRINT_LABEL}"}}{{end}}`,
-        image,
-      ]);
+      // Existence and label are separate probes: images built by buildx with
+      // attestations (the Docker 29 default, and what `qm sandbox publish`
+      // emits) inspect as an OCI index whose Config has no Labels key, which
+      // fails the fingerprint template even though the image is present and
+      // usable. A template failure must not be reported as a missing image.
+      const img = await dexec(["image", "inspect", "-f", "{{.Id}}", image]);
       if (img.code !== 0) {
         preflightDone = undefined;
         throw new Error(`local sandbox image ${image} not found — ${BUILD_HINT}`);
       }
-      const [imageId = "", labeled = ""] = img.stdout.trim().split(/\s+/);
+      const labeled = await dexec([
+        "image",
+        "inspect",
+        "-f",
+        `{{if .Config.Labels}}{{index .Config.Labels "${FINGERPRINT_LABEL}"}}{{end}}`,
+        image,
+      ]);
+      const fingerprint = labeled.code === 0 ? labeled.stdout.trim() : "";
+      const [imageId = ""] = img.stdout.trim().split(/\s+/);
       if (!staleWarned) {
         const want = await computeSandboxImageFingerprint(opts.repoRoot ?? process.cwd());
-        if (want && labeled && labeled !== want) {
+        if (want && fingerprint && fingerprint !== want) {
           staleWarned = true;
           console.warn(`[local-sandbox] sandbox image ${image} is stale — ${BUILD_HINT}`);
         }
