@@ -218,22 +218,10 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
   }
 
   async function conversationAudience(batch: AmbientBatch): Promise<ActorAssertion[] | undefined> {
-    if (batch.kind !== "group") {
-      const channels = await deps.directory.listChannels().catch(() => []);
-      const channel = channels.find((candidate) => candidate.channelId === batch.container);
-      if (!channel || channel.isExternal) return undefined;
-    }
-    const ids = await (
-      batch.kind === "group"
-        ? deps.directory.groupMemberIds(batch.container)
-        : deps.directory.channelMemberIds(batch.container)
-    ).catch(() => undefined);
-    if (!ids?.length) return undefined;
-    const directory = await deps.directory.list().catch(() => [] as DirectoryMember[]);
-    const members = ids
-      .map((id) => directory.find((member) => samePerson(member.principalId, id)))
-      .filter((member): member is DirectoryMember => member !== undefined);
-    if (members.length !== ids.length) return undefined;
+    const members = await deps.directory
+      .conversationMembers(batch.kind === "group" ? "group" : "channel", batch.container)
+      .catch(() => undefined);
+    if (!members?.length) return undefined;
     return members.map((member) => ({
       externalId: member.principalId,
       ...(member.displayName ? { displayName: member.displayName } : {}),
