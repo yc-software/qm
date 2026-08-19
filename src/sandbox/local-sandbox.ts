@@ -48,6 +48,7 @@ export interface LocalSandboxOptions {
   repoRoot?: string;
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
+  peerNetwork?: string;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
@@ -144,6 +145,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   }
 
   async function resolvePort(name: string): Promise<number> {
+    if (opts.peerNetwork) return AGENT_PORT;
     const cached = portByName.get(name);
     if (cached) return cached;
     const r = await dexec(["port", name, `${AGENT_PORT}/tcp`]);
@@ -167,7 +169,8 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   ): Promise<{ status: number; text: string }> {
     const port = await resolvePort(name);
     const signals = [AbortSignal.timeout(timeoutMs ?? 30_000), ...(signal ? [signal] : [])];
-    const res = await fetchImpl(`http://127.0.0.1:${port}${path}`, {
+    const host = opts.peerNetwork ? name : "127.0.0.1";
+    const res = await fetchImpl(`http://${host}:${port}${path}`, {
       method: body === undefined ? "GET" : "POST",
       ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
       signal: AbortSignal.any(signals),
@@ -195,6 +198,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     portByName.delete(name);
     const r = await dexec(["start", name]);
     if (r.code !== 0) throw new Error(`docker start ${name} failed: ${r.stderr.trim()}`);
+    await ensurePeerConnected(name);
     await waitDaemon(name);
   }
 
@@ -236,6 +240,14 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     return net;
   }
 
+  async function ensurePeerConnected(name: string): Promise<void> {
+    if (!opts.peerNetwork) return;
+    const r = await dexec(["network", "connect", opts.peerNetwork, name]);
+    if (r.code !== 0 && !/already exists/i.test(r.stderr)) {
+      throw new Error(`docker network connect ${opts.peerNetwork} ${name} failed: ${r.stderr.trim()}`);
+    }
+  }
+
   async function runContainer(name: string, scope: string | undefined, withVolume: boolean): Promise<void> {
     const net = await ensureNetwork(name);
     const args = [
@@ -262,6 +274,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     ];
     const r = await dexec(args, 120_000);
     if (r.code !== 0) throw new Error(`docker run ${name} failed: ${r.stderr.trim()}`);
+    await ensurePeerConnected(name);
     portByName.delete(name);
     await waitDaemon(name);
   }
