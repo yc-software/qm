@@ -43,9 +43,7 @@ export function entrySearchAuthor(entry: Pick<SessionEntry, "type" | "payload">)
 export function matchesSearchTerms(text: string, terms: readonly string[]): boolean {
   if (!terms.length) return false;
   const words = text.toLowerCase().split(/[^\p{L}\p{N}]+/u);
-  return terms.every((term) =>
-    words.some((w) => (term.length >= MIN_PREFIX_LEN ? w.startsWith(term) : w === term)),
-  );
+  return terms.every((term) => words.some((w) => (term.length >= MIN_PREFIX_LEN ? w.startsWith(term) : w === term)));
 }
 
 /** First occurrence of `term` in `lower` that starts at a word boundary —
