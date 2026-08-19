@@ -41,6 +41,9 @@ test("temporary onboarding covers model credentials, Slack, and OAuth setup", ()
   assert.match(html, /api\("GET", "\/api\/model-providers"\)/);
   assert.match(html, /api\("PUT", "\/api\/model-providers\/" \+ encodeURIComponent\(provider\)/);
   assert.match(html, /models\.data\.models/);
+  assert.match(html, /customOnboardingProvider/);
+  assert.match(html, /provider\.id \+ "\/" \+ model\.id/);
+  assert.match(html, /Use as base model/);
   assert.doesNotMatch(html, /const ONBOARDING_MODELS/);
   assert.match(html, /viewLoadedAt\.onboarding = Date\.now\(\)/);
   assert.match(html, /data-onboarding-target="slack"/);

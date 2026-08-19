@@ -112,24 +112,30 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
   };
 }
 
-let registry = new Map<string, CustomRuntimeModel>();
 let providers: CustomProviderSpec[] = [];
 let version = 0;
 
+export function customModelSelectionId(providerId: string, wireId: string): string {
+  return `${providerId}/${wireId}`;
+}
+
+function specById(id: string): CustomProviderSpec | undefined {
+  return providers.find((spec) => spec.id === id);
+}
+
+function runtimeOnProvider(spec: CustomProviderSpec, wireId: string): CustomRuntimeModel | undefined {
+  const model = spec.models.find((entry) => entry.id === wireId);
+  return model ? toRuntimeModel(spec, model) : undefined;
+}
+
 /**
  * Called by wiring at boot and again after every admin write, with the
- * full current set of enabled providers. Last write wins; built-in model
- * ids shadow custom ones at resolution, so a collision can't hijack a
- * built-in.
+ * full current set of enabled providers. Lookup is provider-first
+ * (`provider/wireId`, wire may itself contain slashes) and otherwise
+ * unique-wire. A shared or shadowed wire is only reachable via the
+ * namespaced id so a collision cannot hijack another model.
  */
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
-  const next = new Map<string, CustomRuntimeModel>();
-  for (const spec of specs) {
-    for (const m of spec.models) {
-      next.set(m.id, toRuntimeModel(spec, m));
-    }
-  }
-  registry = next;
   providers = specs.map((s) => ({ ...s, models: [...s.models] }));
   version += 1;
 }
@@ -140,15 +146,34 @@ export function customProvidersVersion(): number {
 }
 
 export function resolveCustomModel(id: string): CustomRuntimeModel | undefined {
-  return registry.get(id);
+  const slash = id.indexOf("/");
+  if (slash > 0) {
+    const spec = specById(id.slice(0, slash));
+    if (spec) {
+      const named = runtimeOnProvider(spec, id.slice(slash + 1));
+      if (named) return named;
+    }
+  }
+  const hits: CustomRuntimeModel[] = [];
+  for (const spec of providers) {
+    const hit = runtimeOnProvider(spec, id);
+    if (hit) hits.push(hit);
+  }
+  return hits.length === 1 ? hits[0] : undefined;
 }
 
 export function isCustomModelId(id: string): boolean {
-  return registry.has(id);
+  return resolveCustomModel(id) !== undefined;
 }
 
 export function customModelCatalog(): Array<{ id: string; name: string; provider: string }> {
-  return [...registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
+  return providers.flatMap((spec) =>
+    spec.models.map((m) => ({
+      id: m.id,
+      name: m.name?.trim() || m.id,
+      provider: spec.id,
+    })),
+  );
 }
 
 /**

@@ -1,7 +1,7 @@
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { providerBaseUrl } from "./provider-endpoints.ts";
-import { isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import { customModelSelectionId, resolveCustomModel, type CustomRuntimeModel } from "./custom-providers.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -152,6 +152,25 @@ export function resolveModel(id: string): PiModel | undefined {
   return builtinModel(id) ?? (resolveCustomModel(id) as unknown as PiModel | undefined);
 }
 
+export function winningCustomModel(id: string): CustomRuntimeModel | undefined {
+  const custom = resolveCustomModel(id);
+  if (!custom) return undefined;
+  if (REGISTRY_BY_ID.has(id) || builtinModel(id)) return undefined;
+  return custom;
+}
+
+export function customCatalogSelectionId(provider: string, wireId: string): string {
+  const resolved = resolveModel(wireId);
+  if (!resolved || String(resolved.provider) !== provider) return customModelSelectionId(provider, wireId);
+  return wireId;
+}
+
+export function selectableModelId(id: string): string {
+  const custom = winningCustomModel(id);
+  if (!custom) return id;
+  return customCatalogSelectionId(custom.provider, custom.id);
+}
+
 export function auxiliaryModelForProvider(provider: string): string | undefined {
   return MODEL_REGISTRY.find((m) => m.auxiliary && resolveModel(m.id)?.provider === provider)?.id;
 }
@@ -175,8 +194,7 @@ export function contextTokenBudgetForModel(id: string): number | undefined {
 
 export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
   if (!id) return false;
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id))
-    return harness === "pi" || harness === "opencode" || harness === "mock";
+  if (winningCustomModel(id)) return harness === "pi" || harness === "opencode" || harness === "mock";
   if (harness === "pi" || harness === "opencode" || harness === "mock") return Boolean(resolveModel(id));
   const provider = resolveModel(id)?.provider;
   if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
@@ -207,7 +225,7 @@ export interface ModelProviderAvailability {
 export function modelServiceable(id: string, providers: ModelProviderAvailability): boolean {
   const provider = resolveModel(id)?.provider;
   if (!provider) return false;
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return true;
+  if (winningCustomModel(id)) return true;
   if (provider === "openai") return providers.openai;
   if (provider === "anthropic") return providers.anthropic;
   if (provider === "openrouter") return providers.openrouter;

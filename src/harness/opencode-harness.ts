@@ -8,9 +8,8 @@ import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import { isCustomModelId } from "../model/custom-providers.ts";
 import type { CustomProviderSpec } from "../model/custom-providers.ts";
-import { DEFAULT_AGENT_MODEL_ID, resolveModel } from "../model/pi-models.ts";
+import { DEFAULT_AGENT_MODEL_ID, resolveModel, winningCustomModel } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
@@ -179,13 +178,8 @@ function sessionToken(secret: string, sessionId: string): string {
 }
 
 export function modelRef(id: string): { providerID: string; modelID: string } {
-  // A registered custom model wins before slash-splitting: gateway model ids
-  // routinely contain slashes (e.g. "bedrock/claude-x" behind LiteLLM), and
-  // those must route to the registered provider, not a phantom "bedrock".
-  if (isCustomModelId(id)) {
-    const resolved = resolveModel(id);
-    if (resolved?.provider) return { providerID: String(resolved.provider), modelID: id };
-  }
+  const custom = winningCustomModel(id);
+  if (custom) return { providerID: custom.provider, modelID: custom.id };
   const slash = id.indexOf("/");
   if (slash > 0) return { providerID: id.slice(0, slash), modelID: id.slice(slash + 1) };
   const resolved = resolveModel(id);

@@ -1,4 +1,9 @@
-import { modelSupportedByHarness, resolveModel, SELECTABLE_BASE_MODELS } from "./pi-models.ts";
+import {
+  customCatalogSelectionId,
+  modelSupportedByHarness,
+  resolveModel,
+  SELECTABLE_BASE_MODELS,
+} from "./pi-models.ts";
 import { customModelCatalog, customProvidersVersion } from "./custom-providers.ts";
 
 export interface ModelCatalogEntry {
@@ -31,8 +36,14 @@ export function builtInModelCatalog(): ModelCatalogEntry[] {
       ? [{ ...model, provider: provider as string }]
       : [];
   });
-  const known = new Set(builtIns.map((model) => model.id));
-  return [...builtIns, ...customModelCatalog().filter((model) => !known.has(model.id))];
+  const custom = customModelCatalog();
+  return [
+    ...builtIns,
+    ...custom.map((model) => ({
+      ...model,
+      id: customCatalogSelectionId(model.provider, model.id),
+    })),
+  ];
 }
 
 async function boundedJson(response: Response): Promise<unknown> {

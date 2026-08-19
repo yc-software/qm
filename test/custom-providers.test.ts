@@ -5,11 +5,18 @@ import {
   resolveCustomModel,
   isCustomModelId,
   customModelCatalog,
+  customModelSelectionId,
   validateCustomProviderSpec,
 } from "../src/model/custom-providers.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
-import { modelSupportedByHarness, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
+import {
+  modelSupportedByHarness,
+  modelServiceable,
+  resolveModel,
+  selectableModelId,
+  winningCustomModel,
+} from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { StoredCustomProvider } from "../src/model/custom-provider-store.ts";
 
@@ -54,8 +61,16 @@ test("anthropic-protocol providers produce anthropic-messages models with defaul
 test("resolveModel falls back to custom models; built-ins shadow custom ids", () => {
   setCustomProviders([{ ...GATEWAY, models: [{ id: "acme-large" }, { id: "claude-opus-5", name: "impostor" }] }]);
   assert.equal(resolveModel("acme-large")?.provider, "acme-gateway");
-  // The built-in claude-opus-5 must win over a custom model claiming its id.
   assert.equal(String(resolveModel("claude-opus-5")?.provider), "anthropic");
+  const namespaced = customModelSelectionId("acme-gateway", "claude-opus-5");
+  assert.equal(resolveModel(namespaced)?.provider, "acme-gateway");
+  assert.equal(resolveModel(namespaced)?.id, "claude-opus-5");
+  assert.equal(winningCustomModel("claude-opus-5"), undefined);
+  assert.equal(winningCustomModel(namespaced)?.provider, "acme-gateway");
+  assert.equal(selectableModelId("claude-opus-5"), "claude-opus-5");
+  assert.equal(selectableModelId(namespaced), namespaced);
+  assert.equal(selectableModelId("acme-large"), "acme-large");
+  assert.equal(selectableModelId("acme-gateway/acme-large"), "acme-large");
 });
 
 test("custom models are gated to pi and mock harnesses", () => {
@@ -125,6 +140,104 @@ test("store validates specs on upsert", async () => {
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
 });
 
+test("catalog keeps colliding custom models under a provider-prefixed id", () => {
+  setCustomProviders([
+    {
+      id: "dragonapi",
+      name: "DragonAPI",
+      protocol: "openai",
+      baseUrl: "https://dragon.example.com/v1",
+      models: [
+        { id: "gpt-5.6-terra", name: "Dragon Terra" },
+        { id: "gpt-5.6-sol", name: "Dragon Sol" },
+      ],
+    },
+  ]);
+  const catalog = builtInModelCatalog();
+  assert.ok(catalog.some((m) => m.id === "gpt-5.6-terra" && m.provider === "openai"));
+  const terra = catalog.find((m) => m.id === "dragonapi/gpt-5.6-terra");
+  assert.ok(terra, "colliding custom model stays selectable");
+  assert.equal(terra!.provider, "dragonapi");
+  assert.equal(terra!.name, "Dragon Terra");
+  assert.ok(catalog.some((m) => m.id === "dragonapi/gpt-5.6-sol" && m.provider === "dragonapi"));
+  assert.equal(
+    modelServiceable("dragonapi/gpt-5.6-terra", { anthropic: false, openai: false, openrouter: false }),
+    true,
+  );
+  assert.equal(modelServiceable("gpt-5.6-terra", { anthropic: false, openai: false, openrouter: false }), false);
+  assert.equal(String(resolveModel("gpt-5.6-terra")?.provider), "openai");
+  assert.equal(resolveModel("dragonapi/gpt-5.6-terra")?.provider, "dragonapi");
+  assert.equal(resolveModel("dragonapi/gpt-5.6-terra")?.id, "gpt-5.6-terra");
+});
+
+test("catalog namespaces a wire id shared by two custom providers", () => {
+  setCustomProviders([
+    { ...GATEWAY, models: [{ id: "shared-chat", name: "Acme Shared" }] },
+    {
+      id: "other-gw",
+      name: "Other",
+      protocol: "openai",
+      baseUrl: "https://other.example.com/v1",
+      models: [{ id: "shared-chat", name: "Other Shared" }],
+    },
+  ]);
+  const catalog = builtInModelCatalog();
+  assert.ok(catalog.some((m) => m.id === "acme-gateway/shared-chat" && m.provider === "acme-gateway"));
+  assert.ok(catalog.some((m) => m.id === "other-gw/shared-chat" && m.provider === "other-gw"));
+  assert.ok(!catalog.some((m) => m.id === "shared-chat"));
+  assert.equal(selectableModelId("acme-gateway/shared-chat"), "acme-gateway/shared-chat");
+  assert.equal(selectableModelId("other-gw/shared-chat"), "other-gw/shared-chat");
+  assert.equal(winningCustomModel("shared-chat"), undefined);
+  assert.equal(resolveModel("shared-chat"), undefined);
+  assert.equal(resolveModel("acme-gateway/shared-chat")?.provider, "acme-gateway");
+  assert.equal(resolveModel("other-gw/shared-chat")?.provider, "other-gw");
+});
+
+test("a slashed custom wire id does not collide with another provider's namespaced id", () => {
+  setCustomProviders([
+    {
+      id: "litellm",
+      name: "LiteLLM",
+      protocol: "openai",
+      baseUrl: "https://litellm.example.com/v1",
+      models: [{ id: "bedrock/claude-opus-5", name: "Bedrock Opus via LiteLLM" }],
+    },
+    {
+      id: "bedrock",
+      name: "Bedrock",
+      protocol: "openai",
+      baseUrl: "https://bedrock.example.com/v1",
+      models: [{ id: "claude-opus-5", name: "Bedrock Opus" }],
+    },
+  ]);
+  assert.equal(resolveModel("litellm/bedrock/claude-opus-5")?.provider, "litellm");
+  assert.equal(resolveModel("litellm/bedrock/claude-opus-5")?.id, "bedrock/claude-opus-5");
+  assert.equal(resolveModel("bedrock/claude-opus-5")?.provider, "bedrock");
+  assert.equal(resolveModel("bedrock/claude-opus-5")?.id, "claude-opus-5");
+  assert.equal(String(resolveModel("claude-opus-5")?.provider), "anthropic");
+  const catalog = builtInModelCatalog();
+  assert.ok(catalog.some((m) => m.id === "litellm/bedrock/claude-opus-5" && m.provider === "litellm"));
+  assert.ok(catalog.some((m) => m.id === "bedrock/claude-opus-5" && m.provider === "bedrock"));
+  assert.equal(catalog.filter((m) => m.id === "bedrock/claude-opus-5").length, 1);
+});
+
+test("a custom model that matches a non-selectable built-in is still namespaced", () => {
+  setCustomProviders([
+    {
+      id: "shadow-gw",
+      name: "Shadow",
+      protocol: "openai",
+      baseUrl: "https://shadow.example.com/v1",
+      models: [{ id: "claude-opus-4-7", name: "Impostor Opus 4.7" }],
+    },
+  ]);
+  const catalog = builtInModelCatalog();
+  assert.ok(catalog.some((m) => m.id === "shadow-gw/claude-opus-4-7" && m.provider === "shadow-gw"));
+  assert.ok(!catalog.some((m) => m.id === "claude-opus-4-7" && m.provider === "shadow-gw"));
+  assert.equal(String(resolveModel("claude-opus-4-7")?.provider), "anthropic");
+  assert.equal(resolveModel("shadow-gw/claude-opus-4-7")?.provider, "shadow-gw");
+});
+
 test("registered models surface in the catalog and vanish on unregister", () => {
   setCustomProviders([
     {
@@ -156,7 +269,21 @@ test("opencode modelRef routes slashed custom model ids to the registered provid
   ]);
   try {
     assert.deepEqual(modelRef("bedrock/claude-opus-5"), { providerID: "litellm", modelID: "bedrock/claude-opus-5" });
-    // built-in slash convention untouched
+    assert.deepEqual(modelRef("litellm/bedrock/claude-opus-5"), {
+      providerID: "litellm",
+      modelID: "bedrock/claude-opus-5",
+    });
+    setCustomProviders([
+      {
+        id: "dragonapi",
+        name: "DragonAPI",
+        protocol: "openai",
+        baseUrl: "https://dragon.example.com/v1",
+        models: [{ id: "gpt-5.6-terra" }],
+      },
+    ]);
+    assert.deepEqual(modelRef("gpt-5.6-terra"), { providerID: "openai", modelID: "gpt-5.6-terra" });
+    assert.deepEqual(modelRef("dragonapi/gpt-5.6-terra"), { providerID: "dragonapi", modelID: "gpt-5.6-terra" });
     assert.deepEqual(modelRef("openrouter/auto"), { providerID: "openrouter", modelID: "auto" });
   } finally {
     setCustomProviders([]);

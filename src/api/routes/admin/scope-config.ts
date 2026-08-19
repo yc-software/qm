@@ -9,6 +9,7 @@ import {
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
+  selectableModelId,
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
@@ -305,13 +306,15 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
       ? await selectableModelCatalog(deps.modelCredentialFetch)
       : builtInModelCatalog();
   const runtime = values.runtime as { harnessId?: unknown; modelId?: unknown } | null | undefined;
-  const resolvedCurrent = runtime && typeof runtime.modelId === "string" ? resolveModel(runtime.modelId) : null;
-  const currentProvider = resolvedCurrent?.provider;
+  const runtimeModelId = runtime && typeof runtime.modelId === "string" ? runtime.modelId : null;
+  const resolvedCurrent = runtimeModelId ? resolveModel(runtimeModelId) : null;
   const currentModel =
-    runtime &&
-    typeof runtime.modelId === "string" &&
-    (currentProvider === "anthropic" || currentProvider === "openai" || currentProvider === "openrouter")
-      ? ({ id: runtime.modelId, name: resolvedCurrent!.name, provider: currentProvider } satisfies ModelCatalogEntry)
+    runtimeModelId && resolvedCurrent
+      ? ({
+          id: selectableModelId(runtimeModelId),
+          name: resolvedCurrent.name,
+          provider: String(resolvedCurrent.provider),
+        } satisfies ModelCatalogEntry)
       : null;
   const modelsFor = (harnessId: string) => {
     const models = selectableCatalogForHarness(catalog, harnessId);
