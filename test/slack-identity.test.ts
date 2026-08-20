@@ -102,6 +102,51 @@ test("classifyUser email mode still flags restricted/other-workspace members as 
   assert.equal(g.isExternalGuest, true);
 });
 
+test("a failed users.info asserts lookupFailed, not external guest (#626)", async () => {
+  // The directory's classifyUserCached currently launders a transient
+  // users.info failure into a confident "external guest" — the incident
+  // refused an owner outright on one failed lookup. The failure state must
+  // be distinguishable from every checked state.
+  const { createDirectory } = await import("../src/slack/directory.ts");
+  const failingClient = {
+    users: {
+      info: async () => { throw new Error("transient"); },
+      list: async () => ({ members: [] }),
+    },
+    conversations: { list: async () => ({ channels: [] }) },
+    auth: { test: async () => ({ ok: true, user_id: "UBOT", team_id: "T1" }) },
+  };
+  const dir = createDirectory({
+    core: failingClient as never,
+    ids: { botUserId: "UBOT", ownTeamId: "T1", identityMode: "slack-id" } as never,
+  });
+  const result = await dir.classifyUserCached(failingClient, "U1");
+  assert.equal(result.ok, false);
+  assert.equal(result.actor.lookupFailed, true, "the failure is named, not guest-folded");
+  assert.equal(result.actor.isExternalGuest, undefined);
+});
+
+test("classifyActor preserves ok instead of discarding it (#626)", async () => {
+  // Shape check without a live client: the interface change is the contract
+  // (ok rides on the assertion); the directory unit above covers behavior.
+  const { createDirectory } = await import("../src/slack/directory.ts");
+  const okClient = {
+    users: {
+      info: async () => ({ user: { id: "U1", team_id: "T1" } }),
+      list: async () => ({ members: [] }),
+    },
+    conversations: { list: async () => ({ channels: [] }) },
+    auth: { test: async () => ({ ok: true, user_id: "UBOT", team_id: "T1" }) },
+  };
+  const dir = createDirectory({
+    core: okClient as never,
+    ids: { botUserId: "UBOT", ownTeamId: "T1", identityMode: "slack-id" } as never,
+  });
+  const actor = await dir.classifyActor(okClient, "U1");
+  assert.equal(actor.ok, true, "ok rides on the returned assertion");
+  assert.equal(actor.isExternalGuest, false);
+});
+
 test("slackUserTimezone extracts only valid Slack user timezones", () => {
   assert.equal(slackUserTimezone({ id: "U1", tz: "America/Los_Angeles" }), "America/Los_Angeles");
   assert.equal(slackUserTimezone({ id: "U1", profile: { tz: "Europe/London" } }), "Europe/London");

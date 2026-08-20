@@ -13,6 +13,13 @@ export interface ActorAssertion {
    * instead of masquerading as "external guest" (#626).
    */
   principalUnresolved?: true;
+  /**
+   * The users.info lookup itself failed — the classification below is a
+   * placeholder, not an identity claim. Distinct from every checked state
+   * (guest, internal, principal-unresolved) so callers can retry or fall
+   * back to last-known rather than acting on "external" (#626).
+   */
+  lookupFailed?: true;
 }
 
 export interface SlackUser {

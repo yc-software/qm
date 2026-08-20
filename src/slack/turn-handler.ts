@@ -199,6 +199,27 @@ export function createTurnHandler(deps: {
         ...(inc.prefetched.timezone ? { timezone: inc.prefetched.timezone } : {}),
       };
     else classified = await classifyUserCached(client, inc.userId);
+    // A failed users.info must not read as a confident external-guest
+    // refusal: log it so the transient failure is visible, and fall back to
+    // the LAST-KNOWN classification when one exists (the incident in #626
+    // showed a single failed lookup refusing an owner outright). With no
+    // prior state, fail closed but as "unverifiable", the third-state
+    // refusal path — never a laundered "external".
+    if ("ok" in classified && !classified.ok) {
+      const cachedAgain = await directory.lastKnownClassification?.(inc.userId);
+      if (cachedAgain) {
+        console.warn(
+          `[slack-plugin] users.info failed for ${inc.userId}; using last-known classification`,
+        );
+        classified = { actor: cachedAgain };
+      } else {
+        console.warn(
+          `[slack-plugin] users.info failed for ${inc.userId} with no prior classification; ` +
+            `refusing as unverifiable ch=${inc.channel} ts=${inc.ts}`,
+        );
+        classified = { actor: { ...classified.actor, principalUnresolved: true as const } };
+      }
+    }
     const actor = classified.actor;
     const timezone = classified.timezone;
     const text = stripMention(inc.rawText, ids.botUserId);

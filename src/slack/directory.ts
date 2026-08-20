@@ -65,7 +65,11 @@ export interface Directory {
   getUserSnapshot(client: any): Promise<{ byId: Map<string, CachedUser>; fetchedAt: number } | undefined>;
   forceDirectorySync(client: any, invalidateChannelId?: string, invalidatePrincipalId?: string): Promise<void>;
   classifyUserCached(client: any, userId: string): Promise<CachedUser & { ok: boolean }>;
-  classifyActor(client: any, userId: string): Promise<ActorAssertion>;
+  lastKnownClassification(userId: string): ActorAssertion | undefined;
+  classifyActor(
+    client: any,
+    userId: string,
+  ): Promise<ActorAssertion & { ok: boolean }>;
   getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined>;
   channelMembership(
     client: any,
@@ -588,12 +592,28 @@ export function createDirectory(deps: {
       if (ids.ownTeamId) userCache.set(userId, classified);
       return { ...classified, ok: true };
     } catch {
-      return { actor: { externalId: userId, isExternalGuest: true }, ok: false };
+      // Lookup failed — say so instead of asserting the user is an external
+      // guest (#626): the id-based actor carries lookupFailed so consumers
+      // can distinguish "couldn't check" from every checked state.
+      return { actor: { externalId: userId, lookupFailed: true }, ok: false };
     }
   }
 
-  async function classifyActor(client: any, userId: string): Promise<ActorAssertion> {
-    return (await classifyUserCached(client, userId)).actor;
+  function lastKnownClassification(userId: string): ActorAssertion | undefined {
+    // The LRU entry is the last SUCCESSFUL classification (failures are
+    // never cached), i.e. exactly the fallback a transient users.info
+    // failure should fall back to (#626). Time-bounded by the cache TTL.
+    return userCache.get(userId)?.actor;
+  }
+
+  async function classifyActor(client: any, userId: string): Promise<ActorAssertion & { ok: boolean }> {
+    // ok preserved, not discarded: a failed users.info currently reads as a
+    // confident "external guest" to every caller — transiently refusing a
+    // member whose record is merely unreachable. Callers decide what a failed
+    // lookup means (skip, retry, fall back to last-known); the classification
+    // itself must not launder the failure into an identity claim (#626).
+    const { actor, ok } = await classifyUserCached(client, userId);
+    return { ...actor, ok };
   }
 
   async function getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined> {
@@ -658,6 +678,7 @@ export function createDirectory(deps: {
     forceDirectorySync,
     classifyUserCached,
     classifyActor,
+    lastKnownClassification,
     getChannelInfo,
     channelMembership,
     allInternalRosters,
