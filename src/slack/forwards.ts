@@ -1,6 +1,6 @@
 import type { SlackFile } from "./attachments.ts";
 
-export const MAX_RENDERED_FORWARDS = 5;
+const MAX_RENDERED_FORWARDS = 5;
 const MAX_FORWARD_DEPTH = 4;
 
 interface ForwardedMessage {
