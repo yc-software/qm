@@ -2762,7 +2762,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(compactMs !== undefined ? { compactMs } : {}),
           ...(typeof input.queueMs === "number" ? { queueMs: Math.max(0, input.queueMs) } : {}),
           ...(resumedFromSeq !== undefined ? { resumedFromSeq } : {}),
-          status: pausing ? "paused" : "ok",
+          // Mirror the finalResult branches below (same primitives, same
+          // order) so the metrics row says what actually happened instead of
+          // hardcoding "ok" — delivered answers, silent polls, and approval
+          // pauses all used to land here as "ok" (#609).
+          status:
+            pausing
+              ? "paused"
+              : isPollFire && result.silent && result.pausedOnApproval !== true
+                ? "silent"
+                : result.pendingApprovals?.length
+                  ? turnCompleted
+                    ? "ok"
+                    : "pending_approval"
+                  : isPollFire && !outbound.attachments.length && isSilentPollReply(reply)
+                    ? "silent"
+                    : input.surfaceTools && surfaceToolDeps && !strictReadOnly
+                      ? "delivered"
+                      : "ok",
           scopeLabel: scopeId,
           provisioned:
             !!box.handle ||
@@ -2950,7 +2967,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         } else if (isPollFire && !outbound.attachments.length && isSilentPollReply(reply)) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
-          finalResult = { status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) };
+          // The reply was delivered through a surface tool — the ordinary
+          // shape of a Slack answer. Recording it as "silent" made a
+          // delivered answer indistinguishable from a suppressed turn in
+          // runs.result (#609).
+          finalResult = {
+            status: "delivered",
+            sessionId: session.id,
+            ...(result.stopped ? { stopped: true } : {}),
+          };
         } else {
           finalResult = {
             status: "ok",

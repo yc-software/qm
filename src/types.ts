@@ -496,7 +496,22 @@ export interface CommandApprovalGrant {
 }
 
 export interface TurnResult {
-  status: "ok" | "refused" | "failed" | "pending_approval" | "queued" | "silent" | "react";
+  /**
+   * ``delivered``: the turn's reply went out through a surface tool (Slack
+   * post, reaction, …) rather than the TurnResult reply field — the ordinary
+   * shape of a Slack answer. Previously folded into ``silent``, which also
+   * means "the ambient gate declined to answer", leaving the two opposite
+   * outcomes indistinguishable in runs.result (#609).
+   */
+  status:
+    | "ok"
+    | "delivered"
+    | "refused"
+    | "failed"
+    | "pending_approval"
+    | "queued"
+    | "silent"
+    | "react";
   sessionId?: string;
   reply?: string;
   reactions?: string[];

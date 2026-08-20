@@ -513,6 +513,14 @@ export function createTurnHandler(deps: {
       return;
     }
 
+    if (result.status === "delivered") {
+      // The surface tool already posted the reply (the ordinary Slack
+      // answer shape); delivering it here too would double-post. Settle the
+      // ack and stand down, same as the pre-split silent handling (#609).
+      await settleAck();
+      return;
+    }
+
     if (result.status === "react") {
       await settleAck();
       const names = result.reactions ?? [];
