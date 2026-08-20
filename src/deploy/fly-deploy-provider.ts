@@ -320,15 +320,13 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
           .catch((cleanupError) => swallow("fly-deploy: remove unhealthy replacement", cleanupError));
         throw error;
       }
-      const cordoned: FlyMachine[] = [];
       try {
         for (const previous of stale) {
           await api.setCordon(appName, previous.id, true);
-          cordoned.push(previous);
         }
         await api.setCordon(appName, machine.id, false);
       } catch (error) {
-        for (const previous of cordoned) {
+        for (const previous of stale) {
           await api
             .setCordon(appName, previous.id, false)
             .catch((rollbackError) => swallow("fly-deploy: restore previous machine routing", rollbackError));

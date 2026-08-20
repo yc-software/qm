@@ -43,6 +43,7 @@ interface FakeFlyOptions {
   events?: FlyMachine["events"];
   destroyMachineStatus?: number;
   cordonStatus?: number;
+  cordonFailsAfterApply?: boolean;
   uncordonStatus?: number;
 }
 
@@ -112,6 +113,7 @@ function fakeFly(opts: FakeFlyOptions = {}) {
     }
     if (method === "POST" && segments.length === 6 && segments[5] === "cordon") {
       if ((opts.cordonStatus ?? 200) < 300) cordoned.add(machineId);
+      if (opts.cordonFailsAfterApply) throw new Error("connection lost after cordon");
       return json(opts.cordonStatus ?? 200, {});
     }
     if (method === "POST" && segments.length === 6 && segments[5] === "uncordon") {
@@ -305,6 +307,16 @@ test("apply: a failed cutover restores the old route and removes the replacement
     assert.deepEqual([...fake.machines.keys()], ["machine-old"]);
     assert.deepEqual([...fake.cordoned], []);
   }
+});
+
+test("apply: rollback restores an old route when the cordon response is lost", async () => {
+  const fake = fakeFly({ existingMachines: ["machine-old"], cordonFailsAfterApply: true });
+  await assert.rejects(
+    provider(fake.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+    /connection lost after cordon/,
+  );
+  assert.deepEqual([...fake.machines.keys()], ["machine-old"]);
+  assert.deepEqual([...fake.cordoned], []);
 });
 
 test("apply: an app bundle over the machine-file cap is refused with its actual and maximum size", async () => {
