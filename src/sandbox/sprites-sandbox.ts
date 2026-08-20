@@ -252,7 +252,6 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     for (const arg of [DIRECT_HELPER_EXECUTABLE, "-e", DIRECT_HELPER_SCRIPT]) url.searchParams.append("cmd", arg);
     url.searchParams.set("path", DIRECT_HELPER_EXECUTABLE);
     url.searchParams.set("stdin", "true");
-    url.searchParams.set("tty", "false");
     url.searchParams.set("max_run_after_disconnect", "0s");
     const payload = Buffer.from(
       JSON.stringify({

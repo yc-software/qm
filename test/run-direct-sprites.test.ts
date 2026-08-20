@@ -80,6 +80,7 @@ test("Sprites direct POST keeps executable args and secrets in structured stdin"
   assert.deepEqual(parsedUrl.searchParams.getAll("cmd").slice(0, 2), [DIRECT_HELPER_EXECUTABLE, "-e"]);
   assert.equal(parsedUrl.searchParams.get("path"), DIRECT_HELPER_EXECUTABLE);
   assert.equal(parsedUrl.searchParams.get("stdin"), "true");
+  assert.equal(parsedUrl.searchParams.has("tty"), false);
   assert.equal(parsedUrl.searchParams.get("max_run_after_disconnect"), "0s");
   assert.equal(seenUrl.includes("secret-value"), false);
   assert.equal(seenUrl.includes("STATIC_SECRET"), false);
