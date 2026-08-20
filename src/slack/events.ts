@@ -162,10 +162,23 @@ export function registerSlackEvents(
       if (m.channel_type === "mpim" && m.channel) syncForUnseenGroup(client, String(m.channel));
       const threadReply = isThreadReply(m);
       const isMention = mentionsBot(m.text ?? "", ids.botUserId, ids.ownBotId);
-      const willDispatch = threadReply && !isMention && (await botHasStakeInThread(client, m.channel, m.thread_ts));
+      // A bot-id-form mention (<@B…>) never triggers Slack's app_mention
+      // event — only the bot-user-id form does. Scoped to exactly that
+      // class (bot-id form present, user-id form absent), the message
+      // handler dispatches the ADDRESSED turn itself instead of dropping
+      // it at top level or mis-dispatching it as ambient in a thread
+      // (#630).
+      const text = m.text ?? "";
+      const botIdMentionOnly =
+        Boolean(ids.ownBotId) &&
+        text.includes(`<@${ids.ownBotId}>`) &&
+        !(ids.botUserId && text.includes(`<@${ids.botUserId}>`));
+      const willDispatch =
+        botIdMentionOnly ||
+        (threadReply && !isMention && (await botHasStakeInThread(client, m.channel, m.thread_ts)));
       await mirrorMessageEvent(m, client, willDispatch ? { handled: true } : {});
-      if (!threadReply) return;
-      if (isMention) return;
+      if (!threadReply && !botIdMentionOnly) return;
+      if (isMention && !botIdMentionOnly) return;
       if (!willDispatch) {
         console.error(
           `[slack-plugin] thread-follow skipped: no bot stake detected in thread ch=${m.channel} thread_ts=${m.thread_ts} ts=${m.ts}`,
@@ -191,7 +204,10 @@ export function registerSlackEvents(
           files: (m.files as SlackFile[]) ?? [],
           threadTs: m.thread_ts,
           ts: m.ts,
-          unprompted: true,
+          // A bot-id-only mention is ADDRESSED even in a thread — the
+          // sender typed @qm; the ambient flag belongs to the
+          // stake-followed path alone (#630).
+          ...(botIdMentionOnly ? {} : { unprompted: true }),
           ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
           ackGate,
         },
