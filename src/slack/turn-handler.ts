@@ -27,6 +27,7 @@ import {
   encodeDeliveryTarget,
   groupDmDisplayName,
   hasContent,
+  hydrateSlackFiles,
   isExternallyShared,
   isMpim,
   type SurfaceHeaderClient,
@@ -400,7 +401,13 @@ export function createTurnHandler(deps: {
     }
 
     const ownFiles = inc.files.map((f) => (f.user || !inc.userId ? f : { ...f, user: inc.userId }));
-    const inboundFiles = earlierFiles.length ? [...ownFiles, ...earlierFiles] : ownFiles;
+    const inboundFiles = await hydrateSlackFiles(
+      earlierFiles.length ? [...ownFiles, ...earlierFiles] : ownFiles,
+      async (id) => {
+        const response = await client.files.info({ file: id });
+        return response?.file as SlackFile | undefined;
+      },
+    );
     const resolveFileAuthor = async (userId: string | undefined): Promise<string | undefined> =>
       userId ? (await classifyUserCached(client, userId)).actor.displayName : undefined;
     const { attachments, issues } = await processInboundFiles(

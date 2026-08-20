@@ -50,6 +50,7 @@ export {
 } from "./message-gating.ts";
 export {
   type SlackFile,
+  hydrateSlackFiles,
   MAX_ATTACHMENT_BYTES,
   isOversize,
   type ThreadMessage,

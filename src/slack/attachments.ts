@@ -32,6 +32,23 @@ export interface SlackFile {
   user?: string;
 }
 
+export async function hydrateSlackFiles(
+  files: readonly SlackFile[],
+  lookup: (fileId: string) => Promise<SlackFile | undefined>,
+): Promise<SlackFile[]> {
+  return Promise.all(
+    files.map(async (file) => {
+      if (!file.id || file.url_private || file.url_private_download) return file;
+      try {
+        const hydrated = await lookup(file.id);
+        return hydrated ? { ...file, ...hydrated, ...(file.user ? { user: file.user } : {}) } : file;
+      } catch {
+        return file;
+      }
+    }),
+  );
+}
+
 export const MAX_ATTACHMENT_BYTES = 1_000_000_000;
 
 export function isOversize(file: Pick<SlackFile, "size">): boolean {
