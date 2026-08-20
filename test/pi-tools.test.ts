@@ -598,6 +598,59 @@ test("the screen never rewrites a strict-posture per-tool gate", async () => {
   assert.equal(pending.length, 1);
 });
 
+test("a strict-posture gate record carries the tool call's arguments", async () => {
+  // An approver deciding on a gated call must see the action, not just the
+  // tool name — "execute {command: 'rm -rf /var/data'}" is decidable, a bare
+  // "execute" is not (#560).
+  const emitted: Emitted[] = [];
+  const pending: Array<{ command: string; reason: string; summary?: string }> = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+    pendingApprovals: pending,
+    toolApprovalGate: () => false,
+  };
+  const [execute] = createPiTools(ref);
+  await call(execute, { command: "rm -rf /var/data" });
+
+  assert.equal(pending.length, 1);
+  assert.match(pending[0]!.summary ?? "", /rm -rf \/var\/data/);
+  // The persisted tool_call and tool_result records carry the same bounded
+  // rendering, so the transcript audit shows what was blocked, not just that
+  // something was.
+  const callEntry = emitted.find((entry) => entry.type === "tool_call")!.payload;
+  assert.match(String(callEntry.args ?? ""), /rm -rf \/var\/data/);
+  const resultEntry = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  assert.match(String(resultEntry.args ?? ""), /rm -rf \/var\/data/);
+});
+
+test("a strict-posture gate renders huge arguments bounded and argless calls without a summary", async () => {
+  const pending: Array<{ command: string; reason: string; summary?: string }> = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    scopeLabel: "personal:U1",
+    pendingApprovals: pending,
+    toolApprovalGate: () => false,
+  };
+  const tools = createPiTools(ref);
+  const execute = tools.find((t) => t.name === "execute")!;
+  const memory = tools.find((t) => t.name === "memory")!;
+
+  await call(execute, { command: "x".repeat(5_000) });
+  await call(memory, undefined as unknown as Record<string, unknown>);
+
+  assert.equal(pending.length, 2);
+  // Bounded to the approval-summary cap so a huge payload can't flood the
+  // approval surface an integrator renders.
+  assert.ok((pending[0]!.summary ?? "").length <= 301, "bounded with an ellipsis");
+  assert.ok((pending[0]!.summary ?? "").endsWith("…"));
+  // No arguments → no summary field at all, not an empty one.
+  assert.equal(pending[1]!.summary, undefined);
+});
+
 const surfaceTool = (ref: ToolContextRef, name = "slack") => {
   const t = createPiTools(ref, { surfaceTools: true, ...(name !== "slack" ? { surfaceName: name } : {}) }).find(
     (x) => x.name === name,

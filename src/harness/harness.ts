@@ -105,6 +105,7 @@ export interface HarnessTurnResult {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    summary?: string;
   }>;
   pausedOnApproval?: boolean;
   modelCalls?: number;
