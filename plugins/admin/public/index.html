@@ -4732,14 +4732,14 @@
                           class="sc-broker-only"
                           style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 6px"
                           ><input type="radio" name="sc-share" value="people" style="width: auto" /> Only selected
-                          people or teams</label
+                          people or channels</label
                         >
                         <input
                           type="text"
                           id="sc-people"
                           class="sc-broker-only"
                           list="sc-people-options"
-                          placeholder="Principal IDs, comma-separated"
+                          placeholder="Principal or channel IDs, comma-separated"
                           style="width: 100%"
                         />
                         <datalist id="sc-people-options"></datalist>
@@ -6906,7 +6906,9 @@
       function syncScPeople() {
         const orgWide = $("sc-share-org").checked;
         $("sc-people").disabled = orgWide;
-        $("sc-people").placeholder = orgWide ? "Organization-wide access selected" : "Principal IDs, comma-separated";
+        $("sc-people").placeholder = orgWide
+          ? "Organization-wide access selected"
+          : "Principal or channel IDs, comma-separated";
         renderServiceCredentialCapability();
       }
       function serviceCredentialGrantees() {
@@ -6918,7 +6920,7 @@
               .map((s) => s.trim())
               .filter(Boolean)
               .map((id) => {
-                if (/^(personal|team|org|channel|group):/.test(id)) return id;
+                if (/^(personal|org|channel):/.test(id)) return id;
                 const q = id.toLowerCase();
                 const identifiers = serviceCredDirectory.filter(
                   (member) => member.principalId.toLowerCase() === q || member.slackId?.toLowerCase() === q,
@@ -6989,7 +6991,7 @@
             chip.className = "identity-chip";
             const label = serviceCredentialPrincipalLabel(grantee);
             chip.textContent = label;
-            if (/^(channel|group):/.test(grantee)) {
+            if (/^(team|group):/.test(grantee)) {
               const unsupported = document.createElement("small");
               unsupported.textContent = "unsupported · remove before saving";
               chip.appendChild(unsupported);
@@ -7057,13 +7059,13 @@
           return "Add at least one person or choose org-wide access.";
         if (body.delivery !== "env" && serviceCredentialResolutionError) return serviceCredentialResolutionError;
         const unsupported = body.grantees.find(
-          (grantee) => /^(channel|group):/.test(grantee) || /^personal:[^,]*:/.test(grantee),
+          (grantee) => /^(team|group):/.test(grantee) || /^personal:[^,]*:/.test(grantee),
         );
         if (unsupported)
           return (
             "Remove unsupported legacy grant \u201c" +
             unsupported +
-            "\u201d before saving. Shared credentials support people, teams, or the organization."
+            "\u201d before saving. Shared credentials support people, channels, or the organization."
           );
         return "";
       }

@@ -109,9 +109,8 @@ publish({
 ```
 
 - **read** = can reach the app. **write** = can also manage it (redeploy/rollback).
-- Share to `personal:<id>` (one teammate), or `org:<id>` (the whole org). Team/channel
-  scopes can be granted, but team-membership reach at the link is not enforced yet — for
-  now use `org:` or `personal:` grants for reach.
+- Share to `personal:<id>` (one teammate), `channel:<id>` (a channel), or `org:<id>`
+  (the whole org).
 
 ## What you can rely on
 

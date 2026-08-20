@@ -334,6 +334,17 @@ const call = (tool: ReturnType<typeof createPiTools>[number] | undefined, params
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
 };
 
+test("artifact sharing advertises only reachable OSS grant scopes", () => {
+  const ref: ToolContextRef = { current: fakeToolContext() };
+  const tools = createPiTools(ref, { controlTools: true });
+  for (const name of ["write", "share"]) {
+    const tool = tools.find((candidate) => candidate.name === name);
+    assert.ok(tool);
+    assert.match(tool.description, /channel:<id>/);
+    assert.doesNotMatch(tool.description, /team:<id>/);
+  }
+});
+
 test("each pi tool emits a tool_call then a tool_result", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {

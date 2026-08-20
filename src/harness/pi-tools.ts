@@ -806,11 +806,11 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       "Google-Docs style: the file keeps living in your workspace, the grant just lets others " +
       "reach it. To share a file that already exists (e.g. one you made with `execute`), call " +
       "write with just its `path` and `share` (no `data`). Each share is { scope, permission }: " +
-      '`scope` is "org" (everyone in your org), a person (personal:<userId>), a channel ' +
-      "(channel:<id>), or a team (team:<id>); `permission` is read (view, default) or write " +
+      '`scope` is "org" (everyone in your org), a person (personal:<userId>), or a channel ' +
+      "(channel:<id>); `permission` is read (view, default) or write " +
       "(view + manage). A grant to a PERSON follows them — it's visible wherever you two are " +
       "together (your DMs and any room whose members are all entitled to it); to make a file " +
-      "visible to a whole channel/team or everyone, share that scope. Recipients see shared " +
+      "visible to a whole channel or everyone, share that scope. Recipients see shared " +
       "files under ./shared/.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
@@ -821,7 +821,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
         Type.Array(
           Type.Object({
             scope: Type.String({
-              description: 'Who to share with: "org", personal:<userId>, channel:<id>, or team:<id>.',
+              description: 'Who to share with: "org", personal:<userId>, or channel:<id>.',
             }),
             permission: Type.Optional(
               Type.Union([Type.Literal("read"), Type.Literal("write")], {
@@ -2132,7 +2132,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       "Default (move omitted/false) SHARES it: adds a grant so the target can reach it, while it keeps " +
       "living in its current home with you as its creator (Google-Docs style). move:true MOVES it: " +
       "changes its home scope to the target (the creator is unchanged); supported for skills and deployments — moving a deployment to a teammate makes THEM the owner (ownership transfer; existing shares survive).\n" +
-      '`toScope` is where it goes: "org" (everyone), a scope id (channel:<id>, team:<id>, personal:<id>), ' +
+      '`toScope` is where it goes: "org" (everyone), a scope id (channel:<id>, personal:<id>), ' +
       "or a teammate's NAME (core resolves it — you can't author a raw address). Sharing/moving into a " +
       "context you're already in is frictionless. Ceding a skill to the whole org is the one gated " +
       "step: only an org admin, in a turn they started themselves, can do it.\n" +
@@ -2144,8 +2144,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       }),
       id: Type.String({ description: "The artifact's id (a deployment may also be named by its handle)." }),
       toScope: Type.String({
-        description:
-          'Where to share/move it: "org", a scope id (channel:<id>, team:<id>, personal:<id>), or a teammate\'s name.',
+        description: 'Where to share/move it: "org", a scope id (channel:<id>, personal:<id>), or a teammate\'s name.',
       }),
       permission: Type.Optional(
         Type.Union([Type.Literal("read"), Type.Literal("write")], {

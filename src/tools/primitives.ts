@@ -729,7 +729,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               if (!granteeScopeId) throw new Error('cannot resolve "org" — no org scope is mounted in this session');
               if (parseScopeId(granteeScopeId).kind === null) {
                 throw new Error(
-                  `invalid share target "${s.scope}" — use a scope id like personal:<id>, channel:<id>, team:<id>, or org:<id> (or "org")`,
+                  `invalid share target "${s.scope}" — use a scope id like personal:<id>, channel:<id>, or org:<id> (or "org")`,
                 );
               }
               const permission: Permission = s.permission ?? "read";

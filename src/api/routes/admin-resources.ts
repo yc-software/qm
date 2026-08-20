@@ -914,14 +914,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const badGrantee = desired?.find((g) => {
         const parsed = parseScopeId(g);
         return (
-          !["org", "personal", "team"].includes(parsed.kind ?? "") ||
+          !["org", "personal", "channel"].includes(parsed.kind ?? "") ||
           !parsed.ref ||
           parsed.ref.includes(":") ||
           (parsed.kind === "org" && g !== scope)
         );
       });
       if (badGrantee !== undefined)
-        return { error: `grantee must be this org or a valid personal:/team: scope (got ${badGrantee})` };
+        return { error: `grantee must be this org or a valid personal:/channel: scope (got ${badGrantee})` };
       const injection =
         b.injection && typeof b.injection === "object"
           ? ({

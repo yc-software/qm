@@ -276,7 +276,9 @@ test("governance credential editor previews effective capability and uses an in-
   assert.match(html, /usageTruncated \? "at least "/);
   assert.match(html, /Recent users in the retained window/);
   assert.doesNotMatch(html, /serviceCredList\.find\(\(c\) => c\.slug === scEditing\)\?\.updatedAt/);
-  assert.match(html, /personal\|team\|org\|channel\|group/);
+  assert.match(html, /personal\|org\|channel/);
+  assert.doesNotMatch(html, /people or teams|Shared credentials support people, teams/);
+  assert.match(html, /Shared credentials support people, channels, or the organization/);
   assert.match(html, /unsupported legacy grant/);
   assert.match(html, /matches multiple people/);
   assert.match(html, /reviewGovernanceChange/);

@@ -210,7 +210,7 @@ test("env-delivery credential: envKey validated, host refused, duplicates refuse
   }
 });
 
-test("env-delivery accepts person/team grantees — grants now gate env injection like broker calls", async () => {
+test("env-delivery accepts narrowed grantees — grants gate env injection like broker calls", async () => {
   const srv = start();
   try {
     const narrowed = await putCred(srv.base, {
@@ -720,30 +720,32 @@ test("re-sharing reconciles the ACL allow-list (org-wide → specific people →
   }
 });
 
-test("a non-org/personal/team grantee is rejected", async () => {
+test("credential grants accept every supported scope kind and reject unreachable or malformed scopes", async () => {
   const srv = start();
   try {
-    await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
-    const version = (await getCfg(srv.base)).serviceCredentials[0]!.updatedAt;
-    const r = await putCred(srv.base, {
-      slug: "k",
-      name: "K",
-      host: "h.example",
-      grantees: ["channel:C1"],
-      expectedUpdatedAt: version,
-    });
-    assert.equal(r.status, 400);
-    assert.match(await r.text(), /grantee must be/);
+    const supported = ["org:default-org", "personal:alice", "channel:C1"];
+    for (const [index, grantee] of supported.entries()) {
+      const r = await putCred(srv.base, {
+        slug: `supported-${index}`,
+        name: `Supported ${index}`,
+        secret: "s",
+        host: "h.example",
+        grantees: [grantee],
+      });
+      assert.equal(r.status, 200, `${grantee} should be accepted`);
+    }
 
-    const disguised = await putCred(srv.base, {
-      slug: "k",
-      name: "K",
-      host: "h.example",
-      grantees: ["personal:channel:C1"],
-      expectedUpdatedAt: version,
-    });
-    assert.equal(disguised.status, 400);
-    assert.match(await disguised.text(), /personal:channel:C1/);
+    for (const grantee of ["team:T1", "group:G1", "org:another-org", "personal:channel:C1", "unknown:X1"]) {
+      const r = await putCred(srv.base, {
+        slug: `rejected-${grantee.toLowerCase().replace(/[^a-z0-9]/g, "-")}`,
+        name: "Rejected",
+        secret: "s",
+        host: "h.example",
+        grantees: [grantee],
+      });
+      assert.equal(r.status, 400, `${grantee} should be rejected`);
+      assert.match(await r.text(), /grantee must be/);
+    }
   } finally {
     await srv.close();
   }
@@ -1030,6 +1032,45 @@ test("orchestrator stamps AGENT_CREDENTIAL_TOKEN with an org-wide credential's s
   assert.equal(botClaims?.botActor, true);
   assert.equal(botClaims?.liveActor, true);
   assert.deepEqual(botClaims?.members, [{ id: "B-LEGACY", type: "internal" }]);
+});
+
+test("orchestrator exposes a channel-granted credential only in that channel scope", async () => {
+  const { built, env } = buildWithCapture();
+  await built.serviceCreds.setServiceCredential("org:default-org", {
+    slug: "channel-api",
+    name: "Channel API",
+    secret: "s",
+    host: "api.example.com",
+  });
+  await built.acl.grant({
+    ownerScopeId: "org:default-org",
+    ref: "service-cred:channel-api",
+    granteeScopeId: "channel:C1",
+    permission: "read",
+    grantedBy: "admin",
+  });
+
+  const channelTurn: TurnRequest = {
+    surface: "slack",
+    actor: internalActor,
+    conversation: {
+      kind: "channel",
+      threadRef: "ch:C1:t1",
+      channelRef: "C1",
+      audience: [internalActor],
+      publishMembers: [internalActor],
+    },
+    text: "!run echo hi",
+  };
+  const channelResult = await built.app.turn(channelTurn);
+  assert.equal(channelResult.status, "ok", channelResult.reason);
+  const channelToken = env()?.AGENT_CREDENTIAL_TOKEN;
+  assert.ok(channelToken);
+  assert.deepEqual((await verifyCapabilityToken(channelToken!, TEST_CAPABILITY_SECRET))?.credentials, ["channel-api"]);
+
+  const dmResult = await built.app.turn(dm("!run echo hi"));
+  assert.equal(dmResult.status, "ok", dmResult.reason);
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
 });
 
 test("orchestrator does NOT stamp a credential granted only to someone else", async () => {
