@@ -11776,6 +11776,7 @@
         });
         const tabs = [modeTab("conversation"), modeTab("cron")];
         if (countForMode("background") > 0 || historyKind === "background") tabs.push(modeTab("background"));
+        const environmentEntry = (environmentDir || []).find((environment) => environment.id === scope);
         if (cronSel) {
           pageShell({
             back: {
@@ -11795,11 +11796,15 @@
                     onClick: () => go({ view: "history", scope: "org:" + orgId, session: null, page: 1, historyKind }),
                   }
                 : undefined,
-            title: scopeKind(scope) !== "org" ? shortName(scope) : VIEW_TITLE.history,
+            title: environmentEntry?.name
+              ? environmentEntry.name
+              : scopeKind(scope) !== "org"
+                ? shortName(scope)
+                : VIEW_TITLE.history,
+            context: environmentEntry?.name ? "environment · owned by " + shortName(scope) : "",
             tabs,
           });
         }
-        const environmentEntry = (environmentDir || []).find((environment) => environment.id === scope);
         if (environmentEntry && !cronSel) {
           const attached = environmentEntry.attachedScopes || [];
           const chips = document.createElement("div");
@@ -11822,7 +11827,9 @@
           root.appendChild(
             dataCard(
               "Attached scopes",
-              plural(attached.length, "scope") + " share this environment's computer and working memory.",
+              plural(attached.length, "scope") +
+                (attached.length === 1 ? " shares" : " share") +
+                " this environment's computer and working memory.",
               chips,
             ),
           );
