@@ -126,6 +126,37 @@ test("a failed users.info asserts lookupFailed, not external guest (#626)", asyn
   assert.equal(result.actor.isExternalGuest, undefined);
 });
 
+test("updateUserFromEvent propagates a fresh profile into both caches (#626)", async () => {
+  const { createDirectory } = await import("../src/slack/directory.ts");
+  // Email mode: the member starts email-less (principal-unresolved — the
+  // #626 incident shape) and a user_change carries the just-set email.
+  const client = {
+    users: {
+      info: async () => ({ user: { id: "U1", team_id: "T1" } }),
+      list: async () => ({ members: [] }),
+    },
+    conversations: { list: async () => ({ channels: [] }) },
+    auth: { test: async () => ({ ok: true, user_id: "UBOT", team_id: "T1", bot_id: "BBOT" }) },
+  };
+  const dir = createDirectory({
+    core: client as never,
+    ids: { botUserId: "UBOT", ownTeamId: "T1", bot_id: "BBOT", identityMode: "email" } as never,
+  });
+
+  const before = await dir.classifyUserCached(client, "U1");
+  assert.equal(before.actor.principalUnresolved, true, "fixture starts unresolved");
+
+  dir.updateUserFromEvent({ id: "U1", team_id: "T1", profile: { email: "U1@acme.com" } });
+
+  const after = await dir.classifyUserCached(client, "U1");
+  assert.equal(after.actor.principalUnresolved, undefined, "the fresh profile resolves immediately");
+  assert.equal(after.actor.externalId, "u1@acme.com", "keyed on the fresh email");
+  // A users.info failure now falls back to the UPDATED classification,
+  // not the stale unresolved one.
+  const lastKnown = dir.lastKnownClassification("U1");
+  assert.equal(lastKnown?.externalId, "u1@acme.com");
+});
+
 test("classifyActor preserves ok instead of discarding it (#626)", async () => {
   // Shape check without a live client: the interface change is the contract
   // (ok rides on the assertion); the directory unit above covers behavior.

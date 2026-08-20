@@ -66,6 +66,11 @@ export interface Directory {
   forceDirectorySync(client: any, invalidateChannelId?: string, invalidatePrincipalId?: string): Promise<void>;
   classifyUserCached(client: any, userId: string): Promise<CachedUser & { ok: boolean }>;
   lastKnownClassification(userId: string): ActorAssertion | undefined;
+  /** Apply a `user_change`/`team_join` event payload to the caches (#626):
+   *  re-classify from the fresh profile and overwrite BOTH the LRU entry
+   *  and the snapshot's row, so a profile/email change propagates
+   *  immediately instead of waiting out the TTL. */
+  updateUserFromEvent(user: SlackUser): void;
   classifyActor(
     client: any,
     userId: string,
@@ -599,6 +604,22 @@ export function createDirectory(deps: {
     }
   }
 
+  function updateUserFromEvent(user: SlackUser): void {
+    // The event carries the FULL fresh profile — classify from it directly
+    // (no users.info round-trip) and overwrite every copy the caches hold.
+    // The LRU entry is the transient-lookup cache; the snapshot row feeds
+    // roster/membership resolution. Both must move together or a name/email
+    // change shows up in one surface and not the other until the TTLs lapse
+    // (#626 defect 3).
+    const actor = classifyUser(user, ids.ownTeamId, ids.identityMode);
+    const timezone = slackUserTimezone(user);
+    const classified = { actor, ...(timezone ? { timezone } : {}) };
+    if (user.id) {
+      userCache.set(user.id, classified);
+      if (userSnapshot) userSnapshot.byId.set(user.id, classified);
+    }
+  }
+
   function lastKnownClassification(userId: string): ActorAssertion | undefined {
     // The LRU entry is the last SUCCESSFUL classification (failures are
     // never cached), i.e. exactly the fallback a transient users.info
@@ -679,6 +700,7 @@ export function createDirectory(deps: {
     classifyUserCached,
     classifyActor,
     lastKnownClassification,
+    updateUserFromEvent,
     getChannelInfo,
     channelMembership,
     allInternalRosters,

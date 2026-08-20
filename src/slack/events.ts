@@ -1,3 +1,4 @@
+import type { SlackUser } from "./identity.ts";
 import {
   type SlackFile,
   channelPrivacyChange,
@@ -198,6 +199,26 @@ export function registerSlackEvents(
         client,
       );
     }
+  });
+
+  // Profile/membership changes must propagate to the identity caches
+  // immediately: classification updates previously waited out the 5-min
+  // snapshot/lookup TTLs, so a just-set email kept an own-team member
+  // refused (the #626 incident's ~39-min window) and a profile change
+  // showed stale names until the TTL lapsed. The event payload carries the
+  // full fresh profile, so the handler re-classifies from it directly.
+  app.event("user_change", async ({ body }: any) => {
+    const user = (body as { event?: { user?: unknown } })?.event?.user as
+      | undefined
+      | (SlackUser & { id?: string });
+    if (user?.id) directory.updateUserFromEvent(user);
+  });
+
+  app.event("team_join", async ({ body }: any) => {
+    const user = (body as { event?: { user?: unknown } })?.event?.user as
+      | undefined
+      | (SlackUser & { id?: string });
+    if (user?.id) directory.updateUserFromEvent(user);
   });
 
   app.event("member_joined_channel", async ({ event, body, client }: any) => {
