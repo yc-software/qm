@@ -95,6 +95,12 @@ can only tighten:
 The predeclared command policy — approval rules and hard denials for things like
 recursive deletes or destructive SQL — applies in every posture, Dangerous included.
 
+When a shared conversation needs a teammate-owned credential, QM asks that credential's
+owner in Slack. They can allow one use, allow the credential in that conversation for
+the stated purpose until revoked, or deny the request.
+
+![A Slack credential request with Allow once, Always allow here, and Deny actions](./docs/screenshots/slack-keychain-approval.jpg)
+
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.
 

@@ -10,6 +10,7 @@ import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { envKey } from "./connector-token.ts";
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 
 type CredentialKind = "env" | "file" | "broker";
 
@@ -123,6 +124,7 @@ export interface KeychainAsk {
 
 export const ASK_TTL_MS = 24 * 60 * 60_000;
 export const ASK_PRUNE_AFTER_MS = 14 * 24 * 60 * 60_000;
+export const MAX_ASK_PURPOSE_CHARS = 800;
 
 export interface ServiceCredentialInput {
   slug: string;
@@ -430,8 +432,10 @@ export function createKeychain(deps: {
   oauthSkewMs?: number;
   oauthRefreshMarginMs?: number;
   now?: () => number;
+  advisoryLock?: AdvisoryLock;
 }): Keychain {
   const now = deps.now ?? Date.now;
+  const askLock = deps.advisoryLock ?? createMemoryAdvisoryLock();
   const oauthSkew = deps.oauthSkewMs ?? 60_000;
   const oauthRefreshMargin = Math.max(deps.oauthRefreshMarginMs ?? 10 * 60_000, oauthSkew);
 
@@ -954,6 +958,9 @@ export function createKeychain(deps: {
     async createAsk(input) {
       const purpose = input.purpose.trim();
       if (!purpose) throw new KeychainError(400, "purpose required — record the requester's words verbatim");
+      if (purpose.length > MAX_ASK_PURPOSE_CHARS) {
+        throw new KeychainError(400, `purpose must be ${MAX_ASK_PURPOSE_CHARS} characters or fewer`);
+      }
       const cred = await deps.creds.get(input.credentialId);
       if (!cred || cred.kind === "broker") throw new KeychainError(404, "unknown credential");
       const t = now();
@@ -1006,37 +1013,41 @@ export function createKeychain(deps: {
     },
 
     async approveAsk(input) {
-      const rec = await deps.asks.get(input.askId);
-      if (!rec) throw new KeychainError(404, "unknown ask");
-      const t = now();
-      const ask = await freshAsk(rec, t);
-      if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
-      const grant = await mintGrant({
-        credentialId: ask.credentialId,
-        ownerId: input.ownerId,
-        audienceScopeId: ask.requesterScopeId,
-        mode: input.mode,
-        purpose: input.purpose,
-        ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
-        askId: ask.id,
+      return askLock.withLock(`keychain-ask:${input.askId}`, async () => {
+        const rec = await deps.asks.get(input.askId);
+        if (!rec) throw new KeychainError(404, "unknown ask");
+        const t = now();
+        const ask = await freshAsk(rec, t);
+        if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
+        const grant = await mintGrant({
+          credentialId: ask.credentialId,
+          ownerId: input.ownerId,
+          audienceScopeId: ask.requesterScopeId,
+          mode: input.mode,
+          purpose: input.purpose,
+          ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+          askId: ask.id,
+        });
+        const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id };
+        await deps.asks.merge(ask.id, patch);
+        return { ask: { ...ask, ...patch }, grant };
       });
-      const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id };
-      await deps.asks.merge(ask.id, patch);
-      return { ask: { ...ask, ...patch }, grant };
     },
 
     async declineAsk(input) {
-      const rec = await deps.asks.get(input.askId);
-      if (!rec) throw new KeychainError(404, "unknown ask");
-      if (!samePerson(rec.ownerId, input.ownerId))
-        throw new KeychainError(403, "only the credential's owner can decline an ask");
-      const t = now();
-      const ask = await freshAsk(rec, t);
-      if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
-      const note = input.note?.trim();
-      const patch = { status: "declined" as const, resolvedAt: t, ...(note ? { note } : {}) };
-      await deps.asks.merge(ask.id, patch);
-      return { ...ask, ...patch };
+      return askLock.withLock(`keychain-ask:${input.askId}`, async () => {
+        const rec = await deps.asks.get(input.askId);
+        if (!rec) throw new KeychainError(404, "unknown ask");
+        if (!samePerson(rec.ownerId, input.ownerId))
+          throw new KeychainError(403, "only the credential's owner can decline an ask");
+        const t = now();
+        const ask = await freshAsk(rec, t);
+        if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
+        const note = input.note?.trim();
+        const patch = { status: "declined" as const, resolvedAt: t, ...(note ? { note } : {}) };
+        await deps.asks.merge(ask.id, patch);
+        return { ...ask, ...patch };
+      });
     },
 
     async unnotifiedResolvedAsks(nowAt) {
@@ -1058,17 +1069,23 @@ export function createKeychain(deps: {
       const t = now();
       const adopted: KeychainAsk[] = [];
       for (const rec of await deps.asks.all()) {
-        const a = await freshAsk(rec, t);
-        if (
-          a.status !== "pending" ||
-          a.credentialId !== grant.credentialId ||
-          a.requesterScopeId !== grant.audienceScopeId
-        )
-          continue;
-        const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: t };
-        await deps.asks.merge(a.id, patch);
-        await deps.grants.merge(grant.id, { askId: a.id });
-        adopted.push({ ...a, ...patch });
+        const resolved = await askLock.withLock(`keychain-ask:${rec.id}`, async () => {
+          const current = await deps.asks.get(rec.id);
+          if (!current) return null;
+          const ask = await freshAsk(current, t);
+          if (
+            ask.status !== "pending" ||
+            ask.credentialId !== grant.credentialId ||
+            ask.requesterScopeId !== grant.audienceScopeId
+          ) {
+            return null;
+          }
+          const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: t };
+          await deps.asks.merge(ask.id, patch);
+          await deps.grants.merge(grant.id, { askId: ask.id });
+          return { ...ask, ...patch };
+        });
+        if (resolved) adopted.push(resolved);
       }
       return adopted;
     },

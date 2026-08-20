@@ -23,6 +23,7 @@ import type { Delivery } from "../types.ts";
 import type { CoreBridge } from "./core-bridge.ts";
 import type { Mirror } from "./mirror.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
+import { keychainApprovalMessage } from "./keychain-approval.ts";
 
 const DELIVERY_CLAIM_MS = 15_000;
 
@@ -234,10 +235,16 @@ export function createDeliveryPoller(deps: {
             if (!text.trim() && !d.attachments?.length) return undefined;
             const channel = await openConversationFor(client, [d.destination.target]);
             if (text.trim()) {
-              const posted = await client.chat.postMessage(
-                slackReplyArgs(channel, text, undefined, { unfurlLinks: d.destination.unfurlLinks }),
-              );
-              mirrorSelfPost(channel, posted?.ts, text, { kind: "dm" });
+              const keychainMessage = d.destination.keychainAsk
+                ? keychainApprovalMessage(d.destination.keychainAsk)
+                : undefined;
+              const posted = await client.chat.postMessage({
+                ...slackReplyArgs(channel, keychainMessage?.text ?? text, undefined, {
+                  unfurlLinks: d.destination.unfurlLinks,
+                }),
+                ...(keychainMessage ? { blocks: keychainMessage.blocks } : {}),
+              });
+              mirrorSelfPost(channel, posted?.ts, keychainMessage?.text ?? text, { kind: "dm" });
             }
             if (d.attachments?.length) {
               try {

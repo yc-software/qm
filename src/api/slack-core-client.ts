@@ -24,9 +24,18 @@ import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { TurnStream } from "../runs/turn-stream.ts";
 import type { TaskStore, TaskStatus } from "../tasks/task-store.ts";
-import { swallowAs } from "../util/errors.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable, type RuntimeChoice } from "../harness/harness-router.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
+import {
+  KeychainError,
+  type GrantMode,
+  type Keychain,
+  type KeychainAsk,
+  type KeychainGrant,
+} from "../credentials/keychain.ts";
+import { samePerson } from "../directory/person.ts";
+import type { AuditLog } from "../audit/audit-log.ts";
 
 interface SlackRunHooks {
   onFirstBlock?(text: string): void;
@@ -58,6 +67,16 @@ interface DirectoryPush {
   groupsSyncedAt?: number;
 }
 
+export type KeychainAskDecision = GrantMode | "deny";
+
+export interface KeychainAskResolution {
+  askId: string;
+  status: KeychainAsk["status"];
+  mode?: GrantMode;
+  scopeLabel: ScopeId;
+  purpose: string;
+}
+
 export interface SlackCoreClient {
   externalSlackParticipants(): Promise<boolean>;
   ackEmojiOverride(): Promise<string[] | null>;
@@ -77,6 +96,7 @@ export interface SlackCoreClient {
   reportTurnMetrics(runId: string, patch: { deliverMs?: number; slackInflightMs?: number }): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
+  resolveKeychainAsk(askId: string, ownerId: string, decision: KeychainAskDecision): Promise<KeychainAskResolution>;
   pushDirectory(body: DirectoryPush): Promise<void>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
@@ -115,6 +135,9 @@ export interface SlackCoreClientDeps {
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
   brandingDefault?: OrgBranding;
+  keychain?: Keychain;
+  auditLog?: AuditLog;
+  fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
@@ -306,6 +329,82 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         ...(record.summary !== undefined ? { summary: record.summary } : {}),
         ...(record.request !== undefined ? { request: record.request as unknown as Record<string, unknown> } : {}),
       };
+    },
+
+    async resolveKeychainAsk(askId, ownerId, decision) {
+      if (!deps.keychain) throw new KeychainError(404, "keychain is unavailable");
+      const resolve = async (): Promise<KeychainAskResolution> => {
+        const current = await deps.keychain!.getAsk(askId);
+        if (!current) throw new KeychainError(404, "unknown ask");
+        if (!samePerson(current.ownerId, ownerId)) {
+          deps.auditLog?.record({
+            at: Date.now(),
+            principalId: ownerId,
+            action: "keychain.ask.resolve",
+            resource: current.id,
+            scopeLabel: current.requesterScopeId,
+            status: "denied",
+            detail: "credential owner mismatch",
+          });
+          throw new KeychainError(403, "only the credential's owner can resolve this request");
+        }
+        let ask = current;
+        let grant: KeychainGrant | undefined;
+        if (ask.status === "pending") {
+          let resolvedNow = false;
+          try {
+            if (decision === "deny") {
+              ask = await deps.keychain!.declineAsk({ askId, ownerId, note: "Declined in Slack" });
+              deps.auditLog?.record({
+                at: Date.now(),
+                principalId: ownerId,
+                action: "keychain.ask.decline",
+                resource: ask.id,
+                scopeLabel: ask.requesterScopeId,
+              });
+            } else {
+              const approved = await deps.keychain!.approveAsk({
+                askId,
+                ownerId,
+                mode: decision,
+                purpose: ask.purpose,
+              });
+              ask = approved.ask;
+              grant = approved.grant;
+              deps.auditLog?.record({
+                at: Date.now(),
+                principalId: ownerId,
+                action: `keychain.grant.${grant.mode}`,
+                resource: `${grant.credentialId}→${grant.audienceScopeId} (ask ${ask.id})`,
+                scopeLabel: ask.requesterScopeId,
+              });
+            }
+            resolvedNow = true;
+          } catch (error) {
+            if (!(error instanceof KeychainError) || error.status !== 410) throw error;
+            const settled = await deps.keychain!.getAsk(askId);
+            if (!settled || settled.status === "pending") throw error;
+            ask = settled;
+            if (ask.grantId) grant = (await deps.keychain!.getGrant(ask.grantId)) ?? undefined;
+          }
+          if (resolvedNow && deps.fireAskResolution) {
+            await deps
+              .fireAskResolution(ask, grant)
+              .then(() => deps.keychain!.markAskNotified(ask.id))
+              .catch((error) => swallow("keychain: Slack ask resolution fire failed (sweep will retry)", error));
+          }
+        } else if (ask.grantId) {
+          grant = (await deps.keychain!.getGrant(ask.grantId)) ?? undefined;
+        }
+        return {
+          askId: ask.id,
+          status: ask.status,
+          ...(grant ? { mode: grant.mode } : {}),
+          scopeLabel: ask.requesterScopeId,
+          purpose: ask.purpose,
+        };
+      };
+      return resolve();
     },
 
     async pushDirectory(body) {

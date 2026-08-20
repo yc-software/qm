@@ -336,7 +336,19 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         channelName: ch.channel.name,
       });
       await deps.deliveries?.enqueue({
-        destination: principalDestination(cred.ownerId, actorId),
+        destination: {
+          ...principalDestination(cred.ownerId, actorId),
+          keychainAsk: {
+            id: ask.id,
+            service: cred.service,
+            ...(cred.accountLabel ? { accountLabel: cred.accountLabel } : {}),
+            ...(requester?.displayName ? { requesterName: requester.displayName } : {}),
+            scopeLabel: `#${ch.channel.name.replace(/^#/, "")}`,
+            purpose: ask.purpose,
+            ...(ask.requestedMode ? { requestedMode: ask.requestedMode } : {}),
+            expiresAt: ask.expiresAt,
+          },
+        },
         text: notice,
         idempotencyKey: `ask:${ask.id}:notice`,
       });

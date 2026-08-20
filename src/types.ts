@@ -177,6 +177,16 @@ export interface Destination {
   delete?: { messageTs: string };
   identity?: string;
   debugFooter?: string;
+  keychainAsk?: {
+    id: string;
+    service: string;
+    accountLabel?: string;
+    requesterName?: string;
+    scopeLabel: string;
+    purpose: string;
+    requestedMode?: "once" | "standing";
+    expiresAt: number;
+  };
 }
 
 export interface CandidateDestination extends Destination {

@@ -15,6 +15,7 @@ import {
   KeychainError,
   ASK_TTL_MS,
   ASK_PRUNE_AFTER_MS,
+  MAX_ASK_PURPOSE_CHARS,
   type Keychain,
   type KeychainAsk,
 } from "../src/credentials/keychain.ts";
@@ -65,6 +66,15 @@ test("createAsk: owner derived from the credential, purpose frozen, dedup per (c
     k.createAsk({ credentialId: cred.id, requesterId: "U_ALICE", requesterScopeId: "channel:C1", purpose: "x" }),
     (e: KeychainError) => e.status === 400,
     "asking for your own credential is a grant, not an ask",
+  );
+  await assert.rejects(
+    k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: "channel:C1",
+      purpose: "x".repeat(MAX_ASK_PURPOSE_CHARS + 1),
+    }),
+    (e: KeychainError) => e.status === 400,
   );
 
   const { ask, existing } = await k.createAsk({
@@ -678,6 +688,15 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     assert.equal(notices.length, 1);
     assert.equal(notices[0]!.destination.target, "U_ALICE");
     assert.equal(notices[0]!.destination.onBehalfOf, "U_BOB");
+    assert.deepEqual(notices[0]!.destination.keychainAsk, {
+      id: ask.id,
+      service: "github",
+      accountLabel: "alice-acme",
+      requesterName: "Bob",
+      scopeLabel: "#infra",
+      purpose: "clone acme/payments and run the tests",
+      expiresAt: ask.expiresAt,
+    });
     assert.match(
       notices[0]!.text,
       /Bob \(U_BOB\) asked in \*\*#infra\*\*/,
@@ -721,6 +740,80 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
       await capFor("U_BOB", "channel:C_PUBLIC"),
     );
     assert.equal(res.status, 200);
+  });
+
+  it("Slack resolution is owner-only, durable, and replay-safe", async () => {
+    const { credential } = (await (
+      await post(
+        "/v1/keychain/credentials",
+        { service: "slack-card-test", secret: "secret", envKey: "SLACK_CARD_TEST_TOKEN" },
+        await capFor("U_ALICE"),
+      )
+    ).json()) as any;
+    const made = (await (
+      await post(
+        "/v1/keychain/asks",
+        { credential: credential.id, purpose: "publish approved content", requestedMode: "standing" },
+        await bobInInfra(),
+      )
+    ).json()) as any;
+
+    await assert.rejects(
+      built.slackCore.resolveKeychainAsk(made.ask.id, "U_BOB", "standing"),
+      (error: KeychainError) => error.status === 403,
+    );
+
+    const [first, replay] = await Promise.all([
+      built.slackCore.resolveKeychainAsk(made.ask.id, "U_ALICE", "standing"),
+      built.slackCore.resolveKeychainAsk(made.ask.id, "U_ALICE", "once"),
+    ]);
+    assert.equal(first.status, "approved");
+    assert.deepEqual(replay, first);
+    const grants = (await built.keychain!.listGrants({ ownerId: "U_ALICE" })).filter(
+      (grant) => grant.askId === made.ask.id,
+    );
+    assert.equal(grants.length, 1);
+    assert.equal(grants[0]!.mode, first.mode);
+    assert.equal(grants[0]!.audienceScopeId, "channel:C_INFRA");
+    assert.equal(grants[0]!.purpose, "publish approved content");
+    assert.ok(
+      (await built.auditLog.events()).some(
+        (event) => event.action === `keychain.grant.${first.mode}` && event.resource.includes(made.ask.id),
+      ),
+    );
+  });
+
+  it("Slack and API decisions cannot leave a declined ask with an active grant", async () => {
+    const { credential } = (await (
+      await post(
+        "/v1/keychain/credentials",
+        { service: "cross-path-race", secret: "secret", envKey: "CROSS_PATH_RACE_TOKEN" },
+        await capFor("U_ALICE"),
+      )
+    ).json()) as any;
+    const made = (await (
+      await post(
+        "/v1/keychain/asks",
+        { credential: credential.id, purpose: "run the approved deployment" },
+        await bobInInfra(),
+      )
+    ).json()) as any;
+    const [api, slack] = await Promise.all([
+      post(
+        "/v1/keychain/grants",
+        { ask: made.ask.id, mode: "once", purpose: "run the approved deployment" },
+        await capFor("U_ALICE"),
+      ),
+      built.slackCore.resolveKeychainAsk(made.ask.id, "U_ALICE", "deny"),
+    ]);
+    const ask = await built.keychain!.getAsk(made.ask.id);
+    const grants = (await built.keychain!.listGrants({ ownerId: "U_ALICE" })).filter(
+      (grant) => grant.askId === made.ask.id,
+    );
+    assert.ok(api.status === 200 || api.status === 410);
+    assert.ok(ask?.status === "approved" || ask?.status === "declined");
+    assert.equal(slack.status, ask!.status);
+    assert.equal(grants.length, ask?.status === "approved" ? 1 : 0);
   });
 
   it("relayed approve 403s; the owner's own DM turn mints the audience-bound grant; replay 410s; the original thread resumes", async () => {

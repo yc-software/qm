@@ -17,6 +17,7 @@ import { createSurfaceContextFulfiller } from "./surface-context.ts";
 import { createDeliveryPoller } from "./deliveries.ts";
 import { createDeferredAckReceiver } from "./deferred-ack.ts";
 import { createHttpEventsReceiver } from "./http-events.ts";
+import { createKeychainApprovals } from "./keychain-approval.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 const { App, LogLevel } = bolt;
 
@@ -147,6 +148,7 @@ export async function startSlackPlugin(
     ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
   const approvals = createApprovals({ core, bridge, directory, threads, ids });
+  const keychainApprovals = createKeychainApprovals({ core, directory });
   const ensureHeader = createSurfaceHeaderEnsurer({
     headerFacts: (scope) => core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0]),
     channelPinEnabled: (scope) =>
@@ -205,6 +207,7 @@ export async function startSlackPlugin(
     ensureHeader,
   });
   approvals.registerActions(app);
+  keychainApprovals.registerActions(app);
   registerSlackEvents(app, {
     handler,
     mirror,
