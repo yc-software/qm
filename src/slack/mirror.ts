@@ -1,5 +1,6 @@
 import { swallow } from "../util/errors.ts";
 import { decodeSlackEntities, mentionsBot, resolveMentionsInText } from "./lib.ts";
+import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -104,7 +105,7 @@ export function createMirror(deps: {
       }
       if (!gate.allowed) return;
     }
-    const raw = String(m.text ?? "");
+    const raw = messageWithForwardedContent(m).text;
     const { text, mentions } = await resolveTextMentions(client, decodeSlackEntities(raw));
     await pushSurfaceEvents([
       {

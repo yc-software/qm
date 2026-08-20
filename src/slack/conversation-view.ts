@@ -14,6 +14,7 @@ import {
 } from "./lib.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
+import { messageWithForwardedContent } from "./forwards.ts";
 
 export const RECENT_HISTORY_LIMIT = 200;
 export const RECENT_THREAD_LIMIT = 200;
@@ -153,20 +154,21 @@ export function createConversationSerializer(deps: {
     });
     const botNameById = new Map<string, string>();
     await resolveMissingAuthorNames(client, kept, nameById, botNameById);
-    return kept.map((m) => ({
-      ts: m.ts as string,
-      name: messageAuthorName(m, nameById, botNameById),
-      ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
-      text: decodeSlackEntities(String(m.text ?? "").trim()),
-      ...(m.ts === triggerTs ? { isTrigger: true } : {}),
-      ...(m.bot_id ? { isBot: true } : {}),
-      ...(isSelfMessage(m) ? { isSelf: true } : {}),
-      ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
-      ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
-      ...(Array.isArray(m.files) && m.files.length
-        ? { files: (m.files as any[]).map((f) => String(f?.name ?? f?.title ?? f?.id ?? "file")) }
-        : {}),
-    }));
+    return kept.map((m) => {
+      const content = messageWithForwardedContent(m);
+      return {
+        ts: m.ts as string,
+        name: messageAuthorName(m, nameById, botNameById),
+        ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
+        text: decodeSlackEntities(content.text.trim()),
+        ...(m.ts === triggerTs ? { isTrigger: true } : {}),
+        ...(m.bot_id ? { isBot: true } : {}),
+        ...(isSelfMessage(m) ? { isSelf: true } : {}),
+        ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
+        ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
+        ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),
+      };
+    });
   }
 
   async function serializeSlackConversation(

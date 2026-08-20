@@ -1,5 +1,4 @@
 import {
-  type SlackFile,
   channelPrivacyChange,
   createDeduper,
   dedupeKey,
@@ -11,6 +10,7 @@ import {
   shouldProcessMessage,
 } from "./lib.ts";
 import type { AckGate } from "./deferred-ack.ts";
+import { messageWithForwardedContent } from "./forwards.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { Mirror } from "./mirror.ts";
 import type { SlackReactionEvent, TurnHandler } from "./turn-handler.ts";
@@ -74,6 +74,7 @@ export function registerSlackEvents(
       channel: e.channel,
       ts: e.ts,
     });
+    const content = messageWithForwardedContent(e);
     await dispatch(
       key,
       {
@@ -81,8 +82,8 @@ export function registerSlackEvents(
         channel: e.channel,
         userId: identity.userId,
         ...(identity.actor ? { actor: identity.actor } : {}),
-        rawText: e.text ?? "",
-        files: (e.files as SlackFile[]) ?? [],
+        rawText: content.text,
+        files: content.files,
         threadTs: e.thread_ts,
         ts: e.ts,
         ...(e.bot_id || e.subtype === "bot_message" ? { botAuthored: true } : {}),
@@ -138,6 +139,7 @@ export function registerSlackEvents(
         channel: m.channel,
         ts: m.ts,
       });
+      const content = messageWithForwardedContent(m);
       await dispatch(
         key,
         {
@@ -146,8 +148,8 @@ export function registerSlackEvents(
           userId: identity.userId,
           ...(identity.actor ? { actor: identity.actor } : {}),
           ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
-          rawText: m.text ?? "",
-          files: (m.files as SlackFile[]) ?? [],
+          rawText: content.text,
+          files: content.files,
           threadTs: m.thread_ts,
           ts: m.ts,
           ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
@@ -179,6 +181,7 @@ export function registerSlackEvents(
         ts: m.ts,
       });
       const identity = await eventIdentity(client, m);
+      const content = messageWithForwardedContent(m);
       await dispatch(
         key,
         {
@@ -187,8 +190,8 @@ export function registerSlackEvents(
           userId: identity.userId,
           ...(identity.actor ? { actor: identity.actor } : {}),
           ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
-          rawText: m.text ?? "",
-          files: (m.files as SlackFile[]) ?? [],
+          rawText: content.text,
+          files: content.files,
           threadTs: m.thread_ts,
           ts: m.ts,
           unprompted: true,
