@@ -2,6 +2,7 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
+import { createPostgresCronFireStore } from "../src/cron/cron-fire-store.ts";
 import { scopeId, type Cron } from "../src/types.ts";
 import {
   createKeychain,
@@ -20,7 +21,7 @@ before(async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query(
-    "DROP TABLE IF EXISTS map_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_widgets, map_crons, map_cron_fires, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -68,7 +69,11 @@ test("pg map: a value persists across map instances (no per-process cache to div
 });
 
 test("pg map: an artifact store rides the map (a cron round-trips through Postgres)", { skip }, async () => {
-  const store = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"));
+  const writer = createPostgresMapFactory(URL!);
+  const store = createCronStore(
+    writer.map<Cron>("map_crons"),
+    createPostgresCronFireStore(writer.pool, "map_crons", "map_cron_fires"),
+  );
   const c = await store.create({
     schedule: { everyMs: 60_000 },
     action: "digest",
@@ -77,10 +82,42 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
     createdBy: "U1",
   });
   await store.markFired(c.id, 123);
-  const reader = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"));
+  await store.recordFire(c.id, { fireKey: "f1", threadRef: "cron:f1", firedAt: 123, reply: "done" });
+  const factory = createPostgresMapFactory(URL!);
+  const reader = createCronStore(
+    factory.map<Cron>("map_crons"),
+    createPostgresCronFireStore(factory.pool, "map_crons", "map_cron_fires"),
+  );
   const got = await reader.get(c.id);
   assert.equal(got?.action, "digest");
   assert.equal(got?.lastFiredAt, 123);
+  assert.deepEqual(await reader.getRuns(c.id), {
+    runs: [{ fireKey: "f1", threadRef: "cron:f1", firedAt: 123, reply: "done" }],
+    total: 1,
+  });
+});
+
+test("pg cron store migrates inline fire history without loading it in cron scans", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const backing = factory.map<Cron>("map_crons");
+  await backing.put("legacy", {
+    id: "legacy",
+    schedule: { firstFireAt: 1 },
+    enabled: true,
+    createdAt: 0,
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    fireLog: [{ fireKey: "legacy-fire", threadRef: "cron:legacy:fire", firedAt: 1, reply: "kept" }],
+  });
+  const store = createCronStore(backing, createPostgresCronFireStore(factory.pool, "map_crons", "map_cron_fires"));
+
+  assert.equal((await store.list())[0]?.fireLog, undefined);
+  assert.equal((await backing.get("legacy"))?.fireLog, undefined);
+  assert.deepEqual(await store.getRuns("legacy"), {
+    runs: [{ fireKey: "legacy-fire", threadRef: "cron:legacy:fire", firedAt: 1, reply: "kept" }],
+    total: 1,
+  });
 });
 
 test(

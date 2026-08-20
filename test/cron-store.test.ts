@@ -224,13 +224,51 @@ test("recordFire appends compact durable fire log entries and replaces duplicate
     reply: "second updated",
   });
 
-  const after = await store.get(cron.id);
+  const after = await store.getRuns(cron.id);
   assert.deepEqual(
-    after?.fireLog?.map((entry) => entry.fireKey),
+    after.runs.map((entry) => entry.fireKey),
     ["f1", "f2"],
   );
-  assert.equal(after?.fireLog?.[1]?.threadRef, "cron:c:fire:2b");
-  assert.equal(after?.fireLog?.[1]?.reply, "second updated");
+  assert.equal(after.runs[1]?.threadRef, "cron:c:fire:2b");
+  assert.equal(after.runs[1]?.reply, "second updated");
+});
+
+test("scheduler scans do not load persisted fire history", async () => {
+  const backing = createMemoryMap<Cron>();
+  await backing.put("old", {
+    ...base,
+    id: "old",
+    schedule: { firstFireAt: 1 },
+    enabled: true,
+    createdAt: 0,
+    fireLog: Array.from({ length: 100 }, (_, i) => ({
+      fireKey: `fire-${i}`,
+      threadRef: `cron:old:fire-${i}`,
+      firedAt: i,
+      reply: "x".repeat(10_000),
+    })),
+  });
+
+  const store = createCronStore(backing);
+  const [listed] = await store.list();
+  assert.equal(listed?.fireLog, undefined);
+  assert.equal((await backing.get("old"))?.fireLog, undefined);
+  assert.equal((await store.getRuns("old")).total, 100);
+});
+
+test("fire history remains complete while reads can page the newest entries", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 1000 } });
+  for (let i = 1; i <= 3; i++) {
+    await store.recordFire(cron.id, { fireKey: `f${i}`, threadRef: `cron:f${i}`, firedAt: i });
+  }
+  assert.deepEqual(await store.getRuns(cron.id, 2), {
+    runs: [
+      { fireKey: "f2", threadRef: "cron:f2", firedAt: 2 },
+      { fireKey: "f3", threadRef: "cron:f3", firedAt: 3 },
+    ],
+    total: 3,
+  });
 });
 
 test("create stores runAs + member snapshot for a scopeFloor cron", async () => {

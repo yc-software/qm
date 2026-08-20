@@ -313,9 +313,9 @@ test("a recurring teammate-DM cron without current recipient consent is withheld
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.destination.target, "U1");
   assert.match(pending[0]?.text ?? "", /consent.*skipped/i);
-  const stored = await crons.get(cron.id);
-  assert.equal(stored?.fireLog?.[0]?.status, "refused");
-  assert.match(stored?.fireLog?.[0]?.note ?? "", /consent/);
+  const stored = await crons.getRuns(cron.id);
+  assert.equal(stored.runs[0]?.status, "refused");
+  assert.match(stored.runs[0]?.note ?? "", /consent/);
 });
 
 test("a teammate-DM cron created in a channel delivers its real output (§10 parity gate)", async () => {
@@ -826,9 +826,9 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   assert.doesNotMatch(texts[1] ?? "", /Recent fires/);
   assert.doesNotMatch(texts[1] ?? "", /first <invoke name="execute">/);
   assert.doesNotMatch(texts[1] ?? "", /first \[invoke name="execute"\]/);
-  const stored = await crons.get(cron.id);
-  assert.equal(stored?.fireLog?.length, 2);
-  assert.equal(stored?.fireLog?.[0]?.reply, 'first <invoke name="execute">');
+  const stored = await crons.getRuns(cron.id);
+  assert.equal(stored.runs.length, 2);
+  assert.equal(stored.runs[0]?.reply, 'first <invoke name="execute">');
 });
 
 test("an idempotency-skipped cron fire does not create fire log history", async () => {
@@ -857,10 +857,10 @@ test("an idempotency-skipped cron fire does not create fire log history", async 
 
   await scheduler.tick(2500);
 
-  const after = await crons.get(cron.id);
+  const after = await crons.getRuns(cron.id);
   assert.equal(calls.length, 0, "duplicate slot does not reach the agent");
-  assert.equal(after?.fireLog?.length ?? 0, 0, "duplicate slot does not look like a fire");
-  assert.equal(after?.lastFiredAt, 2500, "the due slot is still advanced after durable dedupe");
+  assert.equal(after.runs.length, 0, "duplicate slot does not look like a fire");
+  assert.equal((await crons.get(cron.id))?.lastFiredAt, 2500, "the due slot is still advanced after durable dedupe");
 });
 
 test("cron fire log omits replies that echo the runtime wrapper", async () => {
@@ -876,8 +876,8 @@ test("cron fire log omits replies that echo the runtime wrapper", async () => {
   await scheduler.tick(2000);
   await scheduler.tick(3500);
 
-  const stored = await crons.get((await crons.list())[0]!.id);
-  assert.equal(stored?.fireLog?.[0]?.reply, "[reply echoed cron runtime context; omitted]");
+  const stored = await crons.getRuns((await crons.list())[0]!.id);
+  assert.equal(stored.runs[0]?.reply, "[reply echoed cron runtime context; omitted]");
   assert.doesNotMatch(calls[1]?.text ?? "", /reply=You said: \[Cron runtime context\]/);
   assert.doesNotMatch(calls[1]?.text ?? "", /reply=\[reply echoed cron runtime context; omitted\]/);
 });
@@ -966,10 +966,10 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
     logged.some((l) => l.includes("[scheduler] fire failed") && l.includes("boom")),
     "the fire error must reach the log",
   );
-  const after = await crons.get(cron.id);
-  assert.equal(after?.fireLog?.length, 1);
-  assert.equal(after?.fireLog?.[0]?.status, "failed");
-  assert.equal(after?.fireLog?.[0]?.note, "boom");
+  const after = await crons.getRuns(cron.id);
+  assert.equal(after.runs.length, 1);
+  assert.equal(after.runs[0]?.status, "failed");
+  assert.equal(after.runs[0]?.note, "boom");
 });
 
 test("queue mode: fires claim the slot before running, and stale or lost claims never run", async () => {

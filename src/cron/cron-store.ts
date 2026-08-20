@@ -10,6 +10,7 @@ import {
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
+import { createMemoryCronFireStore, type CronFirePage, type CronFireStore } from "./cron-fire-store.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
   schedule: Cron["schedule"];
@@ -44,6 +45,7 @@ export interface CronStore {
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
   setRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
+  getRuns(id: string, limit?: number): Promise<CronFirePage>;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
@@ -57,7 +59,30 @@ function normalizeTitle(title: string | undefined): string | undefined {
   return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
 }
 
-export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron>()): CronStore {
+export function createCronStore(
+  backing: DurableMap<Cron> = createMemoryMap<Cron>(),
+  fires: CronFireStore = createMemoryCronFireStore(),
+): CronStore {
+  let readyP: Promise<void> | undefined;
+  const ready = () =>
+    (readyP ??= (async () => {
+      try {
+        await backing.get("__cron_fire_log_migration__");
+        await fires.ready();
+      } catch (error) {
+        readyP = undefined;
+        throw error;
+      }
+    })());
+  const withoutFireLog = async (cron: Cron | null): Promise<Cron | null> => {
+    if (!cron) return null;
+    const { fireLog, ...rest } = cron;
+    if (fireLog?.length) {
+      await fires.import(cron.id, fireLog);
+      await backing.merge(cron.id, { fireLog: undefined });
+    }
+    return rest;
+  };
   return {
     async create(input) {
       assertNoEscalation(input);
@@ -88,8 +113,14 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
         ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
       }));
     },
-    get: (id) => backing.get(id),
-    list: () => backing.all(),
+    async get(id) {
+      await ready();
+      return withoutFireLog(await backing.get(id));
+    },
+    async list() {
+      await ready();
+      return (await Promise.all((await backing.all()).map(withoutFireLog))) as Cron[];
+    },
     async update(id, patch) {
       const fields: Partial<Cron> = {};
       if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
@@ -109,7 +140,9 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
       return backing.merge(id, fields);
     },
-    delete: (id) => backing.delete(id),
+    async delete(id) {
+      await Promise.all([backing.delete(id), fires.delete(id)]);
+    },
     async setEnabled(id, enabled) {
       await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
     },
@@ -120,18 +153,14 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
       return setTriggerRecipientConsent(backing, id, recipientConsent);
     },
     async recordFire(id, entry) {
-      const addEntry = (cron: Cron): Cron => {
-        const byKey = new Map((cron.fireLog ?? []).map((e) => [e.fireKey, e]));
-        byKey.set(entry.fireKey, { ...byKey.get(entry.fireKey), ...entry });
-        return { ...cron, fireLog: [...byKey.values()].sort((a, b) => a.firedAt - b.firedAt) };
-      };
-      if (backing.update) {
-        await backing.update(id, addEntry);
-        return;
-      }
-      const cron = await backing.get(id);
-      if (!cron) return;
-      await backing.merge(id, { fireLog: addEntry(cron).fireLog });
+      await ready();
+      if (!(await withoutFireLog(await backing.get(id)))) return;
+      await fires.record(id, entry);
+    },
+    async getRuns(id, limit) {
+      await ready();
+      await withoutFireLog(await backing.get(id));
+      return fires.list(id, limit);
     },
     async markFired(id, at, scheduledAt) {
       const cron = await backing.get(id);

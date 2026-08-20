@@ -31,6 +31,7 @@ export function createMessagingMethods(
   App,
   | "createCron"
   | "getCron"
+  | "getCronRuns"
   | "listCrons"
   | "listCronsForViewer"
   | "updateCron"
@@ -112,6 +113,9 @@ export function createMessagingMethods(
     },
     getCron(id) {
       return deps.crons.get(id);
+    },
+    getCronRuns(id, limit) {
+      return deps.crons.getRuns(id, limit);
     },
     listCrons() {
       return deps.crons.list();

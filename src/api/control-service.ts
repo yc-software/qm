@@ -564,9 +564,8 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (req.limit !== undefined && (!Number.isInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
-      const fireLog = cron.fireLog ?? [];
-      const runs = req.limit !== undefined ? fireLog.slice(-req.limit) : fireLog;
-      return { ok: true, cron, runs, total: fireLog.length };
+      const { runs, total } = await app.getCronRuns(id, req.limit);
+      return { ok: true, cron, runs, total };
     },
 
     async patchCron(id, req, capability) {

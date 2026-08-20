@@ -41,6 +41,7 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
+import type { CronFirePage } from "../cron/cron-fire-store.ts";
 import type { WebhookStore, CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type {
@@ -348,6 +349,7 @@ export interface App {
   ): Promise<number>;
   createCron(input: CreateCronInput): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
+  getCronRuns(id: string, limit?: number): Promise<CronFirePage>;
   listCrons(): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
   updateCron(id: string, patch: CronPatch): Promise<Cron | null>;

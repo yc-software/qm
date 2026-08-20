@@ -332,7 +332,7 @@ async function runCronNow(ctx: ApiCtx): Promise<void> {
 }
 
 async function cronRuns(ctx: ApiCtx): Promise<void> {
-  const { res, url, capability } = ctx;
+  const { res, url, capability, app } = ctx;
   const id = ctx.params.id!;
   const rawLimit = url.searchParams.get("limit");
   const limit = rawLimit === null ? undefined : Number(rawLimit);
@@ -346,9 +346,8 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
     return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
   }
-  const fireLog = cron.fireLog ?? [];
-  const runs = limit !== undefined ? fireLog.slice(-limit) : fireLog;
-  return sendJson(res, 200, { cron: withoutFireLog(cron), runs, total: fireLog.length });
+  const { runs, total } = await app.getCronRuns(id, limit);
+  return sendJson(res, 200, { cron: withoutFireLog(cron), runs, total });
 }
 
 const CRON_PATCH_BAD_REQUEST =
