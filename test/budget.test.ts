@@ -5,7 +5,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBudgetTracker, estimateCostUsd, modelCallCostUsd } from "../src/ratelimit/budget.ts";
+import {
+  budgetAdjustmentForRequest,
+  createBudgetTracker,
+  estimateCostUsd,
+  modelCallCostUsd,
+} from "../src/ratelimit/budget.ts";
 import { DEFAULT_AGENT_INPUT_USD_PER_MTOK } from "../src/model/pi-models.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -79,4 +84,33 @@ test("modelCallCostUsd prefers provider-metered cost, then metered tokens, then 
   // No metered usage at all: the legacy input-only estimate.
   assert.equal(modelCallCostUsd(rec, null), estimateCostUsd(1000));
   assert.equal(modelCallCostUsd(rec, undefined), estimateCostUsd(1000));
+});
+
+test("budgetAdjustmentForRequest credits a cache-folded booking back to metered (#586 follow-up)", () => {
+  // The claude harness books estimateCostUsd(input + cacheRead + cacheWrite)
+  // upfront at the FULL fixed rate; the provider-metered costUsd prices cache
+  // correctly and is lower. The adjustment must be NEGATIVE so the running
+  // total lands on the metered figure — the cache-read false trip.
+  const usage = { input: 1_000, output: 500, cacheRead: 500_000, cacheWrite: 100_000, totalTokens: 601_500, costUsd: 0.42 };
+  const adjustment = budgetAdjustmentForRequest(usage);
+  // The booking formula is input+cacheRead+cacheWrite (claude-harness.ts:613) — no output.
+  const booked = estimateCostUsd(601_000);
+  assert.ok(adjustment < 0, `expected a credit, got ${adjustment}`);
+  assert.ok(Math.abs(adjustment - (0.42 - booked)) < 1e-9, "exactly metered minus booked");
+  // A budget tracker's running total lands on the metered figure after the
+  // upfront + correction.
+  const tracker = createBudgetTracker({});
+  void tracker.record("u1", booked);
+  void tracker.record("u1", adjustment);
+  return tracker.check("u1").then((c) => {
+    assert.ok(Math.abs(c.spentUsd - 0.42) < 1e-9, `total should be the metered cost, got ${c.spentUsd}`);
+  });
+});
+
+test("budgetAdjustmentForRequest only tops up estimate-fed (cache-less) usage", () => {
+  // pi-shape: no cache fields, upfront not reconstructible — positive-only.
+  const usage = { input: 1_000, output: 2_000, cacheRead: 0, cacheWrite: 0, totalTokens: 3_000, costUsd: 0.07 };
+  assert.ok(budgetAdjustmentForRequest(usage) >= 0);
+  assert.equal(budgetAdjustmentForRequest(null), 0);
+  assert.equal(budgetAdjustmentForRequest(undefined), 0);
 });
