@@ -154,3 +154,31 @@ test("pg rows survive across store instances (no per-process cache to diverge)",
   const reader = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
   assert.ok(await reader.get("across"));
 });
+
+test("pg distinctByContent collapses per-turn duplicates to one row per document", { skip }, async () => {
+  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+  await store.put(put({ id: "t1", direction: "in", path: "p/t1", createdBy: "sales", createdAt: 1000 }));
+  await store.put(put({ id: "t2", direction: "in", path: "p/t2", createdBy: "finance", createdAt: 2000 }));
+  await store.put(put({ id: "t3", direction: "out", path: "p/t3", createdBy: "agent", createdAt: 3000 }));
+  await store.put(put({ id: "t4", path: "p/t4", data: Buffer.from("other"), createdAt: 1500 }));
+
+  const ledger = await store.listOwnedByScopes([owner]);
+  assert.equal(ledger.files.length, 4);
+
+  const grouped = await store.listOwnedByScopes([owner], { distinctByContent: true });
+  assert.equal(grouped.files.length, 2);
+  const doc = grouped.files.find((r) => r.name === "flag.png")!;
+  assert.equal(doc.createdBy, "sales", "earliest registration is the representative");
+  assert.equal(doc.createdAt, 1000);
+
+  // Cursor pagination over grouped rows never repeats a document across pages.
+  const page1 = await store.listOwnedByScopes([owner], { distinctByContent: true, limit: 1 });
+  assert.ok(page1.nextCursor);
+  const page2 = await store.listOwnedByScopes([owner], {
+    distinctByContent: true,
+    limit: 10,
+    cursor: page1.nextCursor,
+  });
+  const keys = [...page1.files, ...page2.files].map((r) => r.sha256);
+  assert.equal(new Set(keys).size, keys.length, "no document appears on two pages");
+});

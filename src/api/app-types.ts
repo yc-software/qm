@@ -574,6 +574,9 @@ export interface ContextSummary {
 interface FileListItem {
   id: string;
   ownerScopeId: ScopeId;
+  /** Who first registered this document. With content-grouped listings this
+   * is the author of the earliest row per document (#601). */
+  createdBy?: string;
   name: string;
   mimetype: string;
   sizeBytes: number;
@@ -624,6 +627,7 @@ export function toFileItem(a: FileArtifact): FileListItem {
   return {
     id: a.id,
     ownerScopeId: a.ownerScopeId,
+    ...(a.createdBy ? { createdBy: a.createdBy } : {}),
     name: a.name,
     mimetype: a.mimetype,
     sizeBytes: a.sizeBytes,

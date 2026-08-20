@@ -132,18 +132,39 @@ export function createPostgresFileArtifactStore(
         params.push(opts.createdInScope);
         filters.push(`created_in_scope = $${params.length}::text`);
       }
-      if (cursor) {
-        params.push(cursor.createdAt, cursor.id);
-        filters.push(`(created_at, id) < ($${params.length - 1}::bigint, $${params.length}::text)`);
-      }
+      // distinctByContent collapses the per-turn ledger to one row per
+      // document (earliest registration per sha256; null-sha rows stay
+      // distinct via their id key). The grouping runs BEFORE the cursor
+      // filter so a group already emitted on a prior page cannot reappear
+      // through a later duplicate that follows the cursor (#601).
+      const groupKey = opts?.distinctByContent ? `COALESCE(sha256, 'id:' || id)` : null;
+      const cursorClause = cursor
+        ? (() => {
+            params.push(cursor.createdAt, cursor.id);
+            return `(created_at, id) < ($${params.length - 1}::bigint, $${params.length}::text)`;
+          })()
+        : null;
       params.push(limit + 1);
-      const rows = await q(
-        `SELECT * FROM file_artifacts
-           WHERE ${filters.join(" AND ")}
-           ORDER BY created_at DESC, id DESC
-           LIMIT $${params.length}`,
-        params,
-      );
+      const rows = groupKey
+        ? await q(
+            `SELECT * FROM (
+               SELECT DISTINCT ON (${groupKey}) *
+               FROM file_artifacts
+               WHERE ${filters.join(" AND ")}
+               ORDER BY ${groupKey}, created_at ASC, id ASC
+             ) grouped
+             WHERE ${cursorClause ?? "TRUE"}
+             ORDER BY created_at DESC, id DESC
+             LIMIT $${params.length}`,
+            params,
+          )
+        : await q(
+            `SELECT * FROM file_artifacts
+               WHERE ${filters.join(" AND ")} ${cursorClause ? `AND ${cursorClause}` : ""}
+               ORDER BY created_at DESC, id DESC
+               LIMIT $${params.length}`,
+            params,
+          );
       const all = rows.map(rowToArtifact);
       const page = all.slice(0, limit);
       const nextCursor = all.length > limit && page.length > 0 ? encodeCursor(page[page.length - 1]!) : undefined;
