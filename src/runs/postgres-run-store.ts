@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { retryBackoffMs } from './run-store.ts';
 import { EventEmitter } from "node:events";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { TurnResult } from "../types.ts";
@@ -128,11 +129,17 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     const errorAttemptsAfter = run.errorAttempts + (countsAsError ? 1 : 0);
     const overClaimed = run.attempts >= maxClaims;
     if (retry && errorAttemptsAfter < run.maxAttempts && !overClaimed) {
+      // A pending row's lease_expires_at is the error-retry not-before
+      // (#602): claims hold off until it passes, so a rate-limited provider
+      // isn't re-hit back-to-back maxAttempts times.
+      const notBefore = countsAsError
+        ? Date.now() + retryBackoffMs(Math.max(1, errorAttemptsAfter))
+        : null;
       const { rowCount } = await q(
-        `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL,
+        `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=$5, worker_id=NULL,
            error_attempts=error_attempts+$4
          WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3)`,
-        [run.id, run.leaseToken, ifExpiredAt, countsAsError ? 1 : 0],
+        [run.id, run.leaseToken, ifExpiredAt, countsAsError ? 1 : 0, notBefore],
       );
       return { requeued: rowCount > 0, applied: rowCount > 0 };
     }
@@ -177,9 +184,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            WHERE id = (
              SELECT id FROM runs WHERE status='pending'
                AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
+               AND (lease_expires_at IS NULL OR lease_expires_at <= $5)
              ORDER BY created_at ASC, seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
-          [token, now + ttlMs, workerId, now],
+          [token, now + ttlMs, workerId, now, now],
         );
         return rows[0] ? rowToRun(rows[0]) : null;
       } catch (err) {
@@ -197,6 +205,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
              SELECT id FROM runs WHERE id=$5 AND status='pending'
+               AND (lease_expires_at IS NULL OR lease_expires_at <= $4)
                AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
              FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,

@@ -18,7 +18,11 @@ function turn(text: string, surface?: string): OrchestratorInput {
 }
 
 type Backend = { name: string; make: () => { runs: RunStore; ledger: ToolLedger } };
-const backends: Backend[] = [{ name: "memory", make: () => createMemoryRunStore() }];
+// Zero error-retry backoff keeps this suite's immediate claim-after-fail
+// cadence; the backoff itself is covered in pi-retryable-errors.test.ts.
+const backends: Backend[] = [
+  { name: "memory", make: () => createMemoryRunStore({ retryBackoffMs: () => 0 }) },
+];
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 

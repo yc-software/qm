@@ -39,7 +39,7 @@ test("reaper requeues a run whose lease expired (crashed worker)", async () => {
 });
 
 test("a run parks once the ERROR budget (error_attempts) is exhausted", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createMemoryRunStore({ retryBackoffMs: () => 0 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
 
   let claimed = await runs.claim("w1", 10_000);
@@ -101,7 +101,7 @@ test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill inste
 });
 
 test("a concrete error parks with its own message even when over the claim cap", async () => {
-  const { runs } = createMemoryRunStore({ maxClaims: 2 });
+  const { runs } = createMemoryRunStore({ maxClaims: 2, retryBackoffMs: () => 0 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
 
   let claimed = await runs.claim("w1", 10_000);

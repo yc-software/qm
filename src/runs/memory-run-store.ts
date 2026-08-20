@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { retryBackoffMs } from './run-store.ts';
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
 import { isTerminal, leaseLapsed } from "./run-store.ts";
@@ -9,8 +10,11 @@ export interface MemoryRuntime {
   ledger: ToolLedger;
 }
 
-export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRuntime {
+export function createMemoryRunStore(
+  opts?: { maxClaims?: number; retryBackoffMs?: (nextErrorAttempt: number) => number },
+): MemoryRuntime {
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
+  const backoff = opts?.retryBackoffMs ?? retryBackoffMs;
   const runs = new Map<string, Run>();
   const byKey = new Map<string, string>();
   const ledger = new Map<string, string>();
@@ -66,8 +70,16 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     },
 
     async claim(workerId, ttlMs) {
+      const now = Date.now();
       const pending = [...runs.values()]
-        .filter((r) => r.status === "pending" && !sessionHasRunning(r.sessionId))
+        .filter(
+          (r) =>
+            r.status === "pending" &&
+            !sessionHasRunning(r.sessionId) &&
+            // A pending row's leaseExpiresAt is the error-retry not-before
+            // (see retire); claim only once it has passed (#602).
+            (r.leaseExpiresAt === null || r.leaseExpiresAt <= now),
+        )
         .sort((a, b) => a.createdAt - b.createdAt);
       const run = pending[0];
       if (!run) return null;
@@ -77,6 +89,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     async claimById(runId, workerId, ttlMs) {
       const run = runs.get(runId);
       if (!run || run.status !== "pending" || sessionHasRunning(run.sessionId)) return null;
+      if (run.leaseExpiresAt !== null && run.leaseExpiresAt > Date.now()) return null;
       return lease(run, workerId, ttlMs);
     },
 
@@ -239,6 +252,13 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     const overClaimed = run.attempts >= maxClaims;
     if (retry && run.errorAttempts < run.maxAttempts && !overClaimed) {
       run.status = "pending";
+      // ERROR retries wait out the backoff before they are claimable again
+      // (#602); the claim paths read this as a not-before, not a lease.
+      // Lease-expiry requeues (a suspected worker crash, countsAsError=false)
+      // keep their immediate retry — they have their own poison-pill budget.
+      if (opts?.countsAsError) {
+        run.leaseExpiresAt = Date.now() + backoff(run.errorAttempts);
+      }
       return { requeued: true, applied: true };
     }
     run.status = "failed";
