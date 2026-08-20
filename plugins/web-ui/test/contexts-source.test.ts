@@ -16,6 +16,7 @@ test("contexts pane text inputs carry focus keys", () => {
   assert.match(source, /data-focus-key="project-member-search"/);
   assert.match(source, /data-focus-key="contexts-search"/);
   assert.match(source, /data-focus-key="project-name"/);
+  assert.match(source, /data-focus-key="project-rename"/);
   assert.match(
     readFileSync(new URL("../src/ambient-policy.ts", import.meta.url), "utf8"),
     /data-focus-key="ambient-orders"/,
@@ -68,10 +69,26 @@ test("result cap applies after the member filter", () => {
   assert.match(source, /\.filter\(\(match\) => !members\.has\(match\.principalId\)\)\.slice\(0, 8\)/);
 });
 
-test("every project member can invite while only the owner can remove people", () => {
+test("every project member can invite while only the owner can remove people or rename", () => {
   const detail = source.match(/function detailTpl\([^]*?\n\}/)?.[0] ?? "";
   const members = source.match(/function projectMembersSection\([^]*?\n\}/)?.[0] ?? "";
   assert.match(detail, /\$\{\s*c\.project\s*\? html`<button class="btn context-add-member"/);
-  assert.doesNotMatch(detail, /c\.project && isProjectOwner\(c\)/);
+  assert.match(detail, /Boolean\(c\.project\) && isProjectOwner\(c\)/);
+  assert.match(detail, /class="project-icon-button context-rename-edit"/);
+  assert.doesNotMatch(detail, /context-rename-button/);
+  assert.doesNotMatch(detail, /c\.project && isProjectOwner\(c\)\s*\?\s*html`<button class="btn context-add-member"/);
   assert.match(members, /isProjectOwner\(context\) && principalId !== project\.ownerId/);
+});
+
+test("project rename is owner-only and unavailable for personal contexts", () => {
+  assert.match(source, /function beginProjectRename\(/);
+  assert.match(source, /function commitProjectDetailRename\(/);
+  assert.match(source, /if \(!context\.project \|\| !isProjectOwner\(context\)\) return;/);
+  assert.doesNotMatch(source.match(/function contextRow\([^]*?\n\}/)?.[0] ?? "", /Rename/);
+});
+
+test("renaming a project refreshes the sidebar list", () => {
+  const body = source.match(/export async function renameProject\([^]*?\n\}/)?.[0] ?? "";
+  assert.match(body, /upsertProject\(updated\)/);
+  assert.match(body, /renderList\(\)/);
 });
