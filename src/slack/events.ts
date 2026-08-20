@@ -161,7 +161,7 @@ export function registerSlackEvents(
     if (m.channel_type === "channel" || m.channel_type === "group" || m.channel_type === "mpim") {
       if (m.channel_type === "mpim" && m.channel) syncForUnseenGroup(client, String(m.channel));
       const threadReply = isThreadReply(m);
-      const isMention = mentionsBot(m.text ?? "", ids.botUserId);
+      const isMention = mentionsBot(m.text ?? "", ids.botUserId, ids.ownBotId);
       const willDispatch = threadReply && !isMention && (await botHasStakeInThread(client, m.channel, m.thread_ts));
       await mirrorMessageEvent(m, client, willDispatch ? { handled: true } : {});
       if (!threadReply) return;

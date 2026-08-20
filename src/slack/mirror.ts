@@ -116,7 +116,7 @@ export function createMirror(deps: {
         text,
         ...(Object.keys(mentions).length ? { mentions } : {}),
         ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
-        ...(mentionsBot(raw, ids.botUserId) ? { mentionsSelf: true } : {}),
+        ...(mentionsBot(raw, ids.botUserId, ids.ownBotId) ? { mentionsSelf: true } : {}),
         ...(opts.editedAt ? { editedAt: opts.editedAt } : {}),
         ...(opts.handled ? { handled: true } : {}),
         ...(opts.containerName ? { containerName: opts.containerName } : {}),

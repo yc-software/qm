@@ -201,7 +201,7 @@ export function createTurnHandler(deps: {
     else classified = await classifyUserCached(client, inc.userId);
     const actor = classified.actor;
     const timezone = classified.timezone;
-    const text = stripMention(inc.rawText, ids.botUserId);
+    const text = stripMention(inc.rawText, ids.botUserId, ids.ownBotId);
     if (!hasContent(text, inc.files)) return;
 
     let audience: ActorAssertion[] = [actor];
