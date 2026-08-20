@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { test } from "node:test";
 import { join } from "node:path";
@@ -264,6 +264,62 @@ test("Sprites helper enforces timeout and output limits", async () => {
   assert.equal(limited.outputLimitExceeded, true);
   assert.equal(limited.stdoutTruncated, true);
   assert.equal(Buffer.from(limited.stdoutB64, "base64").length, 32);
+});
+
+test("Sprites helper keeps descendant supervision until the process group is terminated", async () => {
+  const marker = join(process.cwd(), ".direct-helper-descendant-marker");
+  rmSync(marker, { force: true });
+  const descendant = `setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'unexpected'),300);setTimeout(()=>{},1000)`;
+  const leader = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','inherit','inherit']})`;
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const stdout: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stdin.end(
+    JSON.stringify({
+      argv: [process.execPath, "-e", leader],
+      rootDir: process.cwd(),
+      cwd: process.cwd(),
+      env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" },
+      allowedEnvKeys: [],
+      dynamicEnvKeys: [],
+      timeoutMs: 50,
+      stdoutMaxBytes: 1024,
+      stderrMaxBytes: 1024,
+    }),
+  );
+  await once(child, "close");
+  const envelope = JSON.parse(Buffer.concat(stdout).toString("utf8")) as { code: number; timedOut: boolean };
+  assert.equal(envelope.code, 124);
+  assert.equal(envelope.timedOut, true);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(existsSync(marker), false);
+  rmSync(marker, { force: true });
+});
+
+test("Sprites helper rejects malformed environment key arrays with a structured error", async () => {
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const stdout: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stdin.end(
+    JSON.stringify({
+      argv: [process.execPath],
+      rootDir: process.cwd(),
+      cwd: process.cwd(),
+      env: {},
+      allowedEnvKeys: [],
+      dynamicEnvKeys: [{}],
+      timeoutMs: 100,
+      stdoutMaxBytes: 10,
+      stderrMaxBytes: 10,
+    }),
+  );
+  await once(child, "close");
+  const envelope = JSON.parse(Buffer.concat(stdout).toString("utf8")) as { error?: string };
+  assert.equal(envelope.error, "invalid dynamic env keys");
 });
 
 test("Sprites helper does not expose spawn error details", async () => {

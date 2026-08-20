@@ -106,10 +106,10 @@ relative = os.path.relpath(workdir, root)
 if relative == ".." or relative.startswith("../") or os.path.isabs(relative) or ".." in cwd.split("/"):
     fail("direct cwd escapes rootDir")
 dynamic_env_keys = request.get("dynamicEnvKeys", [])
-if not isinstance(dynamic_env_keys, list) or len(set(dynamic_env_keys)) != len(dynamic_env_keys) or any(not isinstance(key, str) or key not in dynamic_keys for key in dynamic_env_keys):
+if not isinstance(dynamic_env_keys, list) or any(not isinstance(key, str) or key not in dynamic_keys for key in dynamic_env_keys) or len(set(dynamic_env_keys)) != len(dynamic_env_keys):
     fail("invalid dynamic env keys")
 allowed_env_keys = request.get("allowedEnvKeys", [])
-if not isinstance(allowed_env_keys, list) or len(set(allowed_env_keys)) != len(allowed_env_keys) or any(not isinstance(key, str) or not env_name.fullmatch(key) or key == "PATH" or key.startswith("AGENT_") for key in allowed_env_keys):
+if not isinstance(allowed_env_keys, list) or any(not isinstance(key, str) or not env_name.fullmatch(key) or key == "PATH" or key.startswith("AGENT_") for key in allowed_env_keys) or len(set(allowed_env_keys)) != len(allowed_env_keys):
     fail("invalid allowed env keys")
 env = request.get("env")
 if not isinstance(env, dict):
@@ -149,6 +149,8 @@ stdout_parts = []
 stderr_parts = []
 totals = {"stdout": 0, "stderr": 0}
 limit_exceeded = threading.Event()
+stdout_done = threading.Event()
+stderr_done = threading.Event()
 
 def kill_tree():
     try:
@@ -159,18 +161,21 @@ def kill_tree():
         except Exception:
             pass
 
-def read_stream(name, stream, parts, limit):
-    while True:
-        chunk = stream.read(65536)
-        if not chunk:
-            return
-        remaining = max(0, limit - totals[name])
-        if remaining:
-            parts.append(chunk[:remaining])
-        totals[name] += len(chunk)
-        if totals[name] > limit:
-            limit_exceeded.set()
-            kill_tree()
+def read_stream(name, stream, parts, limit, done):
+    try:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                return
+            remaining = max(0, limit - totals[name])
+            if remaining:
+                parts.append(chunk[:remaining])
+            totals[name] += len(chunk)
+            if totals[name] > limit:
+                limit_exceeded.set()
+                kill_tree()
+    finally:
+        done.set()
 
 def write_stdin():
     try:
@@ -180,20 +185,23 @@ def write_stdin():
         pass
 
 threads = [
-    threading.Thread(target=read_stream, args=("stdout", child.stdout, stdout_parts, stdout_max), daemon=True),
-    threading.Thread(target=read_stream, args=("stderr", child.stderr, stderr_parts, stderr_max), daemon=True),
+    threading.Thread(target=read_stream, args=("stdout", child.stdout, stdout_parts, stdout_max, stdout_done), daemon=True),
+    threading.Thread(target=read_stream, args=("stderr", child.stderr, stderr_parts, stderr_max, stderr_done), daemon=True),
     threading.Thread(target=write_stdin, daemon=True),
 ]
 for thread in threads:
     thread.start()
 deadline = time.monotonic() + max(1, timeout_ms) / 1000
 timed_out = False
-while child.poll() is None:
+while True:
     if limit_exceeded.is_set():
         kill_tree()
         break
     if time.monotonic() >= deadline:
         timed_out = True
+        kill_tree()
+        break
+    if child.poll() is not None and stdout_done.is_set() and stderr_done.is_set():
         kill_tree()
         break
     time.sleep(0.005)
