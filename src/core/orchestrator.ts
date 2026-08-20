@@ -44,7 +44,7 @@ import {
 } from "../credentials/connector-status.ts";
 import { renderComputerBlock, renderResidentLoginsBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
-import { estimateCostUsd } from "../ratelimit/budget.ts";
+import { estimateCostUsd, modelCallCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -2535,6 +2535,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId });
               } catch (err) {
                 console.error("[orchestrator] failed to persist LLM request snapshot:", errMessage(err));
+              }
+              // Debit the budget from the provider-metered usage when it exists:
+              // the upfront recordModelCall estimate is input-only at a fixed
+              // rate, so models with cheaper input or dominant output costs
+              // were mispriced by up to 5x (#586).
+              const metered = modelCallCostUsd(rec, rec.usage ?? null);
+              const estimated = estimateCostUsd(rec.usage?.input ?? 0);
+              if (metered > estimated) {
+                void deps.budget?.record(actor.id, metered - estimated);
               }
             },
           });
