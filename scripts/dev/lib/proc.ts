@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { openSync } from "node:fs";
 import { connect } from "node:net";
 import { bestEffort, sleep } from "./util.ts";
@@ -67,6 +67,31 @@ export function spawnDetached(opts: {
   child.unref();
   if (!child.pid) throw new Error(`failed to spawn ${opts.argv.join(" ")}`);
   return child.pid;
+}
+
+/**
+ * Spawn a supervisor (or any dev-tree root) ATTACHED to the caller's lifetime.
+ *
+ * The mirror of {@link spawnDetached} for foreground/service use: stdio is
+ * inherited so output lands on the caller's console (or journald under
+ * systemd), the child is NOT unref'd, and the returned handle lets the caller
+ * wait for the tree to die and exit non-zero so a supervising unit
+ * (`Restart=always`) can react (#603).
+ */
+export function spawnForeground(opts: {
+  cwd: string;
+  argv: string[];
+  env: Record<string, string>;
+}): ChildProcess {
+  const [cmd, ...rest] = opts.argv;
+  if (!cmd) throw new Error("spawnForeground: empty argv");
+  const child = spawn(cmd, rest, {
+    cwd: opts.cwd,
+    stdio: "inherit",
+    env: opts.env,
+  });
+  if (!child.pid) throw new Error(`failed to spawn ${opts.argv.join(" ")}`);
+  return child;
 }
 
 export async function killTree(pid: number | null | undefined, graceMs = 5000): Promise<void> {
