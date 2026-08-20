@@ -48,124 +48,177 @@ const CHECK_TIMEOUT_MS = 30_000;
 const GUEST_PROBE_TIMEOUT_SEC = 15;
 const DEFAULT_SPRITES_BASE_URL = "https://api.sprites.dev";
 const DIRECT_HELPER_RESPONSE_MAX_BYTES = 256 * 1024 * 1024;
-export const DIRECT_HELPER_EXECUTABLE = "/usr/local/bin/node";
+export const DIRECT_HELPER_EXECUTABLE = "/usr/bin/python3";
 export const DIRECT_HELPER_SCRIPT = String.raw`
-const fs = require("node:fs");
-const path = require("node:path");
-const childProcess = require("node:child_process");
-const dynamicKeys = new Set(["AGENT_API_URL", "AGENT_API_TOKEN", "AGENT_OAUTH_CONSENT_TOKEN", "AGENT_CREDENTIAL_TOKEN", "AGENT_OUTBOX"]);
-const runtimePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-const inputCap = 16 * 1024 * 1024;
-const outputCap = 64 * 1024 * 1024;
-const requestCap = 128 * 1024 * 1024;
-const resultCap = 256 * 1024 * 1024;
-const dynamicKey = (key) => dynamicKeys.has(key);
-const canonical = (value) => typeof value === "string" && value.startsWith("/") && value !== "/" && !value.endsWith("/") && !value.includes("\\") && !value.includes("\0") && value.split("/").slice(1).every((part) => part.length > 0 && part !== "." && part !== "..");
-const bounded = (value, fallback, cap) => {
-  const result = value === undefined ? fallback : Number(value);
-  return Number.isSafeInteger(result) && result >= 0 && result <= cap ? result : null;
-};
-const output = (value) => {
-  const encoded = JSON.stringify(value);
-  process.stdout.write(encoded.length > resultCap ? JSON.stringify({ error: "direct helper result exceeds limit" }) : encoded);
-};
-const run = (raw) => {
-  let request;
-  try {
-    request = JSON.parse(raw);
-  } catch {
-    return output({ error: "invalid direct request" });
-  }
-  if (!request || !Array.isArray(request.argv) || request.argv.length === 0 || request.argv.length > 4096 || request.argv.some((arg) => typeof arg !== "string" || arg.includes("\0")) || !canonical(request.argv[0])) return output({ error: "invalid direct argv" });
-  if (!canonical(request.rootDir) || !canonical(request.cwd)) return output({ error: "invalid direct path" });
-  const root = path.posix.normalize(request.rootDir);
-  const cwd = path.posix.normalize(request.cwd);
-  const relative = path.posix.relative(root, cwd);
-  if (relative === ".." || relative.startsWith("../") || path.posix.isAbsolute(relative) || request.cwd.split("/").includes("..")) return output({ error: "direct cwd escapes rootDir" });
-  const dynamicEnvKeys = request.dynamicEnvKeys === undefined ? [] : request.dynamicEnvKeys;
-  if (!Array.isArray(dynamicEnvKeys) || dynamicEnvKeys.some((key) => typeof key !== "string" || !dynamicKey(key)) || new Set(dynamicEnvKeys).size !== dynamicEnvKeys.length) return output({ error: "invalid dynamic env keys" });
-  const allowedEnvKeys = request.allowedEnvKeys === undefined ? [] : request.allowedEnvKeys;
-  if (!Array.isArray(allowedEnvKeys) || allowedEnvKeys.some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || key === "PATH" || key.startsWith("AGENT_")) || new Set(allowedEnvKeys).size !== allowedEnvKeys.length) return output({ error: "invalid allowed env keys" });
-  if (!request.env || typeof request.env !== "object" || Array.isArray(request.env)) return output({ error: "invalid direct env" });
-  for (const [key, value] of Object.entries(request.env)) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || (key === "PATH" && value !== runtimePath) || (key !== "PATH" && !dynamicEnvKeys.includes(key) && !allowedEnvKeys.includes(key)) || (key.startsWith("AGENT_") && !dynamicEnvKeys.includes(key)) || typeof value !== "string" || value.includes("\0")) return output({ error: "invalid direct env" });
-  }
-  const timeoutMs = bounded(request.timeoutMs, 600000, 86400000);
-  const stdoutMaxBytes = bounded(request.stdoutMaxBytes, 4 * 1024 * 1024, outputCap);
-  const stderrMaxBytes = bounded(request.stderrMaxBytes, 4 * 1024 * 1024, outputCap);
-  if (timeoutMs === null || stdoutMaxBytes === null || stderrMaxBytes === null) return output({ error: "invalid direct limits" });
-  let stdin = Buffer.alloc(0);
-  if (request.stdinB64 !== undefined) {
-    if (typeof request.stdinB64 !== "string") return output({ error: "invalid direct stdin" });
-    stdin = Buffer.from(request.stdinB64, "base64");
-    if (stdin.length > inputCap) return output({ error: "direct stdin exceeds limit" });
-  }
-  let rootReal;
-  let cwdReal;
-  let executableReal;
-  try {
-    rootReal = fs.realpathSync(root);
-    cwdReal = fs.realpathSync(cwd);
-    executableReal = fs.realpathSync(request.argv[0]);
-    if (cwdReal !== rootReal && !cwdReal.startsWith(rootReal + path.sep)) return output({ error: "direct cwd escapes rootDir" });
-    if (executableReal !== request.argv[0] || !fs.statSync(executableReal).isFile()) return output({ error: "direct executable is not canonical" });
-  } catch {
-    return output({ error: "direct path is not available" });
-  }
-  const stdout = [];
-  const stderr = [];
-  let stdoutBytes = 0;
-  let stderrBytes = 0;
-  let timedOut = false;
-  let outputLimitExceeded = false;
-  let finished = false;
-  const child = childProcess.spawn(request.argv[0], request.argv.slice(1), { cwd: cwdReal, env: { ...request.env }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
-  const killTree = () => {
-    if (finished || !child.pid) return;
-    try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
-  };
-  const timer = setTimeout(() => {
-    if (!finished) {
-      timedOut = true;
-      killTree();
-    }
-  }, Math.max(1, timeoutMs));
-  const take = (parts, current, chunk, limit, stream) => {
-    const remaining = Math.max(0, limit - current);
-    if (remaining) parts.push(chunk.subarray(0, remaining));
-    const next = current + chunk.length;
-    if (next > limit) {
-      outputLimitExceeded = true;
-      stream.destroy();
-      killTree();
-    }
-    return next;
-  };
-  child.stdout.on("data", (chunk) => { stdoutBytes = take(stdout, stdoutBytes, chunk, stdoutMaxBytes, child.stdout); });
-  child.stderr.on("data", (chunk) => { stderrBytes = take(stderr, stderrBytes, chunk, stderrMaxBytes, child.stderr); });
-  child.stdin.end(stdin);
-  child.on("error", (error) => {
-    if (finished) return;
-    finished = true;
-    clearTimeout(timer);
-    output({ error: "direct helper could not start executable" });
-  });
-  child.on("close", (code, signal) => {
-    if (finished) return;
-    finished = true;
-    clearTimeout(timer);
-    const resultCode = timedOut ? 124 : outputLimitExceeded ? 122 : code === null ? 1 : code;
-    output({ stdoutB64: Buffer.concat(stdout).toString("base64"), stderrB64: Buffer.concat(stderr).toString("base64"), code: resultCode, timedOut, outputLimitExceeded, stdoutTruncated: stdoutBytes > stdoutMaxBytes, stderrTruncated: stderrBytes > stderrMaxBytes, signal: signal || undefined });
-  });
-};
-const chunks = [];
-let size = 0;
-process.stdin.on("data", (chunk) => {
-  size += chunk.length;
-  if (size > requestCap) process.exit(400);
-  chunks.push(chunk);
-});
-process.stdin.on("end", () => run(Buffer.concat(chunks).toString("utf8")));
+import base64
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+dynamic_keys = {"AGENT_API_URL", "AGENT_API_TOKEN", "AGENT_OAUTH_CONSENT_TOKEN", "AGENT_CREDENTIAL_TOKEN", "AGENT_OUTBOX"}
+runtime_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+input_cap = 16 * 1024 * 1024
+output_cap = 64 * 1024 * 1024
+request_cap = 128 * 1024 * 1024
+result_cap = 256 * 1024 * 1024
+env_name = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+def output(value):
+    encoded = json.dumps(value, separators=(",", ":"))
+    if len(encoded.encode()) > result_cap:
+        encoded = json.dumps({"error": "direct helper result exceeds limit"}, separators=(",", ":"))
+    sys.stdout.write(encoded)
+
+def canonical(value):
+    return isinstance(value, str) and value.startswith("/") and value != "/" and not value.endswith("/") and "\\" not in value and "\0" not in value and all(part not in ("", ".", "..") for part in value.split("/")[1:])
+
+def bounded(value, fallback, cap):
+    result = fallback if value is None else value
+    return result if isinstance(result, int) and not isinstance(result, bool) and 0 <= result <= cap else None
+
+def fail(message):
+    output({"error": message})
+    raise SystemExit(0)
+
+raw = sys.stdin.buffer.read(request_cap + 1)
+if len(raw) > request_cap:
+    raise SystemExit(400)
+try:
+    request = json.loads(raw)
+except Exception:
+    fail("invalid direct request")
+
+argv = request.get("argv") if isinstance(request, dict) else None
+if not isinstance(argv, list) or not argv or len(argv) > 4096 or any(not isinstance(arg, str) or "\0" in arg for arg in argv) or not canonical(argv[0]):
+    fail("invalid direct argv")
+root_dir = request.get("rootDir")
+cwd = request.get("cwd")
+if not canonical(root_dir) or not canonical(cwd):
+    fail("invalid direct path")
+root = os.path.normpath(root_dir)
+workdir = os.path.normpath(cwd)
+relative = os.path.relpath(workdir, root)
+if relative == ".." or relative.startswith("../") or os.path.isabs(relative) or ".." in cwd.split("/"):
+    fail("direct cwd escapes rootDir")
+dynamic_env_keys = request.get("dynamicEnvKeys", [])
+if not isinstance(dynamic_env_keys, list) or len(set(dynamic_env_keys)) != len(dynamic_env_keys) or any(not isinstance(key, str) or key not in dynamic_keys for key in dynamic_env_keys):
+    fail("invalid dynamic env keys")
+allowed_env_keys = request.get("allowedEnvKeys", [])
+if not isinstance(allowed_env_keys, list) or len(set(allowed_env_keys)) != len(allowed_env_keys) or any(not isinstance(key, str) or not env_name.fullmatch(key) or key == "PATH" or key.startswith("AGENT_") for key in allowed_env_keys):
+    fail("invalid allowed env keys")
+env = request.get("env")
+if not isinstance(env, dict):
+    fail("invalid direct env")
+for key, value in env.items():
+    if not isinstance(key, str) or not env_name.fullmatch(key) or (key == "PATH" and value != runtime_path) or (key != "PATH" and key not in dynamic_env_keys and key not in allowed_env_keys) or (key.startswith("AGENT_") and key not in dynamic_env_keys) or not isinstance(value, str) or "\0" in value:
+        fail("invalid direct env")
+timeout_ms = bounded(request.get("timeoutMs"), 600000, 86400000)
+stdout_max = bounded(request.get("stdoutMaxBytes"), 4 * 1024 * 1024, output_cap)
+stderr_max = bounded(request.get("stderrMaxBytes"), 4 * 1024 * 1024, output_cap)
+if timeout_ms is None or stdout_max is None or stderr_max is None:
+    fail("invalid direct limits")
+try:
+    stdin = base64.b64decode(request.get("stdinB64", ""), validate=True)
+except Exception:
+    fail("invalid direct stdin")
+if len(stdin) > input_cap:
+    fail("direct stdin exceeds limit")
+try:
+    root_real = os.path.realpath(root)
+    cwd_real = os.path.realpath(workdir)
+    executable_real = os.path.realpath(argv[0])
+    if cwd_real != root_real and not cwd_real.startswith(root_real + os.sep):
+        fail("direct cwd escapes rootDir")
+    if executable_real != argv[0] or not os.path.isfile(executable_real):
+        fail("direct executable is not canonical")
+except SystemExit:
+    raise
+except Exception:
+    fail("direct path is not available")
+try:
+    child = subprocess.Popen(argv, cwd=cwd_real, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+except Exception:
+    fail("direct helper could not start executable")
+
+stdout_parts = []
+stderr_parts = []
+totals = {"stdout": 0, "stderr": 0}
+limit_exceeded = threading.Event()
+
+def kill_tree():
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            child.kill()
+        except Exception:
+            pass
+
+def read_stream(name, stream, parts, limit):
+    while True:
+        chunk = stream.read(65536)
+        if not chunk:
+            return
+        remaining = max(0, limit - totals[name])
+        if remaining:
+            parts.append(chunk[:remaining])
+        totals[name] += len(chunk)
+        if totals[name] > limit:
+            limit_exceeded.set()
+            kill_tree()
+
+def write_stdin():
+    try:
+        child.stdin.write(stdin)
+        child.stdin.close()
+    except Exception:
+        pass
+
+threads = [
+    threading.Thread(target=read_stream, args=("stdout", child.stdout, stdout_parts, stdout_max), daemon=True),
+    threading.Thread(target=read_stream, args=("stderr", child.stderr, stderr_parts, stderr_max), daemon=True),
+    threading.Thread(target=write_stdin, daemon=True),
+]
+for thread in threads:
+    thread.start()
+deadline = time.monotonic() + max(1, timeout_ms) / 1000
+timed_out = False
+while child.poll() is None:
+    if limit_exceeded.is_set():
+        kill_tree()
+        break
+    if time.monotonic() >= deadline:
+        timed_out = True
+        kill_tree()
+        break
+    time.sleep(0.005)
+child.wait()
+for thread in threads:
+    thread.join(timeout=1)
+return_code = 124 if timed_out else 122 if limit_exceeded.is_set() else child.returncode if child.returncode >= 0 else 1
+signal_name = None
+if child.returncode < 0:
+    try:
+        signal_name = signal.Signals(-child.returncode).name
+    except Exception:
+        signal_name = None
+result = {
+    "stdoutB64": base64.b64encode(b"".join(stdout_parts)).decode("ascii"),
+    "stderrB64": base64.b64encode(b"".join(stderr_parts)).decode("ascii"),
+    "code": return_code,
+    "timedOut": timed_out,
+    "outputLimitExceeded": limit_exceeded.is_set(),
+    "stdoutTruncated": totals["stdout"] > stdout_max,
+    "stderrTruncated": totals["stderr"] > stderr_max,
+}
+if signal_name:
+    result["signal"] = signal_name
+output(result)
 `;
 
 export interface SpritesClientLike {
@@ -249,7 +302,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     }
   > {
     const url = new URL(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec`);
-    for (const arg of [DIRECT_HELPER_EXECUTABLE, "-e", DIRECT_HELPER_SCRIPT]) url.searchParams.append("cmd", arg);
+    for (const arg of [DIRECT_HELPER_EXECUTABLE, "-c", DIRECT_HELPER_SCRIPT]) url.searchParams.append("cmd", arg);
     url.searchParams.set("path", DIRECT_HELPER_EXECUTABLE);
     url.searchParams.set("stdin", "true");
     url.searchParams.set("max_run_after_disconnect", "0s");
@@ -696,7 +749,11 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       try {
         // Scratch boxes are credential-free and wiped at release; they don't get the links.
         const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
+        const prep = await execRaw(
+          name,
+          `${shq(DIRECT_HELPER_EXECUTABLE)} -c ${shq("")} && mkdir -p ${shq(workspaceDir)}${credLinks}`,
+          60,
+        );
         if (prep.code !== 0)
           throw new Error(`sprites provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 

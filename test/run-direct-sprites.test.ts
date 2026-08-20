@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, rmSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { test } from "node:test";
 import { join } from "node:path";
@@ -77,7 +77,7 @@ test("Sprites direct POST keeps executable args and secrets in structured stdin"
   assert.equal(result.stdout, "ok");
   const parsedUrl = new URL(seenUrl);
   assert.equal(parsedUrl.protocol, "https:");
-  assert.deepEqual(parsedUrl.searchParams.getAll("cmd").slice(0, 2), [DIRECT_HELPER_EXECUTABLE, "-e"]);
+  assert.deepEqual(parsedUrl.searchParams.getAll("cmd").slice(0, 2), [DIRECT_HELPER_EXECUTABLE, "-c"]);
   assert.equal(parsedUrl.searchParams.get("path"), DIRECT_HELPER_EXECUTABLE);
   assert.equal(parsedUrl.searchParams.get("stdin"), "true");
   assert.equal(parsedUrl.searchParams.has("tty"), false);
@@ -153,16 +153,34 @@ test("Sprites direct POST combines caller abort with authenticated fetch", async
   assert.equal(seenSignal?.aborted, true);
 });
 
-test("Sprites helper path follows the image's copied Node runtime", () => {
-  const dockerfile = readFileSync("fly/Dockerfile", "utf8");
-  assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/ \/usr\/local\//);
-  assert.equal(DIRECT_HELPER_EXECUTABLE, "/usr/local/bin/node");
+test("Sprites provision fails closed when the fixed helper runtime is unavailable", async () => {
+  let prepScript = "";
+  const stderr = Buffer.from("direct helper runtime unavailable");
+  const envelope = Buffer.from(`127 0 ${stderr.length}\n${stderr.toString("base64")}\n`);
+  const sandbox = createSpritesSandbox({} as WorkspaceStore, {
+    token: "test-token",
+    client: {
+      getSprite: async () => {
+        throw new Error("missing");
+      },
+      createSprite: async () => ({}),
+      deleteSprite: async () => {},
+    },
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      prepScript = url.searchParams.getAll("cmd").at(-1) ?? "";
+      return new Response(Buffer.concat([Buffer.from([1]), envelope, Buffer.from([3, 0])]), { status: 200 });
+    },
+  });
+  await assert.rejects(sandbox.provision([]), /sprites provision prep failed: direct helper runtime unavailable/);
+  assert.match(prepScript, new RegExp(DIRECT_HELPER_EXECUTABLE.replaceAll("/", "\\/")));
+  assert.match(prepScript, / -c /);
 });
 
 test("Sprites helper executes a bounded structured request with exact child env", async () => {
   const executablePath = process.execPath;
   const rootDir = process.cwd();
-  const child = spawn(executablePath, ["-e", DIRECT_HELPER_SCRIPT], {
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
     env: { HELPER_AMBIENT: "should-not-reach-target" },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -203,8 +221,55 @@ test("Sprites helper executes a bounded structured request with exact child env"
   });
 });
 
+test("Sprites helper enforces timeout and output limits", async () => {
+  const runHelper = async (request: Record<string, unknown>) => {
+    const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const stdout: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stdin.end(JSON.stringify(request));
+    await once(child, "close");
+    return JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
+      stdoutB64: string;
+      code: number;
+      timedOut: boolean;
+      outputLimitExceeded: boolean;
+      stdoutTruncated: boolean;
+    };
+  };
+  const base = {
+    rootDir: process.cwd(),
+    cwd: process.cwd(),
+    env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" },
+    allowedEnvKeys: [],
+    dynamicEnvKeys: [],
+    stderrMaxBytes: 1024,
+  };
+  const timed = await runHelper({
+    ...base,
+    argv: [process.execPath, "-e", "setTimeout(()=>{},5000)"],
+    timeoutMs: 20,
+    stdoutMaxBytes: 1024,
+  });
+  assert.equal(timed.code, 124);
+  assert.equal(timed.timedOut, true);
+  const limited = await runHelper({
+    ...base,
+    argv: [process.execPath, "-e", "process.stdout.write('x'.repeat(4096))"],
+    timeoutMs: 1000,
+    stdoutMaxBytes: 32,
+  });
+  assert.equal(limited.code, 122);
+  assert.equal(limited.outputLimitExceeded, true);
+  assert.equal(limited.stdoutTruncated, true);
+  assert.equal(Buffer.from(limited.stdoutB64, "base64").length, 32);
+});
+
 test("Sprites helper does not expose spawn error details", async () => {
-  const child = spawn(process.execPath, ["-e", DIRECT_HELPER_SCRIPT], { stdio: ["pipe", "pipe", "ignore"] });
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+    stdio: ["pipe", "pipe", "ignore"],
+  });
   const stdout: Buffer[] = [];
   child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
   const marker = "secret-argv-marker";
