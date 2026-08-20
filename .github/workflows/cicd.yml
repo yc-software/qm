@@ -138,8 +138,10 @@ jobs:
         run: |
           set -euo pipefail
           base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          git fetch --no-tags https://github.com/yc-software/qm.git main
+          upstream_main=$(git rev-parse FETCH_HEAD)
           offenders=""
-          for sha in $(git rev-list "$base..$HEAD_SHA"); do
+          for sha in $(git rev-list "$base..$HEAD_SHA" --not "$upstream_main"); do
             if git log -1 --format='%(trailers:key=Co-authored-by,valueonly)' "$sha" \
               | grep -qi '@users\.noreply\.github\.com'; then
               offenders="$offenders $sha"
