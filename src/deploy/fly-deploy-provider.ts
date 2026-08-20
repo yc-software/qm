@@ -1,4 +1,3 @@
-import { connect } from "node:net";
 import { gzipSync } from "node:zlib";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
@@ -14,13 +13,23 @@ const APP_PORT = 8080;
 const APP_DIR = "/app";
 const BUNDLE_GUEST_PATH = "/app.tar.gz";
 const MAX_BUNDLE_BASE64_BYTES = 2_000_000;
+const MAX_BUNDLE_SOURCE_BYTES = 20_000_000;
 const GUEST = { cpu_kind: "shared", cpus: 1, memory_mb: 512 };
 const MACHINE_START_TIMEOUT_MS = 90_000;
 const APP_READY_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 1_000;
-const DIAL_TIMEOUT_MS = 2_000;
 const API_TIMEOUT_MS = 30_000;
 const APP_ALREADY_TAKEN = /already\s+(exists|been\s+taken)|name\s+is\s+taken/i;
+
+interface FlyApp {
+  name: string;
+  network: string;
+  organization?: { slug?: string };
+}
+
+interface FlyIpAssignment {
+  ip: string;
+}
 
 interface FlyMachineExitEvent {
   exit_code?: number;
@@ -30,6 +39,7 @@ interface FlyMachineExitEvent {
 export interface FlyMachine {
   id: string;
   state: string;
+  checks?: Array<{ name?: string; status?: string; output?: string }>;
   events?: Array<{ request?: { exit_event?: FlyMachineExitEvent } }>;
 }
 
@@ -38,12 +48,19 @@ export interface FlyMachineConfig {
   env: Record<string, string>;
   guest: { cpu_kind: string; cpus: number; memory_mb: number };
   files: Array<{ guest_path: string; raw_value: string }>;
-  services: never[];
+  services: Array<{
+    protocol: "tcp";
+    internal_port: number;
+    ports: Array<{ port: number }>;
+    checks: Array<{ type: "tcp"; interval: string; timeout: string; grace_period: string }>;
+  }>;
   init: { exec: string[] };
 }
 
 interface FlyMachinesApi {
-  createApp(appName: string, orgSlug: string): Promise<void>;
+  ensureApp(appName: string, orgSlug: string): Promise<void>;
+  ensurePrivateIngress(appName: string): Promise<void>;
+  assertOwnedApp(appName: string, orgSlug: string): Promise<boolean>;
   deleteApp(appName: string): Promise<void>;
   listMachines(appName: string): Promise<FlyMachine[]>;
   createMachine(appName: string, input: { region: string; config: FlyMachineConfig }): Promise<FlyMachine>;
@@ -83,11 +100,46 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
   const app = (appName: string): string => `/apps/${encodeURIComponent(appName)}`;
   const machine = (appName: string, machineId: string): string =>
     `${app(appName)}/machines/${encodeURIComponent(machineId)}`;
+  const getApp = async (appName: string): Promise<FlyApp | null> => {
+    const r = await request("GET", app(appName));
+    if (r.status === 404) return null;
+    if (!r.ok) throw failure(`read app ${appName}`, r);
+    return parse<FlyApp>(`read app ${appName}`, r);
+  };
+  const assertOwned = (appName: string, orgSlug: string, found: FlyApp): void => {
+    if (found.name !== appName || found.organization?.slug !== orgSlug || found.network !== appName) {
+      throw new Error(
+        `fly app ${appName} already exists but is not the isolated app owned by this deployment; choose another FLY_DEPLOY_APP_PREFIX`,
+      );
+    }
+  };
   return {
-    async createApp(appName, orgSlug): Promise<void> {
-      const r = await request("POST", "/apps", { app_name: appName, org_slug: orgSlug });
-      if (r.ok || r.status === 409 || APP_ALREADY_TAKEN.test(r.text)) return;
-      throw failure(`create app ${appName}`, r);
+    async ensureApp(appName, orgSlug): Promise<void> {
+      const r = await request("POST", "/apps", { app_name: appName, org_slug: orgSlug, network: appName });
+      if (r.ok) return;
+      if (r.status !== 409 && r.status !== 422 && !APP_ALREADY_TAKEN.test(r.text)) {
+        throw failure(`create app ${appName}`, r);
+      }
+      const found = await getApp(appName);
+      if (!found) throw failure(`create app ${appName}`, r);
+      assertOwned(appName, orgSlug, found);
+    },
+    async ensurePrivateIngress(appName): Promise<void> {
+      const listed = await request("GET", `${app(appName)}/ip_assignments`);
+      if (!listed.ok) throw failure(`list IP assignments for ${appName}`, listed);
+      const ips = parse<{ ips: FlyIpAssignment[] }>(`list IP assignments for ${appName}`, listed).ips;
+      if (ips.some((entry) => !entry.ip.toLowerCase().startsWith("fdaa:"))) {
+        throw new Error(`fly app ${appName} has a public IP assignment; refusing to expose the published app`);
+      }
+      if (ips.length) return;
+      const assigned = await request("POST", `${app(appName)}/ip_assignments`, { type: "private_v6" });
+      if (!assigned.ok) throw failure(`allocate private ingress for ${appName}`, assigned);
+    },
+    async assertOwnedApp(appName, orgSlug): Promise<boolean> {
+      const found = await getApp(appName);
+      if (!found) return false;
+      assertOwned(appName, orgSlug, found);
+      return true;
     },
     async deleteApp(appName): Promise<void> {
       const r = await request("DELETE", app(appName));
@@ -119,20 +171,6 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
   };
 }
 
-function tcpReachable(host: string, port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = connect({ host, port });
-    const settle = (reachable: boolean): void => {
-      socket.destroy();
-      resolve(reachable);
-    };
-    socket.setTimeout(DIAL_TIMEOUT_MS);
-    socket.once("connect", () => settle(true));
-    socket.once("timeout", () => settle(false));
-    socket.once("error", () => settle(false));
-  });
-}
-
 function exitDetail(machine: FlyMachine | null): string {
   const exit = machine?.events?.find((e) => e.request?.exit_event)?.request?.exit_event;
   if (!exit) return "; the machine reported no exit event";
@@ -151,7 +189,6 @@ export interface FlyDeployProviderOptions {
   appReadyTimeoutMs?: number;
   pollIntervalMs?: number;
   fetchImpl?: typeof fetch;
-  dialPort?: (host: string, port: number) => Promise<boolean>;
 }
 
 export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployProvider {
@@ -160,7 +197,6 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     token: opts.token,
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
   });
-  const dialPort = opts.dialPort ?? tcpReachable;
   const machineStartTimeoutMs = opts.machineStartTimeoutMs ?? MACHINE_START_TIMEOUT_MS;
   const appReadyTimeoutMs = opts.appReadyTimeoutMs ?? APP_READY_TIMEOUT_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
@@ -171,12 +207,21 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     if (!opts.appPrefix) throw new Error("FLY_DEPLOY_APP_PREFIX not set (DEPLOY_PROVIDER=fly)");
     if (!opts.baseImage) throw new Error("FLY_DEPLOY_BASE_IMAGE not set (DEPLOY_PROVIDER=fly)");
     if (!opts.org) throw new Error("FLY_ORG not set (DEPLOY_PROVIDER=fly)");
+    if (opts.appPrefix.length > 26 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(opts.appPrefix)) {
+      throw new Error("FLY_DEPLOY_APP_PREFIX must be a lowercase DNS label no longer than 26 characters");
+    }
   }
 
-  const appNameFor = (d: Deployment): string => `${opts.appPrefix}-${d.id.slice(0, 12)}`;
+  const appNameFor = (d: Deployment): string => `${opts.appPrefix}-${d.id}`;
 
   async function bundleBase64(version: DeploymentVersion): Promise<string> {
     const tree = await readTree(version.snapshotDir, { tolerateMissing: true });
+    const sourceBytes = tree.reduce((total, file) => total + file.data.byteLength, 0);
+    if (sourceBytes > MAX_BUNDLE_SOURCE_BYTES) {
+      throw new Error(
+        `the app source is too large for the Fly deploy provider: ${sourceBytes} bytes, maximum ${MAX_BUNDLE_SOURCE_BYTES} bytes`,
+      );
+    }
     const encoded = gzipSync(await makeTar(tree)).toString("base64");
     if (encoded.length > MAX_BUNDLE_BASE64_BYTES) {
       throw new Error(
@@ -192,7 +237,14 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     env: { ...version.env, PORT: String(APP_PORT) },
     guest: GUEST,
     files: [{ guest_path: BUNDLE_GUEST_PATH, raw_value: bundle }],
-    services: [],
+    services: [
+      {
+        protocol: "tcp",
+        internal_port: APP_PORT,
+        ports: [{ port: APP_PORT }],
+        checks: [{ type: "tcp", interval: "2s", timeout: "1s", grace_period: "1s" }],
+      },
+    ],
     init: {
       exec: [
         "/bin/sh",
@@ -218,13 +270,15 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
 
   async function waitAppReady(appName: string, machineId: string): Promise<void> {
     const deadline = Date.now() + appReadyTimeoutMs;
+    let machine: FlyMachine | null = null;
     while (Date.now() < deadline) {
-      if (await dialPort(`${appName}.internal`, APP_PORT)) return;
+      machine = await api.getMachine(appName, machineId);
+      if (machine?.state === "started" && machine.checks?.some((check) => check.status === "passing")) return;
       await sleep(pollIntervalMs);
     }
-    const machine = await api
+    machine = await api
       .getMachine(appName, machineId)
-      .catch(swallowAs<FlyMachine | null>("fly-deploy: read machine after readiness timeout", null));
+      .catch(swallowAs<FlyMachine | null>("fly-deploy: read machine after readiness timeout", machine));
     const why =
       machine && machine.state !== "started"
         ? `the version's entrypoint exited without binding port ${APP_PORT} (fly machine ${machineId} is ${machine.state})`
@@ -239,17 +293,26 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       ensureConfigured();
       const appName = appNameFor(d);
       const bundle = await bundleBase64(version);
-      await api.createApp(appName, opts.org);
-      for (const stale of await api.listMachines(appName)) await api.destroyMachine(appName, stale.id);
+      await api.ensureApp(appName, opts.org);
+      await api.ensurePrivateIngress(appName);
+      const stale = await api.listMachines(appName);
       const machine = await api.createMachine(appName, { region, config: machineConfig(version, bundle) });
-      await waitStarted(appName, machine.id);
-      await waitAppReady(appName, machine.id);
-      return { host: `${appName}.internal`, port: APP_PORT };
+      try {
+        await waitStarted(appName, machine.id);
+        await waitAppReady(appName, machine.id);
+      } catch (error) {
+        await api.destroyMachine(appName, machine.id).catch(() => {});
+        throw error;
+      }
+      for (const previous of stale) await api.destroyMachine(appName, previous.id);
+      return { host: `${appName}.flycast`, port: APP_PORT };
     },
 
     async destroy(d: Deployment): Promise<void> {
       ensureConfigured();
-      await api.deleteApp(appNameFor(d));
+      const appName = appNameFor(d);
+      if (!(await api.assertOwnedApp(appName, opts.org))) return;
+      await api.deleteApp(appName);
     },
   };
 }

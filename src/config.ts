@@ -690,8 +690,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL ?? publicApiUrl;
-  const deployProvider: "aws" | "docker" | "fly" =
-    env.DEPLOY_PROVIDER === "aws" || env.DEPLOY_PROVIDER === "fly" ? env.DEPLOY_PROVIDER : "docker";
+  const deployProvider = env.DEPLOY_PROVIDER ?? "docker";
+  if (deployProvider !== "aws" && deployProvider !== "docker" && deployProvider !== "fly") {
+    throw new Error(
+      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, or fly)`,
+    );
+  }
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
   if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
