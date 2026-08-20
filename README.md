@@ -4,6 +4,10 @@ A multiplayer agent harness for work. In Slack and on the web.
 
 ![The QM web UI: two concurrent sessions, a sidebar of personal files, crons, keychain, deploys, memory, and skills](./docs/screenshots/web-ui-hero.png)
 
+## Setup
+
+Tell your coding agent of choice `Let's deploy https://github.com/yc-software/qm`. From here, it should follow the deployment guide in this repo. 
+
 ## What is QM?
 
 Most agents are designed like personal assistants. You can make one work for a whole
