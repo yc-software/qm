@@ -80,12 +80,6 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         message: "threadTs threads a text post — react/delete already name their target message ts",
       });
     }
-    if (typeof b.recipient === "string") {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "threadTs applies to a channel or group DM post — a DM to a person has no threads",
-      });
-    }
   }
   const hasNamedTarget =
     typeof b.recipient === "string" || typeof b.channel === "string" || Array.isArray(b.participants);

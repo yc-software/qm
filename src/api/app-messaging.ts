@@ -467,12 +467,16 @@ export function createMessagingMethods(
         if (r.group) extra.group = r.group;
       }
       if (input.threadTs) {
-        if (baseDestination.type !== "slack" && baseDestination.type !== "group") {
+        if (
+          baseDestination.type !== "slack" &&
+          baseDestination.type !== "group" &&
+          baseDestination.type !== "principal"
+        ) {
           return {
             ok: false,
             status: 400,
             error: "bad_request",
-            message: "threadTs threads a channel or group DM post — a DM to a person has no threads",
+            message: "threadTs requires a Slack channel, group DM, or person DM",
           };
         }
         baseDestination = withThread(baseDestination, input.threadTs);

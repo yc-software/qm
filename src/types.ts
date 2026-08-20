@@ -166,6 +166,7 @@ export interface Destination {
   target: string;
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
+  threadTs?: string;
   editRef?: string;
   taskList?: Array<{
     id: string;

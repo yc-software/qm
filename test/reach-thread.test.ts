@@ -62,11 +62,14 @@ describe("POST /v1/reach with threadTs", () => {
     assert.equal(d!.destination.target, "C-eng");
   });
 
-  it("rejects threadTs on a DM to a person", async () => {
-    const res = await post({ recipient: "Alice", text: "hi", threadTs: TS });
-    assert.equal(res.status, 400);
-    const body = (await res.json()) as { message: string };
-    assert.match(body.message, /has no threads/);
+  it("threads a DM to a person without changing its principal target", async () => {
+    const res = await post({ recipient: "Alice", text: "in the DM thread", threadTs: TS });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { deliveryId: string };
+    const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === body.deliveryId);
+    assert.ok(d, "delivery enqueued for the principal surface");
+    assert.equal(d!.destination.target, "U-alice");
+    assert.equal(d!.destination.threadTs, TS);
   });
 
   it("rejects a malformed threadTs", async () => {

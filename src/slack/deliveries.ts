@@ -233,18 +233,19 @@ export function createDeliveryPoller(deps: {
             const text = toSlackMrkdwn(stripReactionDirectives(d.text));
             if (!text.trim() && !d.attachments?.length) return undefined;
             const channel = await openConversationFor(client, [d.destination.target]);
+            const threadTs = d.destination.threadTs;
             if (text.trim()) {
               const posted = await client.chat.postMessage(
-                slackReplyArgs(channel, text, undefined, { unfurlLinks: d.destination.unfurlLinks }),
+                slackReplyArgs(channel, text, threadTs, { unfurlLinks: d.destination.unfurlLinks }),
               );
-              mirrorSelfPost(channel, posted?.ts, text, { kind: "dm" });
+              mirrorSelfPost(channel, posted?.ts, text, { kind: "dm", sub: threadTs });
             }
             if (d.attachments?.length) {
               try {
                 await uploadAttachments(
                   client,
                   channel,
-                  undefined,
+                  threadTs,
                   d.attachments,
                   fetchBlobFromCore,
                   fetchFileArtifactFromCore,
@@ -255,11 +256,11 @@ export function createDeliveryPoller(deps: {
                   (err as Error).message,
                 );
                 await client.chat
-                  .postMessage(slackReplyArgs(channel, uploadFailureNote(err), undefined))
+                  .postMessage(slackReplyArgs(channel, uploadFailureNote(err), threadTs))
                   .catch(swallowAs("slack: post principal upload-failure note", undefined));
               }
             }
-            return { recipientThreadRef: dmThreadRef(channel) };
+            return { recipientThreadRef: dmThreadRef(channel, threadTs) };
           } finally {
             slackApiMs = Math.round(performance.now() - tPost);
           }
