@@ -4,7 +4,7 @@ import { marked } from "marked";
 import katex from "katex";
 import { JSDOM } from "jsdom";
 import createDOMPurify from "dompurify";
-import { MARKDOWN_SANITIZE_CONFIG } from "../src/markdown-sanitize.ts";
+import { MARKDOWN_SANITIZE_CONFIG, rewriteSandboxFileLinks } from "../src/markdown-sanitize.ts";
 
 const DOMPurify = createDOMPurify(new JSDOM("").window as unknown as Window & typeof globalThis);
 const sanitize = (html: string): string => DOMPurify.sanitize(html, MARKDOWN_SANITIZE_CONFIG) as string;
@@ -12,7 +12,7 @@ const sanitize = (html: string): string => DOMPurify.sanitize(html, MARKDOWN_SAN
 const renderer = new marked.Renderer();
 const originalLink = renderer.link.bind(renderer);
 renderer.link = (token) => originalLink(token).replace("<a ", '<a target="_blank" rel="noopener noreferrer" ');
-const render = (md: string): string => sanitize(marked.parse(md, { async: false, renderer }));
+const render = (md: string): string => sanitize(rewriteSandboxFileLinks(marked.parse(md, { async: false, renderer })));
 
 test("strips every script-bearing vector marked would otherwise pass through", () => {
   const vectors: Array<[string, string]> = [
@@ -32,6 +32,11 @@ test("strips every script-bearing vector marked would otherwise pass through", (
       `${name} leaked: ${out}`,
     );
   }
+});
+
+test("turns sandbox workspace links into real file-library downloads", () => {
+  const out = render("[download](sandbox:/home/sprite/workspace/reports/interview-list.csv)");
+  assert.match(out, /href="\/api\/files\/by-name\/content\?name=interview-list\.csv"/);
 });
 
 test("preserves ordinary links (target=_blank), code fences, and inline PNG images", () => {

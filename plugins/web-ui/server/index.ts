@@ -1274,6 +1274,43 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/files/by-name/content",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const name = url.searchParams.get("name")?.trim();
+      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
+      let cursor: string | undefined;
+      let match: { id: string; createdAt: number } | undefined;
+      for (let page = 0; page < 50; page++) {
+        const qs = new URLSearchParams({ viewer: user, limit: "200" });
+        if (cursor) qs.set("cursor", cursor);
+        const listed = await coreFetch("GET", `/v1/files?${qs.toString()}`);
+        if (listed.status !== 200) return relay(res, listed);
+        let body: {
+          owned?: Array<{ id?: string; name?: string; createdAt?: number; openable?: boolean }>;
+          shared?: Array<{ id?: string; name?: string; createdAt?: number; openable?: boolean }>;
+          nextCursor?: string;
+        };
+        try {
+          body = JSON.parse(listed.text) as typeof body;
+        } catch {
+          return json(res, 502, { error: "upstream_error" });
+        }
+        for (const file of [...(body.owned ?? []), ...(body.shared ?? [])]) {
+          if (file.name !== name || file.openable === false || typeof file.id !== "string") continue;
+          const createdAt = typeof file.createdAt === "number" ? file.createdAt : 0;
+          if (!match || createdAt > match.createdAt) match = { id: file.id, createdAt };
+        }
+        cursor = body.nextCursor;
+        if (!cursor) break;
+      }
+      if (!match) return json(res, 404, { error: "not_found" });
+      res.writeHead(302, { location: `/api/files/${encodeURIComponent(match.id)}/content` });
+      return res.end();
+    },
+  },
+  {
+    method: "GET",
     path: "/api/files/:id/content",
     handle: async (c) => {
       const { res, user } = c;
