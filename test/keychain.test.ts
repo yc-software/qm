@@ -39,6 +39,57 @@ const GH = {
   accountLabel: "AliceBell",
 };
 
+test("materializeStandingForUser returns only that person's standing grants (#550)", async () => {
+  const k = kc();
+  await k.save({ ...GH, ownerId: "alice", envKey: "ALICE_TOKEN" });
+  await k.save({ ...GH, ownerId: "bob", envKey: "BOB_TOKEN", accountLabel: "BobBell" });
+  const aliceCred = (await k.listByOwner("alice"))[0]!;
+  const bobCred = (await k.listByOwner("bob"))[0]!;
+  const scope = scopeId("channel", "C1");
+  await k.createGrant({
+    credentialId: aliceCred.id,
+    ownerId: "alice",
+    audienceScopeId: scope,
+    mode: "standing",
+    purpose: "ssh session",
+  });
+  await k.createGrant({
+    credentialId: bobCred.id,
+    ownerId: "bob",
+    audienceScopeId: scope,
+    mode: "standing",
+    purpose: "ssh session",
+  });
+
+  // A human session materializes exactly ONE person's grants — the sandbox
+  // is shared, but the interactive session's credentials are the signer's
+  // own, never a neighbor's (#550).
+  const aliceOnly = await k.materializeStandingForUser("alice", scope);
+  assert.equal(aliceOnly.length, 1);
+  assert.match(aliceOnly[0]!.env[0]!.key, /ALICE_TOKEN/);
+  const bobOnly = await k.materializeStandingForUser("bob", scope);
+  assert.equal(bobOnly.length, 1);
+  assert.match(bobOnly[0]!.env[0]!.key, /BOB_TOKEN/);
+  // Someone with no grants toward the scope gets nothing — no fallthrough
+  // to the whole standing set.
+  assert.equal((await k.materializeStandingForUser("carol", scope)).length, 0);
+});
+
+test("materializeStandingForUser excludes once-mode and expired grants", async () => {
+  const k = kc();
+  await k.save({ ...GH, ownerId: "alice", envKey: "ALICE_TOKEN" });
+  const cred = (await k.listByOwner("alice"))[0]!;
+  const scope = scopeId("channel", "C9");
+  await k.createGrant({
+    credentialId: cred.id,
+    ownerId: "alice",
+    audienceScopeId: scope,
+    mode: "once",
+    purpose: "one shot",
+  });
+  assert.equal((await k.materializeStandingForUser("alice", scope)).length, 0);
+});
+
 test("save → list returns metadata only (no secret material), and re-save upserts the same slot", async () => {
   const k = kc();
   const meta = await k.save(GH);
