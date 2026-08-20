@@ -466,6 +466,7 @@ export function createTurnHandler(deps: {
       result = await callCore(
         { ...turn, intakePreambleMs: Math.round(tSubmit - t0), clientSentAt: Date.now() },
         {
+          deferOkAck: true,
           onQueued: (runId) => {
             queuedRunId = runId;
             inFlightRunByThread.set(threadRef, runId);
@@ -544,30 +545,45 @@ export function createTurnHandler(deps: {
       const postText = reply;
       const tDeliverStart = performance.now();
       let finalizedTaskList = false;
-      if (result.attachments?.length) {
-        let uploadError: unknown;
-        try {
-          await uploadAttachments(
-            client,
-            inc.channel,
-            replyThreadTs,
-            result.attachments,
-            fetchBlobFromCore,
-            fetchFileArtifactFromCore,
-          );
-        } catch (err) {
-          uploadError = err;
-          console.error("[slack-plugin] file upload failed:", (err as Error).message);
+      try {
+        if (result.attachments?.length) {
+          let uploadError: unknown;
+          try {
+            await uploadAttachments(
+              client,
+              inc.channel,
+              replyThreadTs,
+              result.attachments,
+              fetchBlobFromCore,
+              fetchFileArtifactFromCore,
+            );
+          } catch (err) {
+            uploadError = err;
+            console.error("[slack-plugin] file upload failed:", (err as Error).message);
+          }
+          await settleAck();
+          if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
+          if (postText && !finalizedTaskList) await postReply(postText);
+          if (uploadError) await postReply(uploadFailureNote(uploadError));
+        } else {
+          await settleAck();
+          if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
+          if (postText && !finalizedTaskList) await postReply(postText);
         }
-        await settleAck();
-        if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
-        if (uploadError) await postReply(uploadFailureNote(uploadError));
-      } else {
-        await settleAck();
-        if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
+      } catch (err) {
+        // The run finished but the reply never reached Slack. Do NOT ack the run's recovery
+        // delivery — release the pin so the delivery poller redelivers it after the grace period.
+        if (queuedRunId) {
+          console.error(
+            `[slack-plugin] reply post failed after run ${queuedRunId} finished (ch=${inc.channel} ts=${inc.ts}): ${(err as Error).message} — leaving delivery run:${queuedRunId} for the recovery poller`,
+          );
+          inFlightRuns.delete(queuedRunId);
+          return;
+        }
+        throw err;
       }
+      // The reply is on Slack (or there was nothing to post) — now settle the recovery delivery.
+      if (queuedRunId) ackRunDeliveryWithRetry(queuedRunId);
       if (queuedRunId) {
         reportTurnMetrics(queuedRunId, {
           deliverMs: Math.round(performance.now() - tDeliverStart),

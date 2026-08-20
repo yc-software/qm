@@ -294,6 +294,7 @@ export function deliveryCandidatesFor(
 
 const DELIVERY_MAX_ATTEMPTS = 5;
 const DELIVERY_MAX_TRACKED = 1000;
+const DELIVERY_GIVEUP_RETRY_MS = 5 * 60_000;
 
 export interface DeliveryTracker {
   givenUp(id: string): boolean;
@@ -311,15 +312,25 @@ function capMap<K, V>(map: Map<K, V>, max: number): void {
   }
 }
 
-export function createDeliveryTracker(opts: { maxAttempts?: number; maxTracked?: number } = {}): DeliveryTracker {
+export function createDeliveryTracker(
+  opts: { maxAttempts?: number; maxTracked?: number; giveUpRetryMs?: number } = {},
+): DeliveryTracker {
   const maxAttempts = opts.maxAttempts ?? DELIVERY_MAX_ATTEMPTS;
   const maxTracked = opts.maxTracked ?? DELIVERY_MAX_TRACKED;
+  const giveUpRetryMs = opts.giveUpRetryMs ?? DELIVERY_GIVEUP_RETRY_MS;
   const failures = new Map<string, number>();
   const posted = new Map<string, { ackBody?: unknown }>();
-  const dead = new Map<string, true>();
+  // A "dead" delivery is only benched, not abandoned: after giveUpRetryMs it becomes
+  // eligible again, so a transient Slack outage can't silently strand a pending row forever.
+  const dead = new Map<string, number>();
   return {
     givenUp(id) {
-      return dead.has(id);
+      const until = dead.get(id);
+      if (until === undefined) return false;
+      if (Date.now() < until) return true;
+      dead.delete(id);
+      console.error(`[slack-plugin] delivery ${id} give-up window expired — retrying delivery`);
+      return false;
     },
     posted(id) {
       return posted.get(id);
@@ -331,7 +342,7 @@ export function createDeliveryTracker(opts: { maxAttempts?: number; maxTracked?:
         if (oldest === undefined) break;
         posted.delete(oldest);
         failures.delete(oldest);
-        dead.set(oldest, true);
+        dead.set(oldest, Date.now() + giveUpRetryMs);
         capMap(dead, maxTracked);
       }
     },
@@ -340,7 +351,7 @@ export function createDeliveryTracker(opts: { maxAttempts?: number; maxTracked?:
       if (count >= maxAttempts) {
         failures.delete(id);
         posted.delete(id);
-        dead.set(id, true);
+        dead.set(id, Date.now() + giveUpRetryMs);
         capMap(dead, maxTracked);
         return true;
       }

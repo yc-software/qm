@@ -13,6 +13,10 @@ interface CoreCallHooks {
   onFirstBlock?: (text: string) => void;
   onSurfacePosted?: () => void;
   onTasks?: (tasks: RunTaskView[]) => void;
+  /** The caller posts the ok reply itself and settles the run's recovery delivery afterward:
+   *  ack on a successful post, release on failure so the delivery poller can redeliver.
+   *  Without this, an ok run is acked here — BEFORE the reply reaches Slack. */
+  deferOkAck?: boolean;
 }
 
 export interface CoreBridge {
@@ -152,7 +156,10 @@ export function createCoreBridge(core: SlackCoreClient): CoreBridge {
       return result;
     }
     if (result && (result.status === "ok" || result.status === "refused" || result.status === "failed")) {
-      ackRunDeliveryWithRetry(runId);
+      // Ack marks the run's recovery delivery as delivered. For ok results the reply text has
+      // NOT been posted to Slack yet — acking here erases the poller's ability to recover a
+      // failed post. Callers that post the reply themselves pass deferOkAck and settle after.
+      if (!(result.status === "ok" && hooks.deferOkAck)) ackRunDeliveryWithRetry(runId);
     } else {
       inFlightRuns.delete(runId);
     }
