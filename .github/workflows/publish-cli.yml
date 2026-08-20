@@ -92,6 +92,18 @@ jobs:
           else
             npm publish --provenance --access public
           fi
+          # The provenance flag only produces an attestation when the run's
+          # OIDC token satisfies npm's requirements; every other failure mode
+          # publishes cleanly WITHOUT one, silently downgrading trust for
+          # attestation-checking installers (aube/pnpm trust policies) — exactly
+          # the 0.1.5 incident (#591). Verify the attestation actually landed
+          # and fail loudly otherwise.
+          attestations=$(npm view "@yc-software/qm@$version" attestations --json 2>/dev/null || echo '[]')
+          if [ "$attestations" = 'null' ] || [ "$attestations" = '[]' ] || [ -z "$attestations" ]; then
+            echo "::error::@yc-software/qm@$version published without a provenance attestation; trust-checking installers will refuse or downgrade it. Check the run's id-token permission and republish a new version."
+            exit 1
+          fi
+          echo "@yc-software/qm@$version published with provenance attestation"
           if [ "$version" = 0.1.5 ]; then
             npm deprecate @yc-software/qm@1.0.5 "Published with an incorrect version number; use 0.1.5."
           fi
