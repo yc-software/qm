@@ -296,13 +296,15 @@ test("apply: a failed stale cleanup leaves the old machine cordoned, never mixed
 });
 
 test("apply: a failed cutover restores the old route and removes the replacement", async () => {
-  const fake = fakeFly({ existingMachines: ["machine-old"], uncordonStatus: 500 });
-  await assert.rejects(
-    provider(fake.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
-    /uncordon machine machine-1.*http 500/,
-  );
-  assert.deepEqual([...fake.machines.keys()], ["machine-old"]);
-  assert.deepEqual([...fake.cordoned], []);
+  for (const status of [404, 500]) {
+    const fake = fakeFly({ existingMachines: ["machine-old"], uncordonStatus: status });
+    await assert.rejects(
+      provider(fake.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      new RegExp(`uncordon machine machine-1.*http ${status}`),
+    );
+    assert.deepEqual([...fake.machines.keys()], ["machine-old"]);
+    assert.deepEqual([...fake.cordoned], []);
+  }
 });
 
 test("apply: an app bundle over the machine-file cap is refused with its actual and maximum size", async () => {

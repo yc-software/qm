@@ -170,7 +170,7 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
     async setCordon(appName, machineId, cordoned): Promise<void> {
       const action = cordoned ? "cordon" : "uncordon";
       const r = await request("POST", `${machine(appName, machineId)}/${action}`);
-      if (r.ok || r.status === 404) return;
+      if (r.ok || (cordoned && r.status === 404)) return;
       throw failure(`${action} machine ${machineId}`, r);
     },
     async destroyMachine(appName, machineId): Promise<void> {
