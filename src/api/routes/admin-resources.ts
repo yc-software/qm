@@ -92,7 +92,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     id: "security-posture",
     kind: "enum",
     target: "any",
-    label: "Harness security posture. The org value is a minimum; narrower scopes may tighten it but cannot weaken it.",
+    // The lattice is not per-control: strict does not retain auto's inbound
+    // screening -- it swaps content screening for approval-gated tools, and
+    // dangerous resolves back to auto as the floor. The old label's blanket
+    // "cannot weaken it" read as a per-control guarantee and led an operator
+    // tightening a scope to believe they had kept screening when they had
+    // swapped it away (#574).
+    label:
+      "Harness security posture. The org value is a floor: auto screens inbound content with no tool approvals; strict trades that screening for approval-gated tools (every harness tool pauses for a human); dangerous disables screening. Narrower scopes may move to a stricter mode but not below the org floor. Note: moving auto -> strict turns inbound content screening OFF in exchange for tool approvals.",
     readKey: "securityPosture",
     enumValues: SECURITY_POSTURES,
     get: (deps, scope) => deps.config!.getSecurityPostureDurable(scope),
