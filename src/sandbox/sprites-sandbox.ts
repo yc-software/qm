@@ -24,6 +24,7 @@ import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { CapabilityUnsupportedError } from "./sandbox.ts";
 import type {
   AgentComputerProfile,
   ExecOptions,
@@ -33,6 +34,7 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
+import { directRequest, type DirectExecOptions, type ScopedCommand } from "./scoped-exec.ts";
 
 const HOME_DIR = "/home/sprite";
 const WORKSPACE_BASENAME = "workspace";
@@ -45,11 +47,132 @@ const RESTART_TIMEOUT_MS = 60_000;
 const CHECK_TIMEOUT_MS = 30_000;
 const GUEST_PROBE_TIMEOUT_SEC = 15;
 const DEFAULT_SPRITES_BASE_URL = "https://api.sprites.dev";
+const DIRECT_HELPER_RESPONSE_MAX_BYTES = 256 * 1024 * 1024;
+export const DIRECT_HELPER_EXECUTABLE = "/usr/local/bin/node";
+export const DIRECT_HELPER_SCRIPT = String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const childProcess = require("node:child_process");
+const dynamicKeys = new Set(["AGENT_API_URL", "AGENT_API_TOKEN", "AGENT_OAUTH_CONSENT_TOKEN", "AGENT_CREDENTIAL_TOKEN", "AGENT_OUTBOX"]);
+const runtimePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const inputCap = 16 * 1024 * 1024;
+const outputCap = 64 * 1024 * 1024;
+const requestCap = 128 * 1024 * 1024;
+const resultCap = 256 * 1024 * 1024;
+const dynamicKey = (key) => dynamicKeys.has(key);
+const canonical = (value) => typeof value === "string" && value.startsWith("/") && value !== "/" && !value.endsWith("/") && !value.includes("\\") && !value.includes("\0") && value.split("/").slice(1).every((part) => part.length > 0 && part !== "." && part !== "..");
+const bounded = (value, fallback, cap) => {
+  const result = value === undefined ? fallback : Number(value);
+  return Number.isSafeInteger(result) && result >= 0 && result <= cap ? result : null;
+};
+const output = (value) => {
+  const encoded = JSON.stringify(value);
+  process.stdout.write(encoded.length > resultCap ? JSON.stringify({ error: "direct helper result exceeds limit" }) : encoded);
+};
+const run = (raw) => {
+  let request;
+  try {
+    request = JSON.parse(raw);
+  } catch {
+    return output({ error: "invalid direct request" });
+  }
+  if (!request || !Array.isArray(request.argv) || request.argv.length === 0 || request.argv.length > 4096 || request.argv.some((arg) => typeof arg !== "string" || arg.includes("\0")) || !canonical(request.argv[0])) return output({ error: "invalid direct argv" });
+  if (!canonical(request.rootDir) || !canonical(request.cwd)) return output({ error: "invalid direct path" });
+  const root = path.posix.normalize(request.rootDir);
+  const cwd = path.posix.normalize(request.cwd);
+  const relative = path.posix.relative(root, cwd);
+  if (relative === ".." || relative.startsWith("../") || path.posix.isAbsolute(relative) || request.cwd.split("/").includes("..")) return output({ error: "direct cwd escapes rootDir" });
+  const dynamicEnvKeys = request.dynamicEnvKeys === undefined ? [] : request.dynamicEnvKeys;
+  if (!Array.isArray(dynamicEnvKeys) || dynamicEnvKeys.some((key) => typeof key !== "string" || !dynamicKey(key)) || new Set(dynamicEnvKeys).size !== dynamicEnvKeys.length) return output({ error: "invalid dynamic env keys" });
+  const allowedEnvKeys = request.allowedEnvKeys === undefined ? [] : request.allowedEnvKeys;
+  if (!Array.isArray(allowedEnvKeys) || allowedEnvKeys.some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || key === "PATH" || key.startsWith("AGENT_")) || new Set(allowedEnvKeys).size !== allowedEnvKeys.length) return output({ error: "invalid allowed env keys" });
+  if (!request.env || typeof request.env !== "object" || Array.isArray(request.env)) return output({ error: "invalid direct env" });
+  for (const [key, value] of Object.entries(request.env)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || (key === "PATH" && value !== runtimePath) || (key !== "PATH" && !dynamicEnvKeys.includes(key) && !allowedEnvKeys.includes(key)) || (key.startsWith("AGENT_") && !dynamicEnvKeys.includes(key)) || typeof value !== "string" || value.includes("\0")) return output({ error: "invalid direct env" });
+  }
+  const timeoutMs = bounded(request.timeoutMs, 600000, 86400000);
+  const stdoutMaxBytes = bounded(request.stdoutMaxBytes, 4 * 1024 * 1024, outputCap);
+  const stderrMaxBytes = bounded(request.stderrMaxBytes, 4 * 1024 * 1024, outputCap);
+  if (timeoutMs === null || stdoutMaxBytes === null || stderrMaxBytes === null) return output({ error: "invalid direct limits" });
+  let stdin = Buffer.alloc(0);
+  if (request.stdinB64 !== undefined) {
+    if (typeof request.stdinB64 !== "string") return output({ error: "invalid direct stdin" });
+    stdin = Buffer.from(request.stdinB64, "base64");
+    if (stdin.length > inputCap) return output({ error: "direct stdin exceeds limit" });
+  }
+  let rootReal;
+  let cwdReal;
+  let executableReal;
+  try {
+    rootReal = fs.realpathSync(root);
+    cwdReal = fs.realpathSync(cwd);
+    executableReal = fs.realpathSync(request.argv[0]);
+    if (cwdReal !== rootReal && !cwdReal.startsWith(rootReal + path.sep)) return output({ error: "direct cwd escapes rootDir" });
+    if (executableReal !== request.argv[0] || !fs.statSync(executableReal).isFile()) return output({ error: "direct executable is not canonical" });
+  } catch {
+    return output({ error: "direct path is not available" });
+  }
+  const stdout = [];
+  const stderr = [];
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  let timedOut = false;
+  let outputLimitExceeded = false;
+  let finished = false;
+  const child = childProcess.spawn(request.argv[0], request.argv.slice(1), { cwd: cwdReal, env: { ...request.env }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+  const killTree = () => {
+    if (finished || !child.pid) return;
+    try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+  };
+  const timer = setTimeout(() => {
+    if (!finished) {
+      timedOut = true;
+      killTree();
+    }
+  }, Math.max(1, timeoutMs));
+  const take = (parts, current, chunk, limit, stream) => {
+    const remaining = Math.max(0, limit - current);
+    if (remaining) parts.push(chunk.subarray(0, remaining));
+    const next = current + chunk.length;
+    if (next > limit) {
+      outputLimitExceeded = true;
+      stream.destroy();
+      killTree();
+    }
+    return next;
+  };
+  child.stdout.on("data", (chunk) => { stdoutBytes = take(stdout, stdoutBytes, chunk, stdoutMaxBytes, child.stdout); });
+  child.stderr.on("data", (chunk) => { stderrBytes = take(stderr, stderrBytes, chunk, stderrMaxBytes, child.stderr); });
+  child.stdin.end(stdin);
+  child.on("error", (error) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    output({ error: "direct helper could not start executable" });
+  });
+  child.on("close", (code, signal) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    const resultCode = timedOut ? 124 : outputLimitExceeded ? 122 : code === null ? 1 : code;
+    output({ stdoutB64: Buffer.concat(stdout).toString("base64"), stderrB64: Buffer.concat(stderr).toString("base64"), code: resultCode, timedOut, outputLimitExceeded, stdoutTruncated: stdoutBytes > stdoutMaxBytes, stderrTruncated: stderrBytes > stderrMaxBytes, signal: signal || undefined });
+  });
+};
+const chunks = [];
+let size = 0;
+process.stdin.on("data", (chunk) => {
+  size += chunk.length;
+  if (size > requestCap) process.exit(400);
+  chunks.push(chunk);
+});
+process.stdin.on("end", () => run(Buffer.concat(chunks).toString("utf8")));
+`;
 
 export interface SpritesClientLike {
   getSprite(name: string): Promise<unknown>;
   createSprite(name: string): Promise<unknown>;
   deleteSprite(name: string): Promise<void>;
+  sprite?(name: string): unknown;
 }
 
 export interface SpritesSandboxOptions {
@@ -86,6 +209,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   const baseUrl = (opts.baseUrl ?? DEFAULT_SPRITES_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
+  const nativeDirect = Boolean(opts.token && typeof fetchImpl === "function");
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
 
@@ -98,6 +222,166 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     rc: number;
     stdout: Buffer;
     stderr: Buffer;
+  }
+
+  async function execDirectNative(
+    name: string,
+    request: {
+      argv: string[];
+      cwd: string;
+      rootDir: string;
+      env: Record<string, string>;
+      allowedEnvKeys: string[];
+      dynamicEnvKeys: string[];
+      stdin?: Uint8Array;
+      timeoutMs: number;
+      stdoutMaxBytes: number;
+      stderrMaxBytes: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<
+    RawExec & {
+      timedOut: boolean;
+      outputLimitExceeded: boolean;
+      stdoutTruncated: boolean;
+      stderrTruncated: boolean;
+      signal?: string;
+    }
+  > {
+    const url = new URL(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec`);
+    for (const arg of [DIRECT_HELPER_EXECUTABLE, "-e", DIRECT_HELPER_SCRIPT]) url.searchParams.append("cmd", arg);
+    url.searchParams.set("path", DIRECT_HELPER_EXECUTABLE);
+    url.searchParams.set("stdin", "true");
+    url.searchParams.set("tty", "false");
+    url.searchParams.set("max_run_after_disconnect", "0s");
+    const payload = Buffer.from(
+      JSON.stringify({
+        argv: request.argv,
+        rootDir: request.rootDir,
+        cwd: request.cwd,
+        env: request.env,
+        allowedEnvKeys: request.allowedEnvKeys,
+        dynamicEnvKeys: request.dynamicEnvKeys,
+        ...(request.stdin ? { stdinB64: Buffer.from(request.stdin).toString("base64") } : {}),
+        timeoutMs: request.timeoutMs,
+        stdoutMaxBytes: request.stdoutMaxBytes,
+        stderrMaxBytes: request.stderrMaxBytes,
+      }),
+    );
+    const timeoutSignal = AbortSignal.timeout(request.timeoutMs + EXIT_GRACE_MS);
+    const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+    let response: Response;
+    try {
+      response = await fetchImpl(url.toString(), {
+        method: "POST",
+        headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/octet-stream" },
+        body: payload,
+        signal: requestSignal,
+      });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      if (timeoutSignal.aborted) {
+        return {
+          rc: 124,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          timedOut: true,
+          outputLimitExceeded: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        };
+      }
+      throw new Error("sprites direct execution request failed", { cause: error });
+    }
+    if (!response.ok || !response.body) throw new Error("sprites direct execution request failed");
+    const timeoutResult = (): RawExec & {
+      timedOut: boolean;
+      outputLimitExceeded: boolean;
+      stdoutTruncated: boolean;
+      stderrTruncated: boolean;
+      signal?: string;
+    } => ({
+      rc: 124,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      timedOut: true,
+      outputLimitExceeded: false,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    });
+    const responseChunks: Buffer[] = [];
+    let responseBytes = 0;
+    const reader = response.body.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value?.length) continue;
+        responseBytes += value.length;
+        if (responseBytes > DIRECT_HELPER_RESPONSE_MAX_BYTES)
+          throw new Error("sprites direct execution response exceeded limit");
+        responseChunks.push(Buffer.from(value));
+      }
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      if (timeoutSignal.aborted) return timeoutResult();
+      throw new Error("sprites direct execution response failed", { cause: error });
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+    const responseBytesAll = Buffer.concat(responseChunks);
+    const stdout: Buffer[] = [];
+    let exitCode = -1;
+    let offset = 0;
+    while (offset < responseBytesAll.length) {
+      const frameType = responseBytesAll[offset++]!;
+      if (frameType === 3) {
+        if (offset >= responseBytesAll.length)
+          throw new Error("sprites direct execution returned an invalid exit frame");
+        exitCode = responseBytesAll[offset++]!;
+        continue;
+      }
+      if (frameType !== 1 && frameType !== 2) throw new Error("sprites direct execution returned an unsupported frame");
+      const start = offset;
+      while (offset < responseBytesAll.length && responseBytesAll[offset]! >= 4) offset++;
+      const frame = responseBytesAll.subarray(start, offset);
+      if (frameType === 1) stdout.push(frame);
+    }
+    if (exitCode < 0) throw new Error("sprites direct execution returned no exit frame");
+    let envelope: {
+      stdoutB64?: string;
+      stderrB64?: string;
+      code?: number;
+      timedOut?: boolean;
+      outputLimitExceeded?: boolean;
+      stdoutTruncated?: boolean;
+      stderrTruncated?: boolean;
+      signal?: string;
+      error?: string;
+    };
+    try {
+      envelope = JSON.parse(Buffer.concat(stdout).toString("utf8")) as typeof envelope;
+    } catch {
+      throw new Error("sprites direct helper returned an invalid result");
+    }
+    if (envelope.error) throw new Error(`sprites direct helper failed: ${envelope.error}`);
+    if (
+      typeof envelope.code !== "number" ||
+      typeof envelope.stdoutB64 !== "string" ||
+      typeof envelope.stderrB64 !== "string"
+    ) {
+      throw new Error("sprites direct helper returned an invalid result");
+    }
+    return {
+      rc: envelope.code,
+      stdout: Buffer.from(envelope.stdoutB64, "base64"),
+      stderr: Buffer.from(envelope.stderrB64, "base64"),
+      timedOut: !!envelope.timedOut,
+      outputLimitExceeded: !!envelope.outputLimitExceeded,
+      stdoutTruncated: !!envelope.stdoutTruncated,
+      stderrTruncated: !!envelope.stderrTruncated,
+      ...(envelope.signal ? { signal: envelope.signal } : {}),
+    };
   }
 
   async function postExec(name: string, argv: string[], timeoutSec: number, body?: Uint8Array): Promise<RawExec> {
@@ -297,6 +581,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     backend: "sprites",
     writablePersistence: "resident_disk",
     processSessions: true,
+    directExecution: nativeDirect,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
       os: "Ubuntu 26.04 LTS — Fly Sprite microVM (auto-sleeps when idle; the whole disk persists)",
@@ -455,6 +740,23 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       } finally {
         signal.removeEventListener("abort", onAbort);
       }
+    },
+
+    async runDirect(handle: SandboxHandle, command: ScopedCommand, execOpts?: DirectExecOptions): Promise<ExecResult> {
+      if (!nativeDirect) throw new CapabilityUnsupportedError(profile.backend, "structured direct execution");
+      const request = directRequest(handle.rootDir, command, execOpts);
+      execOpts?.signal?.throwIfAborted();
+      const result = await execDirectNative(handle.id, request, execOpts?.signal);
+      return {
+        stdout: result.stdout.toString("utf8"),
+        stderr: result.stderr.toString("utf8"),
+        code: result.rc,
+        timedOut: result.timedOut,
+        ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
+        ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
+        ...(result.outputLimitExceeded ? { outputLimitExceeded: true } : {}),
+        ...(result.signal ? { signal: result.signal } : {}),
+      };
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

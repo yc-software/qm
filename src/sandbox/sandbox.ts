@@ -1,4 +1,5 @@
 import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
+import type { DirectExecOptions, ScopedCommand } from "./scoped-exec.ts";
 
 export interface SandboxHandle {
   id: string;
@@ -34,6 +35,7 @@ export interface AgentComputerProfile {
   backend: string;
   writablePersistence: WritablePersistence;
   processSessions: boolean;
+  directExecution?: boolean;
   egressEnforcement?: EgressEnforcement;
   spec?: AgentComputerSpec;
 }
@@ -74,6 +76,10 @@ export interface ExecResult {
   stderr: string;
   code: number;
   timedOut: boolean;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
+  outputLimitExceeded?: boolean;
+  signal?: string;
 }
 
 export interface ExecOptions {
@@ -138,6 +144,7 @@ export interface Sandbox {
   profileFor?(scopeId: string): Promise<AgentComputerProfile>;
   provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;
   run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
+  runDirect?(handle: SandboxHandle, command: ScopedCommand, opts?: DirectExecOptions): Promise<ExecResult>;
   readFile(handle: SandboxHandle, relPath: string): Promise<string | null>;
   writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void>;
   writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void>;
@@ -204,9 +211,14 @@ export function supportsProcessSessions(sandbox: Sandbox): sandbox is ProcessSan
   );
 }
 
+export function supportsDirectExecution(sandbox: Sandbox): sandbox is Sandbox & Required<Pick<Sandbox, "runDirect">> {
+  return sandbox.profile.directExecution === true && typeof sandbox.runDirect === "function";
+}
+
 const SANDBOX_CAPABILITIES: ReadonlyArray<{ label: string; supported: (s: Sandbox) => boolean }> = [
   { label: "process sessions (background work, dev servers)", supported: supportsProcessSessions },
   { label: "home backup (publish, resident-auth capture)", supported: supportsAgentComputerBackup },
+  { label: "structured direct execution", supported: supportsDirectExecution },
 ];
 
 const ENFORCEMENT_RANK: Record<EgressEnforcement, number> = { none: 0, ip_port: 1, domain: 2 };

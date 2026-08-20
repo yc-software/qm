@@ -22,6 +22,7 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
+import { directRequest, type DirectExecOptions, type ScopedCommand } from "./scoped-exec.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import {
   ephemeralCredLinkPaths,
@@ -305,6 +306,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     backend: "aws-microvm",
     writablePersistence: "snapshot_to_workspace",
     processSessions: true,
+    directExecution: true,
     egressEnforcement: "none",
     spec: {
       os: "Amazon Linux 2023, glibc",
@@ -416,6 +418,23 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         .join("; ");
       const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
       return execRaw(handle.id, script, timeoutSec);
+    },
+
+    async runDirect(handle: SandboxHandle, command: ScopedCommand, execOpts?: DirectExecOptions): Promise<ExecResult> {
+      const request = directRequest(handle.rootDir, command, execOpts);
+      execOpts?.signal?.throwIfAborted();
+      await ensureRunning(handle.id);
+      const result = await client.execvRaw(handle.id, await resolveEndpoint(handle.id), request, execOpts?.signal);
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        code: result.code,
+        timedOut: result.timedOut,
+        ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
+        ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
+        ...(result.outputLimitExceeded ? { outputLimitExceeded: true } : {}),
+        ...(result.signal ? { signal: result.signal } : {}),
+      };
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

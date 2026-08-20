@@ -19,8 +19,17 @@ export interface DeploymentLayerRuntime {
   hints: string[];
   credentialPaths: ToolCredentialPath[];
   splitEnvTemplates: Record<string, string>[];
+  commandEnvByExecutable: Record<string, string[]>;
   commandRules: CommandRule[];
+  directTools: DirectLayerTool[];
   brokeredTools: BrokeredLayerTool[];
+}
+
+interface DirectLayerTool {
+  service: string;
+  binary: string;
+  roots: string[];
+  directOnly: boolean;
 }
 
 export interface BrokeredLayerTool {
@@ -29,6 +38,14 @@ export interface BrokeredLayerTool {
   roots: string[];
   broker: ToolCredentialBroker;
 }
+
+const AWS_BROKER_COMMAND_ENV = [
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_REGION",
+  "AWS_DEFAULT_REGION",
+] as const;
 
 export function emptyDeploymentLayer(): DeploymentLayerRuntime {
   return {
@@ -39,7 +56,9 @@ export function emptyDeploymentLayer(): DeploymentLayerRuntime {
     hints: [],
     credentialPaths: [],
     splitEnvTemplates: [],
+    commandEnvByExecutable: {},
     commandRules: [],
+    directTools: [],
     brokeredTools: [],
   };
 }
@@ -75,6 +94,41 @@ function toolService(tool: ToolDescriptor, why: string): string {
 
 export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): DeploymentLayerRuntime {
   assertDisjointCredentialLinks(tools);
+  const commandEnvByExecutable: Record<string, string[]> = {};
+  for (const tool of tools) {
+    const keys = tool.commandEnv ?? (tool.auth?.broker?.kind === "aws-role" ? AWS_BROKER_COMMAND_ENV : undefined);
+    if (keys === undefined) continue;
+    const binary = tool.install?.binary ?? tool.id;
+    const prior = commandEnvByExecutable[binary];
+    if (prior && (prior.length !== keys.length || prior.some((key, index) => key !== keys[index]))) {
+      throw new Error(
+        `deployment layer tools declare conflicting commandEnv mappings for executable ${JSON.stringify(binary)}`,
+      );
+    }
+    commandEnvByExecutable[binary] = [...keys];
+  }
+  const directTools: DirectLayerTool[] = tools
+    .filter((tool) => tool.commandEnv !== undefined || tool.auth?.broker?.kind === "aws-role")
+    .map((tool) => ({
+      service: tool.auth ? toolService(tool, "direct execution") : tool.id,
+      binary: tool.install?.binary ?? tool.id,
+      roots: (tool.auth?.credentialPaths ?? []).map((entry) => entry.path),
+      directOnly: tool.commandEnv !== undefined,
+    }));
+  const directServices = new Set<string>();
+  const directBinaries = new Set<string>();
+  for (const tool of directTools) {
+    if (directServices.has(tool.service)) {
+      throw new Error(`deployment layer declares conflicting direct tools for service ${JSON.stringify(tool.service)}`);
+    }
+    if (directBinaries.has(tool.binary)) {
+      throw new Error(
+        `deployment layer declares conflicting direct tools for executable ${JSON.stringify(tool.binary)}`,
+      );
+    }
+    directServices.add(tool.service);
+    directBinaries.add(tool.binary);
+  }
   const withAuth = tools.filter((t) => t.auth);
   const brokered = withAuth.filter((t) => t.auth!.broker);
   if (brokered.length > 1) {
@@ -97,12 +151,14 @@ export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): D
       ...new Map(withAuth.flatMap((t) => t.auth!.credentialPaths ?? []).map((entry) => [entry.path, entry])).values(),
     ],
     splitEnvTemplates: withAuth.flatMap((t) => (t.auth!.splitEnv ? [t.auth!.splitEnv] : [])),
+    commandEnvByExecutable,
     commandRules: tools.flatMap((tool) =>
       (tool.approvals ?? []).map((approval) => ({
         ...compileApproval(tool.install?.binary ?? tool.id, approval),
         ...(approval.reason ? { reason: approval.reason } : {}),
       })),
     ),
+    directTools,
     brokeredTools: brokered.map((t) => {
       const service = toolService(t, "a credential broker");
       return {
@@ -126,11 +182,15 @@ export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: D
     "hints",
     "credentialPaths",
     "splitEnvTemplates",
-    "commandRules",
+    "directTools",
     "brokeredTools",
   ] as const) {
     target[key].splice(0, target[key].length, ...(source[key] as never[]));
   }
+  target.commandEnvByExecutable = Object.fromEntries(
+    Object.entries(source.commandEnvByExecutable).map(([binary, keys]) => [binary, [...keys]]),
+  );
+  target.commandRules.splice(0, target.commandRules.length, ...source.commandRules);
 }
 
 const JUNK_FILE = /^(?:\.DS_Store|Thumbs\.db|\._.*)$/;

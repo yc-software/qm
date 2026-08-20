@@ -1057,6 +1057,7 @@ export function buildApp(
     layerBrokerFor,
     brokeredTools,
     deploymentLayer,
+    secretSource,
   };
   const orchestrator = createOrchestrator(orchestratorDeps);
 

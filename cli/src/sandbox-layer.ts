@@ -56,6 +56,7 @@ export interface ToolDescriptor {
   advertise?: string;
   hints?: string[];
   egress?: string[];
+  commandEnv?: string[];
   auth?: ToolAuthDescriptor;
   approvals?: ToolApproval[];
   install?: { binary?: string };
@@ -100,6 +101,19 @@ export function parseToolDescriptor(raw: string, sourcePath: string): ToolDescri
       throw new Error(`${sourcePath}: "egress" must be an array of host strings`);
     }
     out.egress = d["egress"];
+  }
+
+  if (d["commandEnv"] !== undefined) {
+    if (
+      !isStringArray(d["commandEnv"]) ||
+      d["commandEnv"].some((key) => !SPLIT_ENV_KEY_RE.test(key) || /^AGENT_/i.test(key) || key === "PATH")
+    ) {
+      throw new Error(`${sourcePath}: "commandEnv" must be an array of non-reserved environment variable names`);
+    }
+    if (new Set(d["commandEnv"]).size !== d["commandEnv"].length) {
+      throw new Error(`${sourcePath}: "commandEnv" must not contain duplicate names`);
+    }
+    out.commandEnv = d["commandEnv"];
   }
 
   if (d["auth"] !== undefined) out.auth = parseAuth(d["auth"], sourcePath);

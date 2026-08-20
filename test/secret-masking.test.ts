@@ -44,6 +44,14 @@ test("plumbing keys and short values are not masked", () => {
   assert.equal(mask(cmd), cmd);
 });
 
+test("strict direct-execution masking covers arbitrary keys and short values", () => {
+  const mask = createSecretValueMasker(
+    { FOO: "x7", AGENT_API_URL: "https://core.example.test" },
+    { minimumLength: 1, maskNonSecretKeys: true },
+  );
+  assert.equal(mask("x7 https://core.example.test"), "<redacted:FOO> <redacted:AGENT_API_URL>");
+});
+
 test("regex metacharacters in a secret cannot break the replacement", () => {
   const value = "a+b(c)$[d]*e^f.g|h?12";
   const mask = createSecretValueMasker({ WEIRD_KEY: value });

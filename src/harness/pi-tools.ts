@@ -2695,9 +2695,10 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     parameters: Type.Object({
       service: Type.String({ enum: credentialExecServices.map(({ service }) => service) }),
       args: Type.Array(Type.String()),
+      stdin: Type.Optional(Type.String({ maxLength: 1024 * 1024 })),
       timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: execCeilingSec })),
     }),
-    async execute(callId, params: { service: string; args: string[]; timeout_seconds?: number }) {
+    async execute(callId, params: { service: string; args: string[]; stdin?: string; timeout_seconds?: number }) {
       const tc = ref.current;
       await recordCall(callId, { tool: "credential_exec", service: params.service, args: params.args });
       if (!tc?.credentialExec) {
@@ -2711,6 +2712,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       try {
         const result = await tc.credentialExec(params.service, params.args, {
           ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
+          ...(params.stdin !== undefined ? { stdin: params.stdin } : {}),
           ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
         });
         const parts = [result.stdout, result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");

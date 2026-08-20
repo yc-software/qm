@@ -25,6 +25,7 @@ import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../api/contract.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { CapabilityUnsupportedError } from "./sandbox.ts";
 import { spriteScopeName } from "./sprites-sandbox.ts";
 import type {
   AgentComputerProfile,
@@ -35,6 +36,7 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
+import type { DirectExecOptions, ScopedCommand } from "./scoped-exec.ts";
 
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
@@ -373,6 +375,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     backend: "smolmachines",
     writablePersistence: "resident_disk",
     processSessions: true,
+    directExecution: false,
     egressEnforcement: "none",
     spec: {
       os: "Debian 12 — smolmachines microVM (auto-stops when idle; the whole disk persists)",
@@ -535,6 +538,14 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       } finally {
         signal.removeEventListener("abort", onAbort);
       }
+    },
+
+    async runDirect(
+      _handle: SandboxHandle,
+      _command: ScopedCommand,
+      _execOpts?: DirectExecOptions,
+    ): Promise<ExecResult> {
+      throw new CapabilityUnsupportedError(profile.backend, "structured direct execution");
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

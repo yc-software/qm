@@ -13,10 +13,19 @@ const NON_SECRET_ENV_KEYS = new Set([
 
 const MIN_MASKABLE_LENGTH = 8;
 
-export function createSecretValueMasker(env: Record<string, string> | undefined): (text: string) => string {
+export interface SecretValueMaskerOptions {
+  minimumLength?: number;
+  maskNonSecretKeys?: boolean;
+}
+
+export function createSecretValueMasker(
+  env: Record<string, string> | undefined,
+  options: SecretValueMaskerOptions = {},
+): (text: string) => string {
+  const minimumLength = options.minimumLength ?? MIN_MASKABLE_LENGTH;
   const variants: Array<{ needle: string; label: string }> = [];
   for (const [key, value] of Object.entries(env ?? {})) {
-    if (NON_SECRET_ENV_KEYS.has(key) || value.length < MIN_MASKABLE_LENGTH) continue;
+    if ((!options.maskNonSecretKeys && NON_SECRET_ENV_KEYS.has(key)) || value.length < minimumLength) continue;
     variants.push({ needle: value, label: key });
     const uri = encodeURIComponent(value);
     if (uri !== value) variants.push({ needle: uri, label: key });

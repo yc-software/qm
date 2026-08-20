@@ -42,6 +42,7 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
       backend: "sprites",
       writablePersistence: "resident_disk",
       processSessions: true,
+      directExecution: true,
       egressEnforcement: "none",
     });
     assert.match(spec?.os ?? "", /Ubuntu/);
