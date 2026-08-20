@@ -48,7 +48,7 @@ import { icon } from "./ui";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
 import { appState } from "./shell-state";
-import { renderSidebarTop, switchView, syncUrlFromState } from "./shell";
+import { renderSidebarTop, switchView, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { sleep } from "./chat";
 import {
   createConversation,
@@ -208,6 +208,7 @@ function buildDock(): DockviewApi {
   });
   api.onDidActivePanelChange((e) => {
     splitState.focusedId = e.panel?.id ?? null;
+    syncDocumentTitle();
   });
   api.onDidMaximizedGroupChange(() => {
     for (const a of groupActions) a.draw();
@@ -353,6 +354,7 @@ export function exitSplitIfActive(): void {
   canvasHost = null;
   headerSignature = "";
   renderSidebarTop();
+  syncDocumentTitle();
 }
 
 function adoptPersisted(raw: unknown): void {
@@ -772,6 +774,16 @@ function paneTitle(panel: IDockviewPanel): string {
   if (session) return sessionTitle(session);
   if (panelParams(panel).sessionId) return "Conversation";
   return "New session";
+}
+
+export function focusedPaneConversationTitle(): string | null {
+  if (!splitState.active || !dockApi) return null;
+  const panel =
+    (splitState.focusedId ? dockApi.getPanel(splitState.focusedId) : null) ??
+    dockApi.activePanel ??
+    dockApi.panels[0] ??
+    null;
+  return panel ? paneTitle(panel) : null;
 }
 
 function paneScopeId(panel: IDockviewPanel): string | null {
