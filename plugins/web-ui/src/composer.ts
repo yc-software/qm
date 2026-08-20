@@ -57,11 +57,29 @@ import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 
 export type ComposerMenu = "effort" | "harness" | "model" | "settings";
 
+interface ComposerMenuOption {
+  value: string;
+  label: string;
+  groupLabel?: string;
+}
+
+function groupMenuOptions(options: ComposerMenuOption[]): Array<{ label: string; options: ComposerMenuOption[] }> {
+  const groups = new Map<string, ComposerMenuOption[]>();
+  for (const option of options) {
+    const label = option.groupLabel ?? "";
+    const group = groups.get(label) ?? [];
+    group.push(option);
+    groups.set(label, group);
+  }
+  return [...groups].map(([label, groupOptions]) => ({ label, options: groupOptions }));
+}
+
 const LEGACY_MODEL_STORAGE_KEY = "web-ui:model";
 const THREAD_PICKS_STORAGE_KEY = "web-ui:model-picks";
 const THREAD_PICKS_CAP = 50;
 const FAST_MODE_STORAGE_KEY = "web-ui:fast-mode";
 const EFFORT_STORAGE_KEY = "web-ui:effort";
+const MENU_SEARCH_THRESHOLD = 8;
 
 function loadThreadPicks(): Map<string, ModelOptionValue> {
   try {
@@ -224,6 +242,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     processingFiles: false,
     dragging: false,
     openMenu: null as ComposerMenu | null,
+    menuQuery: "",
     slashDismissed: false,
     effortLevel: loadStoredEffort(defaultEffortForModel(modelOptionFor(defaultModelValue()).model)),
     fastMode: loadStoredFastMode(),
@@ -563,12 +582,15 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                     ${menuControl({
                       kind: "model",
                       label: selectedModel.buttonLabel,
+                      suffix: `· ${effortLabel(composerState.effortLevel)}`,
                       title: "Model",
                       selected: selectedModel.value,
                       align: "right",
+                      searchable: true,
                       options: getModelOptionsForHarness(selectedModel.harnessId, scopeKey()).map((option) => ({
                         value: option.value,
                         label: option.label,
+                        groupLabel: option.groupLabel,
                       })),
                       disabled: inputBlocked,
                       onSelect: (value: string) => selectModel(value, agent),
@@ -903,9 +925,11 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     kind: ComposerMenu;
     glyph?: IconNode;
     label: string;
+    suffix?: string;
     title: string;
     selected: string;
-    options: Array<{ value: string; label: string }>;
+    options: ComposerMenuOption[];
+    searchable?: boolean;
     disabled?: boolean;
     align?: "left" | "right";
     onSelect: (value: string) => void;
@@ -915,6 +939,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     let controlClass = "";
     if (args.kind === "model") controlClass = "model-control";
     else if (args.kind === "harness") controlClass = "harness-control";
+    const searchable = args.searchable === true && args.options.length >= MENU_SEARCH_THRESHOLD;
+    const query = searchable ? composerState.menuQuery.trim().toLocaleLowerCase() : "";
+    const matches = query
+      ? args.options.filter((option) =>
+          `${option.label} ${option.groupLabel ?? ""}`.toLocaleLowerCase().includes(query),
+        )
+      : args.options;
+    const grouped = groupMenuOptions(matches);
     return html`
       <div class="menu-control ${controlClass}" data-align=${args.align ?? "left"}>
         <button
@@ -929,29 +961,54 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         >
           ${args.glyph ? icon(args.glyph, 16) : nothing}
           <span class="menu-label">${args.label}</span>
-          ${icon(ChevronDown, 14)}
+          ${args.suffix ? html`<span class="menu-suffix">${args.suffix}</span>` : nothing} ${icon(ChevronDown, 14)}
         </button>
         ${
           open && !args.disabled
             ? html`
                 <div class="menu-popover" id=${menuId} role="menu" @click=${(e: Event) => e.stopPropagation()}>
                   <div class="menu-title">${args.title}</div>
-                  ${args.options.map(
-                    (option) => html`
-                      <button
-                        class="menu-option ${option.value === args.selected ? "active" : ""}"
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked=${option.value === args.selected ? "true" : "false"}
-                        @click=${() => args.onSelect(option.value)}
-                      >
-                        <span class="menu-option-copy">
-                          <span class="menu-option-label">${option.label}</span>
-                        </span>
-                        ${option.value === args.selected ? icon(Check, 15) : nothing}
-                      </button>
-                    `,
-                  )}
+                  ${
+                    searchable
+                      ? html`<label class="menu-search">
+                          <span class="sr-only">Search models</span>
+                          <input
+                            type="search"
+                            placeholder="Search models…"
+                            .value=${live(composerState.menuQuery)}
+                            @input=${(e: InputEvent) => {
+                              composerState.menuQuery = (e.currentTarget as HTMLInputElement).value;
+                              ctx.chat.drawActiveChat();
+                            }}
+                          />
+                        </label>`
+                      : nothing
+                  }
+                  ${
+                    matches.length
+                      ? grouped.map(
+                          (group) => html`
+                            ${group.label ? html`<div class="menu-group-label">${group.label}</div>` : nothing}
+                            ${group.options.map(
+                              (option) => html`
+                                <button
+                                  class="menu-option ${option.value === args.selected ? "active" : ""}"
+                                  type="button"
+                                  role="menuitemradio"
+                                  aria-checked=${option.value === args.selected ? "true" : "false"}
+                                  @click=${() => args.onSelect(option.value)}
+                                >
+                                  <span class="menu-option-copy">
+                                    <span class="menu-option-label">${option.label}</span>
+                                  </span>
+                                  ${option.value === args.selected ? icon(Check, 15) : nothing}
+                                </button>
+                              `,
+                            )}
+                          `,
+                        )
+                      : html`<div class="menu-empty">No models found</div>`
+                  }
                 </div>
               `
             : nothing
@@ -962,8 +1019,15 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function toggleComposerMenu(e: Event, kind: ComposerMenu): void {
     e.stopPropagation();
-    composerState.openMenu = composerState.openMenu === kind ? null : kind;
+    const opening = composerState.openMenu !== kind;
+    composerState.openMenu = opening ? kind : null;
+    composerState.menuQuery = "";
     ctx.chat.drawActiveChat();
+    if (opening && kind === "model") {
+      requestAnimationFrame(() =>
+        ctx.chat.state.host?.querySelector<HTMLInputElement>(".model-control .menu-search input")?.focus(),
+      );
+    }
   }
 
   function matchSkills(query: string, skills: SkillItem[]): SkillMatch[] {

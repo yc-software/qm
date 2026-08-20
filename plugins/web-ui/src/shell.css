@@ -2484,6 +2484,11 @@ a.chat-row-open {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.menu-suffix {
+  flex: none;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
 .model-control .menu-button {
   max-width: min(280px, 46vw);
   color: var(--foreground);
@@ -2591,6 +2596,45 @@ a.chat-row-open {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted-foreground);
+}
+.menu-search {
+  position: sticky;
+  top: -6px;
+  z-index: 1;
+  display: block;
+  padding: 4px 2px 6px;
+  background: var(--background);
+}
+.menu-search input {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.menu-search input:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
+}
+.menu-group-label {
+  padding: 9px 8px 3px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 650;
+}
+.menu-empty {
+  padding: 18px 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  text-align: center;
+}
+.menu-control.model-control[data-align="right"] .menu-popover {
+  width: 320px;
 }
 .menu-option {
   width: 100%;

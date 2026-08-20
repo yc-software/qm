@@ -79,3 +79,11 @@ test("scope runtime defaults include effort and fast mode", () => {
   assert.match(composer, /config\.effective\.effortLevel/);
   assert.match(composer, /config\.effective\.fastMode === true/);
 });
+
+test("long model menus stay searchable and show the selected effort", () => {
+  assert.match(composer, /const MENU_SEARCH_THRESHOLD = 8;/);
+  assert.match(composer, /searchable: true/);
+  assert.match(composer, /placeholder="Search models…"/);
+  assert.match(composer, /option\.groupLabel/);
+  assert.match(composer, /suffix: `· \$\{effortLabel\(composerState\.effortLevel\)}`/);
+});

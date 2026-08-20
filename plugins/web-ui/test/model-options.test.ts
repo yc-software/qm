@@ -209,3 +209,22 @@ test("runtime options include custom-provider models from the catalog", () => {
   assert.equal(acme.label, "Acme Large");
   assert.equal(acme.model.provider, "acme-gateway");
 });
+
+test("runtime model options expose useful provider groups for long OpenRouter catalogs", () => {
+  const options = runtimeModelOptions(
+    ["pi"],
+    {
+      pi: ["openai/o3-pro", "anthropic/claude-opus-4.7", "google/gemini-2.5-pro-preview", "arcee-ai/virtuoso-large"],
+    },
+    {
+      "openai/o3-pro": { name: "OpenAI: o3 Pro", provider: "openrouter" },
+      "anthropic/claude-opus-4.7": { name: "Anthropic: Claude Opus 4.7", provider: "openrouter" },
+      "google/gemini-2.5-pro-preview": { name: "Google: Gemini 2.5 Pro Preview", provider: "openrouter" },
+      "arcee-ai/virtuoso-large": { name: "Arcee AI: Virtuoso Large", provider: "openrouter" },
+    },
+  );
+  assert.deepEqual(
+    options.map((option) => option.groupLabel),
+    ["OpenAI", "Anthropic", "Google", "Arcee AI"],
+  );
+});

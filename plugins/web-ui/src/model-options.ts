@@ -9,6 +9,7 @@ export interface ModelOption {
   model: Model<Api>;
   label: string;
   buttonLabel: string;
+  groupLabel: string;
 }
 
 interface ModelMeta {
@@ -74,6 +75,32 @@ const HARNESS_LABELS: Record<string, string> = {
   mock: "Mock",
 };
 
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  openrouter: "OpenRouter",
+  google: "Google",
+  "arcee-ai": "Arcee AI",
+  "meta-llama": "Meta",
+  mistralai: "Mistral AI",
+};
+
+function providerLabel(id: string, name: string, provider: string): string {
+  if (provider === "openrouter") {
+    const namedProvider = /^([^:]{2,40}):\s/.exec(name)?.[1]?.trim();
+    if (namedProvider) return namedProvider;
+  }
+  const key = provider === "openrouter" ? (id.split("/", 1)[0] ?? provider) : provider;
+  return (
+    PROVIDER_LABELS[key] ??
+    key
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((part) => part[0]!.toUpperCase() + part.slice(1))
+      .join(" ")
+  );
+}
+
 function buildOption(
   id: string,
   harnessId = "pi",
@@ -91,6 +118,7 @@ function buildOption(
       harnessLabel: HARNESS_LABELS[harnessId] ?? harnessId,
       model,
       ...meta,
+      groupLabel: providerLabel(id, meta.label, dynamic?.provider ?? String(model.provider ?? model.api ?? "other")),
     };
   } catch {
     return null;
