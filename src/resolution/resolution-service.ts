@@ -71,6 +71,7 @@ export function createResolutionService(orgId: string, config: ScopedConfigStore
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
       const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope));
+      const memoryPolicy = await config.getMemoryPolicyDurable(scope);
       const approvalGrantModes = await config.getApprovalGrantModesDurable(scope);
 
       const egress = {
@@ -92,6 +93,7 @@ export function createResolutionService(orgId: string, config: ScopedConfigStore
         commandPolicy,
         securityPolicy,
         approvalGrantModes,
+        memoryPolicy,
         orgScopeId: orgScope,
         grantedHandles,
       };

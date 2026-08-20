@@ -762,10 +762,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
 
       const memoryScopeId = writableMemoryScope(resolution.layers, scopeId);
-      const recallScopes = useMemory ? recallMemoryScopes(memoryPolicy, resolution.layers, memoryScopeId) : [];
+      // Scope-keyed governance: the resolution carries the effective policy
+      // for THIS scope (org floor composed with the scope's stored value);
+      // the deployment-wide deps.memoryPolicy remains the fallback for
+      // resolutions built without one (#559).
+      const turnMemoryPolicy = resolution.memoryPolicy ?? memoryPolicy;
+      const recallScopes = useMemory ? recallMemoryScopes(turnMemoryPolicy, resolution.layers, memoryScopeId) : [];
       const memoryAccess =
-        (useMemory && memoryPolicy.capture !== "off") || recallScopes.length > 0
-          ? { ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}), read: recallScopes }
+        (useMemory && turnMemoryPolicy.capture !== "off") || recallScopes.length > 0
+          ? {
+              ...(useMemory && turnMemoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}),
+              read: recallScopes,
+            }
           : undefined;
       const skillScopes = visibleSkillScopes(resolution, scopeId);
       const grantedSkills: GrantedSkillRef[] = (
@@ -1112,7 +1120,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (
             actorIsOrgAdmin &&
             useMemory &&
-            memoryPolicy.capture !== "off" &&
+            turnMemoryPolicy.capture !== "off" &&
             resolution.orgScopeId !== memoryScopeId
           ) {
             orgMemoryWrite = resolution.orgScopeId;
@@ -2798,7 +2806,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
         });
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
+        if (!pausing && useMemory && turnMemoryPolicy.capture !== "off" && onTurnEnd) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
