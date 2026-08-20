@@ -6440,7 +6440,11 @@
           Array.isArray(r.data.approvedHarnesses) && r.data.approvedHarnesses.length
             ? r.data.approvedHarnesses
             : [harnessDefault];
-        const showBaseModel = scope.startsWith("org:") && opts.length > 0 && dflt && "runtime" in r.data;
+        // The runtime/base-model resources accept any scope (admin-resources.ts
+        // target: "any"); the org: prefix here hid them for channels and
+        // projects, forcing per-scope model choices through hand-rolled API
+        // calls (#589).
+        const showBaseModel = opts.length > 0 && dflt && "runtime" in r.data;
         $("card-base-model").classList.toggle("hidden", !showBaseModel);
         if (showBaseModel) {
           const current = r.data.runtime || { harnessId: harnessDefault, modelId: r.data.baseModel || dflt };
