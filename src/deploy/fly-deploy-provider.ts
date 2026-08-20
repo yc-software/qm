@@ -4,7 +4,7 @@ import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { readTree } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import { sleep } from "../util/async.ts";
-import { swallowAs } from "../util/errors.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 
 const MACHINES_API_BASE_URL = "https://api.machines.dev/v1";
@@ -63,8 +63,12 @@ interface FlyMachinesApi {
   assertOwnedApp(appName: string, orgSlug: string): Promise<boolean>;
   deleteApp(appName: string): Promise<void>;
   listMachines(appName: string): Promise<FlyMachine[]>;
-  createMachine(appName: string, input: { region: string; config: FlyMachineConfig }): Promise<FlyMachine>;
+  createMachine(
+    appName: string,
+    input: { region: string; config: FlyMachineConfig; skip_service_registration: true },
+  ): Promise<FlyMachine>;
   getMachine(appName: string, machineId: string): Promise<FlyMachine | null>;
+  setCordon(appName: string, machineId: string, cordoned: boolean): Promise<void>;
   destroyMachine(appName: string, machineId: string): Promise<void>;
 }
 
@@ -142,7 +146,7 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
       return true;
     },
     async deleteApp(appName): Promise<void> {
-      const r = await request("DELETE", app(appName));
+      const r = await request("DELETE", `${app(appName)}?force=true`);
       if (r.ok || r.status === 404) return;
       throw failure(`delete app ${appName}`, r);
     },
@@ -162,6 +166,12 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
       if (r.status === 404) return null;
       if (!r.ok) throw failure(`get machine ${machineId}`, r);
       return parse<FlyMachine>(`get machine ${machineId}`, r);
+    },
+    async setCordon(appName, machineId, cordoned): Promise<void> {
+      const action = cordoned ? "cordon" : "uncordon";
+      const r = await request("POST", `${machine(appName, machineId)}/${action}`);
+      if (r.ok || r.status === 404) return;
+      throw failure(`${action} machine ${machineId}`, r);
     },
     async destroyMachine(appName, machineId): Promise<void> {
       const r = await request("DELETE", `${machine(appName, machineId)}?force=true`);
@@ -296,15 +306,43 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       await api.ensureApp(appName, opts.org);
       await api.ensurePrivateIngress(appName);
       const stale = await api.listMachines(appName);
-      const machine = await api.createMachine(appName, { region, config: machineConfig(version, bundle) });
+      const machine = await api.createMachine(appName, {
+        region,
+        config: machineConfig(version, bundle),
+        skip_service_registration: true,
+      });
       try {
         await waitStarted(appName, machine.id);
         await waitAppReady(appName, machine.id);
       } catch (error) {
-        await api.destroyMachine(appName, machine.id).catch(() => {});
+        await api
+          .destroyMachine(appName, machine.id)
+          .catch((cleanupError) => swallow("fly-deploy: remove unhealthy replacement", cleanupError));
         throw error;
       }
-      for (const previous of stale) await api.destroyMachine(appName, previous.id);
+      const cordoned: FlyMachine[] = [];
+      try {
+        for (const previous of stale) {
+          await api.setCordon(appName, previous.id, true);
+          cordoned.push(previous);
+        }
+        await api.setCordon(appName, machine.id, false);
+      } catch (error) {
+        for (const previous of cordoned) {
+          await api
+            .setCordon(appName, previous.id, false)
+            .catch((rollbackError) => swallow("fly-deploy: restore previous machine routing", rollbackError));
+        }
+        await api
+          .destroyMachine(appName, machine.id)
+          .catch((cleanupError) => swallow("fly-deploy: remove failed replacement", cleanupError));
+        throw error;
+      }
+      for (const previous of stale) {
+        await api
+          .destroyMachine(appName, previous.id)
+          .catch((cleanupError) => swallow("fly-deploy: remove cordoned machine", cleanupError));
+      }
       return { host: `${appName}.flycast`, port: APP_PORT };
     },
 

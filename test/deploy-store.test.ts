@@ -78,6 +78,40 @@ test("addVersionFromCommit registers a pushed commit as a new version inheriting
   assert.equal((await s.get(d.id))!.versions.length, 2);
 });
 
+test("a provider without reconcile receives durable Git contents after a push", async () => {
+  const root = mkdtempSync(join(tmpdir(), "from-commit-apply-"));
+  const deployStore = createDeployStore({ git: { repoRoot: join(root, "repos") } });
+  const applied: string[] = [];
+  const deploy = createDeployService({
+    deployStore,
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async (_deployment, version) => {
+        applied.push(readFileSync(join(version.snapshotDir, "server.js"), "utf8"));
+        return { host: "127.0.0.1", port: 8080 };
+      },
+      destroy: async () => {},
+    },
+    deployDir: join(root, "snapshots"),
+    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    acl: createAclStore(),
+  });
+  const d = await deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    files: [{ path: "server.js", data: "v1" }],
+  });
+  const work = mkdtempSync(join(tmpdir(), "from-commit-apply-work-"));
+  const repo = await deploy.gitRepoPath(d.id);
+  execFileSync("git", ["clone", "--quiet", repo!, work]);
+  writeFileSync(join(work, "server.js"), "v2");
+  execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-aqm", "v2"], { cwd: work });
+  execFileSync("git", ["push", "--quiet", repo!, "HEAD:current"], { cwd: work });
+  await deploy.pushGit(d.id, async () => ({ result: true, ok: true }));
+  assert.deepEqual(applied, ["v1", "v2"]);
+});
+
 test("homeDir (resident-auth snapshot) round-trips through create + addVersion", async () => {
   const s = createDeployStore();
   const d = await s.create({

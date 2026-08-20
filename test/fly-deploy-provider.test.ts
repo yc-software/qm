@@ -41,6 +41,9 @@ interface FakeFlyOptions {
   states?: string[];
   checkStates?: string[];
   events?: FlyMachine["events"];
+  destroyMachineStatus?: number;
+  cordonStatus?: number;
+  uncordonStatus?: number;
 }
 
 function fakeFly(opts: FakeFlyOptions = {}) {
@@ -52,6 +55,7 @@ function fakeFly(opts: FakeFlyOptions = {}) {
   const nextState = (): string => (states.length > 1 ? states.shift()! : (states[0] ?? "started"));
   const nextCheck = (): string => (checkStates.length > 1 ? checkStates.shift()! : (checkStates[0] ?? "passing"));
   const ips = [...(opts.ips ?? [])];
+  const cordoned = new Set<string>();
   let app = opts.existingApp;
   let created = 0;
   const fetchImpl = (async (input: string | URL, init: RequestInit = {}): Promise<Response> => {
@@ -106,13 +110,25 @@ function fakeFly(opts: FakeFlyOptions = {}) {
         ...(opts.events ? { events: opts.events } : {}),
       });
     }
+    if (method === "POST" && segments.length === 6 && segments[5] === "cordon") {
+      if ((opts.cordonStatus ?? 200) < 300) cordoned.add(machineId);
+      return json(opts.cordonStatus ?? 200, {});
+    }
+    if (method === "POST" && segments.length === 6 && segments[5] === "uncordon") {
+      const status = machineId === "machine-1" ? (opts.uncordonStatus ?? 200) : 200;
+      if (status < 300) cordoned.delete(machineId);
+      return json(status, {});
+    }
     if (method === "DELETE" && segments.length === 5) {
-      machines.delete(machineId);
-      return json(200, {});
+      if ((opts.destroyMachineStatus ?? 200) < 300) {
+        machines.delete(machineId);
+        cordoned.delete(machineId);
+      }
+      return json(opts.destroyMachineStatus ?? 200, {});
     }
     return json(500, { error: `unexpected ${method} ${url.pathname}` });
   }) as unknown as typeof fetch;
-  return { fetchImpl, calls, machines };
+  return { fetchImpl, calls, machines, cordoned };
 }
 
 function provider(fetchImpl: typeof fetch, extra: Partial<FlyDeployProviderOptions> = {}) {
@@ -155,10 +171,13 @@ function version(snapshotDir: string, over: Partial<DeploymentVersion> = {}): De
   return { version: 1, createdAt: 0, entrypoint: "node server.js", snapshotDir, env: { API_KEY: "secret" }, ...over };
 }
 
-const machineCreate = (calls: FlyCall[]): { region: string; config: FlyMachineConfig } =>
+const machineCreate = (
+  calls: FlyCall[],
+): { region: string; config: FlyMachineConfig; skip_service_registration: true } =>
   calls.find((c) => c.method === "POST" && c.path.endsWith("/machines"))!.body as unknown as {
     region: string;
     config: FlyMachineConfig;
+    skip_service_registration: true;
   };
 
 test("apply: creates an isolated Fly app, injects the snapshot, and returns private Flycast ingress", async () => {
@@ -179,8 +198,9 @@ test("apply: creates an isolated Fly app, injects the snapshot, and returns priv
     type: "private_v6",
   });
 
-  const { region, config } = machineCreate(calls);
+  const { region, config, skip_service_registration } = machineCreate(calls);
   assert.equal(region, "lhr");
+  assert.equal(skip_service_registration, true);
   assert.equal(config.image, IMAGE);
   assert.deepEqual(config.env, { API_KEY: "secret", PORT: "8080" });
   assert.deepEqual(config.guest, { cpu_kind: "shared", cpus: 1, memory_mb: 512 });
@@ -254,10 +274,35 @@ test("apply: the previous version stays up until its healthy replacement is read
 
   const destroyIndex = calls.findIndex((c) => c.method === "DELETE" && c.path.endsWith("/machines/machine-old"));
   const createIndex = calls.findIndex((c) => c.method === "POST" && c.path.endsWith("/machines"));
+  const cordonIndex = calls.findIndex((c) => c.path.endsWith("/machines/machine-old/cordon"));
+  const uncordonIndex = calls.findIndex((c) => c.path.endsWith("/machines/machine-1/uncordon"));
   assert.ok(destroyIndex >= 0, "the stale machine is destroyed");
-  assert.ok(createIndex < destroyIndex, "the replacement arrives before the stale machine is destroyed");
+  assert.ok(createIndex < cordonIndex && cordonIndex < uncordonIndex && uncordonIndex < destroyIndex);
   assert.equal(calls[destroyIndex]!.query, "?force=true");
   assert.deepEqual([...machines.keys()], ["machine-1"]);
+});
+
+test("apply: a failed stale cleanup leaves the old machine cordoned, never mixed into traffic", async () => {
+  const fake = fakeFly({ existingMachines: ["machine-old"], destroyMachineStatus: 500 });
+  const logged = console.warn;
+  console.warn = () => {};
+  try {
+    await provider(fake.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" })));
+  } finally {
+    console.warn = logged;
+  }
+  assert.deepEqual([...fake.machines.keys()], ["machine-old", "machine-1"]);
+  assert.deepEqual([...fake.cordoned], ["machine-old"]);
+});
+
+test("apply: a failed cutover restores the old route and removes the replacement", async () => {
+  const fake = fakeFly({ existingMachines: ["machine-old"], uncordonStatus: 500 });
+  await assert.rejects(
+    provider(fake.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+    /uncordon machine machine-1.*http 500/,
+  );
+  assert.deepEqual([...fake.machines.keys()], ["machine-old"]);
+  assert.deepEqual([...fake.cordoned], []);
 });
 
 test("apply: an app bundle over the machine-file cap is refused with its actual and maximum size", async () => {
@@ -322,6 +367,7 @@ test("destroy: deletes the whole Fly app and tolerates one that is already gone"
     calls.map((c) => `${c.method} ${c.path}`),
     [`GET /v1/apps/${APP}`, `DELETE /v1/apps/${APP}`],
   );
+  assert.equal(calls.at(-1)!.query, "?force=true");
 
   const gone = fakeFly({ deleteAppStatus: 404 });
   await provider(gone.fetchImpl).destroy(deployment(ID));

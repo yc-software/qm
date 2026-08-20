@@ -167,7 +167,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         allPaths,
       });
     } else {
-      endpoint = await deps.provider.apply(d, version);
+      let materialized = version;
+      if (version.commit) {
+        const files = await deps.deployStore.filesOf(id, version.version);
+        if (files == null) throw new Error(`cannot materialize deployment ${id} version ${version.version}`);
+        materialized = { ...version, snapshotDir: await snapshotFiles(deps.deployDir, files) };
+      }
+      endpoint = await deps.provider.apply(d, materialized);
     }
     if (endpoint.image && endpoint.image !== version.image) {
       await deps.deployStore.setVersionImage(id, version.version, endpoint.image);
