@@ -149,9 +149,23 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
       ...(state.codeVerifier ? { codeVerifier: state.codeVerifier } : {}),
     });
     if (!token.accessToken) throw new Error("oauth exchange returned an empty access token");
-    const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
+    const storedAccountType =
+      accountType === "default" && (token.accountType === "personal" || token.accountType === "company")
+        ? token.accountType
+        : accountType;
+    const stamped = { ...token, clientRef: client.clientRef, accountType: storedAccountType, orgId: configOrgId() };
     for (const host of hosts)
-      await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
+      await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, storedAccountType);
+    if (accountType === "default" && storedAccountType !== "default") {
+      for (const host of hosts) await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, "default");
+    } else if (storedAccountType !== "default") {
+      for (const host of hosts) {
+        const primary = await deps.connectorTokens.connectorTokenStatus(host, state.principalId, "default");
+        if (primary.accountType === storedAccountType) {
+          await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, "default");
+        }
+      }
+    }
     audit(deps, {
       principalId: state.principalId,
       action: "connector.oauth.connected",
@@ -167,7 +181,13 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
       dest.searchParams.set("status", "connected");
       return sendRedirect(res, `${dest.pathname}${dest.search}${dest.hash}`);
     }
-    return sendJson(res, 200, { ok: true, provider: oauthRoute.provider, principalId: state.principalId, hosts });
+    return sendJson(res, 200, {
+      ok: true,
+      provider: oauthRoute.provider,
+      principalId: state.principalId,
+      accountType: storedAccountType,
+      hosts,
+    });
   } catch (e) {
     return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
   }
@@ -274,6 +294,9 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   if (!PROVIDERS[provider])
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${provider}` });
   const accountType = parseAccountType(typeof b.accountType === "string" ? b.accountType : null);
+  if (accountType !== "default" && provider !== "google") {
+    return sendJson(res, 400, { error: "bad_request", message: "accountType is only supported for Google" });
+  }
   const base = deps.publicUrl ? deps.publicUrl.replace(/\/$/, "") : "";
   const intendedPrincipalId = personKey(typeof b.intendedPrincipalId === "string" ? b.intendedPrincipalId : "");
   if (intendedPrincipalId && !samePerson(intendedPrincipalId, capability.actorId)) {
@@ -350,6 +373,9 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
   if (!principalId || !redirectUri)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and redirectUri required" });
   const accountType = parseAccountType(url.searchParams.get("accountType"));
+  if (accountType !== "default" && oauthRoute.provider !== "google") {
+    return sendJson(res, 400, { error: "bad_request", message: "accountType is only supported for Google" });
+  }
   try {
     const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri)) {
@@ -429,6 +455,15 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   }
   const providerName = typeof b.provider === "string" ? b.provider : "";
   const host = typeof b.host === "string" ? b.host : "";
+  const requestedAccountType = typeof b.accountType === "string" ? b.accountType : undefined;
+  if (
+    requestedAccountType !== undefined &&
+    requestedAccountType !== "default" &&
+    requestedAccountType !== "personal" &&
+    requestedAccountType !== "company"
+  ) {
+    return sendJson(res, 400, { error: "bad_request", message: "invalid accountType" });
+  }
   if (!principalId || (!providerName && !host)) {
     return sendJson(res, 400, { error: "bad_request", message: "principalId and provider or host required" });
   }
@@ -436,14 +471,33 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
     const provider = PROVIDERS[providerName];
     if (!provider)
       return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${providerName}` });
-    for (const h of provider.hosts)
-      for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES)
-        await deps.connectorTokens.deleteConnectorToken(h, principalId, at);
+    if (requestedAccountType !== undefined && providerName !== "google") {
+      return sendJson(res, 400, { error: "bad_request", message: "accountType is only supported for Google" });
+    }
+    const accountTypes = requestedAccountType ? [requestedAccountType] : CONNECTOR_STATUS_ACCOUNT_TYPES;
+    for (const h of provider.hosts) {
+      for (const at of accountTypes) await deps.connectorTokens.deleteConnectorToken(h, principalId, at);
+      if (providerName === "google" && requestedAccountType && requestedAccountType !== "default") {
+        const legacy = await deps.connectorTokens.connectorTokenStatus(h, principalId, "default");
+        if (legacy.accountType === requestedAccountType) {
+          await deps.connectorTokens.deleteConnectorToken(h, principalId, "default");
+        }
+      }
+    }
     audit(deps, { principalId, action: "connector.oauth.revoked", resource: providerName, scopeLabel: principalId });
     return sendJson(res, 200, { ok: true, principalId, provider: providerName, hosts: provider.hosts });
   }
-  for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES)
-    await deps.connectorTokens.deleteConnectorToken(host, principalId, at);
+  if (requestedAccountType !== undefined && !PROVIDERS.google!.hosts.includes(host)) {
+    return sendJson(res, 400, { error: "bad_request", message: "accountType is only supported for Google" });
+  }
+  const accountTypes = requestedAccountType ? [requestedAccountType] : CONNECTOR_STATUS_ACCOUNT_TYPES;
+  for (const at of accountTypes) await deps.connectorTokens.deleteConnectorToken(host, principalId, at);
+  if (requestedAccountType && requestedAccountType !== "default") {
+    const primary = await deps.connectorTokens.connectorTokenStatus(host, principalId, "default");
+    if (primary.accountType === requestedAccountType) {
+      await deps.connectorTokens.deleteConnectorToken(host, principalId, "default");
+    }
+  }
   audit(deps, { principalId, action: "connector.oauth.revoked", resource: host, scopeLabel: principalId });
   return sendJson(res, 200, { ok: true, principalId, host });
 }

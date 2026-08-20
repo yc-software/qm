@@ -10,6 +10,10 @@ export function envKey(host: string, principalId?: string): string {
   return `VAULT_TOKEN_${normalizedHost}__${normalizedPrincipal}_${tag}`;
 }
 
+export function accountEnvKey(host: string, accountType: "personal" | "company"): string {
+  return `${envKey(host)}__${accountType.toUpperCase()}`;
+}
+
 export function withOperatorTokenFallback(
   store: ConnectorTokenStore,
   serviceHosts: string[],

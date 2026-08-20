@@ -40,6 +40,7 @@ test("authorizeUrl builds a consent URL with client id, scopes, redirect, state"
   assert.equal(u.searchParams.get("redirect_uri"), "https://app/cb");
   assert.equal(u.searchParams.get("state"), "st-1");
   assert.equal(u.searchParams.get("access_type"), "offline");
+  assert.equal(u.searchParams.get("prompt"), "consent select_account");
   assert.match(u.searchParams.get("scope") ?? "", /gmail\.modify/);
   assert.match(u.searchParams.get("scope") ?? "", /auth\/drive(\s|$)/);
   assert.match(u.searchParams.get("scope") ?? "", /spreadsheets/);
@@ -94,6 +95,24 @@ test("exchangeCode returns a token for the provider's hosts (default authorizati
   assert.deepEqual(token.grantedScopes, ["a", "b"]);
 });
 
+test("Google classifies a default connection from the selected account", async () => {
+  const payload = Buffer.from(JSON.stringify({ email: "alex@example.com", hd: "example.com" })).toString(
+    "base64url",
+  );
+  const fetchImpl: FetchLike = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ access_token: "at", id_token: `e30.${payload}.sig` }),
+  });
+
+  const { token } = await exchangeCode("google", "code-123", "https://app/cb", {
+    client: await googleClient(),
+    fetchImpl,
+  });
+
+  assert.equal(token.accountType, "company");
+});
+
 test("makeRefresh exchanges a refresh token, keeping it if the provider omits a new one", async () => {
   const fetchImpl: FetchLike = async (_url, init) => {
     assert.match(init.body, /grant_type=refresh_token/);
@@ -117,11 +136,11 @@ test("refresh dispatches by host (calendar host → google provider)", async () 
   assert.equal(hit, PROVIDERS.google!.tokenUrl);
 });
 
-test("google company-slot exchange verifies the id_token hosted domain server-side", async () => {
+test("google account-slot exchange verifies the selected identity server-side", async () => {
   const r = createSecretClientResolver(createEnvSecretSource({ ...env, GOOGLE_WORKSPACE_DOMAIN: "example.com" }));
   const client = await r("google", { accountType: "company" });
   const idToken = (hd?: string) =>
-    ["h", Buffer.from(JSON.stringify({ sub: "1", ...(hd ? { hd } : {}) }), "utf8").toString("base64url"), "s"].join(
+    ["h", Buffer.from(JSON.stringify({ sub: "1", email: "alex@example.com", ...(hd ? { hd } : {}) }), "utf8").toString("base64url"), "s"].join(
       ".",
     );
   const respondWith =
@@ -151,7 +170,7 @@ test("google company-slot exchange verifies the id_token hosted domain server-si
         accountType: "company",
         fetchImpl: respondWith({ access_token: "at", id_token: idToken() }),
       }),
-    /not in the example\.com workspace/,
+    /not a Google Workspace account/,
   );
   await assert.rejects(
     () =>
@@ -160,15 +179,26 @@ test("google company-slot exchange verifies the id_token hosted domain server-si
         accountType: "company",
         fetchImpl: respondWith({ access_token: "at" }),
       }),
-    /not in the example\.com workspace/,
+    /did not identify the selected account/,
   );
 
   const personal = await exchangeCode("google", "c", "https://app/cb", {
     client: await r("google", { accountType: "personal" }),
     accountType: "personal",
-    fetchImpl: respondWith({ access_token: "at" }),
+    fetchImpl: respondWith({ access_token: "at", id_token: idToken() }),
   });
   assert.equal(personal.token.accessToken, "at");
+  const personalClient = await r("google", { accountType: "personal" });
+
+  await assert.rejects(
+    () =>
+      exchangeCode("google", "c", "https://app/cb", {
+        client: personalClient,
+        accountType: "personal",
+        fetchImpl: respondWith({ access_token: "at", id_token: idToken("example.com") }),
+      }),
+    /pick your personal Google account/,
+  );
 });
 
 test("github refresh asks for JSON and surfaces GitHub's 200-with-error bodies", async () => {

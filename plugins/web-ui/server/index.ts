@@ -1422,10 +1422,20 @@ const apiRoutes: readonly WebRoute[] = [
     method: "POST",
     path: "/api/connectors/:provider/start",
     handle: async (c) => {
-      const { res, user } = c;
+      const { req, res, user } = c;
+      const p = await readJson<{ accountType?: unknown }>(req, res);
+      if (!p) return;
+      const accountType = typeof p.accountType === "string" ? p.accountType : undefined;
+      if (accountType && accountType !== "default" && accountType !== "personal" && accountType !== "company") {
+        return json(res, 400, { error: "bad_request", message: "invalid accountType" });
+      }
       const provider = c.params.provider!;
+      if (accountType && accountType !== "default" && provider !== "google") {
+        return json(res, 400, { error: "bad_request", message: "accountType is only supported for Google" });
+      }
       const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
       const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo: "/keychain" });
+      if (accountType) params.set("accountType", accountType);
       const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/start?${params.toString()}`;
       return relayCore(res, "GET", corePath);
     },
@@ -1435,12 +1445,23 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/connectors/revoke",
     handle: async (c) => {
       const { req, res, user } = c;
-      const p = await readJson<{ provider?: unknown; host?: unknown }>(req, res, false);
+      const p = await readJson<{ provider?: unknown; host?: unknown; accountType?: unknown }>(req, res, false);
       if (!p) return;
       const provider = typeof p.provider === "string" ? p.provider : "";
       const host = typeof p.host === "string" ? p.host : "";
+      const accountType = typeof p.accountType === "string" ? p.accountType : undefined;
+      if (accountType && accountType !== "default" && accountType !== "personal" && accountType !== "company") {
+        return json(res, 400, { error: "bad_request", message: "invalid accountType" });
+      }
       if (!provider && !host) return json(res, 400, { error: "bad_request", message: "provider or host required" });
-      const rawBody = JSON.stringify({ principalId: user, ...(provider ? { provider } : { host }) });
+      if (accountType && accountType !== "default" && provider !== "google") {
+        return json(res, 400, { error: "bad_request", message: "accountType is only supported for Google" });
+      }
+      const rawBody = JSON.stringify({
+        principalId: user,
+        ...(provider ? { provider } : { host }),
+        ...(accountType ? { accountType } : {}),
+      });
       return relayCore(res, "POST", "/v1/connectors/oauth/revoke", rawBody);
     },
   },
