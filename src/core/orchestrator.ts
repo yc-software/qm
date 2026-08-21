@@ -2949,7 +2949,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const blocks = approvalBlocksInput(pa.kind, outcome);
             const command = pa.command;
             const requestId = commandApprovalId(session.id, command);
-            const summary = await approvalSummary(scopeId, command, pa.reason, pa.purpose);
+            // A producer-provided summary (the strict tool gate renders the
+            // call's arguments deterministically) needs no LLM pass and is
+            // more specific than one generated from the bare tool name.
+            const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
             prepared.push({
               requestId,
               record: {
