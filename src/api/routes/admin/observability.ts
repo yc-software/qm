@@ -150,6 +150,18 @@ export async function metrics(ctx: ApiCtx): Promise<void> {
     uncachedInputTotal,
   };
 
+  // Turn-level spend, straight off the usage the harnesses already meter:
+  // output tokens and provider-computed cost land on turn_metrics next to
+  // the cache telemetry, so an operator no longer joins session_llm_requests
+  // by hand to know what a scope or model spends.
+  const costSamples = samples.filter((s) => s.costUsd !== undefined || s.outputTokens !== undefined);
+  const spend = {
+    samples: costSamples.length,
+    turnsWithKnownCost: samples.filter((s) => s.costUsd !== undefined).length,
+    costUsdTotal: samples.reduce((n, s) => n + (s.costUsd ?? 0), 0),
+    outputTokensTotal: samples.reduce((n, s) => n + (s.outputTokens ?? 0), 0),
+  };
+
   const phaseFields: [string, (s: TurnMetricSample) => number | undefined][] = [
     ["total", (s) => s.totalMs],
     ["ttft", (s) => s.ttftMs],
@@ -225,6 +237,7 @@ export async function metrics(ctx: ApiCtx): Promise<void> {
     series,
     anatomy,
     cache,
+    spend,
     phases,
   });
 }
