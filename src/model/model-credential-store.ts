@@ -101,6 +101,7 @@ export function createModelCredentialStore(input: {
         anthropic: statuses.find((status) => status.provider === "anthropic")!.configured,
         openai: statuses.find((status) => status.provider === "openai")!.configured,
         openrouter: statuses.find((status) => status.provider === "openrouter")!.configured,
+        deepseek: statuses.find((status) => status.provider === "deepseek")!.configured,
       };
     },
   };

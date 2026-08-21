@@ -24,6 +24,11 @@ const VALIDATION_REQUESTS: Record<
     path: "/key",
     headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
   },
+  deepseek: {
+    baseUrl: "https://api.deepseek.com",
+    path: "/models",
+    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
+  },
 };
 
 function validationUrl(provider: ModelProvider): string {

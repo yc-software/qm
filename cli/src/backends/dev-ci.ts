@@ -35,9 +35,14 @@ function requireEnv(): void {
   if (process.env.SLACK_EVENTS_MODE === "http") {
     if (!process.env.SLACK_SIGNING_SECRET) die("SLACK_SIGNING_SECRET required in http events mode");
   } else if (!app.startsWith("xapp-")) die("SLACK_APP_TOKEN (xapp-…) required");
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY && !process.env.OPENROUTER_API_KEY) {
+  if (
+    !process.env.ANTHROPIC_API_KEY &&
+    !process.env.OPENAI_API_KEY &&
+    !process.env.OPENROUTER_API_KEY &&
+    !process.env.DEEPSEEK_API_KEY
+  ) {
     die(
-      "a model provider key required (ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY — live turns are the point of this instance)",
+      "a model provider key required (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, or DEEPSEEK_API_KEY — live turns are the point of this instance)",
     );
   }
   if (!process.env.CORE_SIGNING_SECRET) die("CORE_SIGNING_SECRET required");

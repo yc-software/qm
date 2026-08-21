@@ -153,7 +153,7 @@ export function createTurnMethods(
           return { status: "refused", reason: `runtime ${req.harness} is not approved` };
         }
         const configuredKeys = deps.providerKeys ??
-          deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
+          deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false, deepseek: false };
         let providers = deps.modelProviders;
         if (deps.modelCredentials) {
           providers = modelProviderAvailabilityFor(

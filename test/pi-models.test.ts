@@ -20,7 +20,7 @@ test("every selectable base model resolves against the pi-ai registry", () => {
     const model = getRequiredModel(m.id);
     assert.equal(model.id, m.id);
     assert.ok(
-      ["anthropic", "openai", "openrouter"].includes(String(model.provider)),
+      ["anthropic", "openai", "openrouter", "deepseek"].includes(String(model.provider)),
       `${m.id} has unexpected provider ${model.provider}`,
     );
   }
@@ -31,6 +31,7 @@ test("selectable models span providers (multi-provider is wired)", () => {
   assert.ok(providers.has("anthropic"), "expected at least one Anthropic model");
   assert.ok(providers.has("openai"), "expected at least one OpenAI model (gpt-5.6)");
   assert.ok(providers.has("openrouter"), "expected an OpenRouter-hosted open-model option");
+  assert.ok(providers.has("deepseek"), "expected a DeepSeek model");
 });
 
 test("unknown models are not silently accepted", () => {
@@ -60,6 +61,7 @@ test("the default base model follows the providers a deployment can actually bil
   }
   assert.equal(defaultModelForHarness("pi", undefined, onlyProvider("openrouter")), "openrouter/auto");
   assert.equal(defaultModelForHarness("pi", undefined, onlyProvider("openai")), "gpt-5.6-sol");
+  assert.equal(defaultModelForHarness("pi", undefined, onlyProvider("deepseek")), "deepseek-v4-flash");
 });
 
 test("provider-blind callers and explicit pins keep the shipped default", () => {
@@ -99,6 +101,7 @@ test("the curated catalog contains only current model families", () => {
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "openrouter/auto",
+      "deepseek-v4-flash",
     ],
   );
   assert.equal(getRequiredModel("gpt-5.6-sol").contextWindow, 1_050_000);

@@ -64,7 +64,7 @@ test("exposure is provider-key-aware: a model whose provider is unconfigured is 
 test("provider-key gating applies only to key-authed harnesses (no over-hiding on CLI-auth harnesses)", () => {
   const noKeys = { anthropic: false, openai: false, openrouter: false };
   assert.deepEqual(modelProviderAvailabilityFor("pi", noKeys), noKeys);
-  assert.deepEqual(modelProviderAvailabilityFor("opencode", noKeys), noKeys);
+  assert.deepEqual(modelProviderAvailabilityFor("opencode", noKeys), { ...noKeys, deepseek: false });
   assert.deepEqual(modelProviderAvailabilityFor("pi", noKeys, { anthropic: false, openai: true, openrouter: true }), {
     anthropic: false,
     openai: true,
@@ -76,7 +76,7 @@ test("provider-key gating applies only to key-authed harnesses (no over-hiding o
       { anthropic: true, openai: true, openrouter: true },
       { anthropic: false, openai: false, openrouter: false },
     ),
-    { anthropic: true, openai: true, openrouter: false },
+    { anthropic: true, openai: true, openrouter: false, deepseek: false },
   );
   assert.deepEqual(modelProviderAvailabilityFor("codex", noKeys), noKeys);
   assert.deepEqual(modelProviderAvailabilityFor("codex", { anthropic: false, openai: true, openrouter: false }), {
@@ -84,8 +84,18 @@ test("provider-key gating applies only to key-authed harnesses (no over-hiding o
     openai: true,
     openrouter: false,
   });
-  assert.deepEqual(modelProviderAvailabilityFor("claude", noKeys), { anthropic: true, openai: true, openrouter: true });
-  assert.deepEqual(modelProviderAvailabilityFor("mock", noKeys), { anthropic: true, openai: true, openrouter: true });
+  assert.deepEqual(modelProviderAvailabilityFor("claude", noKeys), {
+    anthropic: true,
+    openai: true,
+    openrouter: true,
+    deepseek: true,
+  });
+  assert.deepEqual(modelProviderAvailabilityFor("mock", noKeys), {
+    anthropic: true,
+    openai: true,
+    openrouter: true,
+    deepseek: true,
+  });
 });
 
 test("web-turn gate refuses a keyless model cleanly, accepts it once the provider is configured", () => {
