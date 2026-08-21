@@ -9,6 +9,7 @@ import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-mod
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
+import { usageToTurnTelemetry } from "./harness.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -142,17 +143,6 @@ export function codexUsageTotals(params: unknown): LlmCallUsage | null {
   const output = usageNumber(total, "outputTokens", "output_tokens");
   const cacheRead = usageNumber(total, "cachedInputTokens", "cached_input_tokens");
   return { input, output, cacheRead, cacheWrite: 0, totalTokens: input + output, costUsd: 0 };
-}
-
-export function usageToTurnTelemetry(usage: LlmCallUsage | null): {
-  cacheUsage: { cacheRead: number; cacheWrite: number; uncachedInput: number };
-  costUsage: { outputTokens: number; costUsd: number };
-} | null {
-  if (!usage) return null;
-  return {
-    cacheUsage: { cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, uncachedInput: usage.input },
-    costUsage: { outputTokens: usage.output, costUsd: usage.costUsd },
-  };
 }
 
 function sumUsage(byThread: ReadonlyMap<string, LlmCallUsage>): LlmCallUsage | null {

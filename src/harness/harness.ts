@@ -114,6 +114,17 @@ export interface HarnessTurnResult {
   tapeWriteFailed?: boolean;
 }
 
+export function usageToTurnTelemetry(usage: LlmCallUsage | null): {
+  cacheUsage: { cacheRead: number; cacheWrite: number; uncachedInput: number };
+  costUsage: { outputTokens: number; costUsd: number };
+} | null {
+  if (!usage) return null;
+  return {
+    cacheUsage: { cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, uncachedInput: usage.input },
+    costUsage: { outputTokens: usage.output, costUsd: usage.costUsd },
+  };
+}
+
 export interface HarnessDetectInput {
   session: Session;
   message: string;

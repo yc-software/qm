@@ -9,7 +9,7 @@ import {
   codexNonRetryable,
   codexProviderFailure,
   codexUsageTotals,
-  usageToTurnTelemetry,
+
   codexChildToolAllowed,
   codexReasoningEffort,
   codexReplayCallId,
@@ -20,6 +20,7 @@ import {
   createCodexHarness,
   prepareCodexHome,
 } from "../src/harness/codex-harness.ts";
+import { usageToTurnTelemetry } from "../src/harness/harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
