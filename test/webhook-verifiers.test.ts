@@ -92,7 +92,7 @@ test("slack dedup key is the signed body's event_id, not the unsigned x-slack-ev
 test("stripe verifier validates t=…,v1=… over `t.body` and uses the event id for dedup", () => {
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_123", type: "charge.failed" });
-  const t = "1700000000";
+  const t = String(Math.floor(Date.now() / 1000));
   const v1 = hmac(`${t}.${rawBody}`);
   const input = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=${v1}` }, rawBody };
   assert.equal(v.verify(input), true);
@@ -103,7 +103,7 @@ test("stripe verifier validates t=…,v1=… over `t.body` and uses the event id
 test("stripe verifier accepts any valid v1 signature during key rotation", () => {
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_rot" });
-  const t = "1700000000";
+  const t = String(Math.floor(Date.now() / 1000));
   const valid = hmac(`${t}.${rawBody}`);
   const rotated = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=oldkeysig,v1=${valid}` }, rawBody };
   assert.equal(v.verify(rotated), true);
@@ -130,4 +130,28 @@ test("hmac-sha256 dedup key is the signed body, ignoring the unsigned x-delivery
 test("an unknown scheme has no verifier", () => {
   assert.equal(getVerifier("paypal"), null);
   assert.equal(getVerifier("none"), null);
+});
+
+test("stripe verifier rejects a valid signature whose timestamp is stale (replay protection)", () => {
+  const v = getVerifier("stripe")!;
+  const rawBody = JSON.stringify({ id: "evt_replay", type: "charge.failed" });
+  // A captured delivery: correctly signed, but its `t` is far in the past.
+  const t = String(Math.floor(Date.now() / 1000) - 60 * 60);
+  const v1 = hmac(`${t}.${rawBody}`);
+  assert.equal(v.verify({ secret: SECRET, headers: { "stripe-signature": `t=${t},v1=${v1}` }, rawBody }), false);
+
+  const futureT = String(Math.floor(Date.now() / 1000) + 60 * 60);
+  const futureV1 = hmac(`${futureT}.${rawBody}`);
+  assert.equal(
+    v.verify({ secret: SECRET, headers: { "stripe-signature": `t=${futureT},v1=${futureV1}` }, rawBody }),
+    false,
+  );
+});
+
+test("stripe verifier accepts a signature inside the five-minute window", () => {
+  const v = getVerifier("stripe")!;
+  const rawBody = JSON.stringify({ id: "evt_fresh" });
+  const t = String(Math.floor(Date.now() / 1000) - 60);
+  const v1 = hmac(`${t}.${rawBody}`);
+  assert.equal(v.verify({ secret: SECRET, headers: { "stripe-signature": `t=${t},v1=${v1}` }, rawBody }), true);
 });
