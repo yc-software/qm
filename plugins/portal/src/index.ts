@@ -272,18 +272,20 @@ function sendHtml(res: ServerResponse, status: number, html: string): void {
 
 function sameOriginRequest(req: IncomingMessage): boolean {
   const origin = req.headers.origin;
-  const originMatches =
-    typeof origin === "string" &&
+  const matchesPublicOrigin = (raw: string | undefined): boolean =>
+    typeof raw === "string" &&
     (() => {
       try {
-        return new URL(origin).origin === ORIGIN;
+        return new URL(raw).origin === ORIGIN;
       } catch {
         return false;
       }
     })();
+  const originMatches = matchesPublicOrigin(origin);
+  const originMissing = origin === undefined || origin === "null";
   const site = req.headers["sec-fetch-site"];
-  if (typeof site !== "string") return originMatches;
-  return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
+  if (typeof site !== "string") return originMatches || (originMissing && matchesPublicOrigin(req.headers.referer));
+  return site === "same-origin" && (originMatches || originMissing);
 }
 
 function wantsHtml(req: IncomingMessage): boolean {
@@ -857,7 +859,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const pathname = url.pathname;
 
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
-  res.setHeader("referrer-policy", "no-referrer");
+  res.setHeader("referrer-policy", "same-origin");
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
 

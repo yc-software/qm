@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, request, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
 const seen: Array<{ url: string; method: string; headers: Record<string, unknown>; body: string }> = [];
@@ -86,7 +86,7 @@ test("the submit form posts through, same-origin only", async () => {
   assert.equal(crossOrigin.status, 403);
 });
 
-test("a same-origin form POST is accepted even though no-referrer makes the browser send Origin: null", async () => {
+test("a same-origin form POST with Origin null requires same-origin Fetch Metadata", async () => {
   const post = (headers: Record<string, string>): Promise<Response> =>
     fetch(`${base}/idp/authorize`, {
       method: "POST",
@@ -105,6 +105,43 @@ test("a same-origin form POST is accepted even though no-referrer makes the brow
     "fetch metadata overrides a forged Origin",
   );
   assert.equal((await post({ "sec-fetch-site": "same-site" })).status, 403);
+});
+
+test("a form without Origin or Fetch Metadata requires a same-origin Referer", async () => {
+  const status = await new Promise<number | undefined>((resolve, reject) => {
+    const req = request(`${base}/idp/authorize`, {
+      method: "POST",
+      headers: {
+        host: "portal.test",
+        "content-type": "application/x-www-form-urlencoded",
+        referer: `${PUBLIC}/idp/authorize?client_id=qm-portal`,
+      },
+    });
+    req.on("response", (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    });
+    req.on("error", reject);
+    req.end("email=admin%40example.com&request=tok");
+  });
+  assert.equal(status, 200);
+
+  const verifyStatus = await new Promise<number | undefined>((resolve, reject) => {
+    const req = request(`${base}/idp/verify`, {
+      method: "POST",
+      headers: {
+        host: "portal.test",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+    });
+    req.on("response", (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    });
+    req.on("error", reject);
+    req.end("token=abc");
+  });
+  assert.equal(verifyStatus, 403);
 });
 
 test("the portal stamps the client address and refuses to relay a spoofed one", async () => {

@@ -43,7 +43,7 @@ function noStore(extra: Record<string, string> = {}): Record<string, string> {
   return {
     "cache-control": "no-store",
     pragma: "no-cache",
-    "referrer-policy": "no-referrer",
+    "referrer-policy": "same-origin",
     "x-content-type-options": "nosniff",
     ...extra,
   };

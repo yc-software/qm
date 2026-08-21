@@ -415,12 +415,12 @@ test("discovery, JWKS, and health answer without credentials", async (t) => {
   assert.deepEqual(discovery.code_challenge_methods_supported, ["S256"]);
 });
 
-test("sign-in pages never cache and never leak a referrer", async (t) => {
+test("sign-in pages never cache and only send same-origin referrers", async (t) => {
   const h = await startHarness();
   t.after(() => h.close());
   const page = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
   assert.equal(page.headers.get("cache-control"), "no-store");
-  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(page.headers.get("referrer-policy"), "same-origin");
   assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self'/);
   await requestLink(h);
   const redirect = await fetch(`${h.base}/verify`, {
@@ -428,7 +428,7 @@ test("sign-in pages never cache and never leak a referrer", async (t) => {
     redirect: "manual",
   });
   assert.equal(redirect.headers.get("cache-control"), "no-store");
-  assert.equal(redirect.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(redirect.headers.get("referrer-policy"), "same-origin");
 });
 
 test("userinfo refuses a missing, malformed, or expired access token", async (t) => {
