@@ -28,6 +28,7 @@ import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { SkillsRefreshSequence } from "./skills-refresh";
 import { SkillsMutationSequence } from "./skills-mutation";
+import { personalScopeIdFor } from "./scope-id.ts";
 
 let skillRows: SkillItem[] = [];
 let skillsNotice = "";
@@ -830,7 +831,7 @@ export async function renderSkills(): Promise<void> {
     if (!skillsRefreshes.isCurrent(request) || seq !== appState.viewRenderSeq || appState.currentView !== "skills")
       return;
     skillRows = (r.skills ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
-    const personal = appState.me ? `personal:${appState.me.user}` : "";
+    const personal = personalScopeIdFor(appState.me?.user) ?? "";
     createScopes = [
       { scopeId: personal, name: "Personal — only you" },
       ...(contexts.contexts ?? [])

@@ -1,3 +1,5 @@
+import { personalScopeIdFor } from "./scope-id.ts";
+
 interface DeploymentVersionView {
   version: number;
   createdAt: number;
@@ -87,7 +89,7 @@ export function deploymentLatestAt(d: DeploymentView): number {
 export function deploymentTab(d: DeploymentView, viewer: string | undefined): DeploymentTab {
   if (d.status === "archived") return "archived";
   if (!viewer) return "shared";
-  if (d.ownerScopeId === `personal:${viewer}`) return "yours";
+  if (d.ownerScopeId === personalScopeIdFor(viewer)) return "yours";
   return !d.ownerScopeId?.startsWith("personal:") && d.createdBy === viewer ? "yours" : "shared";
 }
 

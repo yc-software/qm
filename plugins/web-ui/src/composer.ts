@@ -54,6 +54,8 @@ import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions"
 import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
+import { effectiveScopeId } from "./scope-id.ts";
+import { runtimeConfigCache, updateCachedRuntimeConfig } from "./runtime-config-cache.ts";
 
 export type ComposerMenu = "effort" | "harness" | "model" | "settings";
 
@@ -97,16 +99,23 @@ function loadThreadPicks(): Map<string, ModelOptionValue> {
 }
 
 let threadModelPicks = loadThreadPicks();
-let seededRuntime: { scopeId: string | null; config: RuntimeConfig } | null = null;
 
 export function seedRuntimeConfig(scopeId: string | null, config: RuntimeConfig): void {
-  seededRuntime = { scopeId: runtimeScopeKey(scopeId), config };
+  storeRuntimeCatalog(runtimeScopeKey(scopeId), config);
 }
 
 function runtimeScopeKey(scopeId: string | null): string | null {
-  if (scopeId) return scopeId;
-  const user = appState.me?.user;
-  return user ? `personal:${user}` : null;
+  return effectiveScopeId(scopeId, appState.me?.user);
+}
+
+function activateRuntimeCatalog(scopeId: string | null, config: RuntimeConfig): void {
+  setFastModeModelIds(scopeId, config.fastModeModelIds);
+  applyRuntimeOptions(scopeId, config.approvedHarnesses, config.modelsByHarness, config.effective, config.modelCatalog);
+}
+
+function storeRuntimeCatalog(scopeId: string | null, config: RuntimeConfig): void {
+  runtimeConfigCache.set(scopeId, config);
+  activateRuntimeCatalog(scopeId, config);
 }
 
 if (typeof window !== "undefined") {
@@ -216,6 +225,7 @@ export function resyncModelSelection(): void {
 export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   let activeRuntimeConfig: RuntimeConfig | null = null;
   let runtimeRequest = 0;
+  let runtimeMutationRequest = 0;
 
   function isUnsentNewChat(): boolean {
     return (
@@ -304,36 +314,32 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   async function refreshRuntimeSelection(scopeId: string | null, agent?: Agent): Promise<void> {
     const request = ++runtimeRequest;
     const scopeKey = runtimeScopeKey(scopeId);
-    const seeded = scopeKey !== null && seededRuntime?.scopeId === scopeKey ? seededRuntime.config : null;
-    if (seeded) {
-      applySelectedRuntime(seeded, agent);
+    const cached = runtimeConfigCache.get(scopeKey);
+    if (cached) {
+      activateRuntimeCatalog(scopeKey, cached);
+      applySelectedRuntime(cached, agent);
       return;
     }
     activeRuntimeConfig = null;
     composerState.error = "";
     ctx.chat.drawActiveChat(agent);
+    const cacheRevision = scopeKey ? runtimeConfigCache.revision(scopeKey) : 0;
     const config = await fetchRuntimeConfig(scopeId);
     if (request !== runtimeRequest) return;
-    if (!config) {
+    const selected = scopeKey ? runtimeConfigCache.resolveFetch(scopeKey, cacheRevision, config) : config;
+    if (!selected) {
       composerState.error = "Could not load runtime settings.";
       ctx.chat.drawActiveChat(agent);
       return;
     }
-    applySelectedRuntime(config, agent);
+    activateRuntimeCatalog(scopeKey, selected);
+    applySelectedRuntime(selected, agent);
   }
 
   function applySelectedRuntime(config: RuntimeConfig, agent?: Agent): void {
     activeRuntimeConfig = config;
     composerState.error = "";
-    setFastModeModelIds(scopeKey(), config.fastModeModelIds);
     orgFastModeDefault = config.interactiveFastMode === true;
-    applyRuntimeOptions(
-      scopeKey(),
-      config.approvedHarnesses,
-      config.modelsByHarness,
-      config.effective,
-      config.modelCatalog,
-    );
     composerState.effortLevel =
       (config.effective.effortLevel as EffortLevel | undefined) ?? defaultEffortForModel(currentModelOption().model);
     composerState.fastMode =
@@ -355,18 +361,28 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     },
     agent: Agent,
   ): Promise<void> {
-    const request = ++runtimeRequest;
+    runtimeRequest++;
+    const mutationRequest = ++runtimeMutationRequest;
     const scopeId = ctx.chat.state.scopeId;
+    const requestedScopeKey = runtimeScopeKey(scopeId);
+    if (!requestedScopeKey) {
+      composerState.error = "Could not resolve the scope for this model update.";
+      ctx.chat.drawActiveChat(agent);
+      return;
+    }
     try {
-      const config = await updateRuntimeConfig(scopeId, change);
-      if (request !== runtimeRequest || scopeId !== ctx.chat.state.scopeId) return;
-      seededRuntime = null;
-      applySelectedRuntime(config, agent);
+      const config = await updateCachedRuntimeConfig(requestedScopeKey, () =>
+        updateRuntimeConfig(requestedScopeKey, change),
+      );
+      const updatedScopeKey = config.scopeId;
+      if (mutationRequest !== runtimeMutationRequest || scopeId !== ctx.chat.state.scopeId) return;
+      activateRuntimeCatalog(updatedScopeKey, config);
+      applySelectedRuntime(config, ctx.chat.state.agent ?? undefined);
     } catch (e) {
-      if (request !== runtimeRequest || scopeId !== ctx.chat.state.scopeId) return;
+      if (mutationRequest !== runtimeMutationRequest || scopeId !== ctx.chat.state.scopeId) return;
       composerState.error = errMessage(e, "Could not update the scope default.");
     }
-    ctx.chat.drawActiveChat(agent);
+    ctx.chat.drawActiveChat(ctx.chat.state.agent ?? undefined);
   }
 
   function composerForm(agent: Agent): TemplateResult {

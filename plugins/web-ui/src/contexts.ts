@@ -41,6 +41,7 @@ import { restoreDialogFocus } from "./dialog-focus";
 import { ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./ambient-policy";
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { channelHeaderSection, loadChannelHeader, resetChannelHeader } from "./channel-header";
+import { personalScopeIdFor } from "./scope-id.ts";
 
 interface ScopeFile {
   id: string;
@@ -235,7 +236,7 @@ export async function ensureContexts(force = false): Promise<CoreContext[]> {
 }
 
 export function personalScopeId(): string | null {
-  return contextsState.list.find((c) => c.kind === "personal")?.scopeId ?? null;
+  return contextsState.list.find((c) => c.kind === "personal")?.scopeId ?? personalScopeIdFor(appState.me?.user);
 }
 
 export function resolveProjectScope(contexts: readonly CoreContext[], slug: string): string | null {

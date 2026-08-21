@@ -10,6 +10,7 @@ import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { mainConversation } from "./conversations";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
+import { personalScopeIdFor } from "./scope-id.ts";
 import {
   withDeploymentDetailNotice,
   withDeploymentListNotice,
@@ -110,7 +111,7 @@ function deployedLabel(d: DeploymentView): string {
 
 function ownerLabel(d: DeploymentView): string {
   const me = appState.me?.user;
-  if (d.ownerScopeId === `personal:${me}`) return "Your personal context";
+  if (d.ownerScopeId === personalScopeIdFor(me)) return "Your personal context";
   if (d.ownerScopeId?.startsWith("personal:"))
     return `${friendlyPrincipal(d.ownerScopeId.slice("personal:".length))} · Personal`;
   if (d.ownerScopeId?.startsWith("org:")) return "Organization";

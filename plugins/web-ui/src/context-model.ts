@@ -10,10 +10,11 @@ import {
 } from "./model-options";
 import { fieldSelect } from "./ui";
 import { errMessage } from "../../chassis/src/errors";
+import { runtimeConfigCache, updateCachedRuntimeConfig } from "./runtime-config-cache.ts";
 
 const INHERIT = "";
 
-export const contextModelState = {
+const contextModelState = {
   scope: null as string | null,
   loading: false,
   saving: false,
@@ -45,12 +46,20 @@ export async function loadContextModel(scopeId: string, onChange: () => void): P
   resetContextModel();
   const seq = ++loadSeq;
   contextModelState.scope = scopeId;
+  const cached = runtimeConfigCache.get(scopeId);
+  if (cached) {
+    contextModelState.config = cached;
+    redraw();
+    return;
+  }
   contextModelState.loading = true;
+  const cacheRevision = runtimeConfigCache.revision(scopeId);
   const config = await fetchRuntimeConfig(scopeId);
   if (seq !== loadSeq) return;
-  contextModelState.config = config;
+  const selected = runtimeConfigCache.resolveFetch(scopeId, cacheRevision, config);
+  contextModelState.config = selected;
   contextModelState.loading = false;
-  if (!config) {
+  if (!selected) {
     contextModelState.notice = "Couldn't load this project's model.";
     contextModelState.noticeKind = "error";
   }
@@ -100,15 +109,17 @@ async function choose(scope: string, value: string, effort?: string): Promise<vo
   try {
     const sep = value.indexOf(":");
     const harnessId = value.slice(0, sep);
-    const config = await updateRuntimeConfig(
-      scope,
-      value === INHERIT
-        ? { inherit: true }
-        : {
-            harnessId,
-            modelId: value.slice(sep + 1),
-            ...(effort && effortLevelsFor(harnessId).some((o) => o.value === effort) ? { effortLevel: effort } : {}),
-          },
+    const config = await updateCachedRuntimeConfig(scope, () =>
+      updateRuntimeConfig(
+        scope,
+        value === INHERIT
+          ? { inherit: true }
+          : {
+              harnessId,
+              modelId: value.slice(sep + 1),
+              ...(effort && effortLevelsFor(harnessId).some((o) => o.value === effort) ? { effortLevel: effort } : {}),
+            },
+      ),
     );
     if (seq !== loadSeq) return;
     contextModelState.config = config;
