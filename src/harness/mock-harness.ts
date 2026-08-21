@@ -682,6 +682,10 @@ export function createMockHarness(): Harness {
           }),
           { cacheRead: 0, cacheWrite: 0, uncachedInput: 0 },
         );
+        const costUsage = steps.reduce(
+          (acc, u) => ({ outputTokens: acc.outputTokens + u.output, costUsd: acc.costUsd + u.costUsd }),
+          { outputTokens: 0, costUsd: 0 },
+        );
         const base = collected.length
           ? {
               reply,
@@ -691,7 +695,7 @@ export function createMockHarness(): Harness {
             }
           : { reply, modelCalls };
         if (muteReply) base.reply = "";
-        return { ...base, ...(silent ? { silent: true as const } : {}), cacheUsage };
+        return { ...base, ...(silent ? { silent: true as const } : {}), cacheUsage, costUsage };
       },
 
       shouldRespond(detect: HarnessDetectInput): Promise<HarnessDetectResult> {

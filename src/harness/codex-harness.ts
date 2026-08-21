@@ -9,6 +9,7 @@ import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-mod
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
+import { usageToTurnTelemetry } from "./harness.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -832,6 +833,12 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           payload: { text: reply, stopped: state.stopped || undefined },
           scopeLabel: turn.scopeLabel,
         });
+      // Turn-level usage straight off the same live thread totals the
+      // recordLlmRequest flush reports, so codex turns land in turn_metrics
+      // with cache and spend telemetry like pi and claude. The codex SDK
+      // reports no cost, so costUsd stays 0 (the value already persisted to
+      // session_llm_requests for the same calls).
+      const telemetry = usageToTurnTelemetry(sumUsage(state.usageByThread));
       return {
         reply,
         ...(state.stopped ? { stopped: true as const } : {}),
@@ -839,6 +846,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
         ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
         modelCalls: state.modelCalls,
+        ...(telemetry ?? {}),
         ...(state.tapeWriteFailed ? { tapeWriteFailed: true } : {}),
       };
     } finally {
