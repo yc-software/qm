@@ -43,6 +43,8 @@ import {
   slackReplyArgs,
   stripMention,
   threadHasBotStake,
+  renderSlackBody,
+  slackMarkdownBlocks,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
@@ -322,9 +324,9 @@ export function createTurnHandler(deps: {
       ? undefined
       : createAckPresenter({
           postAck: async (text) => {
-            const rendered = toSlackMrkdwn(text);
+            const { text: rendered, markdown } = renderSlackBody(text);
             if (await taskList?.addLead(rendered)) return;
-            const ts = await postReply(rendered);
+            const ts = await postReply(rendered, markdown ? slackMarkdownBlocks(markdown) : undefined);
             if (ts) await taskList?.attach(ts, rendered);
           },
           addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
@@ -539,8 +541,12 @@ export function createTurnHandler(deps: {
         result.pendingApprovals?.length
       );
       let reply = "(no response)";
-      if (replyBody) reply = toSlackMrkdwn(replyBody);
-      else if (hasNonText) reply = "";
+      let replyBlocks: Array<Record<string, unknown>> | undefined;
+      if (replyBody) {
+        const rendered = renderSlackBody(replyBody);
+        reply = rendered.text;
+        replyBlocks = rendered.markdown ? slackMarkdownBlocks(rendered.markdown) : undefined;
+      } else if (hasNonText) reply = "";
       const postText = reply;
       const tDeliverStart = performance.now();
       let finalizedTaskList = false;
@@ -561,12 +567,12 @@ export function createTurnHandler(deps: {
         }
         await settleAck();
         if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
+        if (postText && !finalizedTaskList) await postReply(postText, replyBlocks);
         if (uploadError) await postReply(uploadFailureNote(uploadError));
       } else {
         await settleAck();
         if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
+        if (postText && !finalizedTaskList) await postReply(postText, replyBlocks);
       }
       if (queuedRunId) {
         reportTurnMetrics(queuedRunId, {

@@ -21,6 +21,8 @@ import {
   resolveReactionTargets,
   slackReplyArgs,
   stripAckPrefix,
+  renderSlackBody,
+  slackMarkdownBlocks,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
@@ -236,16 +238,25 @@ export function createApprovals(deps: {
   ): Promise<void> {
     const { text: replyBody } = cleanAgentReplyForSlack(result.reply ?? "");
     let bodyText = "Completed.";
-    if (replyBody) bodyText = toSlackMrkdwn(replyBody);
-    else if (result.attachments?.length) bodyText = "Completed; attached file(s) below.";
+    let bodyBlocks: Array<Record<string, unknown>> | undefined;
+    if (replyBody) {
+      const rendered = renderSlackBody(replyBody);
+      bodyText = rendered.text;
+      // The block carries Markdown, where *x* is italic -- the header is
+      // bolded with ** there and stays in mrkdwn * form for the fallback.
+      bodyBlocks = rendered.markdown
+        ? slackMarkdownBlocks(`**${ctx.targetAgentLabel} → ${ctx.originAgentLabel}**\n\n${rendered.markdown}`)
+        : undefined;
+    } else if (result.attachments?.length) bodyText = "Completed; attached file(s) below.";
     const posted = `*${ctx.targetAgentLabel} → ${ctx.originAgentLabel}*\n${bodyText}`;
-    if (!(await tryUpdateSlackMessage(client, ctx.originChannel, ctx.originStatusTs, posted))) {
-      await client.chat.postMessage(
-        slackReplyArgs(ctx.originChannel, posted, ctx.originThreadTs, {
+    if (!(await tryUpdateSlackMessage(client, ctx.originChannel, ctx.originStatusTs, posted, bodyBlocks))) {
+      await client.chat.postMessage({
+        ...slackReplyArgs(ctx.originChannel, posted, ctx.originThreadTs, {
           threadOnly: ctx.originThreadOnly,
           unfurlLinks: false,
         }),
-      );
+        ...(bodyBlocks ? { blocks: bodyBlocks } : {}),
+      });
     }
     if (result.attachments?.length) {
       try {
@@ -469,8 +480,16 @@ export function createApprovals(deps: {
     }
   }
 
-  async function postApprovalFollowup(client: any, ctx: SlackApprovalContext, text: string): Promise<void> {
-    await client.chat.postMessage(slackReplyArgs(ctx.channel, text, ctx.replyThreadTs, { threadOnly: ctx.threadOnly }));
+  async function postApprovalFollowup(
+    client: any,
+    ctx: SlackApprovalContext,
+    text: string,
+    blocks?: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    await client.chat.postMessage({
+      ...slackReplyArgs(ctx.channel, text, ctx.replyThreadTs, { threadOnly: ctx.threadOnly }),
+      ...(blocks ? { blocks } : {}),
+    });
   }
 
   function personalAgentTurnText(ctx: SlackAgentRequestContext): string {
@@ -645,13 +664,19 @@ export function createApprovals(deps: {
         const { reactions, agentRequests } = cleanedContinuation;
         const actionableAgentRequests = ctx.threadOnly ? agentRequests : [];
         let reply = "(no response)";
-        if (replyBody) reply = toSlackMrkdwn(replyBody);
-        else if (result.attachments?.length || reactions.length || actionableAgentRequests.length) reply = "Done.";
+        let replyBlocks: Array<Record<string, unknown>> | undefined;
+        if (replyBody) {
+          const rendered = renderSlackBody(replyBody);
+          reply = rendered.text;
+          replyBlocks = rendered.markdown ? slackMarkdownBlocks(rendered.markdown) : undefined;
+        } else if (result.attachments?.length || reactions.length || actionableAgentRequests.length) reply = "Done.";
         if (cardIsRemote) {
           await updateSlackMessage(client, cardChannel, messageTs, `Approved; ran ${inlineCode(ctx.command)}.`);
-          await postApprovalFollowup(client, ctx, reply);
+          await postApprovalFollowup(client, ctx, reply, replyBlocks);
         } else {
-          await updateSlackMessage(client, cardChannel, messageTs, reply);
+          // An update with no blocks CLEARS them, so the markdown block has
+          // to ride along or the card's first edit reverts to plain text.
+          await updateSlackMessage(client, cardChannel, messageTs, reply, replyBlocks);
         }
         if (result.attachments?.length) {
           try {

@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import {
   decodeSlackEntities,
@@ -9,6 +11,9 @@ import {
   neutralizeMassMentions,
   setMentionIndex,
   inlineCode,
+  renderSlackBody,
+  slackMarkdownBlocks,
+  SLACK_MARKDOWN_BLOCK_BUDGET,
 } from "../src/slack/lib.ts";
 
 test("inlineCode clamps long text and neutralizes backticks", () => {
@@ -206,5 +211,62 @@ test("armUserMentions: reserved broadcast names never arm", () => {
     assert.equal(toSlackMrkdwn("<!here> look"), "@​here look");
   } finally {
     setMentionIndex(new Map());
+  }
+});
+
+
+test("renderSlackBody: mrkdwn text always, raw Markdown for the block when it fits the budget", () => {
+  const body = "## Plan" + String.fromCharCode(10) + "- a" + String.fromCharCode(10) + "**关键** step";
+  const rendered = renderSlackBody(body);
+  assert.equal(rendered.markdown, body, "the block carries the raw Markdown, not the mrkdwn output");
+  assert.equal(rendered.text, toSlackMrkdwn(body), "text stays the mrkdwn fallback");
+  assert.deepEqual(slackMarkdownBlocks(body), [{ type: "markdown", text: body }]);
+});
+
+test("renderSlackBody: over-budget and empty bodies fall back to text-only", () => {
+  const huge = "x".repeat(SLACK_MARKDOWN_BLOCK_BUDGET + 1);
+  assert.equal(renderSlackBody(huge).markdown, undefined, "over-budget bodies do not get a block");
+  assert.equal(renderSlackBody(huge).text, toSlackMrkdwn(huge), "text still renders");
+  assert.equal(renderSlackBody("").markdown, undefined);
+  assert.equal(renderSlackBody("   ").markdown, undefined);
+});
+
+test("renderSlackBody: the budget stays under Slack's 12k translated-result cap", () => {
+  assert.ok(SLACK_MARKDOWN_BLOCK_BUDGET < 12_000, "headroom for translation expansion and sibling blocks");
+});
+
+test("slack senders: every agent-body site threads markdown blocks alongside the mrkdwn text", () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8").split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
+  const turnHandler = read("../src/slack/turn-handler.ts");
+  const approvals = read("../src/slack/approvals.ts");
+  const deliveries = read("../src/slack/deliveries.ts");
+
+  // turn-handler: the ack presenter and the reply both render through the helper.
+  for (const needle of [    "const { text: rendered, markdown } = renderSlackBody(text);",
+    "replyBlocks = rendered.markdown ? slackMarkdownBlocks(rendered.markdown) : undefined;",
+    "await postReply(postText, replyBlocks);",
+  ]) {
+    assert.ok(turnHandler.includes(needle), `turn-handler wired: ${needle}`);
+  }
+
+  // approvals: both result sites render, and the card update resends the
+  // block because an update with no blocks clears them.
+  for (const needle of [
+    "tryUpdateSlackMessage(client, ctx.originChannel, ctx.originStatusTs, posted, bodyBlocks)",
+    "await updateSlackMessage(client, cardChannel, messageTs, reply, replyBlocks);",
+    "await postApprovalFollowup(client, ctx, reply, replyBlocks);",
+  ]) {
+    assert.ok(approvals.includes(needle), `approvals wired: ${needle}`);
+  }
+
+  // deliveries: both the channel poller and the principal poller render,
+  // and the markdown block replaces the section-block body when present.
+  for (const needle of [
+    "const { text, markdown } = renderSlackBody(rawBody);",
+    "...(markdownBlock ?? slackSectionBlocks(text)),",
+    "const { text, markdown } = renderSlackBody(stripReactionDirectives(d.text));",
+  ]) {
+    assert.ok(deliveries.includes(needle), `deliveries wired: ${needle}`);
   }
 });
