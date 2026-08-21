@@ -55,6 +55,7 @@ import ctypes
 import json
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
@@ -68,7 +69,17 @@ output_cap = 64 * 1024 * 1024
 request_cap = 128 * 1024 * 1024
 result_cap = 256 * 1024 * 1024
 env_name = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+kill_uid_pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 helper_pid = os.getpid()
+kill_uid = sys.argv[1] if len(sys.argv) == 2 else None
+if not isinstance(kill_uid, str) or not kill_uid_pattern.fullmatch(kill_uid):
+    raise SystemExit(400)
+cancel_requested = threading.Event()
+
+def request_cancel(_signum, _frame):
+    cancel_requested.set()
+
+signal.signal(signal.SIGTERM, request_cancel)
 
 def output(value):
     encoded = json.dumps(value, separators=(",", ":"))
@@ -129,7 +140,17 @@ def descendants():
                 changed = True
     return result
 
-raw = sys.stdin.buffer.read(request_cap + 1)
+raw = bytearray()
+while len(raw) <= request_cap:
+    if cancel_requested.is_set():
+        fail("direct helper cancelled")
+    readable, _, _ = select.select([sys.stdin.buffer], [], [], 0.05)
+    if not readable:
+        continue
+    chunk = os.read(sys.stdin.fileno(), min(65536, request_cap + 1 - len(raw)))
+    if not chunk:
+        break
+    raw.extend(chunk)
 if len(raw) > request_cap:
     raise SystemExit(400)
 try:
@@ -185,6 +206,8 @@ except SystemExit:
 except Exception:
     fail("direct path is not available")
 enable_subreaper()
+if cancel_requested.is_set():
+    fail("direct helper cancelled")
 try:
     child = subprocess.Popen(argv, cwd=cwd_real, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
 except Exception:
@@ -259,7 +282,12 @@ for thread in threads:
     thread.start()
 deadline = time.monotonic() + max(1, timeout_ms) / 1000
 timed_out = False
+cancelled = False
 while True:
+    if cancel_requested.is_set():
+        cancelled = True
+        kill_tree()
+        break
     if limit_exceeded.is_set():
         kill_tree()
         break
@@ -277,7 +305,7 @@ with child_lock:
     child.wait()
 for thread in threads:
     thread.join(timeout=1)
-return_code = 124 if timed_out else 122 if limit_exceeded.is_set() else child.returncode if child.returncode >= 0 else 1
+return_code = 130 if cancelled else 124 if timed_out else 122 if limit_exceeded.is_set() else child.returncode if child.returncode >= 0 else 1
 signal_name = None
 if child.returncode < 0:
     try:
@@ -378,8 +406,11 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       signal?: string;
     }
   > {
+    if (signal?.aborted) throw signal.reason ?? new Error("sprites direct execution aborted");
+    const killUid = randomUUID();
+    const helperCommand = `import sys;sys.argv.append(${JSON.stringify(killUid)});${DIRECT_HELPER_SCRIPT}`;
     const url = new URL(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec`);
-    for (const arg of [DIRECT_HELPER_EXECUTABLE, "-c", DIRECT_HELPER_SCRIPT]) url.searchParams.append("cmd", arg);
+    for (const arg of [DIRECT_HELPER_EXECUTABLE, "-c", helperCommand]) url.searchParams.append("cmd", arg);
     url.searchParams.set("path", DIRECT_HELPER_EXECUTABLE);
     url.searchParams.set("stdin", "true");
     url.searchParams.set("max_run_after_disconnect", "0s");
@@ -399,6 +430,17 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     );
     const timeoutSignal = AbortSignal.timeout(request.timeoutMs + EXIT_GRACE_MS);
     const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+    const cleanupRemote = async (): Promise<void> => {
+      try {
+        await killDirectSession(name, killUid);
+      } catch (cleanupError) {
+        throw new Error("sprites direct cancellation cleanup failed", { cause: cleanupError });
+      }
+    };
+    const cancelRemote = async (error: unknown): Promise<never> => {
+      await cleanupRemote();
+      throw signal?.reason ?? error;
+    };
     let response: Response;
     try {
       response = await fetchImpl(url.toString(), {
@@ -408,8 +450,9 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         signal: requestSignal,
       });
     } catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error;
+      if (signal?.aborted) return await cancelRemote(error);
       if (timeoutSignal.aborted) {
+        await cleanupRemote();
         return {
           rc: 124,
           stdout: Buffer.alloc(0),
@@ -420,9 +463,13 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
           stderrTruncated: false,
         };
       }
+      await cleanupRemote();
       throw new Error("sprites direct execution request failed", { cause: error });
     }
-    if (!response.ok || !response.body) throw new Error("sprites direct execution request failed");
+    if (!response.ok || !response.body) {
+      await cleanupRemote();
+      throw new Error("sprites direct execution request failed");
+    }
     const timeoutResult = (): RawExec & {
       timedOut: boolean;
       outputLimitExceeded: boolean;
@@ -452,31 +499,41 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         responseChunks.push(Buffer.from(value));
       }
     } catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error;
-      if (timeoutSignal.aborted) return timeoutResult();
+      if (signal?.aborted) return await cancelRemote(error);
+      if (timeoutSignal.aborted) {
+        await cleanupRemote();
+        return timeoutResult();
+      }
+      await cleanupRemote();
       throw new Error("sprites direct execution response failed", { cause: error });
     } finally {
       await reader.cancel().catch(() => undefined);
     }
-    const responseBytesAll = Buffer.concat(responseChunks);
     const stdout: Buffer[] = [];
-    let exitCode = -1;
-    let offset = 0;
-    while (offset < responseBytesAll.length) {
-      const frameType = responseBytesAll[offset++]!;
-      if (frameType === 3) {
-        if (offset >= responseBytesAll.length)
-          throw new Error("sprites direct execution returned an invalid exit frame");
-        exitCode = responseBytesAll[offset++]!;
-        continue;
+    try {
+      const responseBytesAll = Buffer.concat(responseChunks);
+      let exitCode = -1;
+      let offset = 0;
+      while (offset < responseBytesAll.length) {
+        const frameType = responseBytesAll[offset++]!;
+        if (frameType === 3) {
+          if (offset >= responseBytesAll.length)
+            throw new Error("sprites direct execution returned an invalid exit frame");
+          exitCode = responseBytesAll[offset++]!;
+          continue;
+        }
+        if (frameType !== 1 && frameType !== 2)
+          throw new Error("sprites direct execution returned an unsupported frame");
+        const start = offset;
+        while (offset < responseBytesAll.length && responseBytesAll[offset]! >= 4) offset++;
+        const frame = responseBytesAll.subarray(start, offset);
+        if (frameType === 1) stdout.push(frame);
       }
-      if (frameType !== 1 && frameType !== 2) throw new Error("sprites direct execution returned an unsupported frame");
-      const start = offset;
-      while (offset < responseBytesAll.length && responseBytesAll[offset]! >= 4) offset++;
-      const frame = responseBytesAll.subarray(start, offset);
-      if (frameType === 1) stdout.push(frame);
+      if (exitCode < 0) throw new Error("sprites direct execution returned no exit frame");
+    } catch (error) {
+      await cleanupRemote();
+      throw error;
     }
-    if (exitCode < 0) throw new Error("sprites direct execution returned no exit frame");
     let envelope: {
       stdoutB64?: string;
       stderrB64?: string;
@@ -490,7 +547,16 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     };
     try {
       envelope = JSON.parse(Buffer.concat(stdout).toString("utf8")) as typeof envelope;
-    } catch {
+    } catch (error) {
+      await cleanupRemote();
+      throw new Error("sprites direct helper returned an invalid result", { cause: error });
+    }
+    if (!envelope || typeof envelope !== "object") {
+      await cleanupRemote();
+      throw new Error("sprites direct helper returned an invalid result");
+    }
+    if (envelope.error !== undefined && typeof envelope.error !== "string") {
+      await cleanupRemote();
       throw new Error("sprites direct helper returned an invalid result");
     }
     if (envelope.error) throw new Error(`sprites direct helper failed: ${envelope.error}`);
@@ -499,6 +565,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       typeof envelope.stdoutB64 !== "string" ||
       typeof envelope.stderrB64 !== "string"
     ) {
+      await cleanupRemote();
       throw new Error("sprites direct helper returned an invalid result");
     }
     return {
@@ -511,6 +578,115 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       stderrTruncated: !!envelope.stderrTruncated,
       ...(envelope.signal ? { signal: envelope.signal } : {}),
     };
+  }
+
+  async function killDirectSession(name: string, killUid: string): Promise<void> {
+    const sessionsUrl = `${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec`;
+    const deadline = Date.now() + 15_000;
+    for (let attempt = 0; attempt < 50 && Date.now() < deadline; attempt++) {
+      const attemptTimeout = Math.max(1, Math.min(2_000, deadline - Date.now()));
+      const response = await fetchImpl(sessionsUrl, {
+        method: "GET",
+        headers: { authorization: `Bearer ${opts.token ?? ""}` },
+        signal: AbortSignal.timeout(attemptTimeout),
+      });
+      if (!response.ok) throw new Error("sprites direct session lookup failed");
+      let sessions: unknown;
+      try {
+        sessions = await response.json();
+      } catch {
+        throw new Error("sprites direct session lookup failed");
+      }
+      let listed: unknown[] | null = null;
+      if (Array.isArray(sessions)) listed = sessions;
+      else if (
+        sessions &&
+        typeof sessions === "object" &&
+        Array.isArray((sessions as { sessions?: unknown }).sessions)
+      ) {
+        listed = (sessions as { sessions: unknown[] }).sessions;
+      }
+      if (!listed) throw new Error("sprites direct session lookup failed");
+      const matches = listed.filter(
+        (session): session is { id: string | number; command: string; is_active: true } =>
+          !!session &&
+          typeof session === "object" &&
+          (session as { is_active?: unknown }).is_active === true &&
+          typeof (session as { command?: unknown }).command === "string" &&
+          (session as { command: string }).command.includes(killUid) &&
+          ["string", "number"].includes(typeof (session as { id?: unknown }).id),
+      );
+      if (matches.length > 1) throw new Error("sprites direct session identity is ambiguous");
+      if (matches.length === 1) {
+        const sessionId = String(matches[0]!.id);
+        if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) throw new Error("sprites direct session identity is invalid");
+        const killUrl = new URL(
+          `${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec/${encodeURIComponent(sessionId)}/kill`,
+        );
+        killUrl.searchParams.set("signal", "SIGTERM");
+        killUrl.searchParams.set("timeout", "10s");
+        const killed = await fetchImpl(killUrl.toString(), {
+          method: "POST",
+          headers: { authorization: `Bearer ${opts.token ?? ""}` },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!killed.ok) throw new Error("sprites direct session kill failed");
+        const events = await readKillEvents(killed);
+        const completionCount = events.filter((event) => event.type === "complete").length;
+        if (
+          events.length === 0 ||
+          events.some((event) => event.type === "error" || event.type === "timeout") ||
+          completionCount !== 1 ||
+          events.at(-1)?.type !== "complete" ||
+          typeof events.at(-1)?.exit_code !== "number"
+        ) {
+          throw new Error("sprites direct session kill failed");
+        }
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("sprites direct session not found");
+  }
+
+  async function readKillEvents(response: Response): Promise<Array<{ type: string; exit_code?: unknown }>> {
+    if (!response.body) throw new Error("sprites direct session kill failed");
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const reader = response.body.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value?.length) continue;
+        total += value.length;
+        if (total > 1024 * 1024) throw new Error("sprites direct session kill failed");
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+    const text = Buffer.concat(chunks).toString("utf8").trim();
+    if (!text) throw new Error("sprites direct session kill failed");
+    let parsed: unknown;
+    try {
+      parsed = text.startsWith("[") ? JSON.parse(text) : text.split("\n").map((line) => JSON.parse(line));
+    } catch {
+      throw new Error("sprites direct session kill failed");
+    }
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some(
+        (event) =>
+          !event ||
+          typeof event !== "object" ||
+          typeof (event as { type?: unknown }).type !== "string" ||
+          !["signal", "timeout", "exited", "killed", "error", "complete"].includes((event as { type: string }).type),
+      )
+    ) {
+      throw new Error("sprites direct session kill failed");
+    }
+    return parsed as Array<{ type: string; exit_code?: unknown }>;
   }
 
   async function postExec(name: string, argv: string[], timeoutSec: number, body?: Uint8Array): Promise<RawExec> {

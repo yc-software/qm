@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { test } from "node:test";
@@ -77,7 +78,9 @@ test("Sprites direct POST keeps executable args and secrets in structured stdin"
   assert.equal(result.stdout, "ok");
   const parsedUrl = new URL(seenUrl);
   assert.equal(parsedUrl.protocol, "https:");
-  assert.deepEqual(parsedUrl.searchParams.getAll("cmd").slice(0, 2), [DIRECT_HELPER_EXECUTABLE, "-c"]);
+  const directArgs = parsedUrl.searchParams.getAll("cmd");
+  assert.deepEqual(directArgs.slice(0, 2), [DIRECT_HELPER_EXECUTABLE, "-c"]);
+  assert.match(directArgs[2] ?? "", /^import sys;sys\.argv\.append\("[0-9a-f-]{36}"\);/);
   assert.equal(parsedUrl.searchParams.get("path"), DIRECT_HELPER_EXECUTABLE);
   assert.equal(parsedUrl.searchParams.get("stdin"), "true");
   assert.equal(parsedUrl.searchParams.has("tty"), false);
@@ -128,6 +131,9 @@ test("Sprites direct parser handles split and coalesced HTTP frames", async () =
 
 test("Sprites direct POST combines caller abort with authenticated fetch", async () => {
   let seenSignal: AbortSignal | undefined;
+  let directKillUid = "";
+  let killUrl = "";
+  let calls = 0;
   const sandbox = createSpritesSandbox({} as WorkspaceStore, {
     token: "test-token",
     client: {
@@ -135,8 +141,24 @@ test("Sprites direct POST combines caller abort with authenticated fetch", async
       createSprite: async () => {},
       deleteSprite: async () => {},
     },
-    fetchImpl: async (_url, init) => {
+    fetchImpl: async (url, init) => {
+      calls++;
+      if (calls === 2) {
+        assert.equal(init?.method, "GET");
+        return new Response(
+          JSON.stringify({
+            sessions: [{ id: 1847, command: `/usr/bin/python3 -c helper ${directKillUid}`, is_active: true }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (calls === 3) {
+        killUrl = String(url);
+        assert.equal(init?.method, "POST");
+        return new Response('{"type":"signal"}\n{"type":"complete","exit_code":130}\n', { status: 200 });
+      }
       seenSignal = init?.signal ?? undefined;
+      directKillUid = new URL(String(url)).searchParams.getAll("cmd")[2]?.match(/[0-9a-f]{8}-[0-9a-f-]{27}/)?.[0] ?? "";
       return await new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
       });
@@ -151,6 +173,152 @@ test("Sprites direct POST combines caller abort with authenticated fetch", async
   controller.abort();
   await assert.rejects(request);
   assert.equal(seenSignal?.aborted, true);
+  assert.equal(calls, 3);
+  const cleanup = new URL(killUrl);
+  assert.equal(cleanup.pathname, "/v1/sprites/sprite/exec/1847/kill");
+  assert.equal(cleanup.searchParams.get("signal"), "SIGTERM");
+  assert.equal(cleanup.searchParams.get("timeout"), "10s");
+});
+
+for (const [label, killBody] of [
+  ["error event", '{"type":"error","message":"session may still be active"}\n'],
+  [
+    "timeout escalation",
+    '{"type":"signal"}\n{"type":"timeout"}\n{"type":"killed"}\n{"type":"complete","exit_code":137}\n',
+  ],
+  ["missing completion", '{"type":"signal"}\n{"type":"exited","exit_code":130}\n'],
+] as const) {
+  test(`Sprites direct cancellation fails closed on kill ${label}`, async () => {
+    let calls = 0;
+    let directKillUid = "";
+    const sandbox = createSpritesSandbox({} as WorkspaceStore, {
+      token: "test-token",
+      client: {
+        getSprite: async () => ({}),
+        createSprite: async () => ({}),
+        deleteSprite: async () => {},
+      },
+      fetchImpl: async (url, init) => {
+        calls++;
+        if (calls === 1) {
+          directKillUid =
+            new URL(String(url)).searchParams.getAll("cmd")[2]?.match(/[0-9a-f]{8}-[0-9a-f-]{27}/)?.[0] ?? "";
+          return await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+          });
+        }
+        if (calls === 2) {
+          return new Response(
+            JSON.stringify([{ id: "session-1", command: `helper ${directKillUid}`, is_active: true }]),
+            { status: 200 },
+          );
+        }
+        return new Response(killBody, { status: 200 });
+      },
+    });
+    const controller = new AbortController();
+    const request = sandbox.runDirect!(
+      { id: "sprite", rootDir: "/workspace" },
+      { argv: ["/usr/bin/printf"], executablePath: "/usr/bin/printf" },
+      { signal: controller.signal },
+    );
+    controller.abort();
+    await assert.rejects(request, /sprites direct cancellation cleanup failed/);
+    assert.equal(calls, 3);
+  });
+}
+
+test("Sprites direct protocol failure terminates the identified remote session", async () => {
+  let calls = 0;
+  let directKillUid = "";
+  const sandbox = createSpritesSandbox({} as WorkspaceStore, {
+    token: "test-token",
+    client: {
+      getSprite: async () => ({}),
+      createSprite: async () => ({}),
+      deleteSprite: async () => {},
+    },
+    fetchImpl: async (url) => {
+      calls++;
+      if (calls === 1) {
+        directKillUid =
+          new URL(String(url)).searchParams.getAll("cmd")[2]?.match(/[0-9a-f]{8}-[0-9a-f-]{27}/)?.[0] ?? "";
+        return new Response(new Uint8Array([1, ...Buffer.from("unterminated")]));
+      }
+      if (calls === 2) {
+        return new Response(
+          JSON.stringify([{ id: "session-2", command: `helper ${directKillUid}`, is_active: true }]),
+          { status: 200 },
+        );
+      }
+      return new Response('[{"type":"signal"},{"type":"complete","exit_code":130}]', { status: 200 });
+    },
+  });
+  await assert.rejects(
+    sandbox.runDirect!(
+      { id: "sprite", rootDir: "/workspace" },
+      { argv: ["/usr/bin/printf"], executablePath: "/usr/bin/printf" },
+    ),
+    /sprites direct execution returned no exit frame/,
+  );
+  assert.equal(calls, 3);
+});
+
+test("Sprites direct cancellation fails closed when the remote session cannot be identified", async () => {
+  let calls = 0;
+  const sandbox = createSpritesSandbox({} as WorkspaceStore, {
+    token: "test-token",
+    client: {
+      getSprite: async () => ({}),
+      createSprite: async () => ({}),
+      deleteSprite: async () => {},
+    },
+    fetchImpl: async (_url, init) => {
+      calls++;
+      if (calls === 1) {
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        });
+      }
+      return new Response("not-json", { status: 200 });
+    },
+  });
+  const controller = new AbortController();
+  const request = sandbox.runDirect!(
+    { id: "sprite", rootDir: "/workspace" },
+    { argv: ["/usr/bin/printf"], executablePath: "/usr/bin/printf" },
+    { signal: controller.signal },
+  );
+  controller.abort();
+  await assert.rejects(request, /sprites direct cancellation cleanup failed/);
+  assert.equal(calls, 2);
+});
+
+test("Sprites direct rejects an already-aborted caller without starting a remote session", async () => {
+  let calls = 0;
+  const sandbox = createSpritesSandbox({} as WorkspaceStore, {
+    token: "test-token",
+    client: {
+      getSprite: async () => ({}),
+      createSprite: async () => ({}),
+      deleteSprite: async () => {},
+    },
+    fetchImpl: async () => {
+      calls++;
+      return framedResponse("unexpected");
+    },
+  });
+  const controller = new AbortController();
+  controller.abort(new Error("caller cancelled before dispatch"));
+  await assert.rejects(
+    sandbox.runDirect!(
+      { id: "sprite", rootDir: "/workspace" },
+      { argv: ["/usr/bin/printf"], executablePath: "/usr/bin/printf" },
+      { signal: controller.signal },
+    ),
+    /caller cancelled before dispatch/,
+  );
+  assert.equal(calls, 0);
 });
 
 test("Sprites provision fails closed when the fixed helper runtime is unavailable", async () => {
@@ -180,7 +348,7 @@ test("Sprites provision fails closed when the fixed helper runtime is unavailabl
 test("Sprites helper executes a bounded structured request with exact child env", async () => {
   const executablePath = process.execPath;
   const rootDir = process.cwd();
-  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT, randomUUID()], {
     env: { HELPER_AMBIENT: "should-not-reach-target" },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -223,7 +391,7 @@ test("Sprites helper executes a bounded structured request with exact child env"
 
 test("Sprites helper enforces timeout and output limits", async () => {
   const runHelper = async (request: Record<string, unknown>) => {
-    const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+    const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT, randomUUID()], {
       stdio: ["pipe", "pipe", "ignore"],
     });
     const stdout: Buffer[] = [];
@@ -266,12 +434,90 @@ test("Sprites helper enforces timeout and output limits", async () => {
   assert.equal(Buffer.from(limited.stdoutB64, "base64").length, 32);
 });
 
+test("Sprites helper handles remote SIGTERM by terminating the supervised command", async () => {
+  const ready = join(process.cwd(), ".direct-helper-cancel-ready");
+  const marker = join(process.cwd(), ".direct-helper-cancel-marker");
+  rmSync(ready, { force: true });
+  rmSync(marker, { force: true });
+  const command = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},'ready');setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'unexpected'),500);setTimeout(()=>{},2000)`;
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT, randomUUID()], {
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const stdout: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stdin.end(
+    JSON.stringify({
+      argv: [process.execPath, "-e", command],
+      rootDir: process.cwd(),
+      cwd: process.cwd(),
+      env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" },
+      allowedEnvKeys: [],
+      dynamicEnvKeys: [],
+      timeoutMs: 5000,
+      stdoutMaxBytes: 1024,
+      stderrMaxBytes: 1024,
+    }),
+  );
+  try {
+    for (let attempt = 0; attempt < 100 && !existsSync(ready); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(existsSync(ready), true);
+    child.kill("SIGTERM");
+    await once(child, "close");
+    const envelope = JSON.parse(Buffer.concat(stdout).toString("utf8")) as { code?: number };
+    assert.equal(envelope.code, 130);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.equal(existsSync(marker), false);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    rmSync(ready, { force: true });
+    rmSync(marker, { force: true });
+  }
+});
+
+test("Sprites helper handles SIGTERM while structured stdin remains open", async () => {
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT, randomUUID()], {
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const stdout: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stdin.write('{"argv":');
+  try {
+    // The Python interpreter must finish installing its SIGTERM handler before
+    // the test delivers the signal; stdin deliberately remains incomplete.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    child.kill("SIGTERM");
+    const closed = await Promise.race([
+      once(child, "close").then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
+    ]);
+    assert.equal(closed, true);
+    const envelope = JSON.parse(Buffer.concat(stdout).toString("utf8")) as { error?: string };
+    assert.equal(envelope.error, "direct helper cancelled");
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
+});
+
+test("Sprites helper rejects an invalid remote cancellation identity before execution", async () => {
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT, "not-a-valid-identity"], {
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const stdout: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stdin.end("{}");
+  const [code] = (await once(child, "close")) as [number, NodeJS.Signals | null];
+  assert.notEqual(code, 0);
+  assert.equal(Buffer.concat(stdout).length, 0);
+});
+
 test("Sprites helper keeps descendant supervision until the process group is terminated", async () => {
   const marker = join(process.cwd(), ".direct-helper-descendant-marker");
   rmSync(marker, { force: true });
   const descendant = `setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'unexpected'),300);setTimeout(()=>{},1000)`;
   const leader = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','inherit','inherit']})`;
-  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT, randomUUID()], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   const stdout: Buffer[] = [];
@@ -317,7 +563,7 @@ test(
     rmSync(pidFile, { force: true });
     const detached = `setTimeout(()=>{if(process.env.SYNTHETIC_CREDENTIAL==='present')require('node:fs').writeFileSync(${JSON.stringify(marker)},'unexpected')},300);setTimeout(()=>{},1000)`;
     const leader = `const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(detached)}],{detached:true,stdio:'ignore',env:process.env});require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(child.pid));child.unref()`;
-    const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+    const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT, randomUUID()], {
       stdio: ["pipe", "pipe", "ignore"],
     });
     const stdout: Buffer[] = [];
@@ -352,7 +598,7 @@ test(
 );
 
 test("Sprites helper rejects malformed environment key arrays with a structured error", async () => {
-  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT, randomUUID()], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   const stdout: Buffer[] = [];
@@ -376,7 +622,7 @@ test("Sprites helper rejects malformed environment key arrays with a structured 
 });
 
 test("Sprites helper does not expose spawn error details", async () => {
-  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+  const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT, randomUUID()], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   const stdout: Buffer[] = [];
