@@ -503,15 +503,7 @@ export interface TurnResult {
    * means "the ambient gate declined to answer", leaving the two opposite
    * outcomes indistinguishable in runs.result (#609).
    */
-  status:
-    | "ok"
-    | "delivered"
-    | "refused"
-    | "failed"
-    | "pending_approval"
-    | "queued"
-    | "silent"
-    | "react";
+  status: "ok" | "delivered" | "refused" | "failed" | "pending_approval" | "queued" | "silent" | "react";
   sessionId?: string;
   reply?: string;
   reactions?: string[];

@@ -2766,20 +2766,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           // order) so the metrics row says what actually happened instead of
           // hardcoding "ok" — delivered answers, silent polls, and approval
           // pauses all used to land here as "ok" (#609).
-          status:
-            pausing
-              ? "paused"
-              : isPollFire && result.silent && result.pausedOnApproval !== true
-                ? "silent"
-                : result.pendingApprovals?.length
-                  ? turnCompleted
-                    ? "ok"
-                    : "pending_approval"
-                  : isPollFire && !outbound.attachments.length && isSilentPollReply(reply)
-                    ? "silent"
-                    : input.surfaceTools && surfaceToolDeps && !strictReadOnly
-                      ? "delivered"
-                      : "ok",
+          status: pausing
+            ? "paused"
+            : isPollFire && result.silent && result.pausedOnApproval !== true
+              ? "silent"
+              : result.pendingApprovals?.length
+                ? turnCompleted
+                  ? "ok"
+                  : "pending_approval"
+                : isPollFire && !outbound.attachments.length && isSilentPollReply(reply)
+                  ? "silent"
+                  : input.surfaceTools && surfaceToolDeps && !strictReadOnly
+                    ? "delivered"
+                    : "ok",
           scopeLabel: scopeId,
           provisioned:
             !!box.handle ||
