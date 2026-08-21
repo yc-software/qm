@@ -57,6 +57,45 @@ function armUserMentions(text: string, wrap: (armed: string) => string = (s) => 
   });
 }
 
+/**
+ * Slack's `markdown` block budget applies to the TRANSLATED result
+ * (block-tree characters), cumulatively per payload -- and translation can
+ * expand structure into native blocks. Stay clearly under the 12,000 cap
+ * measured in the wild; bodies above this render through the legacy
+ * text-only path instead of failing the post for being too structured.
+ */
+export const SLACK_MARKDOWN_BLOCK_BUDGET = 11_500;
+
+export type SlackRenderedBody = {
+  /** mrkdwn rendering: the notification / screen-reader / mirror fallback. */
+  text: string;
+  /** The raw Markdown for a `markdown` block, when the body fits the budget. */
+  markdown: string | undefined;
+};
+
+/**
+ * Render one outbound agent body for Slack: mrkdwn `text` always, plus the
+ * raw Markdown for a native `markdown` block when it fits the budget.
+ *
+ * The block must carry the RAW Markdown, not the mrkdwn output: `*x*` is
+ * italic in Markdown (mrkdwn bold), and `<url|label>` is not link syntax
+ * there. Native lists, CJK-flanked bold, tables and fenced-code languages
+ * all render through the block; `text` stays the fallback for notifications
+ * and older clients.
+ */
+export function renderSlackBody(md: string): SlackRenderedBody {
+  const text = toSlackMrkdwn(md);
+  if (!md.trim() || md.length > SLACK_MARKDOWN_BLOCK_BUDGET) {
+    return { text, markdown: undefined };
+  }
+  return { text, markdown: md };
+}
+
+/** Wrap raw Markdown in the single-block form the senders expect. */
+export function slackMarkdownBlocks(markdown: string): Array<Record<string, unknown>> {
+  return [{ type: "markdown", text: markdown }];
+}
+
 export function toSlackMrkdwn(md: string): string {
   if (!md) return md;
   const stash: string[] = [];

@@ -13,6 +13,8 @@ import {
   slackReplyArgs,
   slackSectionBlocks,
   stripReactionDirectives,
+  renderSlackBody,
+  slackMarkdownBlocks,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
@@ -102,7 +104,12 @@ export function createDeliveryPoller(deps: {
               }
               return undefined;
             }
-            const text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
+            const rawBody = runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text);
+            const { text, markdown } = renderSlackBody(rawBody);
+            // The markdown block renders the body natively (lists, CJK bold,
+            // tables, code languages); the section blocks remain the shape
+            // for over-budget bodies and the task-list footer's own text.
+            const markdownBlock = markdown ? slackMarkdownBlocks(markdown) : undefined;
             const replayAttachments = async (root?: string): Promise<void> => {
               if (!d.attachments?.length) return;
               try {
@@ -124,7 +131,7 @@ export function createDeliveryPoller(deps: {
             const taskList = d.destination.taskList?.length ? renderTaskList(d.destination.taskList) : undefined;
             const taskListBlocks = taskList
               ? [
-                  ...slackSectionBlocks(text),
+                  ...(markdownBlock ?? slackSectionBlocks(text)),
                   { type: "section", text: { type: "mrkdwn", text: taskList } },
                   ...(d.destination.debugFooter
                     ? [{ type: "context", elements: [{ type: "mrkdwn", text: d.destination.debugFooter }] }]
@@ -172,7 +179,11 @@ export function createDeliveryPoller(deps: {
                   channel,
                   ts: d.destination.editRef,
                   text,
-                  ...(taskListBlocks ? { blocks: taskListBlocks } : {}),
+                  ...(taskListBlocks
+                    ? { blocks: taskListBlocks }
+                    : markdownBlock
+                      ? { blocks: markdownBlock }
+                      : {}),
                   ...botIdentityArgs(),
                   ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                 });
@@ -186,12 +197,19 @@ export function createDeliveryPoller(deps: {
             }
             const footerBlocks =
               taskListBlocks ??
-              (d.destination.debugFooter && text.length <= 2900
+              (markdownBlock
                 ? [
-                    { type: "section", text: { type: "mrkdwn", text } },
-                    { type: "context", elements: [{ type: "mrkdwn", text: d.destination.debugFooter }] },
+                    ...markdownBlock,
+                    ...(d.destination.debugFooter
+                      ? [{ type: "context", elements: [{ type: "mrkdwn", text: d.destination.debugFooter }] }]
+                      : []),
                   ]
-                : undefined);
+                : d.destination.debugFooter && text.length <= 2900
+                  ? [
+                      { type: "section", text: { type: "mrkdwn", text } },
+                      { type: "context", elements: [{ type: "mrkdwn", text: d.destination.debugFooter }] },
+                    ]
+                  : undefined);
             const res = await postWithVerify(
               postClient,
               {
@@ -230,14 +248,15 @@ export function createDeliveryPoller(deps: {
         post: async () => {
           const tPost = performance.now();
           try {
-            const text = toSlackMrkdwn(stripReactionDirectives(d.text));
+            const { text, markdown } = renderSlackBody(stripReactionDirectives(d.text));
             if (!text.trim() && !d.attachments?.length) return undefined;
             const channel = await openConversationFor(client, [d.destination.target]);
             const threadTs = d.destination.threadTs;
             if (text.trim()) {
-              const posted = await client.chat.postMessage(
-                slackReplyArgs(channel, text, threadTs, { unfurlLinks: d.destination.unfurlLinks }),
-              );
+              const posted = await client.chat.postMessage({
+                ...slackReplyArgs(channel, text, threadTs, { unfurlLinks: d.destination.unfurlLinks }),
+                ...(markdown ? { blocks: slackMarkdownBlocks(markdown) } : {}),
+              });
               mirrorSelfPost(channel, posted?.ts, text, { kind: "dm", sub: threadTs });
             }
             if (d.attachments?.length) {
