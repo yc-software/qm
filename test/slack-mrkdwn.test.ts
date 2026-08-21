@@ -24,6 +24,15 @@ test("decodeSlackEntities / stripMention", () => {
   assert.equal(stripMention("<@BOT>", "BOT"), "");
 });
 
+test("stripMention strips the bot-id form and the legacy label shape (#630)", () => {
+  // The core must not receive a raw <@B…> token for an addressed turn.
+  assert.equal(stripMention("<@BOTID> run the tests", "UBOT", "BOTID"), "run the tests");
+  assert.equal(stripMention("<@BOTID|qm> run the tests", "UBOT", "BOTID"), "run the tests");
+  assert.equal(stripMention("<@UBOT> classic", "UBOT", "BOTID"), "classic");
+  assert.equal(stripMention("<@UBOT|qm> legacy label", "UBOT", "BOTID"), "legacy label");
+  assert.equal(stripMention("unrelated <@OTHER> stays", "UBOT", "BOTID"), "unrelated <@OTHER> stays");
+});
+
 test("toSlackMrkdwn: bold uses single * (the screenshot bug: **x** rendered literally)", () => {
   assert.equal(toSlackMrkdwn("**Git commands**"), "*Git commands*");
   assert.equal(toSlackMrkdwn("__also bold__"), "*also bold*");
