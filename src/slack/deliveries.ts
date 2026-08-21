@@ -1,4 +1,4 @@
-import { swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
   botIdentityArgs,
@@ -192,6 +192,35 @@ export function createDeliveryPoller(deps: {
                     { type: "context", elements: [{ type: "mrkdwn", text: d.destination.debugFooter }] },
                   ]
                 : undefined);
+            let composedUploadError: unknown;
+            const canComposeUpload =
+              d.attachments?.length &&
+              !d.destination.identity &&
+              !footerBlocks &&
+              !runId &&
+              d.destination.unfurlLinks === undefined;
+            if (canComposeUpload) {
+              try {
+                const uploaded = await uploadAttachments(
+                  client,
+                  channel,
+                  threadTs,
+                  d.attachments!,
+                  fetchBlobFromCore,
+                  fetchFileArtifactFromCore,
+                  { initialComment: text },
+                );
+                if (uploaded.uploaded) {
+                  const root = threadTs ?? uploaded.messageTs;
+                  if (root) threads.mark(channel, root, true);
+                  mirrorSelfPost(channel, uploaded.messageTs, text, { sub: threadTs });
+                  return undefined;
+                }
+              } catch (error) {
+                composedUploadError = error;
+                console.error(`[slack-plugin] delivery ${d.id} attachment upload failed:`, (error as Error).message);
+              }
+            }
             const res = await postWithVerify(
               postClient,
               {
@@ -209,7 +238,13 @@ export function createDeliveryPoller(deps: {
             const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
             if (root) threads.mark(channel, root, true);
             if (!d.destination.identity) mirrorSelfPost(channel, res?.ts, text, { sub: threadTs });
-            await replayAttachments(root);
+            if (composedUploadError) {
+              await client.chat
+                .postMessage(slackReplyArgs(channel, uploadFailureNote(composedUploadError), root))
+                .catch(swallowAs("slack: post upload-failure note", undefined));
+            } else {
+              await replayAttachments(root);
+            }
             return undefined;
           } finally {
             slackApiMs = Math.round(performance.now() - tPost);
@@ -234,31 +269,58 @@ export function createDeliveryPoller(deps: {
             if (!text.trim() && !d.attachments?.length) return undefined;
             const channel = await openConversationFor(client, [d.destination.target]);
             const threadTs = d.destination.threadTs;
-            if (text.trim()) {
-              const posted = await client.chat.postMessage(
-                slackReplyArgs(channel, text, threadTs, { unfurlLinks: d.destination.unfurlLinks }),
-              );
-              mirrorSelfPost(channel, posted?.ts, text, { kind: "dm", sub: threadTs });
-            }
-            if (d.attachments?.length) {
+            let composedUpload = false;
+            let uploadError: unknown;
+            if (text.trim() && d.attachments?.length && d.destination.unfurlLinks === undefined) {
               try {
-                await uploadAttachments(
+                const uploaded = await uploadAttachments(
                   client,
                   channel,
                   threadTs,
                   d.attachments,
                   fetchBlobFromCore,
                   fetchFileArtifactFromCore,
+                  { initialComment: text },
                 );
-              } catch (err) {
-                console.error(
-                  `[slack-plugin] principal delivery ${d.id} attachment upload failed:`,
-                  (err as Error).message,
-                );
-                await client.chat
-                  .postMessage(slackReplyArgs(channel, uploadFailureNote(err), threadTs))
-                  .catch(swallowAs("slack: post principal upload-failure note", undefined));
+                if (uploaded.uploaded) {
+                  composedUpload = true;
+                  mirrorSelfPost(channel, uploaded.messageTs, text, { kind: "dm", sub: threadTs });
+                }
+              } catch (error) {
+                uploadError = error;
+                console.error(`[slack-plugin] principal delivery ${d.id} attachment upload failed:`, errMessage(error));
               }
+            }
+            if (!composedUpload) {
+              if (text.trim()) {
+                const posted = await client.chat.postMessage(
+                  slackReplyArgs(channel, text, threadTs, { unfurlLinks: d.destination.unfurlLinks }),
+                );
+                mirrorSelfPost(channel, posted?.ts, text, { kind: "dm", sub: threadTs });
+              }
+              if (d.attachments?.length && !uploadError) {
+                try {
+                  await uploadAttachments(
+                    client,
+                    channel,
+                    threadTs,
+                    d.attachments,
+                    fetchBlobFromCore,
+                    fetchFileArtifactFromCore,
+                  );
+                } catch (error) {
+                  uploadError = error;
+                  console.error(
+                    `[slack-plugin] principal delivery ${d.id} attachment upload failed:`,
+                    errMessage(error),
+                  );
+                }
+              }
+            }
+            if (uploadError) {
+              await client.chat
+                .postMessage(slackReplyArgs(channel, uploadFailureNote(uploadError), threadTs))
+                .catch(swallowAs("slack: post principal upload-failure note", undefined));
             }
             return { recipientThreadRef: dmThreadRef(channel, threadTs) };
           } finally {

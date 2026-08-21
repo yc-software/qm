@@ -191,18 +191,28 @@ export interface UploadClient {
   files: { uploadV2(args: any): Promise<unknown>; info(args: { file: string }): Promise<unknown> };
 }
 
-async function waitForShareCommit(client: UploadClient, channel: string, fileId: string): Promise<void> {
+async function waitForShareCommit(client: UploadClient, channel: string, fileId: string): Promise<string | undefined> {
   for (let i = 0; i < 60; i++) {
     let shares: any;
     try {
       shares = ((await client.files.info({ file: fileId })) as any)?.file?.shares ?? {};
     } catch {
-      return;
+      return undefined;
     }
     const here = [...(shares.public?.[channel] ?? []), ...(shares.private?.[channel] ?? [])];
-    if (here.some((s: any) => s?.ts)) return;
+    const shared = here.find((share: any) => share?.ts);
+    if (shared?.ts) return String(shared.ts);
     await sleep(250);
   }
+  return undefined;
+}
+
+function uploadedFileIds(response: any): string[] {
+  const files = response?.file ? [response.file] : (response?.files ?? []);
+  return files.flatMap((entry: any) => {
+    if (entry?.id) return [String(entry.id)];
+    return (entry?.files ?? []).flatMap((file: any) => (file?.id ? [String(file.id)] : []));
+  });
 }
 
 export async function uploadAttachments(
@@ -212,25 +222,33 @@ export async function uploadAttachments(
   attachments: readonly OutgoingAttachment[],
   fetchBlob: (blobId: string) => Promise<Buffer>,
   fetchArtifact?: (artifactId: string, viewerId: string) => Promise<Buffer>,
-): Promise<void> {
-  for (const a of attachments) {
+  opts: { initialComment?: string } = {},
+): Promise<{ uploaded: boolean; messageTs?: string }> {
+  const fileUploads: Array<{ filename: string; file: Buffer }> = [];
+  for (const attachment of attachments) {
     let file: Buffer;
     try {
-      file = await fetchBlob(a.blobId);
+      file = await fetchBlob(attachment.blobId);
     } catch (err) {
-      if (!fetchArtifact || !a.artifactId || !a.artifactViewerId) throw err;
-      file = await fetchArtifact(a.artifactId, a.artifactViewerId);
+      if (!fetchArtifact || !attachment.artifactId || !attachment.artifactViewerId) throw err;
+      file = await fetchArtifact(attachment.artifactId, attachment.artifactViewerId);
     }
-    if (file.length === 0) continue;
-    const res = (await client.files.uploadV2({
-      channel_id: channel,
-      ...(threadTs ? { thread_ts: threadTs } : {}),
-      filename: a.name,
-      file,
-    })) as any;
-    const fileId = res?.files?.[0]?.files?.[0]?.id ?? res?.files?.[0]?.id ?? res?.file?.id;
-    if (fileId) await waitForShareCommit(client, channel, fileId);
+    if (file.length > 0) fileUploads.push({ filename: attachment.name, file });
   }
+  if (!fileUploads.length) return { uploaded: false };
+
+  const response = await client.files.uploadV2({
+    channel_id: channel,
+    ...(threadTs ? { thread_ts: threadTs } : {}),
+    ...(opts.initialComment ? { initial_comment: opts.initialComment } : {}),
+    file_uploads: fileUploads,
+  });
+  let messageTs: string | undefined;
+  for (const fileId of uploadedFileIds(response)) {
+    const sharedTs = await waitForShareCommit(client, channel, fileId);
+    messageTs ??= sharedTs;
+  }
+  return { uploaded: true, ...(messageTs ? { messageTs } : {}) };
 }
 
 export function uploadFailureNote(err: unknown): string {

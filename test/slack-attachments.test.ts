@@ -279,8 +279,53 @@ test("uploadAttachments fetches each blob and calls files.uploadV2 with the righ
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.channel_id, "C1");
   assert.equal(calls[0]!.thread_ts, "123.45");
-  assert.equal(calls[0]!.filename, "x.txt");
-  assert.equal(Buffer.from(calls[0]!.file as Uint8Array).toString("utf8"), "bytes-for-B1");
+  assert.deepEqual(
+    (calls[0]!.file_uploads as Array<{ filename: string; file: Buffer }>).map(({ filename, file }) => [
+      filename,
+      file.toString(),
+    ]),
+    [["x.txt", "bytes-for-B1"]],
+  );
+});
+
+test("uploadAttachments batches mixed files with commentary into one Slack message", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const client = {
+    files: {
+      uploadV2: async (args: Record<string, unknown>) => {
+        calls.push(args);
+        return { files: [{ files: [{ id: "F1" }, { id: "F2" }, { id: "F3" }] }] };
+      },
+      info: async () => ({ file: { shares: { private: { C1: [{ ts: "123.456" }] } } } }),
+    },
+  };
+  const attachments = [
+    { name: "first.png", mimetype: "image/png", sizeBytes: 3, blobId: "B1" },
+    { name: "second.jpg", mimetype: "image/jpeg", sizeBytes: 3, blobId: "B2" },
+    { name: "notes.pdf", mimetype: "application/pdf", sizeBytes: 3, blobId: "B3" },
+  ];
+
+  await uploadAttachments(client, "C1", "123.45", attachments, async (id) => Buffer.from(id), undefined, {
+    initialComment: "two screenshots and the notes",
+  });
+
+  assert.equal(calls.length, 1, "one composed post should make one Slack upload call");
+  assert.equal(calls[0]!.channel_id, "C1");
+  assert.equal(calls[0]!.thread_ts, "123.45");
+  assert.equal(calls[0]!.initial_comment, "two screenshots and the notes");
+  assert.deepEqual(
+    (calls[0]!.file_uploads as Array<{ filename: string; file: Buffer }>).map(({ filename, file }) => [
+      filename,
+      file.toString(),
+    ]),
+    [
+      ["first.png", "B1"],
+      ["second.jpg", "B2"],
+      ["notes.pdf", "B3"],
+    ],
+  );
+  assert.equal(calls[0]!.filename, undefined);
+  assert.equal(calls[0]!.file, undefined);
 });
 
 test("uploadAttachments falls back to durable file artifacts when the transient blob is gone", async () => {
@@ -305,7 +350,8 @@ test("uploadAttachments falls back to durable file artifacts when the transient 
     fetchArtifact,
   );
   assert.equal(calls.length, 1);
-  assert.equal(Buffer.from(calls[0]!.file as Uint8Array).toString("utf8"), "artifact:A1:U1");
+  const [uploaded] = calls[0]!.file_uploads as Array<{ filename: string; file: Buffer }>;
+  assert.equal(uploaded!.file.toString(), "artifact:A1:U1");
 });
 
 test("uploadAttachments propagates an upload failure (so the caller can report it)", async () => {
