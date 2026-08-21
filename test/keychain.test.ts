@@ -1458,3 +1458,59 @@ test("turn e2e: manifest in the prompt, no secret without a grant, standing gran
   assert.equal((await built.app.turn(dm)).status, "ok");
   assert.ok(execScriptsMention("ghp_e2e", mark), "owner's personal scope gets their own keychain creds");
 });
+
+describe("a failed connector refresh does not discard a token that still works", () => {
+  const GMAIL = "gmail.googleapis.com";
+  type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
+  function kcFailingRefresh(): Keychain {
+    return createKeychain({
+      creds: createMemoryMap<Rec>(),
+      grants: createMemoryMap(),
+      asks: createMemoryMap(),
+      key: KEY,
+      refreshConnector: async () => {
+        throw new Error("fetch failed");
+      },
+    });
+  }
+
+  it("falls back to the stored token while it is still valid", async () => {
+    const k = kcFailingRefresh();
+    await k.setConnectorToken(GMAIL, "alex@x", {
+      accessToken: "ya29.still-good",
+      refreshToken: "rt",
+      expiresAt: Date.now() + 5 * 60_000,
+    });
+    assert.equal(await k.connectorAccessToken(GMAIL, "alex@x"), "ya29.still-good");
+    const status = await k.connectorTokenStatus(GMAIL, "alex@x");
+    assert.equal(typeof status.refreshFailedAt, "number", "the failure is still recorded");
+    assert.equal(status.needsReconnect, undefined, "a usable token is not a reconnect prompt");
+  });
+
+  it("returns nothing once the stored token is past its skew", async () => {
+    const k = kcFailingRefresh();
+    await k.setConnectorToken(GMAIL, "alex@x", {
+      accessToken: "ya29.dead",
+      refreshToken: "rt",
+      expiresAt: Date.now() + 10_000,
+    });
+    assert.equal(await k.connectorAccessToken(GMAIL, "alex@x"), null);
+    assert.equal((await k.connectorTokenStatus(GMAIL, "alex@x")).needsReconnect, true);
+  });
+
+  it("still prefers a successful refresh over the stored token", async () => {
+    const k = createKeychain({
+      creds: createMemoryMap<Rec>(),
+      grants: createMemoryMap(),
+      asks: createMemoryMap(),
+      key: KEY,
+      refreshConnector: async () => ({ accessToken: "ya29.fresh", expiresAt: Date.now() + 3_600_000 }),
+    });
+    await k.setConnectorToken(GMAIL, "alex@x", {
+      accessToken: "ya29.aging",
+      refreshToken: "rt",
+      expiresAt: Date.now() + 5 * 60_000,
+    });
+    assert.equal(await k.connectorAccessToken(GMAIL, "alex@x"), "ya29.fresh");
+  });
+});
