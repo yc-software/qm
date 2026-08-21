@@ -283,6 +283,25 @@ test("spine ON: an unprompted thread-follow ALSO routes to a sub-conversation wi
   }
 });
 
+test("an addressed approval pause is returned without a reply-or-decline nudge", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const res = await built.app.turn({
+      ...mention("!finish-silent-paused", "C-approval-pause", "700.0"),
+      async: false,
+    });
+
+    assert.equal(res.status, "pending_approval");
+    assert.equal(res.pendingApprovals?.length, 1);
+    assert.equal(res.pendingApprovals?.[0]?.command, "gated-check");
+    const all = (await built.deliveries.pending("slack")) as any[];
+    assert.equal(all.length, 0, "an approval pause must not be nudged into a surface reply");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("addressed + no post → exactly one nudge → the agent posts on the continuation turn", async () => {
   const built = freshApp();
   built.runtime.start();

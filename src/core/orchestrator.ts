@@ -2555,7 +2555,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           surfaceToolDeps &&
           spine.surfaceOutboundCount === 0 &&
           spine.staySilentReason === undefined &&
-          !result.silent
+          !result.silent &&
+          result.pausedOnApproval !== true
         ) {
           const firstTapeWriteFailed = !!result.tapeWriteFailed;
           const primaryStopped = !!result.stopped;
