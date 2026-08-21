@@ -12,6 +12,7 @@ import {
   isHarnessId,
   modelProviderAvailabilityFor,
   modelServiceable,
+  resolveModel,
 } from "../model/pi-models.ts";
 import { selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
@@ -100,6 +101,22 @@ export function createTurnMethods(
         }
       }
 
+      const orgRuntimeScope = scopeId("org", orgIdOf());
+      const turnRuntimeScope =
+        req.conversation.kind === "dm"
+          ? scopeId("personal", actor.id)
+          : scopeId(req.conversation.kind, req.conversation.channelRef ?? req.conversation.threadRef);
+      const [storedOrgRuntime, storedTurnRuntime] = await Promise.all([
+        deps.config.getRuntimeSelectionDurable(orgRuntimeScope),
+        turnRuntimeScope === orgRuntimeScope ? null : deps.config.getRuntimeSelectionDurable(turnRuntimeScope),
+      ]);
+      const needsOpenRouterCatalog = [storedOrgRuntime?.modelId, storedTurnRuntime?.modelId].some(
+        (modelId) => modelId && !resolveModel(modelId),
+      );
+      if (needsOpenRouterCatalog && deps.modelCredentials && (await deps.modelCredentials.availability()).openrouter) {
+        await selectableModelCatalog(deps.modelCredentialFetch);
+      }
+
       async function withCurrentProjectRoster<T>(fn: () => Promise<T>): Promise<T | null> {
         if (!projectId || !deps.projects) return fn();
         if (!conversationRef || !projectVersion) return null;
@@ -130,6 +147,9 @@ export function createTurnMethods(
           harnessId: fallbackHarness,
           modelId: defaultModelForHarness(fallbackHarness),
         };
+        const configuredKeys = deps.providerKeys ??
+          deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
+        const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
         let orgRuntime;
         let configuredRuntime;
         let runtime;
@@ -152,15 +172,9 @@ export function createTurnMethods(
         if (req.harness && !isHarnessId(req.harness)) {
           return { status: "refused", reason: `runtime ${req.harness} is not approved` };
         }
-        const configuredKeys = deps.providerKeys ??
-          deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
         let providers = deps.modelProviders;
         if (deps.modelCredentials) {
-          providers = modelProviderAvailabilityFor(
-            runtime.harnessId,
-            configuredKeys,
-            await deps.modelCredentials.availability(),
-          );
+          providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys, managedKeys);
         } else if (deps.providerKeys) {
           providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys);
         }

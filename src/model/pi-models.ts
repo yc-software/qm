@@ -94,9 +94,10 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
 ];
 
 const REGISTRY_BY_ID = new Map(MODEL_REGISTRY.map((m) => [m.id, m]));
+const OPENROUTER_CATALOG_MODELS = new Map<string, PiModel>();
 
 export function modelDisplayName(id: string): string {
-  return REGISTRY_BY_ID.get(id)?.name ?? id;
+  return REGISTRY_BY_ID.get(id)?.name ?? OPENROUTER_CATALOG_MODELS.get(id)?.name ?? id;
 }
 
 export const DEFAULT_WEBUI_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter((m) => m.webui).map((m) => m.id);
@@ -132,6 +133,35 @@ function cloneModel(model: PiModel, id: string, name: string, overrides: Partial
   };
 }
 
+export interface OpenRouterCatalogModel {
+  id: string;
+  name: string;
+  contextWindow: number;
+  maxTokens: number;
+  input: ("text" | "image")[];
+  reasoning: boolean;
+  cost: { input: number; output: number };
+}
+
+export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogModel): PiModel | undefined {
+  const template = builtinModel("openrouter/auto");
+  if (!template) return undefined;
+  const model = cloneModel(template, definition.id, definition.name, {
+    contextWindow: definition.contextWindow,
+    maxTokens: definition.maxTokens,
+    reasoning: definition.reasoning,
+    cost: {
+      input: definition.cost.input,
+      output: definition.cost.output,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  });
+  model.input = [...definition.input];
+  OPENROUTER_CATALOG_MODELS.set(model.id, model);
+  return model;
+}
+
 export function resolveModel(id: string): PiModel | undefined {
   const entry = REGISTRY_BY_ID.get(id);
   if (entry?.clone) {
@@ -149,7 +179,9 @@ export function resolveModel(id: string): PiModel | undefined {
         })
       : undefined;
   }
-  return builtinModel(id) ?? (resolveCustomModel(id) as unknown as PiModel | undefined);
+  return (
+    builtinModel(id) ?? (resolveCustomModel(id) as unknown as PiModel | undefined) ?? OPENROUTER_CATALOG_MODELS.get(id)
+  );
 }
 
 export function auxiliaryModelForProvider(provider: string): string | undefined {

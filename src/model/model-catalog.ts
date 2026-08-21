@@ -1,4 +1,9 @@
-import { modelSupportedByHarness, resolveModel, SELECTABLE_BASE_MODELS } from "./pi-models.ts";
+import {
+  modelSupportedByHarness,
+  registerOpenRouterCatalogModel,
+  resolveModel,
+  SELECTABLE_BASE_MODELS,
+} from "./pi-models.ts";
 import { customModelCatalog, customProvidersVersion } from "./custom-providers.ts";
 
 export interface ModelCatalogEntry {
@@ -9,6 +14,7 @@ export interface ModelCatalogEntry {
 }
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?supported_parameters=tools&sort=most-popular";
+const OPENROUTER_MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
 
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
 const MAX_CATALOG_MODELS = 1_000;
@@ -58,24 +64,88 @@ async function boundedJson(response: Response): Promise<unknown> {
   return JSON.parse(text) as unknown;
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  let parsed = Number.NaN;
+  if (typeof value === "number") parsed = value;
+  else if (typeof value === "string") parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined {
+  if (!candidate || typeof candidate !== "object") return undefined;
+  const raw = candidate as Record<string, unknown>;
+  const id = raw.id;
+  const name = raw.name;
+  const supportedParameters = raw.supported_parameters;
+  const contextWindow = finiteNumber(raw.context_length);
+  const topProvider = raw.top_provider;
+  const maxTokens =
+    topProvider && typeof topProvider === "object"
+      ? finiteNumber((topProvider as Record<string, unknown>).max_completion_tokens)
+      : undefined;
+  const pricing = raw.pricing;
+  const promptPrice =
+    pricing && typeof pricing === "object" ? finiteNumber((pricing as Record<string, unknown>).prompt) : undefined;
+  const completionPrice =
+    pricing && typeof pricing === "object" ? finiteNumber((pricing as Record<string, unknown>).completion) : undefined;
+  const architecture = raw.architecture;
+  const inputModalities =
+    architecture && typeof architecture === "object"
+      ? (architecture as Record<string, unknown>).input_modalities
+      : undefined;
+  if (
+    typeof id !== "string" ||
+    id.length > 200 ||
+    !OPENROUTER_MODEL_ID_RE.test(id) ||
+    typeof name !== "string" ||
+    name.length === 0 ||
+    name.length > 200 ||
+    !Array.isArray(supportedParameters) ||
+    !supportedParameters.includes("tools")
+  )
+    return undefined;
+  const knownOpenRouter = resolveModel(id)?.provider === "openrouter";
+  const inputPrice = promptPrice === undefined ? undefined : promptPrice * 1_000_000;
+  const outputPrice = completionPrice === undefined ? undefined : completionPrice * 1_000_000;
+  if (
+    contextWindow === undefined ||
+    !Number.isSafeInteger(contextWindow) ||
+    contextWindow <= 0 ||
+    maxTokens === undefined ||
+    !Number.isSafeInteger(maxTokens) ||
+    maxTokens <= 0 ||
+    maxTokens > contextWindow ||
+    inputPrice === undefined ||
+    !Number.isFinite(inputPrice) ||
+    outputPrice === undefined ||
+    !Number.isFinite(outputPrice) ||
+    !Array.isArray(inputModalities) ||
+    !inputModalities.includes("text")
+  )
+    return knownOpenRouter ? { id, name, provider: "openrouter" } : undefined;
+  const registered = registerOpenRouterCatalogModel({
+    id,
+    name,
+    contextWindow,
+    maxTokens,
+    input: inputModalities.includes("image") ? ["text", "image"] : ["text"],
+    reasoning:
+      supportedParameters.includes("reasoning") ||
+      supportedParameters.includes("include_reasoning") ||
+      supportedParameters.includes("reasoning_effort"),
+    cost: { input: inputPrice, output: outputPrice },
+  });
+  return registered ? { id, name, provider: "openrouter" } : undefined;
+}
+
 async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalogEntry[]> {
   const response = await fetcher(OPENROUTER_MODELS_URL, { signal: AbortSignal.timeout(5_000) });
   if (!response.ok) throw new Error(`OpenRouter catalog returned ${response.status}`);
   const body = (await boundedJson(response)) as { data?: unknown };
   if (!Array.isArray(body.data)) throw new Error("OpenRouter catalog is invalid");
   return body.data.slice(0, MAX_CATALOG_MODELS).flatMap((candidate) => {
-    if (!candidate || typeof candidate !== "object") return [];
-    const { id, name, supported_parameters: supportedParameters } = candidate as Record<string, unknown>;
-    if (
-      typeof id !== "string" ||
-      id.length > 200 ||
-      typeof name !== "string" ||
-      name.length > 200 ||
-      !Array.isArray(supportedParameters) ||
-      !supportedParameters.includes("tools")
-    )
-      return [];
-    return resolveModel(id)?.provider === "openrouter" ? [{ id, name, provider: "openrouter" as const }] : [];
+    const model = parseOpenRouterModel(candidate);
+    return model ? [model] : [];
   });
 }
 
