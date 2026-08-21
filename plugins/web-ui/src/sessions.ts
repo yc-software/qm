@@ -70,10 +70,11 @@ import {
   personalScopeId,
   renameProject,
   scopeChip,
+  scopeTitle,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
-import { appState, closeSidebarOnNarrowView, renderSidebarTop, showMainEmpty, syncUrlFromState } from "./shell";
+import { appState, can, closeSidebarOnNarrowView, renderSidebarTop, showMainEmpty, syncUrlFromState } from "./shell";
 import { allConversations, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
@@ -263,7 +264,9 @@ export function renderList(): void {
   const active = visible.filter((s) => !s.archived);
   const archived = visible.filter((s) => s.archived);
   const { pinned, rest } = splitPinned(active);
-  const activeItems = recentItemsFor(rest);
+  const activeItems: RecentItem[] = can("admin")
+    ? recentItemsFor(rest)
+    : rest.map((session) => ({ kind: "session", session }));
   const archivedItems: RecentItem[] = archived.map((session) => ({ kind: "session", session }));
   armMidnightRefresh();
   render(
@@ -518,21 +521,25 @@ export function drawChatsPage(): void {
               </button>`,
           )}
         </div>
-        <label class="list-select"
-          ><span>Surface</span>${fieldSelect({
-            compact: true,
-            value: chatsPageSurface,
-            onChange: (value) => {
-              chatsPageSurface = value as typeof chatsPageSurface;
-              drawChatsPage();
-            },
-            options: [
-              html`<option value="all">All surfaces</option>`,
-              html`<option value="web">Web</option>`,
-              html`<option value="slack">Slack</option>`,
-            ],
-          })}</label
-        >
+        ${
+          can("admin")
+            ? html`<label class="list-select"
+                ><span>Surface</span>${fieldSelect({
+                  compact: true,
+                  value: chatsPageSurface,
+                  onChange: (value) => {
+                    chatsPageSurface = value as typeof chatsPageSurface;
+                    drawChatsPage();
+                  },
+                  options: [
+                    html`<option value="all">All surfaces</option>`,
+                    html`<option value="web">Web</option>`,
+                    html`<option value="slack">Slack</option>`,
+                  ],
+                })}</label
+              >`
+            : nothing
+        }
       </div>`,
       rows,
       empty,
@@ -633,7 +640,11 @@ function chatPageRow(s: CoreSession): TemplateResult {
       >
         <span class="list-row-title">${statusMarks(s)}${groupDmTitle(s)}</span>
         <span class="list-row-meta">
-          ${scopeChip(s.scopeId, s.channelName ?? null)}
+          ${
+            can("admin") || scopeTitle(s.scopeId, s.channelName ?? null) !== "Personal"
+              ? scopeChip(s.scopeId, s.channelName ?? null)
+              : nothing
+          }
           ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackLogo(13)}</span>` : nothing}
           ${readOnly ? html`<span class="ro-lock" title="Read-only">${icon(Lock, 12)}</span>` : nothing}
           <span class="list-row-date">${listWhen(activityOf(s))}</span>

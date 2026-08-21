@@ -47,7 +47,7 @@ import { hideTooltip, showTooltip } from "./tooltip";
 import { icon } from "./ui";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
-import { appState } from "./shell-state";
+import { appState, can } from "./shell-state";
 import { renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { sleep } from "./chat";
 import {
@@ -1089,7 +1089,7 @@ class GroupActions implements IHeaderActionsRenderer {
             ${ref(this.placeMenu)}
             @click=${(e: Event) => e.stopPropagation()}
           >
-            ${PANE_TOOLS.map(
+            ${PANE_TOOLS.filter((t) => can("admin") || t.tool === "files" || t.tool === "keychain").map(
               (t) => html`
                 <button class="session-menu-option" type="button" role="menuitem" @click=${() => runTool(t.tool)}>
                   ${icon(t.glyph, 15)}<span>${t.label}</span>

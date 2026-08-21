@@ -275,7 +275,7 @@ export function scopeChip(scopeId: string | null, fallbackName?: string | null):
 }
 
 export function scopeFilterControl(current: string | null, onSelect: (scopeId: string | null) => void): TemplateResult {
-  const label = current ? metaForScope(current).title : "All contexts";
+  const label = current ? metaForScope(current).title : "All projects";
   const option = (scopeId: string | null, text: string, glyph: IconNode) => {
     const active = (current ?? null) === scopeId;
     return html`
@@ -298,11 +298,11 @@ export function scopeFilterControl(current: string | null, onSelect: (scopeId: s
   return html`
     <div class="menu-control form-menu-control scope-filter">
       <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" @click=${toggleFormMenu}>
-        ${icon(ListFilter, 14)}<span class="menu-label">Filter by: ${label}</span>${icon(ChevronDown, 14)}
+        ${icon(ListFilter, 14)}<span class="menu-label">${label}</span>${icon(ChevronDown, 14)}
       </button>
       <div class="menu-popover" role="menu" hidden>
-        <div class="menu-title">Filter by context</div>
-        ${option(null, "All contexts", Boxes)}
+        <div class="menu-title">Filter by project</div>
+        ${option(null, "All projects", Boxes)}
         ${contextsState.list.map((c) => option(c.scopeId, contextMeta(c).title, contextMeta(c).glyph))}
       </div>
     </div>

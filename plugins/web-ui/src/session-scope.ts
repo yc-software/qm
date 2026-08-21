@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { Box, Brain, Clock3, Files, GitFork, KeyRound, Rocket } from "lucide";
 import { api } from "./core-bridge";
+import { can } from "./shell-state";
 import { icon } from "./ui";
 
 /** A session's context carried into the crons/files/memory views so the whole
@@ -157,8 +158,13 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
           : html`<div class="session-heading" title=${headingTitle}>${heading}</div>`
       }
       <div class="topbar-actions session-tools">
-        ${tool("crons", Clock3, "Crons")} ${tool("files", Files, "Files")} ${tool("apps", Rocket, "Apps")}
-        ${tool("skills", Box, "Skills")} ${tool("memory", Brain, "Memory")}
+        ${can("admin") ? tool("crons", Clock3, "Crons") : nothing} ${tool("files", Files, "Files")}
+        ${
+          can("admin")
+            ? html`${tool("apps", Rocket, "Apps")} ${tool("skills", Box, "Skills")}
+              ${tool("memory", Brain, "Memory")}`
+            : nothing
+        }
         ${tool("keychain", KeyRound, "Your keychain")}
       </div>
     </header>

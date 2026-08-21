@@ -178,7 +178,6 @@ const ICON = {
   chats: MessageSquare,
   contexts: Folder,
   files: Files,
-  keychain: KeyRound,
   deploys: Rocket,
   webhooks: Webhook,
   crons: Clock,
@@ -450,6 +449,20 @@ export function mountShell(): void {
               <span class="avatar">${initials(appState.me?.user ?? "?")}</span>
               <span class="user-name">${appState.me?.user ?? ""}</span>
             </div>
+            <a
+              class="icon-btn subtle"
+              href=${deepLinkPath(UI_BASE, "keychain", null)}
+              title="Keychain"
+              aria-label="Keychain"
+              @click=${(e: MouseEvent) => {
+                if (!isPlainLeftClick(e)) return;
+                e.preventDefault();
+                setScopedSession(null);
+                switchView("keychain");
+              }}
+            >
+              ${icon(KeyRound, 17)}
+            </a>
             <theme-toggle .includeSystem=${true} title="Color scheme: light / dark / system"></theme-toggle>
             <button class="icon-btn subtle" title="Sign out" aria-label="Sign out" @click=${signOut}>
               ${icon(LogOut, 17)}
@@ -522,30 +535,30 @@ export function renderSidebarTop(): void {
         ${icon(ICON.newChat, 17)}<span>${splitState.active ? "New session" : "New chat"}</span>
       </button>
       <nav class="nav" @click=${onNavClick}>
-        ${navGroup(
-          "nav-workspace",
-          "Browse",
-          navWorkspaceOpen,
-          toggleNavWorkspace,
-          html`
-            ${navRow("contexts", ICON.contexts, "Projects")} ${navRow("chats", ICON.chats, "Chats")}
-            ${navRow("files", ICON.files, "Files")} ${navRow("crons", ICON.crons, "Crons")}
-            ${navRow("webhooks", ICON.webhooks, "Webhooks")} ${navRow("keychain", ICON.keychain, "Keychain")}
-            ${navRow("deploys", ICON.deploys, "Apps")} ${navRow("memory", ICON.memory, "Memory")}
-            ${navRow("skills", ICON.skills, "Skills")}
-            ${
-              can("admin")
-                ? html`<a class="navrow" href=${ADMIN_HOME_URL} title="Admin">
+        ${
+          can("admin")
+            ? navGroup(
+                "nav-workspace",
+                "Browse",
+                navWorkspaceOpen,
+                toggleNavWorkspace,
+                html`
+                  ${navRow("contexts", ICON.contexts, "Projects")} ${navRow("chats", ICON.chats, "Chats")}
+                  ${navRow("files", ICON.files, "Files")} ${navRow("crons", ICON.crons, "Crons")}
+                  ${navRow("webhooks", ICON.webhooks, "Webhooks")} ${navRow("deploys", ICON.deploys, "Apps")}
+                  ${navRow("memory", ICON.memory, "Memory")} ${navRow("skills", ICON.skills, "Skills")}
+                  <a class="navrow" href=${ADMIN_HOME_URL} title="Admin">
                     ${icon(ShieldCheck, 17)}<span>Admin</span>
-                  </a>`
-                : nothing
-            }
-          `,
-        )}
+                  </a>
+                `,
+              )
+            : html`${navRow("contexts", ICON.contexts, "Projects")} ${navRow("chats", ICON.chats, "Chats")}
+              ${navRow("files", ICON.files, "Files")}`
+        }
       </nav>
       ${html`
         <div class="section-label recents-label">
-          <span>Sessions</span>
+          <span>${can("admin") ? "Sessions" : "Recents"}</span>
           <button
             class="chat-search-open"
             type="button"
@@ -561,16 +574,20 @@ export function renderSidebarTop(): void {
           >
             ${icon(Search, 13)}
           </button>
-          <button
-            class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
-            type="button"
-            role="switch"
-            aria-checked=${sessionsState.webOnly ? "true" : "false"}
-            title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
-            @click=${toggleWebOnly}
-          >
-            <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
-          </button>
+          ${
+            can("admin")
+              ? html`<button
+                  class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
+                  type="button"
+                  role="switch"
+                  aria-checked=${sessionsState.webOnly ? "true" : "false"}
+                  title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
+                  @click=${toggleWebOnly}
+                >
+                  <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
+                </button>`
+              : nothing
+          }
         </div>
       `}
     `,
@@ -847,6 +864,7 @@ export async function boot(): Promise<void> {
   resetKeychainState();
   appState.me = (await r.json()) as Me;
   authMode = appState.me.mode ?? "portal";
+  if (!can("admin")) sessionsState.webOnly = true;
   clearPortalAttempt();
   const personalScope = `personal:${appState.me.user}`;
   const runtimeConfig = await fetchRuntimeConfig(personalScope);
