@@ -36,6 +36,8 @@ export interface TurnMetricSample {
   cacheRead?: number;
   cacheWrite?: number;
   uncachedInput?: number;
+  outputTokens?: number;
+  costUsd?: number;
 }
 
 export function cacheHitRatio(s: { cacheRead?: number; cacheWrite?: number; uncachedInput?: number }): number | null {

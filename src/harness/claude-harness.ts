@@ -764,11 +764,12 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       const usageTotals = [...callUsage.values()].reduce(
         (acc, usage) => {
           acc.input += usage.input;
+          acc.output += usage.output;
           acc.cacheRead += usage.cacheRead;
           acc.cacheWrite += usage.cacheWrite;
           return acc;
         },
-        { input: 0, cacheRead: 0, cacheWrite: 0 },
+        { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       );
       return {
         reply,
@@ -793,6 +794,12 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                   finalResult.usage.cache_creation_input_tokens,
               ),
             },
+        // The SDK result carries no cost total, so spend is surfaced only
+        // when the per-message accumulator saw cost deltas; the fallback
+        // branch keeps output tokens but reports no known cost.
+        costUsage: callUsage.size
+          ? { outputTokens: usageTotals.output, costUsd: lastTotalCostUsd }
+          : { outputTokens: finalResult.usage.output_tokens ?? 0, costUsd: 0 },
         ...(tapeWriteFailed ? { tapeWriteFailed: true } : {}),
       };
     } finally {

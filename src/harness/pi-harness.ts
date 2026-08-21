@@ -574,6 +574,21 @@ function piUsageToCallUsage(u: PiUsageShape | undefined): LlmCallUsage | null {
   };
 }
 
+function sumCostUsage(
+  stats: ReadonlyArray<{ usage: LlmCallUsage | null }>,
+): { outputTokens: number; costUsd: number } | null {
+  let saw = false;
+  let outputTokens = 0;
+  let costUsd = 0;
+  for (const s of stats) {
+    if (!s.usage) continue;
+    saw = true;
+    outputTokens += s.usage.output;
+    costUsd += s.usage.costUsd;
+  }
+  return saw ? { outputTokens, costUsd } : null;
+}
+
 function sumCacheUsage(
   stats: ReadonlyArray<{ usage: LlmCallUsage | null }>,
 ): { cacheRead: number; cacheWrite: number; uncachedInput: number } | null {
@@ -1989,6 +2004,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             });
             await checkpointSubturn(finalEntry.seq);
             const cacheUsage = sumCacheUsage(callStats);
+            const costUsage = sumCostUsage(callStats);
             const base = {
               reply,
               stopped: true as const,
@@ -1996,7 +2012,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               compileMs,
               ...(tapeWriteFailed ? { tapeWriteFailed: true } : {}),
             };
-            return cacheUsage ? { ...base, cacheUsage } : base;
+            return { ...base, ...(cacheUsage ? { cacheUsage } : {}), ...(costUsage ? { costUsage } : {}) };
           }
           const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
           const closingTextWithWaiver = [closingText, grindWaiverNote].filter(Boolean).join("\n\n");
@@ -2011,6 +2027,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const pendingApprovals = entry.ref.pendingApprovals ?? [];
           const modelCalls = entry.ref.modelCalls ?? 0;
           const cacheUsage = sumCacheUsage(callStats);
+          const costUsage = sumCostUsage(callStats);
           const silent = entry.ref.silentRequested ? { silent: true as const } : {};
           const base = pendingApprovals.length
             ? {
@@ -2023,7 +2040,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 compileMs,
               }
             : { reply, ...(tapeWriteFailed ? { tapeWriteFailed: true } : {}), modelCalls, ...silent, compileMs };
-          return cacheUsage ? { ...base, cacheUsage } : base;
+          return { ...base, ...(cacheUsage ? { cacheUsage } : {}), ...(costUsage ? { costUsage } : {}) };
         } finally {
           removeIsolatedDirs(entry);
         }

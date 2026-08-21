@@ -2796,6 +2796,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 uncachedInput: result.cacheUsage.uncachedInput,
               }
             : {}),
+          ...(result.costUsage
+            ? { outputTokens: result.costUsage.outputTokens, costUsd: result.costUsage.costUsd }
+            : {}),
         });
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         if (!pausing && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
