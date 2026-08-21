@@ -8516,6 +8516,7 @@
         const phaseSel = urlToState().phase;
         if (phaseSel) return renderPhaseDrill(root, d, phaseSel);
         renderCacheHealth(root, d);
+        renderSpend(root, d);
         const phases = d.phases || [];
         root.appendChild(
           openableTable(
@@ -8560,6 +8561,20 @@
           ]),
         );
       }
+      function renderSpend(root, d) {
+        const sp = d.spend;
+        if (!sp || !(sp.samples || 0)) return;
+        root.appendChild(
+          statline([
+            fmtUsd(sp.costUsdTotal) + " model spend",
+            (sp.turnsWithKnownCost || 0) + " turns with known cost",
+            fmtTokens(sp.outputTokensTotal || 0) + " output tokens",
+            (sp.samples || 0) + " turns with spend data",
+          ]),
+        );
+      }
+      const fmtUsd = (n) =>
+        n == null ? "—" : "$" + (Math.round((n || 0) * 100) / 100).toFixed(2);
       const fmtX = (n) => (n == null ? "—" : String(Math.round(n * 10) / 10));
       function renderTurnMix(root, d) {
         const an = d.anatomy;

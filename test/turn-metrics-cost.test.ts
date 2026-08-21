@@ -10,6 +10,8 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cost-obs-")) }));
@@ -63,4 +65,15 @@ test("metrics: an empty scope yields a present-but-empty spend block", async () 
   } finally {
     await s.close();
   }
+});
+
+test("metrics viewer: the spend line renders cost and output totals beside cache health", () => {
+  const html = readFileSync(fileURLToPath(new URL("../plugins/admin/public/index.html", import.meta.url)), "utf8").split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
+  assert.ok(html.includes("function renderSpend(root, d)"), "viewer has a spend renderer");
+  assert.ok(
+    html.includes("renderCacheHealth(root, d);" + String.fromCharCode(10) + "        renderSpend(root, d);"),
+    "the spend line renders directly beside cache health on the metrics page",
+  );
+  assert.ok(html.includes("fmtUsd(sp.costUsdTotal)"), "cost total is formatted as currency");
+  assert.ok(html.includes("fmtTokens(sp.outputTokensTotal || 0)"), "output tokens are formatted");
 });
