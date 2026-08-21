@@ -206,7 +206,10 @@ jobs:
       - name: Postgres-backed tests (durability + cross-process)
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
-        run: npm run test:pg
+        run: |
+          npm run test:pg
+          npm ci --prefix integrations/inwise
+          npm test --prefix integrations/inwise
 
   admin-plugin:
     name: Admin plugin
