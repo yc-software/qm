@@ -37,7 +37,11 @@ import {
   serializedTileCount,
   v1PaneSeeds,
   layoutNeedsSessionList,
-  paneNeedsSessionList,
+  classifyPaneSeed,
+  parsePaneSeed,
+  paneSeedMatchesSession,
+  serializedPaneParams,
+  isLiveCanvasState,
   type DropEdge,
   type PaneSeed,
   type SplitEdge,
@@ -47,7 +51,7 @@ import { hideTooltip, showTooltip } from "./tooltip";
 import { icon } from "./ui";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
-import { appState } from "./shell-state";
+import { appState, claimMainSurface } from "./shell-state";
 import { renderSidebarTop, switchView } from "./shell";
 import { sleep } from "./chat";
 import {
@@ -105,6 +109,22 @@ let persistTimer: number | null = null;
 let remoteTimer: number | null = null;
 let remotePayload: { updatedAt: number } | null = null;
 let persistedUpdatedAt = 0;
+const pendingSessionClosures = new Map<string, string>();
+
+export function canvasIsLive(): boolean {
+  return isLiveCanvasState({
+    active: splitState.active,
+    hasDock: dockApi !== null,
+    hostAttached: Boolean(
+      canvasHost &&
+      appState.mainEl &&
+      canvasHost.parentElement === appState.mainEl &&
+      canvasHost.isConnected &&
+      appState.mainEl.isConnected,
+    ),
+    panelCount: dockApi?.panels.length ?? 0,
+  });
+}
 
 function uid(): string {
   return crypto.randomUUID().slice(0, 8);
@@ -155,6 +175,13 @@ function persistSoon(): void {
     persistTimer = null;
     persist();
   }, 150);
+}
+
+export function flushSplitPersistence(): void {
+  if (persistTimer === null) return;
+  window.clearTimeout(persistTimer);
+  persistTimer = null;
+  persist();
 }
 
 function buildDock(): DockviewApi {
@@ -212,6 +239,8 @@ function buildDock(): DockviewApi {
   api.onDidMaximizedGroupChange(() => {
     for (const a of groupActions) a.draw();
   });
+  dockEl.addEventListener("pointerdown", () => claimMainSurface(), true);
+  dockEl.addEventListener("keydown", () => claimMainSurface(), true);
   dockEl.addEventListener("pointerdown", (e) => {
     if (!(e.target instanceof Element) || !e.target.closest(".dv-sash")) return;
     host.classList.add("resizing");
@@ -244,10 +273,24 @@ function disposeDock(): void {
   toastEl = null;
 }
 
+function retireDockForPersistedState(): void {
+  disposeDock();
+  canvasHost = null;
+  lastLayout = null;
+  headerSignature = "";
+}
+
 function ensureCanvas(): boolean {
   if (!appState.mainEl) return false;
-  if (canvasHost && canvasHost.parentElement === appState.mainEl && dockApi) return true;
-  if (dockApi) lastLayout = dockApi.toJSON();
+  if (
+    canvasHost &&
+    canvasHost.parentElement === appState.mainEl &&
+    canvasHost.isConnected &&
+    appState.mainEl.isConnected &&
+    dockApi
+  )
+    return true;
+  if (dockApi?.panels.length && !pendingSeed) lastLayout = dockApi.toJSON();
   disposeDock();
   canvasHost = document.createElement("div");
   canvasHost.className = "split-canvas";
@@ -257,12 +300,12 @@ function ensureCanvas(): boolean {
   const seed = pendingSeed;
   pendingSeed = null;
   try {
-    if (lastLayout) {
-      dockApi.fromJSON(lastLayout);
-    } else if (seed?.kind === "v2") {
+    if (seed?.kind === "v2") {
       dockApi.fromJSON(seed.layout);
     } else if (seed?.kind === "v1") {
       seedFromV1(dockApi, seed.seeds);
+    } else if (lastLayout) {
+      dockApi.fromJSON(lastLayout);
     }
   } catch {
     disposeDock();
@@ -330,6 +373,7 @@ function edgeToDirection(edge: SplitEdge): "left" | "right" | "above" | "below" 
 
 export function exitSplitIfActive(): void {
   if (!splitState.active) return;
+  pendingSessionClosures.clear();
   if (dockApi) lastLayout = dockApi.toJSON();
   splitState.active = false;
   splitState.focusedId = null;
@@ -345,18 +389,28 @@ function adoptPersisted(raw: unknown): void {
   const o = raw as { v?: unknown; active?: unknown; layout?: unknown; updatedAt?: unknown };
   if (o.v === 2) {
     if (typeof o.updatedAt === "number") persistedUpdatedAt = o.updatedAt;
+    retireDockForPersistedState();
     pendingSeed = null;
     splitState.active = true;
-    if (!o.layout || typeof o.layout !== "object") return;
+    if (!o.layout || typeof o.layout !== "object") {
+      pendingSessionClosures.clear();
+      return;
+    }
     const panels = (o.layout as { panels?: object }).panels;
     const n = panels && typeof panels === "object" ? Object.keys(panels).length : 0;
-    if (n < 1 || n > MAX_PANES || serializedTileCount(o.layout) > MAX_TILES) return;
+    if (n < 1 || n > MAX_PANES || serializedTileCount(o.layout) > MAX_TILES) {
+      pendingSessionClosures.clear();
+      return;
+    }
     pendingSeed = { kind: "v2", layout: o.layout as SerializedDockview };
+    retainPendingSessionClosures(pendingSeed);
     return;
   }
   const seeds = v1PaneSeeds(raw);
   if (!seeds) return;
+  retireDockForPersistedState();
   pendingSeed = { kind: "v1", seeds };
+  retainPendingSessionClosures(pendingSeed);
   splitState.active = true;
 }
 
@@ -371,7 +425,7 @@ export function loadPersistedSplit(): void {
   adoptPersisted(raw);
 }
 
-export async function adoptRemoteSplit(timeoutMs = 2000): Promise<void> {
+export async function adoptRemoteSplit(timeoutMs = 2000, shouldAdopt: () => boolean = () => true): Promise<void> {
   let rec: Awaited<ReturnType<typeof fetchUiState>>;
   try {
     rec = await Promise.race([
@@ -384,6 +438,7 @@ export async function adoptRemoteSplit(timeoutMs = 2000): Promise<void> {
   if (!rec || typeof rec !== "object") return;
   const at = typeof rec.updatedAt === "number" ? rec.updatedAt : 0;
   if (!rec.value || typeof rec.value !== "object" || at <= persistedUpdatedAt) return;
+  if (!shouldAdopt()) return;
   adoptPersisted(rec.value);
   persistedUpdatedAt = at;
   try {
@@ -395,15 +450,17 @@ export async function adoptRemoteSplit(timeoutMs = 2000): Promise<void> {
 
 export function restoredCanvasNeedsSessionList(): boolean {
   if (!pendingSeed) return false;
-  if (pendingSeed.kind === "v1") return pendingSeed.seeds.some((seed) => paneNeedsSessionList(seed));
+  if (pendingSeed.kind === "v1") return pendingSeed.seeds.some((seed) => classifyPaneSeed(seed) === "continuable");
   return layoutNeedsSessionList(pendingSeed.layout);
 }
 
 export function mountRestoredCanvas(): boolean {
   splitState.active = true;
-  if ((dockApi?.panels.length ?? 0) > 0) return true;
+  if (canvasIsLive()) return true;
   if (!ensureCanvas() || !dockApi) return false;
+  closePendingSessionPanels();
   if (dockApi.panels.length === 0) addPane({});
+  if (!canvasIsLive()) return false;
   persist();
   renderSidebarTop();
   renderList();
@@ -415,20 +472,62 @@ function panelParams(panel: IDockviewPanel): PaneParams {
 }
 
 function paneShowing(sessionId: string): IDockviewPanel | null {
-  return dockApi?.panels.find((p) => panelParams(p).sessionId === sessionId) ?? null;
+  if (!canvasIsLive()) return null;
+  const threadRef = sessionsState.list.find((session) => session.id === sessionId)?.threadRef ?? "";
+  return dockApi?.panels.find((panel) => paneSeedMatchesSession(panelParams(panel), sessionId, threadRef)) ?? null;
+}
+
+function pendingSeedShowsSession(sessionId: string, threadRef: string): boolean {
+  if (!pendingSeed) return false;
+  if (pendingSeed.kind === "v1")
+    return pendingSeed.seeds.some((seed) => paneSeedMatchesSession(seed, sessionId, threadRef));
+  return Object.values(pendingSeed.layout.panels).some((panel) =>
+    paneSeedMatchesSession(serializedPaneParams(panel), sessionId, threadRef),
+  );
+}
+
+function retainPendingSessionClosures(seed: PendingSeed): void {
+  const panes = seed.kind === "v1" ? seed.seeds : Object.values(seed.layout.panels).map(serializedPaneParams);
+  for (const [sessionId, threadRef] of pendingSessionClosures)
+    if (!panes.some((pane) => paneSeedMatchesSession(pane, sessionId, threadRef)))
+      pendingSessionClosures.delete(sessionId);
+}
+
+export function cancelPendingSessionClosure(sessionId: string): void {
+  pendingSessionClosures.delete(sessionId);
+}
+
+function closePendingSessionPanels(): boolean {
+  if (!splitState.active || !dockApi) return false;
+  const showing = dockApi.panels.filter((panel) => {
+    const params = panelParams(panel);
+    for (const [sessionId, threadRef] of pendingSessionClosures)
+      if (paneSeedMatchesSession(params, sessionId, threadRef)) return true;
+    return false;
+  });
+  pendingSessionClosures.clear();
+  if (!showing.length) return false;
+  closePanels(showing, false);
+  return true;
 }
 
 export function sessionInCanvas(sessionId: string): boolean {
-  return splitState.active && paneShowing(sessionId) !== null;
+  return canvasIsLive() && paneShowing(sessionId) !== null;
 }
 
-/** Close any pane (and, outside the canvas, the main view) showing this session. */
-export function closeSessionSurfaces(sessionId: string): boolean {
+export function closeSessionSurfaces(sessionId: string, threadRef = ""): boolean {
   if (!sessionId) return false;
-  if (splitState.active && dockApi) {
-    const showing = dockApi.panels.filter((p) => panelParams(p).sessionId === sessionId);
-    if (showing.length) {
-      closePanels(showing);
+  if (splitState.active) {
+    if (dockApi) {
+      const showing = dockApi.panels.filter((panel) =>
+        paneSeedMatchesSession(panelParams(panel), sessionId, threadRef),
+      );
+      if (showing.length) {
+        closePanels(showing);
+        return true;
+      }
+    } else if (pendingSeedShowsSession(sessionId, threadRef)) {
+      pendingSessionClosures.set(sessionId, threadRef);
       return true;
     }
     return false;
@@ -440,7 +539,7 @@ export function closeSessionSurfaces(sessionId: string): boolean {
 }
 
 export function splitInterceptsOpen(s: CoreSession): boolean {
-  if (!splitState.active || appState.currentView !== "chats" || !s.id) return false;
+  if (!canvasIsLive() || appState.currentView !== "chats" || !s.id) return false;
   const target = splitState.focusedId ?? dockApi?.panels[0]?.id ?? "";
   openInPane(target, s.id, s.threadRef);
   renderList();
@@ -449,7 +548,10 @@ export function splitInterceptsOpen(s: CoreSession): boolean {
 }
 
 export function openBackgroundInCanvas(s: CoreSession): boolean {
-  if (!s.id || !mountRestoredCanvas() || !dockApi) return false;
+  if (!s.id) return false;
+  if (appState.currentView !== "chats") switchView("chats");
+  claimMainSurface();
+  if (!mountRestoredCanvas() || !dockApi) return false;
   const showing = paneShowing(s.id);
   if (showing) {
     showing.api.setActive();
@@ -465,6 +567,7 @@ export function openBackgroundInCanvas(s: CoreSession): boolean {
 function focusExistingPane(sessionId: string, exceptPaneId?: string): boolean {
   const dup = paneShowing(sessionId);
   if (!dup) return false;
+  claimMainSurface();
   if (dup.id !== exceptPaneId) {
     dup.api.setActive();
     canvasToast("Already open in a pane");
@@ -473,7 +576,9 @@ function focusExistingPane(sessionId: string, exceptPaneId?: string): boolean {
 }
 
 function openInPane(paneId: string, sessionId: string, threadRef: string, background = false): void {
-  if (!dockApi || focusExistingPane(sessionId, paneId)) return;
+  if (!canvasIsLive() || !dockApi) return;
+  claimMainSurface();
+  if (focusExistingPane(sessionId, paneId)) return;
   const target = dockApi.getPanel(paneId);
   if (!target) return;
   const fresh = addPane(
@@ -486,13 +591,16 @@ function openInPane(paneId: string, sessionId: string, threadRef: string, backgr
 }
 
 function roomForAnotherPane(): boolean {
+  if (!canvasIsLive()) return false;
   if ((dockApi?.panels.length ?? 0) < MAX_PANES) return true;
   canvasToast(`${MAX_PANES} conversations is all one canvas holds — close one first`);
   return false;
 }
 
 function splitPane(paneId: string, edge: SplitEdge, params: PaneParams): void {
-  if (!dockApi || !roomForAnotherPane()) return;
+  if (!canvasIsLive() || !dockApi) return;
+  claimMainSurface();
+  if (!roomForAnotherPane()) return;
   if (dockApi.groups.length >= MAX_TILES) {
     if (tabIntoPane(paneId, params)) canvasToast(`${MAX_TILES} tiles is the limit — opened as a tab`);
     return;
@@ -503,7 +611,9 @@ function splitPane(paneId: string, edge: SplitEdge, params: PaneParams): void {
 }
 
 function tabIntoPane(paneId: string, params: PaneParams, index?: number): boolean {
-  if (!dockApi || !roomForAnotherPane()) return false;
+  if (!canvasIsLive() || !dockApi) return false;
+  claimMainSurface();
+  if (!roomForAnotherPane()) return false;
   const fresh = addPane(params, {
     referencePanel: paneId,
     direction: "within",
@@ -515,9 +625,10 @@ function tabIntoPane(paneId: string, params: PaneParams, index?: number): boolea
 }
 
 export function addBlankPane(scopeId?: string): boolean {
-  if (!mountRestoredCanvas() || !dockApi) return false;
   if (appState.currentView !== "chats") switchView("chats");
-  if (!ensureCanvas() || !dockApi) return false;
+  claimMainSurface();
+  if (!mountRestoredCanvas() || !dockApi) return false;
+  if (!canvasIsLive()) return false;
   const at = largestGroupPanel(dockApi);
   if (!at) return false;
   const capped = dockApi.groups.length >= MAX_TILES;
@@ -528,6 +639,7 @@ export function addBlankPane(scopeId?: string): boolean {
 
 function replaceFocusedPane(params: PaneParams): boolean {
   if (appState.currentView !== "chats") switchView("chats");
+  claimMainSurface();
   if (!mountRestoredCanvas() || !dockApi) return false;
   const target = dockApi.getPanel(splitState.focusedId ?? "") ?? dockApi.activePanel ?? dockApi.panels[0];
   if (!target) return false;
@@ -551,8 +663,9 @@ function paneSplitWithBlank(panel: IDockviewPanel): void {
   splitPane(panel.id, r.width >= r.height ? "right" : "bottom", {});
 }
 
-function closePanels(panels: IDockviewPanel[]): void {
-  if (!dockApi) return;
+function closePanels(panels: IDockviewPanel[], claimSurface = true): void {
+  if (!splitState.active || !dockApi) return;
+  if (claimSurface) claimMainSurface();
   for (const p of panels) {
     dockApi.removePanel(p);
   }
@@ -566,7 +679,8 @@ function reconcileAfterClose(): void {
 }
 
 function maximizePane(params: PaneParams): void {
-  if (!dockApi) return;
+  if (!canvasIsLive() || !dockApi) return;
+  claimMainSurface();
   const panel = dockApi.panels.find((candidate) => panelParams(candidate) === params) ?? dockApi.activePanel;
   if (!panel) return;
   if (panel.api.isMaximized()) panel.api.exitMaximized();
@@ -574,8 +688,10 @@ function maximizePane(params: PaneParams): void {
 }
 
 function focusPane(paneId: string): void {
+  if (!canvasIsLive()) return;
   const panel = dockApi?.getPanel(paneId);
   if (!panel || panel.api.isActive) return;
+  claimMainSurface();
   preservingFocus(document, () => panel.api.setActive());
 }
 
@@ -595,10 +711,16 @@ function drawToast(): void {
   render(toastMsg ? html`<div class="split-toast" role="status">${toastMsg}</div>` : nothing, toastEl);
 }
 
-export function beginSessionDrag(s: CoreSession): void {
-  if (!s.id) return;
+export function beginSessionDrag(s: CoreSession): boolean {
+  if (!s.id || appState.currentView !== "chats") return false;
+  claimMainSurface();
   sessionDrag = { sessionId: s.id, threadRef: s.threadRef };
+  if (!mountRestoredCanvas()) {
+    sessionDrag = null;
+    return false;
+  }
   refreshSessionDrag();
+  return true;
 }
 
 function refreshSessionDrag(): void {
@@ -613,7 +735,7 @@ export function endSessionDrag(): void {
   if (!sessionDrag) return;
   sessionDrag = null;
   canvasHost?.classList.remove("session-dragging");
-  if (splitState.active) syncAllZones();
+  if (canvasIsLive()) syncAllZones();
 }
 
 function syncAllZones(): void {
@@ -649,7 +771,7 @@ function splitZonesTpl(act: (edge: DropEdge) => () => void): TemplateResult {
 
 function paneZonesTpl(paneId: string): TemplateResult | typeof nothing {
   const drag = sessionDrag;
-  if (!drag || !dockApi) return nothing;
+  if (!drag || !canvasIsLive() || !dockApi) return nothing;
   const act = paneZoneAct(paneId);
   const showing = paneShowing(drag.sessionId);
   if (showing)
@@ -680,6 +802,7 @@ function paneZoneAct(paneId: string): (edge: DropEdge) => () => void {
 export function drawCanvas(): void {
   if (!splitState.active || appState.currentView !== "chats" || !appState.mainEl) return;
   if (!ensureCanvas()) return;
+  if (!canvasIsLive()) return;
   refreshHeaders();
 }
 
@@ -693,7 +816,8 @@ function computeHeaderSignature(): string {
 }
 
 export function notifySessionsChanged(): void {
-  if (!splitState.active || !dockApi) return;
+  if (closePendingSessionPanels()) return;
+  if (!canvasIsLive() || !dockApi) return;
   if (computeHeaderSignature() === headerSignature) return;
   refreshHeaders();
 }
@@ -794,7 +918,7 @@ class PaneContent implements IContentRenderer {
       ownsUrl: false,
       container: () => this.chatEl,
       claimContainer: () => this.chatEl,
-      visible: () => splitState.active && appState.currentView === "chats",
+      visible: () => canvasIsLive() && appState.currentView === "chats",
       density: () => this.density,
       onDensityChange: (handler) => this.redrawOnResize.push(handler),
       ensureDeliveryStream,
@@ -841,7 +965,14 @@ class PaneContent implements IContentRenderer {
     if (this.loaded || this.disposed) return;
     this.loaded = true;
     this.syncDensity();
-    const { sessionId, threadRef, scopeId, background } = this.params;
+    const kind = classifyPaneSeed(this.params);
+    const seed = parsePaneSeed(this.params);
+    const { scopeId, background } = this.params;
+    if (kind === "invalid" || !seed) {
+      this.conversation.newChat();
+      return;
+    }
+    const { sessionId, threadRef } = seed;
     const wanted =
       sessionId ?? (threadRef ? (sessionsState.list.find((s) => s.threadRef === threadRef)?.id ?? null) : null);
     if (!wanted) {
@@ -877,7 +1008,7 @@ class PaneContent implements IContentRenderer {
       this.panel?.api.updateParameters({ sessionId, threadRef, ...(scopeId ? { scopeId } : {}) });
       persist();
     }
-    await openSessionInto(this.conversation, session);
+    await openSessionInto(this.conversation, session, undefined, undefined, () => !this.disposed);
     if (this.disposed) return;
     refreshHeaders();
   }
@@ -1155,7 +1286,7 @@ async function settlePaneTitle(sessionId: string): Promise<void> {
 async function settlePoll(delays: number[], done: () => boolean): Promise<void> {
   for (const delay of delays) {
     if (delay) await sleep(delay);
-    if (!splitState.active) return;
+    if (!canvasIsLive()) return;
     try {
       await refreshSessions({ silent: true });
     } catch {
@@ -1166,5 +1297,7 @@ async function settlePoll(delays: number[], done: () => boolean): Promise<void> 
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && splitState.active && dockApi?.hasMaximizedGroup()) dockApi.exitMaximizedGroup();
+  if (e.key !== "Escape" || !canvasIsLive() || !dockApi?.hasMaximizedGroup()) return;
+  claimMainSurface();
+  dockApi.exitMaximizedGroup();
 });
