@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const read = (f: string): string => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+const read = (f: string): string =>
+  readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8").replace(/\r\n?/g, "\n");
 const split = read("split.ts");
 const sessions = read("sessions.ts");
 const shell = read("shell.ts");
@@ -111,13 +112,29 @@ test("the tile cap only judges dockview's own panel drags", () => {
 test("boot mounts a one-pane canvas before it awaits the session list", () => {
   const boot = shell.match(/export async function boot\(\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.ok(boot, "boot not found");
-  const early = boot.indexOf("if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();");
-  const listAwait = boot.indexOf("await refreshSessions({ showLoading: true });");
-  assert.ok(early > 0 && early < listAwait, "the baseline canvas mounts before session refresh when it can");
-  assert.match(boot.slice(listAwait), /\} else \{\s*mountRestoredCanvas\(\);\s*\}/);
+  const early = boot.indexOf(
+    'if (destination.kind === "bare" && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();',
+  );
+  const listAwait = boot.indexOf("await refreshSessions({ showLoading: true });", early);
+  assert.ok(early > 0, "boot must offer the canvas its head start");
+  assert.ok(listAwait > 0, "boot still loads the session list");
+  assert.ok(early < listAwait, "the mount must come BEFORE the list fetch the panes never read");
 
+  assert.match(boot, /const destination = resolveBootDestination\(/);
+  const surfaceRevision = boot.indexOf("const surfaceRevision = appState.mainSurfaceRevision");
+  const flush = boot.indexOf("flushSplitPersistence()");
+  const load = boot.indexOf("loadPersistedSplit()");
+  const adopt = boot.indexOf("await adoptRemoteSplit");
+  assert.ok(surfaceRevision > 0 && flush > surfaceRevision && load > flush && adopt > load && adopt < early);
+  assert.match(boot, /adoptRemoteSplit\(2000, \(\) => mainSurfaceIsCurrent\(surfaceRevision\)\)/);
+  assert.match(
+    boot.slice(adopt, early),
+    /if \(!mainSurfaceIsCurrent\(surfaceRevision\)\) \{\s*await refreshSessions\(\{ showLoading: true \}\);\s*return;/,
+  );
+  assert.match(boot.slice(listAwait), /if \(!mainSurfaceIsCurrent\(surfaceRevision\)\) return;/);
   const mount = fn(split, "mountRestoredCanvas");
   assert.match(mount, /splitState\.active = true;/);
+  assert.match(mount, /if \(canvasIsLive\(\)\) return true;/);
   assert.match(mount, /if \(dockApi\.panels\.length === 0\) addPane\(\{\}\)/);
 });
 
@@ -126,6 +143,56 @@ test("one-pane layouts persist and restore as first-class canvas layouts", () =>
   assert.match(adopt, /if \(n < 1 \|\| n > MAX_PANES/);
   assert.doesNotMatch(adopt, /o\.active !== true|n < 2/);
   assert.match(fn(split, "loadPersistedSplit"), /splitState\.active = true;/);
+});
+
+test("canvas user actions claim the main surface before mutating it", () => {
+  for (const name of [
+    "openInPane",
+    "splitPane",
+    "tabIntoPane",
+    "addBlankPane",
+    "replaceFocusedPane",
+    "openBackgroundInCanvas",
+    "beginSessionDrag",
+    "maximizePane",
+    "focusPane",
+  ])
+    assert.match(fn(split, name), /claimMainSurface\(\)/, `${name} must supersede boot and older navigation`);
+  const close = fn(split, "closePanels");
+  assert.match(close, /claimSurface = true/);
+  assert.match(close, /if \(claimSurface\) claimMainSurface\(\);/);
+  assert.match(fn(split, "closePendingSessionPanels"), /closePanels\(showing, false\)/);
+  assert.match(fn(split, "focusExistingPane"), /claimMainSurface\(\)/);
+  const dock = fn(split, "buildDock");
+  assert.match(dock, /addEventListener\("pointerdown", \(\) => claimMainSurface\(\), true\)/);
+  assert.match(dock, /addEventListener\("keydown", \(\) => claimMainSurface\(\), true\)/);
+  assert.match(
+    split,
+    /if \(e\.key !== "Escape" \|\| !canvasIsLive\(\) \|\| !dockApi\?\.hasMaximizedGroup\(\)\) return;\s*claimMainSurface\(\);\s*dockApi\.exitMaximizedGroup\(\);/,
+  );
+  const background = fn(split, "openBackgroundInCanvas");
+  assert.ok(background.indexOf('switchView("chats")') < background.indexOf("mountRestoredCanvas()"));
+  const drag = fn(split, "beginSessionDrag");
+  assert.ok(drag.indexOf('appState.currentView !== "chats"') < drag.indexOf("sessionDrag ="));
+  assert.ok(drag.indexOf("claimMainSurface()") < drag.indexOf("mountRestoredCanvas()"));
+});
+
+test("detached canvases are rebuilt instead of intercepting session navigation", () => {
+  const live = fn(split, "canvasIsLive");
+  assert.match(live, /canvasHost\.parentElement === appState\.mainEl/);
+  assert.match(live, /canvasHost\.isConnected/);
+  assert.match(live, /appState\.mainEl\.isConnected/);
+  assert.match(live, /panelCount: dockApi\?\.panels\.length \?\? 0/);
+  assert.match(fn(split, "splitInterceptsOpen"), /if \(!canvasIsLive\(\)/);
+  assert.match(fn(split, "sessionInCanvas"), /canvasIsLive\(\)/);
+  const ensure = fn(split, "ensureCanvas");
+  const snapshot = ensure.indexOf("lastLayout = dockApi.toJSON()");
+  const dispose = ensure.indexOf("disposeDock()");
+  assert.ok(snapshot > 0 && dispose > snapshot, "a detached dock must be snapshotted before disposal");
+  assert.match(ensure, /dockApi\?\.panels\.length && !pendingSeed/);
+  const remote = ensure.indexOf('seed?.kind === "v2"');
+  const local = ensure.indexOf("else if (lastLayout)");
+  assert.ok(remote > dispose && local > remote, "an adopted remote seed must outrank a detached stale dock");
 });
 
 test("a pane gives the conversation the same height chain the full-screen .main does", () => {
@@ -145,10 +212,36 @@ test("a pane gives the conversation the same height chain the full-screen .main 
 
 test("adopting a remote layout normalizes the mirrored timestamp to the server record", () => {
   const adopt = fn(split, "adoptRemoteSplit");
+  const current = adopt.indexOf("if (!shouldAdopt()) return;");
+  const apply = adopt.indexOf("adoptPersisted(rec.value)");
+  assert.ok(current > 0 && apply > current, "a stale boot must not mutate split state with its remote result");
   assert.match(adopt, /persistedUpdatedAt = at;/, "the in-memory watermark takes the server record's time");
   assert.match(
     adopt,
     /JSON\.stringify\(\{ \.\.\.rec\.value, updatedAt: at \}\)/,
     "the local mirror must carry the server-clamped timestamp, not the value's inner claim",
   );
+});
+
+test("an authoritative persisted state retires the detached dock it replaces", () => {
+  const adopt = fn(split, "adoptPersisted");
+  const v2 = adopt.indexOf("if (o.v === 2)");
+  const retire = adopt.indexOf("retireDockForPersistedState()", v2);
+  const active = adopt.indexOf("splitState.active = true", retire);
+  assert.ok(v2 > 0 && retire > v2 && active > retire);
+  const cleanup = fn(split, "retireDockForPersistedState");
+  assert.match(cleanup, /disposeDock\(\)/);
+  assert.match(cleanup, /lastLayout = null/);
+  assert.match(split, /Object\.values\(seed\.layout\.panels\)\.map\(serializedPaneParams\)/);
+});
+
+test("boot retries are single-flight and disable duplicate submissions", () => {
+  const retry = fn(shell, "retryBoot");
+  assert.match(retry, /if \(bootInFlight\) return;/);
+  assert.match(retry, /pending: true/);
+  const safe = fn(shell, "bootSafely");
+  assert.match(safe, /if \(!bootInFlight\)/);
+  assert.match(safe, /bootInFlight = flight/);
+  const gate = fn(shell, "unreachableGate");
+  assert.match(gate, /\?disabled=\$\{pending\}/);
 });

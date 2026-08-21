@@ -2,40 +2,64 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
-const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
+const read = (path: string): string => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\r\n?/g, "\n");
+const composer = read("../src/composer.ts");
+const css = read("../src/shell.css");
+const shell = read("../src/shell.ts");
 
 test("boot hands its runtime config to the composer instead of dropping it", () => {
-  assert.match(shell, /const personalScope = `personal:\$\{appState\.me\.user\}`;/);
+  assert.match(shell, /const personalScope = personalScopeIdFor\(appState\.me\.user\);/);
   assert.match(shell, /seedRuntimeConfig\(personalScope, runtimeConfig\);/);
   const fetchAt = shell.indexOf("await fetchRuntimeConfig(personalScope)");
   const seedAt = shell.indexOf("seedRuntimeConfig(personalScope, runtimeConfig)");
   assert.ok(fetchAt > 0 && seedAt > fetchAt, "boot must seed the config it just fetched");
 });
 
-test("the first mount in the seeded scope renders from it — no blanking, no second fetch", () => {
-  const fn = composer.slice(
-    composer.indexOf("async function refreshRuntimeSelection"),
-    composer.indexOf("function applySelectedRuntime"),
-  );
-  assert.ok(fn, "refreshRuntimeSelection not found");
-  const seedRead = fn.indexOf("seededRuntime?.scopeId === scopeKey");
-  const blank = fn.indexOf("activeRuntimeConfig = null");
-  const fetchCall = fn.indexOf("await fetchRuntimeConfig(scopeId)");
-  assert.ok(seedRead > 0, "the seeded config must be consulted");
-  assert.ok(seedRead < blank, "consult the seed BEFORE blanking the composer");
-  assert.ok(seedRead < fetchCall, "consult the seed BEFORE refetching");
-  assert.match(fn, /if \(seeded\) \{\s*applySelectedRuntime\(seeded, agent\);\s*return;\s*\}/);
-  assert.match(fn, /seededRuntime\?\.scopeId === scopeKey \? seededRuntime\.config : null/);
-  assert.match(fn, /const scopeKey = runtimeScopeKey\(scopeId\);/);
-  assert.doesNotMatch(fn, /seededRuntime = null;/, "every pane booting on the seeded scope may read the seed");
-  const change = composer.slice(composer.indexOf("async function changeScopeRuntime"));
+test("runtime selection consults the scoped cache before blanking or fetching", () => {
+  const start = composer.indexOf("async function refreshRuntimeSelection");
+  const end = composer.indexOf("function applySelectedRuntime", start);
+  assert.ok(start >= 0 && end > start, "refreshRuntimeSelection not found");
+  const body = composer.slice(start, end);
+  const cacheRead = body.indexOf("runtimeConfigCache.get(scopeKey)");
+  const blank = body.indexOf("activeRuntimeConfig = null");
+  const fetchCall = body.indexOf("await fetchRuntimeConfig(scopeId)");
+  assert.ok(cacheRead >= 0 && cacheRead < blank && cacheRead < fetchCall);
   assert.match(
-    change.slice(0, change.indexOf("\n  }")),
-    /seededRuntime = null;/,
-    "changing the scope default is what retires the boot seed",
+    body,
+    /if \(cached\) \{\s*activateRuntimeCatalog\(scopeKey, cached\);\s*applySelectedRuntime\(cached, agent\);\s*return;\s*\}/,
   );
+  assert.doesNotMatch(body.slice(cacheRead, blank), /runtimeConfigCache\.set/, "a cache hit must not refresh its TTL");
+  const revision = body.indexOf("runtimeConfigCache.revision(scopeKey)");
+  const fetch = body.indexOf("await fetchRuntimeConfig(scopeId)");
+  const resolve = body.indexOf("runtimeConfigCache.resolveFetch(scopeKey, cacheRevision, config)");
+  const failure = body.indexOf("if (!selected)");
+  assert.ok(revision > blank && fetch > revision && resolve > fetch && failure > resolve);
+});
+
+test("successful scope updates survive a newer same-scope mount without overriding a newer mutation", () => {
+  const start = composer.indexOf("async function changeScopeRuntime");
+  const end = composer.indexOf("function composerForm", start);
+  assert.ok(start >= 0 && end > start, "changeScopeRuntime not found");
+  const body = composer.slice(start, end);
+  const requestScope = body.indexOf("const requestedScopeKey = runtimeScopeKey(scopeId)");
+  const mutation = body.indexOf("const mutationRequest = ++runtimeMutationRequest");
+  const update = body.indexOf("await updateCachedRuntimeConfig(requestedScopeKey");
+  const request = body.indexOf("updateRuntimeConfig(requestedScopeKey, change)");
+  const scope = body.indexOf("const updatedScopeKey = config.scopeId");
+  const guard = body.indexOf("mutationRequest !== runtimeMutationRequest", update);
+  const activate = body.indexOf("activateRuntimeCatalog(updatedScopeKey, config)");
+  const apply = body.indexOf("applySelectedRuntime(config, ctx.chat.state.agent ?? undefined)");
+  assert.ok(
+    requestScope > 0 &&
+      mutation > 0 &&
+      update > requestScope &&
+      request > update &&
+      scope > request &&
+      guard > scope &&
+      activate > guard &&
+      apply > activate,
+  );
+  assert.doesNotMatch(body.slice(update), /request !== runtimeRequest/);
 });
 
 test("a still-loading composer is not painted as a failure", () => {
@@ -58,17 +82,5 @@ test("a still-loading composer is not painted as a failure", () => {
 });
 
 test(".composer-error is the destructive colour — which is why loading must not use it", () => {
-  assert.match(css, /^\.composer-error \{\n {2}color: var\(--destructive/m);
-});
-
-test("a personal mount passing null still matches the seeded personal scope", () => {
-  const resolver = composer.slice(
-    composer.indexOf("function runtimeScopeKey"),
-    composer.indexOf("function modelOptionFor"),
-  );
-  assert.ok(resolver, "runtimeScopeKey not found");
-  assert.match(resolver, /if \(scopeId\) return scopeId;/, "a named scope is used as-is");
-  assert.match(resolver, /return user \? `personal:\$\{user\}` : null;/, "null resolves to the personal scope");
-  assert.match(composer, /seededRuntime = \{ scopeId: runtimeScopeKey\(scopeId\), config \};/);
-  assert.match(composer, /scopeKey !== null && seededRuntime\?\.scopeId === scopeKey/);
+  assert.match(css, /^\.composer-error \{\r?\n {2}color: var\(--destructive/m);
 });

@@ -2,15 +2,19 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const panel = readFileSync(new URL("../src/context-model.ts", import.meta.url), "utf8");
-const contexts = readFileSync(new URL("../src/contexts.ts", import.meta.url), "utf8");
-const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+const read = (path: string): string => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\r\n?/g, "\n");
+const panel = read("../src/context-model.ts");
+const contexts = read("../src/contexts.ts");
+const css = read("../src/shell.css");
 
 test("the scope's model panel writes through the same endpoint the composer's default does", () => {
   assert.match(panel, /updateRuntimeConfig\(\s*scope,/);
   assert.match(panel, /\{ inherit: true \}/);
   assert.match(panel, /harnessId,\n\s+modelId: value\.slice\(sep \+ 1\)/);
   assert.doesNotMatch(panel, /applyRuntimeOptions/);
+  assert.match(panel, /updateCachedRuntimeConfig\(scope,/);
+  assert.match(panel, /const cached = runtimeConfigCache\.get\(scopeId\);/);
+  assert.match(panel, /runtimeConfigCache\.resolveFetch\(scopeId, cacheRevision, config\)/);
 });
 
 test("the panel offers inheriting the org default and names what is serving now", () => {

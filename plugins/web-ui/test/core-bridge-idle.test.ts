@@ -43,10 +43,13 @@ function drain(stream: ReturnType<typeof createAssistantMessageEventStream>): Pr
 
 const realFetch = globalThis.fetch;
 const realSetTimeout = globalThis.setTimeout;
+const realEventSource = globalThis.EventSource;
 afterEach(() => {
   setClock(() => Date.now());
   globalThis.fetch = realFetch;
   globalThis.setTimeout = realSetTimeout;
+  if (realEventSource) globalThis.EventSource = realEventSource;
+  else delete (globalThis as { EventSource?: typeof EventSource }).EventSource;
 });
 
 function instantSleep(): void {
@@ -238,6 +241,43 @@ test("a terminal status waits for the durable result before ending the reply", a
   const final = await drain(stream);
 
   assert.equal(final.content[0]?.type === "text" ? final.content[0].text : "", "durable reply");
+});
+
+test("a premature SSE done event falls back to polling for the durable result", async () => {
+  class PrematureDoneEventSource {
+    onopen: ((event: Event) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
+
+    constructor() {
+      queueMicrotask(() => {
+        this.onopen?.(new Event("open"));
+        const event = {
+          data: JSON.stringify({ status: "done", result: null, alive: true, replyComplete: true }),
+        } as MessageEvent;
+        for (const listener of this.listeners.get("done") ?? []) listener(event);
+      });
+    }
+
+    addEventListener(type: string, listener: (event: MessageEvent) => void): void {
+      this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+    }
+
+    close(): void {
+      void 0;
+    }
+  }
+
+  globalThis.EventSource = PrematureDoneEventSource as unknown as typeof EventSource;
+  stubRuns([{ status: "done", result: { status: "ok", reply: "durable SSE reply" }, partial: "" }]);
+  const streamFn = makeRunResumeStreamFn("run-premature-sse");
+  const stream = await streamFn(MODEL, { systemPrompt: "", messages: [], tools: [] } as never);
+  const final = await Promise.race([
+    drain(stream),
+    new Promise<never>((_, reject) => realSetTimeout(() => reject(new Error("stream did not fall back")), 1_000)),
+  ]);
+
+  assert.equal(final.content[0]?.type === "text" ? final.content[0].text : "", "durable SSE reply");
 });
 
 test("a running snapshot WITHOUT alive still hits the idle deadline (stale run record)", async () => {

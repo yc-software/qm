@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-const split = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
+const read = (path: string): string => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\r\n?/g, "\n");
+const css = read("../src/shell.css");
+const split = read("../src/split.ts");
 
 test("a pane only offers the drops that will really happen", () => {
   const zones = split.match(/^function paneZonesTpl\([\s\S]*?\n\}/m)?.[0] ?? "";
