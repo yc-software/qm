@@ -90,6 +90,19 @@ test("dmThreadRef gives the DM main pane one continuous lane and each thread its
   assert.notEqual(dmThreadRef("D1", "1699999999.000100"), dmThreadRef("D1"));
 });
 
+test("mentionsBot recognizes the bot-id form (<@B…>) alongside the user-id form (#630)", () => {
+  // A hand-typed mention can arrive encoded against the bot id; Slack fires
+  // no app_mention for it, so message-gating recognition is the only thing
+  // that can dispatch it.
+  assert.equal(mentionsBot("hey <@BOTID> do this", "UBOT", "BOTID"), true);
+  assert.equal(mentionsBot("<@UBOT> classic form", "UBOT", "BOTID"), true);
+  assert.equal(mentionsBot("both <@UBOT> <@BOTID>", "UBOT", "BOTID"), true);
+  assert.equal(mentionsBot("<@OTHERBOT> not me", "UBOT", "BOTID"), false);
+  assert.equal(mentionsBot("no ids configured", "", ""), false);
+  // Back-compat: the two-arg form still works.
+  assert.equal(mentionsBot("hey <@BOT> do this", "BOT"), true);
+});
+
 test("mentionsBot detects the bot @mention so thread-follow leaves those to app_mention", () => {
   assert.equal(mentionsBot("hey <@BOT> do this", "BOT"), true);
   assert.equal(mentionsBot("just a follow-up", "BOT"), false);

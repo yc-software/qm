@@ -1074,6 +1074,76 @@ test("an internal channel mention carries the complete audience and thread conte
   }
 });
 
+test("a bot-id-form top-level mention dispatches an addressed turn (#630)", async () => {
+  // Slack fires app_mention only for the bot-USER-id form; a hand-typed
+  // mention encoded as <@BBOT> previously fell through every gate (mirrored
+  // handled=f, no turn). The message handler now dispatches it itself.
+  const f = await fixture();
+  try {
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@BBOT> deploy status?",
+      ts: "106.1",
+    });
+    assert.equal(f.core.turns.length, 1, "the bot-id mention must become a turn");
+    assert.equal(f.core.turns[0].text, "deploy status?");
+    // ADDRESSED, not ambient — no unprompted flag.
+    assert.equal(f.core.turns[0].unprompted, undefined);
+    assert.equal(
+      f.core.ingests.flat().some((e: any) => e.ts === "106.1" && e.handled),
+      true,
+      "the mirrored row must read handled",
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a bot-id-form thread reply dispatches ADDRESSED, not ambient (#630)", async () => {
+  const f = await fixture();
+  try {
+    f.client.messagesByChannel.set("C1", [
+      { channel: "C1", user: "U1", text: "kick off", ts: "107.1" },
+      { channel: "C1", user: "UBOT", text: "on it", ts: "107.2", thread_ts: "107.1" },
+    ]);
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      user: "U2",
+      text: "<@BBOT> and the logs?",
+      ts: "107.3",
+      thread_ts: "107.1",
+    });
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.core.turns[0].text, "and the logs?");
+    // The sender typed @qm: addressed, never the ambient unprompted flag
+    // the stake-followed path carries.
+    assert.equal(f.core.turns[0].unprompted, undefined);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a user-id mention still routes through app_mention, not the message handler (#630)", async () => {
+  // The message-handler dispatch is scoped to EXACTLY the class app_mention
+  // won't fire for: a message carrying BOTH forms must not double-dispatch
+  // (app_mention + message handler), and the user-id path is unchanged.
+  const f = await fixture();
+  try {
+    const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> <@BBOT> status?", ts: "108.1" };
+    f.client.messagesByChannel.set("C1", [event]);
+    await f.app.emitEvent("app_mention", event);
+    assert.equal(f.core.turns.length, 1);
+    // The message handler must not add a second turn for the same ts.
+    await f.app.emitMessage(event);
+    assert.equal(f.core.turns.length, 1, "no duplicate turn from the message handler");
+  } finally {
+    await f.stop();
+  }
+});
+
 test("an unaddressed top-level channel message is mirrored but never becomes a turn", async () => {
   const f = await fixture();
   try {
