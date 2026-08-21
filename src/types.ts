@@ -165,6 +165,13 @@ export interface Destination {
   type: string;
   target: string;
   audienceScopeId?: ScopeId;
+  /**
+   * A human's interactive session on a scope's sandbox (SSH attach, browser
+   * IDE) — the non-agent counterpart of the web destination. Carried as
+   * ``{ type: "human-session", target: "human:<userId>:<sessionId>" }`` so
+   * keychain asks and audit name where the materialization went (#550).
+   */
+  humanSession?: { userId: string; sessionId: string };
   onBehalfOf?: string;
   threadTs?: string;
   editRef?: string;

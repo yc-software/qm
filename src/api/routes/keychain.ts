@@ -429,6 +429,135 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 404, { error: "not_found" });
 }
 
+// ── Human-session materialization (#550) ────────────────────────────────
+//
+// A scope's sandbox is reachable interactively (SSH attach, browser IDE) by
+// the same people the agent serves, but credential materialization was only
+// drivable from an agent turn: the people got either a shared credential in
+// the scope's home volume (no expiry, no attribution, no revocation) or
+// nothing. These routes drive the SAME primitives (standing grants +
+// renderUseScript) for a human session, scoped to that one person's grants
+// and bounded by a session TTL.
+
+interface KeychainSession {
+  id: string;
+  userId: string;
+  scopeId: string;
+  createdAt: number;
+  expiresAt: number;
+  releasedAt?: number;
+  credentialIds: string[];
+}
+
+const keychainSessions = new Map<string, KeychainSession>();
+const KEYCHAIN_SESSION_DEFAULT_TTL_MS = 8 * 3_600_000;
+const KEYCHAIN_SESSION_MAX_TTL_MS = 12 * 3_600_000;
+
+function sweepKeychainSessions(): void {
+  const now = Date.now();
+  for (const s of keychainSessions.values()) {
+    if (s.releasedAt === undefined && s.expiresAt <= now) s.releasedAt = now;
+    // Retain released sessions briefly for idempotent DELETE / inspection.
+    if (s.releasedAt !== undefined && s.releasedAt + 3_600_000 < now) keychainSessions.delete(s.id);
+  }
+}
+
+async function handleKeychainSession(ctx: ApiCtx): Promise<void> {
+  const { res, deps, pathname, method, body, params } = ctx;
+  if (!deps.keychain) return sendJson(res, 404, { error: "not_found" });
+  const kc = deps.keychain;
+  sweepKeychainSessions();
+
+  if (method === "POST" && pathname === "/v1/keychain/sessions") {
+    const b = body as { userId?: unknown; scopeId?: unknown; ttlMinutes?: unknown };
+    const userId = typeof b.userId === "string" ? b.userId.trim() : "";
+    const scopeId = typeof b.scopeId === "string" ? b.scopeId.trim() : "";
+    if (!userId || !scopeId || parseScopeId(scopeId).kind === null) {
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "expected { userId, scopeId, ttlMinutes? }",
+      });
+    }
+    const ttl =
+      typeof b.ttlMinutes === "number" && Number.isFinite(b.ttlMinutes)
+        ? Math.min(Math.max(1, b.ttlMinutes) * 60_000, KEYCHAIN_SESSION_MAX_TTL_MS)
+        : KEYCHAIN_SESSION_DEFAULT_TTL_MS;
+    // The caller is a source-authenticated integration naming the human on
+    // the session (SSH/IDE attach helper); the materialization set is that
+    // person's OWN standing grants toward this scope — never anyone else's.
+    const materialized = await kc.materializeStandingForUser(userId, scopeId);
+    const id = `kcs_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    const session: KeychainSession = {
+      id,
+      userId,
+      scopeId,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + ttl,
+      credentialIds: materialized.map((m) => m.credentialId),
+    };
+    keychainSessions.set(id, session);
+    for (const m of materialized) {
+      deps.credentialUsage?.record({
+        slug: `keychain-session:${m.service}:${m.credentialId}`,
+        host: m.service,
+        status: "materialized",
+        scopeLabel: scopeId,
+        principalId: userId,
+      });
+    }
+    audit(deps, {
+      principalId: userId,
+      action: "keychain.session.open",
+      resource: `${id} (${materialized.length} credential(s) → ${scopeId})`,
+      scopeLabel: scopeId,
+    });
+    // The script is the same shape /keychain/use renders for an agent turn:
+    // the SSH/IDE helper sources it in the user's shell.
+    const script = materialized.map((m) => renderUseScript({ kind: "env", ...m })).join("\n");
+    return sendJson(res, 200, {
+      session: {
+        id: session.id,
+        userId: session.userId,
+        scopeId: session.scopeId,
+        expiresAt: session.expiresAt,
+        credentials: materialized.map((m) => ({ service: m.service, credentialId: m.credentialId })),
+      },
+      script,
+    });
+  }
+
+  if (method === "DELETE" && pathname.startsWith("/v1/keychain/sessions/")) {
+    const id = params.id!;
+    const session = keychainSessions.get(id);
+    if (!session) return sendJson(res, 404, { error: "not_found", message: "unknown keychain session" });
+    if (session.releasedAt === undefined) {
+      session.releasedAt = Date.now();
+      for (const credentialId of session.credentialIds) {
+        deps.credentialUsage?.record({
+          slug: `keychain-session:${credentialId}`,
+          host: "",
+          status: "released",
+          scopeLabel: session.scopeId,
+          principalId: session.userId,
+        });
+      }
+      audit(deps, {
+        principalId: session.userId,
+        action: "keychain.session.release",
+        resource: id,
+        scopeLabel: session.scopeId,
+      });
+    }
+    return sendJson(res, 200, { session: { ...session, script: undefined } });
+  }
+
+  if (method === "GET" && pathname === "/v1/keychain/sessions") {
+    return sendJson(res, 200, { sessions: [...keychainSessions.values()] });
+  }
+
+  return sendJson(res, 404, { error: "not_found" });
+}
+
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/credentials", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: handleKeychain },
@@ -441,4 +570,7 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/asks/:id/decline", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/use", auth: "either", handle: handleKeychain },
+  { method: "POST", path: "/v1/keychain/sessions", auth: "source", handle: handleKeychainSession },
+  { method: "GET", path: "/v1/keychain/sessions", auth: "source", handle: handleKeychainSession },
+  { method: "DELETE", path: "/v1/keychain/sessions/:id", auth: "source", handle: handleKeychainSession },
 ];

@@ -356,6 +356,12 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   materializeOwnFiles(ownerId: string): Promise<MaterializedFileCred[]>;
 
   materializeStanding(scopeId: ScopeId): Promise<MaterializedEnvCred[]>;
+  /** Standing grants owned by *userId* toward *scopeId* — a human session's
+   *  materialization set (non-agent surfaces; #550). */
+  materializeStandingForUser(
+    ownerId: string,
+    scopeId: ScopeId,
+  ): Promise<MaterializedEnvCred[]>;
 }
 
 function fingerprintOf(secret: string): string {
@@ -1231,6 +1237,15 @@ export function createKeychain(deps: {
         .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && !c.managed)
         .map((c) => tryDecrypt(c, decryptToFiles))
         .filter((c): c is MaterializedFileCred => c !== null);
+    },
+
+    async materializeStandingForUser(ownerId, scopeId) {
+      // Same selection as materializeStanding, filtered to the OWNER's
+      // credentials: a human session materializes exactly what that person
+      // granted toward this scope — never anyone else's, even though the
+      // grants table is keyed by audience scope (#550).
+      const all = await this.materializeStanding(scopeId);
+      return all.filter((m) => samePerson(m.ownerId, ownerId));
     },
 
     async materializeStanding(scopeId) {
