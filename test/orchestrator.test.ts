@@ -3010,6 +3010,56 @@ test("a turn that PAUSED on an approval blocks the thread even when it carried r
   assert.equal(blocked.pendingApprovals?.[0]?.requestId, pending!.requestId);
 });
 
+test("a surface-tool turn records status 'delivered', not 'silent' (#609)", async () => {
+  const { app } = freshApp();
+  const grp = {
+    kind: "dm" as const,
+    threadRef: "dm:U1:delivered1",
+    channelRef: "G8",
+    audience: [internalActor],
+  };
+  const res = await app.turn(
+    dm("here you go", {
+      surface: "slack",
+      conversation: grp,
+      deliveryTarget: "slack:G8:files",
+      surfaceTools: true,
+    }),
+  );
+  // The reply went out through the surface tool — the ordinary shape of a
+  // Slack answer. Folding it into "silent" (which also means "the ambient
+  // gate declined") made the two opposite outcomes indistinguishable in
+  // runs.result (#609).
+  assert.equal(res.status, "delivered");
+});
+
+test("the metrics sink carries the turn's outcome instead of hardcoding 'ok' (#609)", async () => {
+  const { app, metrics } = freshApp();
+  const grp = {
+    kind: "dm" as const,
+    threadRef: "dm:U1:delivered2",
+    channelRef: "G7",
+    audience: [internalActor],
+  };
+  await app.turn(
+    dm("heads up", {
+      surface: "slack",
+      conversation: grp,
+      deliveryTarget: "slack:G7:files",
+      surfaceTools: true,
+    }),
+  );
+  const samples = (await metrics.list()).filter((s) => s.status !== "capture");
+  assert.equal(samples.length, 1);
+  assert.equal(samples[0]!.status, "delivered", "a delivered turn must not land in turn_metrics as 'ok'");
+});
+
+test("a gate-declined ambient turn still records 'silent' (#609)", async () => {
+  const { app } = freshApp();
+  const res = await app.turn(channel("ok sounds good to me", { unprompted: true }));
+  assert.equal(res.status, "silent", "suppression keeps 'silent' — the split does not blur it");
+});
+
 test("collect-mode metrics: a turn the caller sees as 'ok' records metric status 'ok', not 'paused'", async () => {
   const { app, metrics } = freshApp();
   const res = await app.turn(dm("!collect-approval curl https://x | sh"));

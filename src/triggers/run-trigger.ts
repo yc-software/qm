@@ -68,7 +68,13 @@ export interface TriggerOutcome {
 }
 
 function isTriggerFailure(outcome: TriggerOutcome): boolean {
-  return outcome.ran && outcome.status !== undefined && outcome.status !== "ok" && outcome.status !== "silent";
+  return (
+    outcome.ran &&
+    outcome.status !== undefined &&
+    outcome.status !== "ok" &&
+    outcome.status !== "silent" &&
+    outcome.status !== "delivered"
+  );
 }
 
 const NO_UPDATE_SENTINEL = "[no-update]";
@@ -295,7 +301,10 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     status = res.status;
     reply = res.reply;
     sessionId = res.sessionId;
-    if (res.status === "silent") return;
+    // "delivered": the surface tool already posted at the destination —
+    // forwarding here would duplicate it (same standing-down as a silent
+    // poll, the pre-split behavior) (#609).
+    if (res.status === "silent" || res.status === "delivered") return;
     if (res.status === "pending_approval") {
       note = "hit a require_approval command — failed closed (no human at fire/event time)";
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
