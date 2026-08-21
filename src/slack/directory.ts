@@ -65,7 +65,16 @@ export interface Directory {
   getUserSnapshot(client: any): Promise<{ byId: Map<string, CachedUser>; fetchedAt: number } | undefined>;
   forceDirectorySync(client: any, invalidateChannelId?: string, invalidatePrincipalId?: string): Promise<void>;
   classifyUserCached(client: any, userId: string): Promise<CachedUser & { ok: boolean }>;
-  classifyActor(client: any, userId: string): Promise<ActorAssertion>;
+  lastKnownClassification(userId: string): ActorAssertion | undefined;
+  /** Apply a `user_change`/`team_join` event payload to the caches (#626):
+   *  re-classify from the fresh profile and overwrite BOTH the LRU entry
+   *  and the snapshot's row, so a profile/email change propagates
+   *  immediately instead of waiting out the TTL. */
+  updateUserFromEvent(user: SlackUser): void;
+  classifyActor(
+    client: any,
+    userId: string,
+  ): Promise<ActorAssertion & { ok: boolean }>;
   getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined>;
   channelMembership(
     client: any,
@@ -588,12 +597,44 @@ export function createDirectory(deps: {
       if (ids.ownTeamId) userCache.set(userId, classified);
       return { ...classified, ok: true };
     } catch {
-      return { actor: { externalId: userId, isExternalGuest: true }, ok: false };
+      // Lookup failed — say so instead of asserting the user is an external
+      // guest (#626): the id-based actor carries lookupFailed so consumers
+      // can distinguish "couldn't check" from every checked state.
+      return { actor: { externalId: userId, lookupFailed: true }, ok: false };
     }
   }
 
-  async function classifyActor(client: any, userId: string): Promise<ActorAssertion> {
-    return (await classifyUserCached(client, userId)).actor;
+  function updateUserFromEvent(user: SlackUser): void {
+    // The event carries the FULL fresh profile — classify from it directly
+    // (no users.info round-trip) and overwrite every copy the caches hold.
+    // The LRU entry is the transient-lookup cache; the snapshot row feeds
+    // roster/membership resolution. Both must move together or a name/email
+    // change shows up in one surface and not the other until the TTLs lapse
+    // (#626 defect 3).
+    const actor = classifyUser(user, ids.ownTeamId, ids.identityMode);
+    const timezone = slackUserTimezone(user);
+    const classified = { actor, ...(timezone ? { timezone } : {}) };
+    if (user.id) {
+      userCache.set(user.id, classified);
+      if (userSnapshot) userSnapshot.byId.set(user.id, classified);
+    }
+  }
+
+  function lastKnownClassification(userId: string): ActorAssertion | undefined {
+    // The LRU entry is the last SUCCESSFUL classification (failures are
+    // never cached), i.e. exactly the fallback a transient users.info
+    // failure should fall back to (#626). Time-bounded by the cache TTL.
+    return userCache.get(userId)?.actor;
+  }
+
+  async function classifyActor(client: any, userId: string): Promise<ActorAssertion & { ok: boolean }> {
+    // ok preserved, not discarded: a failed users.info currently reads as a
+    // confident "external guest" to every caller — transiently refusing a
+    // member whose record is merely unreachable. Callers decide what a failed
+    // lookup means (skip, retry, fall back to last-known); the classification
+    // itself must not launder the failure into an identity claim (#626).
+    const { actor, ok } = await classifyUserCached(client, userId);
+    return { ...actor, ok };
   }
 
   async function getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined> {
@@ -658,6 +699,8 @@ export function createDirectory(deps: {
     forceDirectorySync,
     classifyUserCached,
     classifyActor,
+    lastKnownClassification,
+    updateUserFromEvent,
     getChannelInfo,
     channelMembership,
     allInternalRosters,

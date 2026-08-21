@@ -59,6 +59,8 @@
         "message.mpim",
         "member_joined_channel",
         "member_left_channel",
+        "user_change",
+        "team_join",
         "channel_created",
         "channel_rename",
         "channel_unarchive",

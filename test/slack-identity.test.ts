@@ -63,7 +63,26 @@ test("classifyUser email mode keys members on their normalized work email", () =
 test("classifyUser email mode fails closed to guest when a member has no visible email", () => {
   const a = classifyUser({ id: "U1", team_id: TEAM }, TEAM, "email");
   assert.equal(a.externalId, "U1");
-  assert.equal(a.isExternalGuest, true);
+  // Own-team member, principal unresolved: its OWN state, not external
+  // guest (#626). The refusal is equally closed, but logs and copy say
+  // what actually happened.
+  assert.equal(a.isExternalGuest, false);
+  assert.equal(a.principalUnresolved, true);
+});
+
+test("classifyUser email mode: native external evidence still wins over unresolved", () => {
+  // A restricted member with no visible email is an EXTERNAL GUEST, not an
+  // unresolved own-team member — the third state never masks the flags
+  // (#626).
+  const g = classifyUser({ id: "U2", team_id: TEAM, is_restricted: true }, TEAM, "email");
+  assert.equal(g.isExternalGuest, true);
+  assert.equal(g.principalUnresolved, undefined);
+});
+
+test("classifyUser slack-id mode never marks principalUnresolved", () => {
+  const a = classifyUser({ id: "U1", team_id: TEAM }, TEAM, "slack-id");
+  assert.equal(a.isExternalGuest, false);
+  assert.equal(a.principalUnresolved, undefined);
 });
 
 test("classifyUser email mode keeps bots on their Slack id and non-guest", () => {
@@ -81,6 +100,82 @@ test("classifyUser email mode still flags restricted/other-workspace members as 
   );
   assert.equal(g.externalId, "g@acme.com");
   assert.equal(g.isExternalGuest, true);
+});
+
+test("a failed users.info asserts lookupFailed, not external guest (#626)", async () => {
+  // The directory's classifyUserCached currently launders a transient
+  // users.info failure into a confident "external guest" — the incident
+  // refused an owner outright on one failed lookup. The failure state must
+  // be distinguishable from every checked state.
+  const { createDirectory } = await import("../src/slack/directory.ts");
+  const failingClient = {
+    users: {
+      info: async () => { throw new Error("transient"); },
+      list: async () => ({ members: [] }),
+    },
+    conversations: { list: async () => ({ channels: [] }) },
+    auth: { test: async () => ({ ok: true, user_id: "UBOT", team_id: "T1" }) },
+  };
+  const dir = createDirectory({
+    core: failingClient as never,
+    ids: { botUserId: "UBOT", ownTeamId: "T1", identityMode: "slack-id" } as never,
+  });
+  const result = await dir.classifyUserCached(failingClient, "U1");
+  assert.equal(result.ok, false);
+  assert.equal(result.actor.lookupFailed, true, "the failure is named, not guest-folded");
+  assert.equal(result.actor.isExternalGuest, undefined);
+});
+
+test("updateUserFromEvent propagates a fresh profile into both caches (#626)", async () => {
+  const { createDirectory } = await import("../src/slack/directory.ts");
+  // Email mode: the member starts email-less (principal-unresolved — the
+  // #626 incident shape) and a user_change carries the just-set email.
+  const client = {
+    users: {
+      info: async () => ({ user: { id: "U1", team_id: "T1" } }),
+      list: async () => ({ members: [] }),
+    },
+    conversations: { list: async () => ({ channels: [] }) },
+    auth: { test: async () => ({ ok: true, user_id: "UBOT", team_id: "T1", bot_id: "BBOT" }) },
+  };
+  const dir = createDirectory({
+    core: client as never,
+    ids: { botUserId: "UBOT", ownTeamId: "T1", bot_id: "BBOT", identityMode: "email" } as never,
+  });
+
+  const before = await dir.classifyUserCached(client, "U1");
+  assert.equal(before.actor.principalUnresolved, true, "fixture starts unresolved");
+
+  dir.updateUserFromEvent({ id: "U1", team_id: "T1", profile: { email: "U1@acme.com" } });
+
+  const after = await dir.classifyUserCached(client, "U1");
+  assert.equal(after.actor.principalUnresolved, undefined, "the fresh profile resolves immediately");
+  assert.equal(after.actor.externalId, "u1@acme.com", "keyed on the fresh email");
+  // A users.info failure now falls back to the UPDATED classification,
+  // not the stale unresolved one.
+  const lastKnown = dir.lastKnownClassification("U1");
+  assert.equal(lastKnown?.externalId, "u1@acme.com");
+});
+
+test("classifyActor preserves ok instead of discarding it (#626)", async () => {
+  // Shape check without a live client: the interface change is the contract
+  // (ok rides on the assertion); the directory unit above covers behavior.
+  const { createDirectory } = await import("../src/slack/directory.ts");
+  const okClient = {
+    users: {
+      info: async () => ({ user: { id: "U1", team_id: "T1" } }),
+      list: async () => ({ members: [] }),
+    },
+    conversations: { list: async () => ({ channels: [] }) },
+    auth: { test: async () => ({ ok: true, user_id: "UBOT", team_id: "T1" }) },
+  };
+  const dir = createDirectory({
+    core: okClient as never,
+    ids: { botUserId: "UBOT", ownTeamId: "T1", identityMode: "slack-id" } as never,
+  });
+  const actor = await dir.classifyActor(okClient, "U1");
+  assert.equal(actor.ok, true, "ok rides on the returned assertion");
+  assert.equal(actor.isExternalGuest, false);
 });
 
 test("slackUserTimezone extracts only valid Slack user timezones", () => {

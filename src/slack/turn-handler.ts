@@ -200,6 +200,27 @@ export function createTurnHandler(deps: {
         ...(inc.prefetched.timezone ? { timezone: inc.prefetched.timezone } : {}),
       };
     else classified = await classifyUserCached(client, inc.userId);
+    // A failed users.info must not read as a confident external-guest
+    // refusal: log it so the transient failure is visible, and fall back to
+    // the LAST-KNOWN classification when one exists (the incident in #626
+    // showed a single failed lookup refusing an owner outright). With no
+    // prior state, fail closed but as "unverifiable", the third-state
+    // refusal path — never a laundered "external".
+    if ("ok" in classified && !classified.ok) {
+      const cachedAgain = await directory.lastKnownClassification?.(inc.userId);
+      if (cachedAgain) {
+        console.warn(
+          `[slack-plugin] users.info failed for ${inc.userId}; using last-known classification`,
+        );
+        classified = { actor: cachedAgain };
+      } else {
+        console.warn(
+          `[slack-plugin] users.info failed for ${inc.userId} with no prior classification; ` +
+            `refusing as unverifiable ch=${inc.channel} ts=${inc.ts}`,
+        );
+        classified = { actor: { ...classified.actor, principalUnresolved: true as const } };
+      }
+    }
     const actor = classified.actor;
     const timezone = classified.timezone;
     const text = stripMention(inc.rawText, ids.botUserId);
@@ -297,7 +318,33 @@ export function createTurnHandler(deps: {
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           };
 
+    // A principal-unresolved own-team member (email mode, email not yet
+    // visible) is refused as its OWN state — fail closed like a guest, but
+    // named for what it is, both to the sender and in the log, so the
+    // incident signature is decidable (#626: the refusal used to be
+    // indistinguishable from external-guest in logs, and its success path
+    // logged nothing at all).
+    const unresolvedMember = audience.find((a) => a.principalUnresolved);
+    if (unresolvedMember) {
+      console.warn(
+        `[slack-plugin] refusing turn: own-team member principal unresolved ` +
+          `(email identity mode; email not visible in the directory) ` +
+          `user=${unresolvedMember.externalId || "?"} ch=${inc.channel} ts=${inc.ts}`,
+      );
+      if (!inc.unprompted) {
+        await ephemeralOrSay(
+          "I can't respond here yet — I couldn't verify your team membership " +
+            "(your email isn't visible to me). This usually resolves within a " +
+            "few minutes of the directory refreshing; try again shortly.",
+        );
+      }
+      return;
+    }
+
     if (audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) {
+      console.warn(
+        `[slack-plugin] refusing turn: external guest ch=${inc.channel} ts=${inc.ts}`,
+      );
       if (!inc.unprompted) {
         await ephemeralOrSay(
           "I can't respond here — this conversation isn't fully internal. Try a DM or a fully-internal channel.",
