@@ -109,6 +109,7 @@ export interface HarnessTurnResult {
   pausedOnApproval?: boolean;
   modelCalls?: number;
   cacheUsage?: { cacheRead: number; cacheWrite: number; uncachedInput: number };
+  costUsage?: { outputTokens: number; costUsd: number };
   compileMs?: number;
   tapeWriteFailed?: boolean;
 }

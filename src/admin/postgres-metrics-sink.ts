@@ -37,6 +37,8 @@ const COLUMNS: readonly EventColumn<keyof TurnMetricSample & string>[] = [
   ["cache_read", "cacheRead", "BIGINT", "number"],
   ["cache_write", "cacheWrite", "BIGINT", "number"],
   ["uncached_input", "uncachedInput", "BIGINT", "number"],
+  ["output_tokens", "outputTokens", "BIGINT", "number"],
+  ["cost_usd", "costUsd", "DOUBLE PRECISION", "number"],
 ];
 
 const EXTRA_SCHEMA_STATEMENTS = [
