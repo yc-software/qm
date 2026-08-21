@@ -220,6 +220,15 @@ export interface Cron extends TriggerBase {
   schedule: CronSchedule;
   nextFireAt?: number;
   lastAttemptAt?: number;
+  /**
+   * Consecutive failed fire attempts (#602): drives the per-cron failure
+   * backoff with {@link Cron.retryNotBefore}, so a cron whose fire keeps
+   * failing (e.g. its model provider is down) backs off exponentially
+   * instead of re-attempting every scheduler tick. Cleared on success.
+   */
+  failedAttempts?: number;
+  /** Not-before for the next attempt after failures (#602); 0/absent = due now. */
+  retryNotBefore?: number;
   title?: string;
   archived?: boolean;
   action?: string;

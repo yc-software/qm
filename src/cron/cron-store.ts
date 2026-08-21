@@ -46,9 +46,19 @@ export interface CronStore {
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
+  markFailedAttempt(id: string, at: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
   due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
+}
+
+/**
+ * Per-cron failure backoff (#602): 30s exponential, capped at 5 minutes — a
+ * recurring cron with a failing provider is probed at most every few minutes
+ * during an outage instead of every scheduler tick.
+ */
+export function cronFailureBackoffMs(failedAttempts: number): number {
+  return Math.min(30_000 * 2 ** Math.max(0, failedAttempts - 1), 300_000);
 }
 
 function normalizeTitle(title: string | undefined): string | undefined {
@@ -135,6 +145,9 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
     },
     async markFired(id, at, scheduledAt) {
       const cron = await backing.get(id);
+      if (cron && (cron.failedAttempts || cron.retryNotBefore)) {
+        await backing.merge(id, { failedAttempts: 0, retryNotBefore: 0 });
+      }
       if (!cron) return;
       const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
       await backing.merge(id, { lastFiredAt: at, nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom) });
@@ -181,6 +194,18 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
       if (!cron || cron.lastFiredAt !== at) return;
       await backing.merge(id, { lastFiredAt: priorLastFiredAt, nextFireAt: scheduledAt });
     },
+    async markFailedAttempt(id, at) {
+      // Per-cron failure backoff (#602): a failing fire pushes the next
+      // attempt out exponentially so an outage is probed gently instead of
+      // every 1-5s; success (markFired) clears both fields.
+      const cron = await backing.get(id);
+      const attempts = (cron?.failedAttempts ?? 0) + 1;
+      await backing.merge(id, {
+        lastAttemptAt: at,
+        failedAttempts: attempts,
+        retryNotBefore: at + cronFailureBackoffMs(attempts),
+      });
+    },
     async markAttempted(id, at) {
       await backing.merge(id, { lastAttemptAt: at });
     },
@@ -188,6 +213,9 @@ export function createCronStore(backing: DurableMap<Cron> = createMemoryMap<Cron
       const due: Array<Cron & { scheduledAt: number }> = [];
       for (const c of await backing.all()) {
         if (c.archived || !c.enabled) continue;
+        // A cron inside its failure backoff window is not due yet, whatever
+        // its schedule says — the retry pacing beats the schedule (#602).
+        if ((c.retryNotBefore ?? 0) > now) continue;
         const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
         if (scheduledAt !== undefined && now >= scheduledAt) due.push({ ...c, nextFireAt: scheduledAt, scheduledAt });
       }

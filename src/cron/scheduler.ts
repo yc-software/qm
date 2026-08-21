@@ -153,6 +153,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         status: "failed",
         note: truncate(errMessage(e), CRON_FIRE_REPLY_MAX_CHARS),
       });
+      // Back this cron off before its next attempt (#602): the schedule
+      // alone would re-derive the same scheduledAt and retry within
+      // seconds, feeding an outage.
+      await deps.crons.markFailedAttempt(cron.id, t).catch(() => undefined);
       throw e;
     }
     if (outcome.ran || outcome.authzFailed) {
