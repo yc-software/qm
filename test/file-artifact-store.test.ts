@@ -196,3 +196,44 @@ test("delete removes the ROW only — bytes shared with another row stay openabl
   const back = await drain(store, "in");
   assert.deepEqual(back, PNG, "the surviving row's bytes are intact (no inline byte delete)");
 });
+
+
+test("distinctByContent collapses per-turn duplicates to the earliest row per document", async () => {
+  // The issue's shape: the same bytes registered by different turns (and
+  // different owners) — one row per document in the grouped view, earliest
+  // registration as the representative (#601).
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  await store.put(put({ id: fileArtifactId("run-1", "in", 0), direction: "in", createdBy: "sales", createdAt: 1000 }));
+  await store.put(put({ id: fileArtifactId("run-2", "in", 0), direction: "in", createdBy: "finance", createdAt: 2000 }));
+  await store.put(put({ id: fileArtifactId("run-3", "out", 0), direction: "out", createdBy: "agent", createdAt: 3000 }));
+  await store.put(
+    put({ id: fileArtifactId("run-4", "out", 0), name: "notes.txt", data: Buffer.from([0x01]), createdAt: 1500 }),
+  );
+
+  // Raw ledger: one row per registration.
+  const ledger = await store.listOwnedByScopes([owner]);
+  assert.equal(ledger.files.length, 4);
+
+  // Grouped view: one row per document (per sha256), earliest wins.
+  const grouped = await store.listOwnedByScopes([owner], { distinctByContent: true });
+  assert.equal(grouped.files.length, 2);
+  const doc = grouped.files.find((r) => r.name === "pirate_flag.png");
+  assert.ok(doc, "document row present");
+  assert.equal(doc.createdBy, "sales", "earliest registration is the representative");
+  assert.equal(doc.direction, "in");
+  assert.equal(doc.createdAt, 1000);
+
+  // Cursor pagination over grouped rows: a group already emitted must not
+  // reappear through a later duplicate following the cursor.
+  const page1 = await store.listOwnedByScopes([owner], { distinctByContent: true, limit: 1 });
+  assert.equal(page1.files.length, 1);
+  assert.ok(page1.nextCursor, "more pages");
+  const page2 = await store.listOwnedByScopes([owner], {
+    distinctByContent: true,
+    limit: 10,
+    cursor: page1.nextCursor,
+  });
+  const ids = [...page1.files, ...page2.files].map((r) => r.sha256);
+  assert.equal(new Set(ids).size, ids.length, "no document appears on two pages");
+});
+

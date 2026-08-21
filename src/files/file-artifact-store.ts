@@ -54,6 +54,14 @@ export interface ListOwnedOptions {
   cursor?: string;
   includeDisabled?: boolean;
   createdInScope?: ScopeId;
+  /**
+   * Collapse per-turn duplicate rows: one row per document (the earliest
+   * registration of each sha256; null-sha rows stay distinct). The artifact
+   * table is a per-turn ledger — a document re-attached each turn is a new row
+   * by construction — so USER-FACING file views pass this to stop the file
+   * list growing with use. Ledger/admin listings leave it off (#601).
+   */
+  distinctByContent?: boolean;
 }
 
 export interface FileArtifactStore {
@@ -168,9 +176,25 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
       const set = new Set(scopes);
       const limit = clampLimit(opts?.limit);
       const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
-      const all = [...rows.values()]
+      let all = [...rows.values()]
         .filter((r) => set.has(r.ownerScopeId) && (opts?.includeDisabled || r.enabled))
-        .filter((r) => opts?.createdInScope == null || r.createdInScope === opts.createdInScope)
+        .filter((r) => opts?.createdInScope == null || r.createdInScope === opts.createdInScope);
+      if (opts?.distinctByContent) {
+        // Group FIRST (over every matching row, cursor ignored), then apply
+        // the cursor to the representatives: a group whose earliest row was
+        // already emitted on a prior page must not reappear via a later
+        // duplicate that happens to follow the cursor (#601).
+        const earliest = new Map<string, FileArtifact>();
+        for (const r of all) {
+          const key = r.sha256 ?? `id:${r.id}`;
+          const cur = earliest.get(key);
+          if (!cur || r.createdAt < cur.createdAt || (r.createdAt === cur.createdAt && r.id < cur.id)) {
+            earliest.set(key, r);
+          }
+        }
+        all = [...earliest.values()];
+      }
+      all = all
         .filter((r) => (cursor ? afterCursor(r, cursor) : true))
         .sort((a, b) => b.createdAt - a.createdAt || idOrderDesc(a.id, b.id));
       const page = all.slice(0, limit);

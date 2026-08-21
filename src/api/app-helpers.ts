@@ -317,8 +317,12 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     inScope?: ScopeId,
   ): Promise<FileListPage> {
     const myScopes = await currentResourceScopesForViewer(principalId);
+    // Viewer-facing views show one row per document, not the per-turn
+    // ledger: an agent re-attaching the same file each turn must not grow
+    // the list without bound (#601). Admin/ledger listings keep raw rows.
     const owned = await deps.files.listOwnedByScopes(myScopes, {
       ...opts,
+      distinctByContent: true,
       ...(inScope ? { createdInScope: inScope } : {}),
     });
     const handles = await deps.acl.handlesFor(myScopes);
