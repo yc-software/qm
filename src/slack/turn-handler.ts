@@ -297,7 +297,33 @@ export function createTurnHandler(deps: {
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           };
 
+    // A principal-unresolved own-team member (email mode, email not yet
+    // visible) is refused as its OWN state — fail closed like a guest, but
+    // named for what it is, both to the sender and in the log, so the
+    // incident signature is decidable (#626: the refusal used to be
+    // indistinguishable from external-guest in logs, and its success path
+    // logged nothing at all).
+    const unresolvedMember = audience.find((a) => a.principalUnresolved);
+    if (unresolvedMember) {
+      console.warn(
+        `[slack-plugin] refusing turn: own-team member principal unresolved ` +
+          `(email identity mode; email not visible in the directory) ` +
+          `user=${unresolvedMember.externalId || "?"} ch=${inc.channel} ts=${inc.ts}`,
+      );
+      if (!inc.unprompted) {
+        await ephemeralOrSay(
+          "I can't respond here yet — I couldn't verify your team membership " +
+            "(your email isn't visible to me). This usually resolves within a " +
+            "few minutes of the directory refreshing; try again shortly.",
+        );
+      }
+      return;
+    }
+
     if (audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) {
+      console.warn(
+        `[slack-plugin] refusing turn: external guest ch=${inc.channel} ts=${inc.ts}`,
+      );
       if (!inc.unprompted) {
         await ephemeralOrSay(
           "I can't respond here — this conversation isn't fully internal. Try a DM or a fully-internal channel.",

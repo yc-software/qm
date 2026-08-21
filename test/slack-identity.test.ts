@@ -63,7 +63,26 @@ test("classifyUser email mode keys members on their normalized work email", () =
 test("classifyUser email mode fails closed to guest when a member has no visible email", () => {
   const a = classifyUser({ id: "U1", team_id: TEAM }, TEAM, "email");
   assert.equal(a.externalId, "U1");
-  assert.equal(a.isExternalGuest, true);
+  // Own-team member, principal unresolved: its OWN state, not external
+  // guest (#626). The refusal is equally closed, but logs and copy say
+  // what actually happened.
+  assert.equal(a.isExternalGuest, false);
+  assert.equal(a.principalUnresolved, true);
+});
+
+test("classifyUser email mode: native external evidence still wins over unresolved", () => {
+  // A restricted member with no visible email is an EXTERNAL GUEST, not an
+  // unresolved own-team member — the third state never masks the flags
+  // (#626).
+  const g = classifyUser({ id: "U2", team_id: TEAM, is_restricted: true }, TEAM, "email");
+  assert.equal(g.isExternalGuest, true);
+  assert.equal(g.principalUnresolved, undefined);
+});
+
+test("classifyUser slack-id mode never marks principalUnresolved", () => {
+  const a = classifyUser({ id: "U1", team_id: TEAM }, TEAM, "slack-id");
+  assert.equal(a.isExternalGuest, false);
+  assert.equal(a.principalUnresolved, undefined);
 });
 
 test("classifyUser email mode keeps bots on their Slack id and non-guest", () => {
