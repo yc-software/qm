@@ -38,6 +38,7 @@ function start(
       anthropic: Boolean(config.anthropicApiKey),
       openai: Boolean(config.openaiApiKey),
       openrouter: Boolean(config.openrouterApiKey),
+      codexOpenai: config.codexProcessEnv?.CODEX_SUBSCRIPTION_AUTH?.trim() === "1",
     },
     admin: built.admin,
     auditLog: built.auditLog,
@@ -396,6 +397,39 @@ test("surface-config reports whether any model provider is configured", async ()
     await srv.built.modelCredentials.set("anthropic", "working-admin-key", "admin-alice@default-org");
     const after = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(((await after.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("surface-config counts Codex subscription auth as a configured provider", async () => {
+  const srv = start({ harness: "codex", codexProcessEnv: { CODEX_SUBSCRIPTION_AUTH: "1" } });
+  try {
+    const response = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("surface-config ignores providers the Codex harness cannot serve", async () => {
+  const srv = start({ harness: "codex", anthropicApiKey: "deployment-anthropic-key" });
+  try {
+    const response = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, false);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("surface-config does not count Codex routing metadata as an OpenCode provider", async () => {
+  const srv = start({ harness: "opencode", codexProcessEnv: { CODEX_SUBSCRIPTION_AUTH: "1" } });
+  try {
+    const response = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, false);
   } finally {
     await srv.close();
   }

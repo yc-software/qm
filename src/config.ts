@@ -163,6 +163,7 @@ export function providerKeysPresent(config: Config): ModelProviderAvailability {
     anthropic: Boolean(config.anthropicApiKey),
     openai: Boolean(config.openaiApiKey),
     openrouter: Boolean(config.openrouterApiKey),
+    codexOpenai: Boolean(config.openaiApiKey || config.codexProcessEnv.CODEX_SUBSCRIPTION_AUTH?.trim() === "1"),
   };
 }
 
@@ -714,6 +715,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "ALL_PROXY",
       "OPENAI_API_KEY",
       "CODEX_ACCESS_TOKEN",
+      "CODEX_SUBSCRIPTION_AUTH",
+      "CODEX_AUTH_JSON",
       "HOME",
       "CODEX_HOME",
     ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),

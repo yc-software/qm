@@ -202,6 +202,7 @@ export interface ModelProviderAvailability {
   anthropic: boolean;
   openai: boolean;
   openrouter: boolean;
+  codexOpenai?: boolean;
 }
 
 export function modelServiceable(id: string, providers: ModelProviderAvailability): boolean {
@@ -227,7 +228,13 @@ export function modelProviderAvailabilityFor(
 ): ModelProviderAvailability {
   if (harness === "pi") return managedKeys;
   if (harness === "opencode") return { ...configKeys, openrouter: false };
-  if (harness === "codex") return configKeys;
+  if (harness === "codex")
+    return {
+      ...configKeys,
+      anthropic: false,
+      openai: configKeys.codexOpenai ?? configKeys.openai,
+      openrouter: false,
+    };
   return ALL_PROVIDERS_AVAILABLE;
 }
 

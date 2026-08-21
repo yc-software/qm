@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { baseModelProviders, boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
+import {
+  baseModelProviders,
+  boolEnv,
+  loadConfig,
+  numEnv,
+  providerKeysPresent,
+  CONFIG_DEFAULTS,
+} from "../src/config.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -316,10 +323,24 @@ test("HARNESS=pi can boot before an admin configures a model provider", () => {
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi", ANTHROPIC_API_KEY: "sk-ant" }));
 });
 
-test("HARNESS=codex requires OPENAI_API_KEY: its CLI cannot do browser OAuth in a container", () => {
+test("HARNESS=codex accepts an API key or explicit subscription authentication", () => {
   assert.throws(() => loadConfig({ HARNESS: "codex" }), /missing or insecure required core secrets: OPENAI_API_KEY/);
   assert.throws(() => loadConfig({ HARNESS: " codex " }), /missing or insecure required core secrets: OPENAI_API_KEY/);
   assert.doesNotThrow(() => loadConfig({ HARNESS: "codex", OPENAI_API_KEY: "sk-openai" }));
+  assert.throws(
+    () => loadConfig({ HARNESS: "codex", CODEX_ACCESS_TOKEN: "access-token" }),
+    /missing or insecure required core secrets: OPENAI_API_KEY/,
+  );
+  assert.throws(
+    () => loadConfig({ HARNESS: "codex", CODEX_AUTH_JSON: "{}" }),
+    /missing or insecure required core secrets: OPENAI_API_KEY/,
+  );
+  assert.doesNotThrow(() => loadConfig({ HARNESS: "codex", CODEX_SUBSCRIPTION_AUTH: " 1 ", HOME: "/tmp/user" }));
+  assert.equal(
+    providerKeysPresent(loadConfig({ HARNESS: "codex", CODEX_SUBSCRIPTION_AUTH: " 1 ", HOME: "/tmp/user" }))
+      .codexOpenai,
+    true,
+  );
   assert.throws(
     () => loadConfig({ ...productionEnv, HARNESS: "codex" }),
     /missing or insecure required core secrets: OPENAI_API_KEY/,

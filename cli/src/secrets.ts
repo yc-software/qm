@@ -4,6 +4,7 @@ import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 
 type SecretCondition =
   | { kind: "env-equals"; service: DeclaredServiceName; name: string; value: string }
+  | { kind: "env-not-equals"; service: DeclaredServiceName; name: string; value: string }
   | { kind: "env-in"; service: DeclaredServiceName; name: string; values: string[] }
   | { kind: "env-absent"; service: DeclaredServiceName; name: string }
   | { kind: "env-all-absent"; service: DeclaredServiceName; names: string[] }
@@ -61,13 +62,39 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       when: {
         kind: "any",
         conditions: [
-          { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
-          { kind: "model-provider", provider: "openai" },
+          {
+            kind: "all",
+            conditions: [
+              { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
+              { kind: "env-not-equals", service: "core", name: "CODEX_SUBSCRIPTION_AUTH", value: "1" },
+            ],
+          },
+          {
+            kind: "all",
+            conditions: [
+              { kind: "model-provider", provider: "openai" },
+              {
+                kind: "any",
+                conditions: [
+                  { kind: "env-not-equals", service: "core", name: "HARNESS", value: "codex" },
+                  { kind: "env-not-equals", service: "core", name: "CODEX_SUBSCRIPTION_AUTH", value: "1" },
+                ],
+              },
+            ],
+          },
         ],
       },
     },
     description:
-      'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), and it bills the base model when modelProvider is "openai".',
+      'OpenAI API key: authenticates the Codex harness unless subscription auth is enabled, and bills the base model when modelProvider is "openai".',
+  },
+  {
+    name: "CODEX_AUTH_JSON",
+    service: "core",
+    required: {
+      when: { kind: "env-equals", service: "core", name: "CODEX_SUBSCRIPTION_AUTH", value: "1" },
+    },
+    description: "Serialized Codex subscription credentials used to materialize the isolated runtime auth file.",
   },
   {
     name: "PUBLIC_API_URL",
@@ -394,6 +421,7 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   const value = (
     config.env[condition.service]?.[condition.name] ?? targetEnvDefault(config, condition.service, condition.name)
   )?.trim();
+  if (condition.kind === "env-not-equals") return value !== condition.value;
   if (condition.kind === "env-absent") return !value;
   if (condition.kind === "env-present") return Boolean(value);
   if (condition.kind === "env-in") return value !== undefined && condition.values.includes(value);
@@ -565,6 +593,8 @@ function conditionClause(condition: SecretCondition): string {
   if (condition.kind === "target") return `the target is ${condition.target}`;
   if (condition.kind === "env-all-absent")
     return `none of env.${condition.service}.{${condition.names.join(", ")}} are set`;
+  if (condition.kind === "env-not-equals")
+    return `env.${condition.service}.${condition.name} is not ${JSON.stringify(condition.value)}`;
   if (condition.kind === "env-absent") return `env.${condition.service}.${condition.name} is not set`;
   if (condition.kind === "env-present") return `env.${condition.service}.${condition.name} is set`;
   if (condition.kind === "env-in")

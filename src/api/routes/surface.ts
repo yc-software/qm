@@ -1061,8 +1061,10 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
   ]);
   const harnessId = deps.harnessId ?? "pi";
+  const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
-  const catalog = managedKeys?.openrouter
+  const availableProviders = managedKeys ? modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys) : null;
+  const catalog = availableProviders?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
   const allowed = selectableCatalogForHarness(catalog, harnessId).map((model) => model.id);
@@ -1079,7 +1081,12 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     webuiModels: configuredPicker.length ? configuredPicker : allowed,
     baseModel: resolvedBase,
     harnessId,
-    ...(managedKeys ? { modelProviderConfigured: Object.values(managedKeys).some(Boolean) } : {}),
+    ...(availableProviders
+      ? {
+          modelProviderConfigured:
+            availableProviders.anthropic || availableProviders.openai || availableProviders.openrouter,
+        }
+      : {}),
     externalSlackParticipants,
     ...(Object.keys(resolvedBranding).length ? { branding: resolvedBranding } : {}),
   });

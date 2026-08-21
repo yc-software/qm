@@ -222,6 +222,26 @@ test("an OpenAI base model and the Codex harness agree on one required key", () 
   assert.equal(matches[0]!.required, true);
 });
 
+test("Codex subscription auth does not require an API key", () => {
+  const config = makeConfig({ env: { core: { HARNESS: "codex", CODEX_SUBSCRIPTION_AUTH: "1" } } });
+  assert.ok(!computedSecrets(config).some((secret) => secret.name === "OPENAI_API_KEY"));
+  assert.equal(secretByName(config, "CODEX_AUTH_JSON").required, true);
+});
+
+test("Codex subscription auth satisfies an explicit OpenAI model provider", () => {
+  const config = makeConfig({
+    modelProvider: "openai",
+    env: { core: { HARNESS: "codex", CODEX_SUBSCRIPTION_AUTH: " 1 " } },
+  });
+  assert.ok(!computedSecrets(config).some((secret) => secret.name === "OPENAI_API_KEY"));
+  assert.equal(secretByName(config, "CODEX_AUTH_JSON").required, true);
+});
+
+test("a disabled Codex subscription still requires an API key", () => {
+  const config = makeConfig({ env: { core: { HARNESS: "codex", CODEX_SUBSCRIPTION_AUTH: "0" } } });
+  assert.equal(secretByName(config, "OPENAI_API_KEY").required, true);
+});
+
 test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavior", () => {
   const deferred = makeConfig();
   assert.equal(secretByName(deferred, "ANTHROPIC_API_KEY").required, false);

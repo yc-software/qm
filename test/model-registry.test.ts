@@ -79,9 +79,19 @@ test("provider-key gating applies only to key-authed harnesses (no over-hiding o
     { anthropic: true, openai: true, openrouter: false },
   );
   assert.deepEqual(modelProviderAvailabilityFor("codex", noKeys), noKeys);
+  assert.deepEqual(modelProviderAvailabilityFor("codex", { ...noKeys, codexOpenai: true }), {
+    ...noKeys,
+    openai: true,
+    codexOpenai: true,
+  });
   assert.deepEqual(modelProviderAvailabilityFor("codex", { anthropic: false, openai: true, openrouter: false }), {
     anthropic: false,
     openai: true,
+    openrouter: false,
+  });
+  assert.deepEqual(modelProviderAvailabilityFor("codex", { anthropic: true, openai: false, openrouter: true }), {
+    anthropic: false,
+    openai: false,
     openrouter: false,
   });
   assert.deepEqual(modelProviderAvailabilityFor("claude", noKeys), { anthropic: true, openai: true, openrouter: true });

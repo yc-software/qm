@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -201,7 +201,31 @@ export function codexChildEnv(source: NodeJS.ProcessEnv, jail: string): NodeJS.P
 export function prepareCodexHome(source: NodeJS.ProcessEnv, jail: string): string {
   const target = join(jail, "codex-home");
   mkdirSync(target, { recursive: true });
-  if (source.OPENAI_API_KEY) {
+  if (source.CODEX_SUBSCRIPTION_AUTH?.trim() === "1") {
+    if (source.CODEX_AUTH_JSON) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(source.CODEX_AUTH_JSON) as unknown;
+      } catch {
+        throw new Error("CODEX_AUTH_JSON must contain valid JSON");
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("CODEX_AUTH_JSON must contain a Codex auth.json object");
+      }
+      writeFileSync(join(target, "auth.json"), JSON.stringify(parsed), { mode: 0o600 });
+      return target;
+    }
+    const sourceHome = source.CODEX_HOME || (source.HOME ? join(source.HOME, ".codex") : "");
+    const sourceAuth = sourceHome ? join(sourceHome, "auth.json") : "";
+    if (!sourceAuth || !existsSync(sourceAuth)) {
+      throw new Error(
+        "CODEX_SUBSCRIPTION_AUTH=1 requires CODEX_AUTH_JSON or a logged-in Codex auth.json; run codex login first",
+      );
+    }
+    const targetAuth = join(target, "auth.json");
+    copyFileSync(sourceAuth, targetAuth);
+    chmodSync(targetAuth, 0o600);
+  } else if (source.OPENAI_API_KEY) {
     writeFileSync(
       join(target, "auth.json"),
       JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: source.OPENAI_API_KEY }),
@@ -426,8 +450,14 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     if (starting) return await starting;
     starting = (async () => {
       const jail = mkdtempSync(join(tmpdir(), "qm-codex-"));
-      const sourceEnv = opts.env ?? {};
-      prepareCodexHome(sourceEnv, jail);
+      let sourceEnv: NodeJS.ProcessEnv;
+      try {
+        sourceEnv = opts.env ?? {};
+        prepareCodexHome(sourceEnv, jail);
+      } catch (error) {
+        rmSync(jail, { recursive: true, force: true });
+        throw error;
+      }
       const binaryPath = opts.binaryPath ?? resolve("node_modules/.bin/codex");
       const server = new CodexAppServer({
         binaryPath,

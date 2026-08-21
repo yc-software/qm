@@ -303,6 +303,32 @@ test("Codex materializes API-key auth into its isolated home, and never an ambie
   assert.equal(existsSync(join(prepareCodexHome({ HOME: homedir() }, bare), "auth.json")), false);
 });
 
+test("Codex materializes serialized subscription auth into its isolated home", (t) => {
+  const jail = mkdtempSync(join(tmpdir(), "qm-codex-auth-subscription-"));
+  t.after(() => rmSync(jail, { recursive: true, force: true }));
+  const home = prepareCodexHome(
+    {
+      OPENAI_API_KEY: "sk-unused",
+      CODEX_SUBSCRIPTION_AUTH: " 1 ",
+      CODEX_AUTH_JSON: JSON.stringify({ auth_mode: "chatgpt", tokens: {} }),
+    },
+    jail,
+  );
+  assert.deepEqual(JSON.parse(readFileSync(join(home, "auth.json"), "utf8")), {
+    auth_mode: "chatgpt",
+    tokens: {},
+  });
+});
+
+test("Codex rejects malformed serialized subscription auth without echoing it", (t) => {
+  const jail = mkdtempSync(join(tmpdir(), "qm-codex-auth-malformed-"));
+  t.after(() => rmSync(jail, { recursive: true, force: true }));
+  assert.throws(
+    () => prepareCodexHome({ CODEX_SUBSCRIPTION_AUTH: "1", CODEX_AUTH_JSON: "SECRET" }, jail),
+    (error: Error) => error.message === "CODEX_AUTH_JSON must contain valid JSON",
+  );
+});
+
 test("Codex children cannot use parent surface, control, or terminal tools", () => {
   assert.equal(codexChildToolAllowed("history"), true);
   assert.equal(codexChildToolAllowed("execute"), true);

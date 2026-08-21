@@ -3,6 +3,7 @@ import { isStrongSigningSecret } from "../auth/source-auth.ts";
 type SecretGate =
   | "production"
   | "codex"
+  | "codex-subscription"
   | "postgres"
   | "sprites"
   | "smolmachines"
@@ -28,6 +29,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "PORTAL_IDENTITY_SECRET", requiredWhen: "production" },
   { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
   { name: "OPENAI_API_KEY", requiredWhen: ["codex", "model-openai"] },
+  { name: "CODEX_AUTH_JSON", requiredWhen: "codex-subscription" },
   { name: "ANTHROPIC_API_KEY", requiredWhen: "model-anthropic" },
   { name: "OPENROUTER_API_KEY", requiredWhen: "model-openrouter" },
   { name: "DATABASE_URL", requiredWhen: "postgres" },
@@ -43,7 +45,8 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
 
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
-  codex: (env) => env.HARNESS?.trim() === "codex",
+  codex: (env) => env.HARNESS?.trim() === "codex" && env.CODEX_SUBSCRIPTION_AUTH?.trim() !== "1",
+  "codex-subscription": (env) => env.NODE_ENV === "production" && env.CODEX_SUBSCRIPTION_AUTH?.trim() === "1",
   postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
   sprites: (env) => env.SANDBOX_BACKEND === "sprites" || env.SANDBOX_SECONDARY_BACKEND === "sprites",
   smolmachines: (env) => env.SANDBOX_BACKEND === "smolmachines" || env.SANDBOX_SECONDARY_BACKEND === "smolmachines",
@@ -54,7 +57,9 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "dropbox-oauth": (env) => Boolean(env.DROPBOX_OAUTH_CLIENT_ID),
   "linear-oauth": (env) => Boolean(env.LINEAR_OAUTH_CLIENT_ID),
   "model-anthropic": (env) => env.MODEL_PROVIDER?.trim() === "anthropic",
-  "model-openai": (env) => env.MODEL_PROVIDER?.trim() === "openai",
+  "model-openai": (env) =>
+    env.MODEL_PROVIDER?.trim() === "openai" &&
+    !(env.HARNESS?.trim() === "codex" && env.CODEX_SUBSCRIPTION_AUTH?.trim() === "1"),
   "model-openrouter": (env) => env.MODEL_PROVIDER?.trim() === "openrouter",
 };
 
