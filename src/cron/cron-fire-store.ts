@@ -64,7 +64,7 @@ export function createPostgresCronFireStore(
         FOREIGN KEY (cron_id) REFERENCES ${cronTable}(id) ON DELETE CASCADE
       )`,
     `CREATE INDEX IF NOT EXISTS ${fireTable}_cron_fired_idx ON ${fireTable} (cron_id, fired_at DESC, fire_key DESC)`,
-    `CREATE INDEX IF NOT EXISTS ${fireTable}_inline_cron_idx ON ${cronTable} (id) WHERE json ? 'fireLog'`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${fireTable}_inline_cron_idx ON ${cronTable} (id) WHERE json ? 'fireLog'`,
   ];
   let readyP: Promise<void> | undefined;
   const ready = () =>
