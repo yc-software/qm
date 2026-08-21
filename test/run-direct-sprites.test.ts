@@ -298,6 +298,15 @@ test("Sprites helper keeps descendant supervision until the process group is ter
   rmSync(marker, { force: true });
 });
 
+test("Sprites helper serializes process reaping with process-group termination", () => {
+  assert.match(
+    DIRECT_HELPER_SCRIPT,
+    /with child_lock:\n\s+if child\.returncode is None:\n\s+try:\n\s+os\.killpg\(child\.pid, signal\.SIGKILL\)/,
+  );
+  assert.match(DIRECT_HELPER_SCRIPT, /with child_lock:\n\s+child_finished = child\.poll\(\) is not None/);
+  assert.match(DIRECT_HELPER_SCRIPT, /with child_lock:\n\s+child\.wait\(\)/);
+});
+
 test(
   "Sprites helper terminates detached descendants that escape the child process group",
   { skip: process.platform !== "linux" },

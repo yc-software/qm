@@ -196,33 +196,36 @@ totals = {"stdout": 0, "stderr": 0}
 limit_exceeded = threading.Event()
 stdout_done = threading.Event()
 stderr_done = threading.Event()
+child_lock = threading.Lock()
 
 def kill_tree():
-    try:
-        os.killpg(child.pid, signal.SIGKILL)
-    except Exception:
-        try:
-            child.kill()
-        except Exception:
-            pass
-    if sys.platform == "linux":
-        for _ in range(32):
-            found = descendants()
-            if not found:
-                break
-            for pid in found:
+    with child_lock:
+        if child.returncode is None:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except Exception:
                 try:
-                    os.kill(pid, signal.SIGKILL)
+                    child.kill()
                 except Exception:
                     pass
-            for pid in found:
-                if pid == child.pid:
-                    continue
-                try:
-                    os.waitpid(pid, os.WNOHANG)
-                except Exception:
-                    pass
-            time.sleep(0.005)
+        if sys.platform == "linux":
+            for _ in range(32):
+                found = descendants()
+                if not found:
+                    break
+                for pid in found:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
+                for pid in found:
+                    if pid == child.pid:
+                        continue
+                    try:
+                        os.waitpid(pid, os.WNOHANG)
+                    except Exception:
+                        pass
+                time.sleep(0.005)
 
 def read_stream(name, stream, parts, limit, done):
     try:
@@ -264,11 +267,14 @@ while True:
         timed_out = True
         kill_tree()
         break
-    if child.poll() is not None and stdout_done.is_set() and stderr_done.is_set():
+    with child_lock:
+        child_finished = child.poll() is not None
+    if child_finished and stdout_done.is_set() and stderr_done.is_set():
         kill_tree()
         break
     time.sleep(0.005)
-child.wait()
+with child_lock:
+    child.wait()
 for thread in threads:
     thread.join(timeout=1)
 return_code = 124 if timed_out else 122 if limit_exceeded.is_set() else child.returncode if child.returncode >= 0 else 1
