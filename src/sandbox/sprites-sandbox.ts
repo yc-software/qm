@@ -51,6 +51,7 @@ const DIRECT_HELPER_RESPONSE_MAX_BYTES = 256 * 1024 * 1024;
 export const DIRECT_HELPER_EXECUTABLE = "/usr/bin/python3";
 export const DIRECT_HELPER_SCRIPT = String.raw`
 import base64
+import ctypes
 import json
 import os
 import re
@@ -67,6 +68,7 @@ output_cap = 64 * 1024 * 1024
 request_cap = 128 * 1024 * 1024
 result_cap = 256 * 1024 * 1024
 env_name = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+helper_pid = os.getpid()
 
 def output(value):
     encoded = json.dumps(value, separators=(",", ":"))
@@ -84,6 +86,48 @@ def bounded(value, fallback, cap):
 def fail(message):
     output({"error": message})
     raise SystemExit(0)
+
+def enable_subreaper():
+    if sys.platform != "linux":
+        return
+    try:
+        with open("/proc/self/stat", "rb") as stat_file:
+            stat_file.read(1)
+        if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+            fail("direct helper containment unavailable")
+    except SystemExit:
+        raise
+    except Exception:
+        fail("direct helper containment unavailable")
+
+def descendants():
+    if sys.platform != "linux":
+        return set()
+    parents = {}
+    try:
+        entries = os.scandir("/proc")
+    except Exception:
+        return set()
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", "r", encoding="utf-8") as stat_file:
+                    stat = stat_file.read()
+                fields = stat[stat.rfind(")") + 2:].split()
+                parents[int(entry.name)] = int(fields[1])
+            except Exception:
+                continue
+    result = set()
+    changed = True
+    while changed:
+        changed = False
+        for pid, parent in parents.items():
+            if pid != helper_pid and pid not in result and (parent == helper_pid or parent in result):
+                result.add(pid)
+                changed = True
+    return result
 
 raw = sys.stdin.buffer.read(request_cap + 1)
 if len(raw) > request_cap:
@@ -140,6 +184,7 @@ except SystemExit:
     raise
 except Exception:
     fail("direct path is not available")
+enable_subreaper()
 try:
     child = subprocess.Popen(argv, cwd=cwd_real, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
 except Exception:
@@ -160,6 +205,24 @@ def kill_tree():
             child.kill()
         except Exception:
             pass
+    if sys.platform == "linux":
+        for _ in range(32):
+            found = descendants()
+            if not found:
+                break
+            for pid in found:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+            for pid in found:
+                if pid == child.pid:
+                    continue
+                try:
+                    os.waitpid(pid, os.WNOHANG)
+                except Exception:
+                    pass
+            time.sleep(0.005)
 
 def read_stream(name, stream, parts, limit, done):
     try:

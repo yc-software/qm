@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { test } from "node:test";
 import { join } from "node:path";
@@ -297,6 +297,50 @@ test("Sprites helper keeps descendant supervision until the process group is ter
   assert.equal(existsSync(marker), false);
   rmSync(marker, { force: true });
 });
+
+test(
+  "Sprites helper terminates detached descendants that escape the child process group",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const marker = join(process.cwd(), ".direct-helper-detached-marker");
+    const pidFile = join(process.cwd(), ".direct-helper-detached-pid");
+    rmSync(marker, { force: true });
+    rmSync(pidFile, { force: true });
+    const detached = `setTimeout(()=>{if(process.env.SYNTHETIC_CREDENTIAL==='present')require('node:fs').writeFileSync(${JSON.stringify(marker)},'unexpected')},300);setTimeout(()=>{},1000)`;
+    const leader = `const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(detached)}],{detached:true,stdio:'ignore',env:process.env});require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(child.pid));child.unref()`;
+    const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const stdout: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stdin.end(
+      JSON.stringify({
+        argv: [process.execPath, "-e", leader],
+        rootDir: process.cwd(),
+        cwd: process.cwd(),
+        env: {
+          PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          SYNTHETIC_CREDENTIAL: "present",
+        },
+        allowedEnvKeys: ["SYNTHETIC_CREDENTIAL"],
+        dynamicEnvKeys: [],
+        timeoutMs: 1000,
+        stdoutMaxBytes: 1024,
+        stderrMaxBytes: 1024,
+      }),
+    );
+    await once(child, "close");
+    const envelope = JSON.parse(Buffer.concat(stdout).toString("utf8")) as { code: number; timedOut: boolean };
+    assert.equal(envelope.code, 0);
+    assert.equal(envelope.timedOut, false);
+    const detachedPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
+    assert.throws(() => process.kill(detachedPid, 0), { code: "ESRCH" });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(existsSync(marker), false);
+    rmSync(marker, { force: true });
+    rmSync(pidFile, { force: true });
+  },
+);
 
 test("Sprites helper rejects malformed environment key arrays with a structured error", async () => {
   const child = spawn(DIRECT_HELPER_EXECUTABLE, ["-c", DIRECT_HELPER_SCRIPT], {
