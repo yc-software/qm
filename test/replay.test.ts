@@ -314,8 +314,8 @@ test("recordedMessageTimestamps collects ts from BOTH overheard imports and stam
 test("a message answered as a trigger is NOT re-imported as overheard next turn (the duplication fix)", () => {
   const history = [triggerEntry("100.002", "run it now on the first 20 emails")];
   const incoming: OverheardMessage[] = [
-    { ts: "100.002", role: "user", name: "Avery", text: "run it now on the first 20 emails" },
-    { ts: "100.005", role: "user", name: "Avery", text: "I don't see an approval prompt" },
+    { ts: "100.002", role: "user", name: "Fixture Alpha", text: "run it now on the first 20 emails" },
+    { ts: "100.005", role: "user", name: "Fixture Alpha", text: "I don't see an approval prompt" },
   ];
   const picked = selectOverheardToImport(incoming, recordedMessageTimestamps(history));
   assert.deepEqual(
@@ -386,12 +386,12 @@ test("renderOverheard adds a mentions attr when the payload carries resolved men
   const line = renderOverheard({
     overheard: true,
     ts: "2",
-    name: "Avery",
-    text: "cc @jordan",
-    mentions: { U1: "jordan", U2: "avery" },
+    name: "Fixture Alpha",
+    text: "cc @fixture-beta",
+    mentions: { U1: "fixture-beta", U2: "fixture-alpha" },
   });
-  assert.match(line, /mentions="U1=jordan,U2=avery"/);
-  const bare = renderOverheard({ overheard: true, ts: "3", name: "Avery", text: "no mentions" });
+  assert.match(line, /mentions="U1=fixture-beta,U2=fixture-alpha"/);
+  const bare = renderOverheard({ overheard: true, ts: "3", name: "Fixture Alpha", text: "no mentions" });
   assert.doesNotMatch(bare, /mentions=/);
 });
 

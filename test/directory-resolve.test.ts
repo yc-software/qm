@@ -30,8 +30,18 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     await built.app.upsertDirectory([
       { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
-      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
-      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+      {
+        principalId: "fixture-beta@example.test",
+        displayName: "Fixture Beta",
+        type: "internal",
+        slackId: "U_FIXTURE_BETA",
+      },
+      {
+        principalId: "fixture-branch@example.test",
+        displayName: "Fixture Branch",
+        type: "internal",
+        slackId: "U_FIXTURE_BRANCH",
+      },
     ]);
   });
 
@@ -60,8 +70,18 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     await built.app.upsertDirectory([
       { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
-      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
-      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+      {
+        principalId: "fixture-beta@example.test",
+        displayName: "Fixture Beta",
+        type: "internal",
+        slackId: "U_FIXTURE_BETA",
+      },
+      {
+        principalId: "fixture-branch@example.test",
+        displayName: "Fixture Branch",
+        type: "internal",
+        slackId: "U_FIXTURE_BRANCH",
+      },
     ]);
   });
 
@@ -75,13 +95,23 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     await built.app.upsertDirectory([
       { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
-      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
-      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+      {
+        principalId: "fixture-beta@example.test",
+        displayName: "Fixture Beta",
+        type: "internal",
+        slackId: "U_FIXTURE_BETA",
+      },
+      {
+        principalId: "fixture-branch@example.test",
+        displayName: "Fixture Branch",
+        type: "internal",
+        slackId: "U_FIXTURE_BRANCH",
+      },
     ]);
   });
 
   it("returns the candidate set for an ambiguous prefix", async () => {
-    const res = await get("/v1/directory/resolve?q=jo");
+    const res = await get("/v1/directory/resolve?q=fixture");
     assert.equal(res.status, 200);
     const { matches } = (await res.json()) as { matches: Array<{ principalId: string }> };
     assert.ok(matches.length >= 2, "an ambiguous prefix returns multiple candidates");

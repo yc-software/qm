@@ -259,7 +259,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         verb: "share",
         type: "file",
         id: "F1",
-        target: { scope: "channel:C1", label: "#avery-jordan" },
+        target: { scope: "channel:C1", label: "#fixture-alpha-fixture-beta" },
         permission: "read",
       };
     },

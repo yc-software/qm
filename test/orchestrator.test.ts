@@ -981,7 +981,7 @@ test("identity grounding: a participant who hasn't synced into the directory sti
 test("identity grounding: a cased-vs-lowercase duplicate participant resolves to the single real directory member", async () => {
   const { app, directory } = freshApp();
   await directory.replace([
-    { principalId: "U1", displayName: "Jordan Lee", type: "internal" },
+    { principalId: "U1", displayName: "Fixture Beta", type: "internal" },
     { principalId: "alice@acme.com", displayName: "Alice Wonderland", type: "internal" },
   ]);
   const prompt = await app.turn({
@@ -1737,7 +1737,7 @@ test("a message answered on one turn is not re-imported as overheard on the next
     channel("did that work?", {
       liveActor: true,
       triggerTs: "200.002",
-      overheard: [{ ts: "200.001", role: "user", name: "Avery", text: "run it now on the first 20 emails" }],
+      overheard: [{ ts: "200.001", role: "user", name: "Fixture Alpha", text: "run it now on the first 20 emails" }],
     }),
   );
   assert.equal(r2.status, "ok");
@@ -1771,7 +1771,7 @@ test("an unprompted thread-follow (no triggerTs) is stamped via entryTs and not 
     channel("ok done?", {
       liveActor: true,
       triggerTs: "300.002",
-      overheard: [{ ts: "300.001", role: "user", name: "Avery", text: followText }],
+      overheard: [{ ts: "300.001", role: "user", name: "Fixture Alpha", text: followText }],
     }),
   );
   assert.equal(r2.status, "ok");
@@ -3189,7 +3189,7 @@ test("Door 2: an envelopeWrapped request on its own skips the overheard seed (re
     dm("did that work?", {
       conversation: { kind: "dm", threadRef: "dm:U1:door2-wrapped" },
       envelopeWrapped: true,
-      overheard: [{ ts: "900.000", role: "user", name: "Avery", text: "unrelated chatter" }],
+      overheard: [{ ts: "900.000", role: "user", name: "Fixture Alpha", text: "unrelated chatter" }],
     }),
   );
   assert.equal(wrapped.status, "ok");
@@ -3203,7 +3203,7 @@ test("Door 2: an envelopeWrapped request on its own skips the overheard seed (re
   const plain = await app.turn(
     dm("did that work?", {
       conversation: { kind: "dm", threadRef: "dm:U1:door2-plain" },
-      overheard: [{ ts: "901.000", role: "user", name: "Avery", text: "unrelated chatter" }],
+      overheard: [{ ts: "901.000", role: "user", name: "Fixture Alpha", text: "unrelated chatter" }],
     }),
   );
   assert.equal(plain.status, "ok");

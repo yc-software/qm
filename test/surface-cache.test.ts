@@ -280,12 +280,14 @@ test("ambient judge: the agent's own posts are never shown to the judge as new m
 
 test("mentions round-trip through ingest → readMessages (memory)", async () => {
   const cache = createMemorySurfaceCache();
-  await cache.ingest([{ container: "C1", ts: "100.9", text: "hi @jordan", mentions: { U1: "jordan" }, createdAt: 1 }]);
+  await cache.ingest([
+    { container: "C1", ts: "100.9", text: "hi @fixture-beta", mentions: { U1: "fixture-beta" }, createdAt: 1 },
+  ]);
   const msgs = await cache.readMessages("C1");
-  assert.deepEqual(msgs[0]!.mentions, { U1: "jordan" }, "the mentions map survives the round-trip");
-  await cache.ingest([{ container: "C1", ts: "100.9", text: "hi @jordan", editedAt: 5, createdAt: 1 }]);
+  assert.deepEqual(msgs[0]!.mentions, { U1: "fixture-beta" }, "the mentions map survives the round-trip");
+  await cache.ingest([{ container: "C1", ts: "100.9", text: "hi @fixture-beta", editedAt: 5, createdAt: 1 }]);
   const after = await cache.readMessages("C1");
-  assert.deepEqual(after[0]!.mentions, { U1: "jordan" }, "a mention-less edit keeps the prior mentions");
+  assert.deepEqual(after[0]!.mentions, { U1: "fixture-beta" }, "a mention-less edit keeps the prior mentions");
 });
 
 test("mentionsSelf round-trips through ingest → readMessages (memory)", async () => {

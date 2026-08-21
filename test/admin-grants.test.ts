@@ -131,16 +131,20 @@ test("revoke flips a promoted user back to non-admin; audited", async () => {
 test("a cased stored grant is revoked by its canonical id (the delete follows the person, not the bytes)", async () => {
   const s = start();
   try {
-    await post(s.base, ALICE, { principalId: "Jordan@Acme.test", role: "org_admin", scopeId: "org:default-org" });
-    assert.deepEqual(await whoami(s.base, "jordan@acme.test@default-org"), {
+    await post(s.base, ALICE, {
+      principalId: "Fixture-Beta@Example.test",
+      role: "org_admin",
+      scopeId: "org:default-org",
+    });
+    assert.deepEqual(await whoami(s.base, "fixture-beta@example.test@default-org"), {
       isAdmin: true,
       role: "org_admin",
       scopeId: "org:default-org",
       permissions: ["admin"],
     });
-    assert.equal((await del(s.base, ALICE, "jordan@acme.test", "org:default-org", "org_admin")).status, 200);
+    assert.equal((await del(s.base, ALICE, "fixture-beta@example.test", "org:default-org", "org_admin")).status, 200);
     assert.deepEqual(
-      await whoami(s.base, "Jordan@Acme.test@default-org"),
+      await whoami(s.base, "Fixture-Beta@Example.test@default-org"),
       { isAdmin: false, permissions: [] },
       "the cased row was actually removed",
     );
@@ -153,12 +157,26 @@ test("the last-admin guard counts one person's case-variant grants as ONE admin"
   const s = start();
   try {
     assert.equal((await del(s.base, ALICE, "admin-bob", "org:default-org", "org_admin")).status, 200);
-    await post(s.base, ALICE, { principalId: "Jordan@Acme.test", role: "org_admin", scopeId: "org:default-org" });
-    await post(s.base, ALICE, { principalId: "jordan@acme.test", role: "org_admin", scopeId: "org:default-org" });
+    await post(s.base, ALICE, {
+      principalId: "Fixture-Beta@Example.test",
+      role: "org_admin",
+      scopeId: "org:default-org",
+    });
+    await post(s.base, ALICE, {
+      principalId: "fixture-beta@example.test",
+      role: "org_admin",
+      scopeId: "org:default-org",
+    });
     assert.equal((await del(s.base, ALICE, "admin-alice", "org:default-org", "org_admin")).status, 200);
-    const r = await del(s.base, "jordan@acme.test@default-org", "jordan@acme.test", "org:default-org", "org_admin");
+    const r = await del(
+      s.base,
+      "fixture-beta@example.test@default-org",
+      "fixture-beta@example.test",
+      "org:default-org",
+      "org_admin",
+    );
     assert.equal(r.status, 400, "two case-variant rows are still one person — the lock-out guard holds");
-    assert.deepEqual(await whoami(s.base, "jordan@acme.test@default-org"), {
+    assert.deepEqual(await whoami(s.base, "fixture-beta@example.test@default-org"), {
       isAdmin: true,
       role: "org_admin",
       scopeId: "org:default-org",
@@ -174,9 +192,9 @@ test("canAdminister agrees with adminStatusOf: a cased grant admits the canonica
   const svc = createAdminService();
   await svc.createGrant(
     { id: "admin-alice", type: "internal" },
-    { principalId: "Jordan@Acme.test", role: "org_admin", scopeId: "org:default-org" },
+    { principalId: "Fixture-Beta@Example.test", role: "org_admin", scopeId: "org:default-org" },
   );
-  assert.equal(await svc.canAdminister({ id: "jordan@acme.test", type: "internal" }, "org:default-org"), true);
+  assert.equal(await svc.canAdminister({ id: "fixture-beta@example.test", type: "internal" }, "org:default-org"), true);
   assert.equal(await svc.canAdminister({ id: "casey@acme.test", type: "internal" }, "org:default-org"), false);
 });
 

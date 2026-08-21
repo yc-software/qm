@@ -388,7 +388,7 @@ test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run 
 function spawnedWorker(channel: string, askTs: string): TurnRequest {
   return {
     surface: "slack",
-    actor: { externalId: "jordan@acme.test", displayName: "Jordan" },
+    actor: { externalId: "fixture-beta@example.test", displayName: "Fixture Beta" },
     conversation: { kind: "channel", threadRef: `slack:${channel}:ambient:${askTs}`, channelRef: channel },
     deliveryTarget: channel,
     text: "can you check the deploy?",

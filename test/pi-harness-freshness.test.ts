@@ -128,7 +128,7 @@ test("prior-turn bootstrap is taped as a retry-idempotent import before the firs
   const turn = recordingTurn("BASE", [], "prior-bootstrap");
   turn.priorTurns = [
     { role: "assistant", text: "I opened this thread with the release result" },
-    { role: "user", name: "Jordan", text: "tell me more" },
+    { role: "user", name: "Fixture Beta", text: "tell me more" },
   ];
   turn.tape = async (record) => {
     records.push({ kind: record.kind, payload: record.payload });

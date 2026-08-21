@@ -136,12 +136,12 @@ test("slackSectionBlocks splits long replies below Slack's section limit", () =>
 });
 
 test("resolveMentionsInText: plain, labeled, unknown, multiple", () => {
-  const lookup = (id: string): string | undefined => ({ U1: "jordan", U2: "avery" })[id];
-  assert.equal(resolveMentionsInText("hey <@U1>", lookup), "hey @jordan");
-  assert.equal(resolveMentionsInText("hey <@U1|Jordan Label>", lookup), "hey @Jordan Label");
+  const lookup = (id: string): string | undefined => ({ U1: "fixture-beta", U2: "fixture-alpha" })[id];
+  assert.equal(resolveMentionsInText("hey <@U1>", lookup), "hey @fixture-beta");
+  assert.equal(resolveMentionsInText("hey <@U1|Fixture Beta Label>", lookup), "hey @Fixture Beta Label");
   assert.equal(resolveMentionsInText("ping <@U9>", lookup), "ping @U9");
   assert.equal(resolveMentionsInText("ping <@U9|Nobody>", lookup), "ping @Nobody");
-  assert.equal(resolveMentionsInText("<@U1> and <@U2> and <@U3>", lookup), "@jordan and @avery and @U3");
+  assert.equal(resolveMentionsInText("<@U1> and <@U2> and <@U3>", lookup), "@fixture-beta and @fixture-alpha and @U3");
   assert.equal(resolveMentionsInText("no mentions", lookup), "no mentions");
 });
 
@@ -171,29 +171,38 @@ test("neutralizeMassMentions only touches the encoded broadcast forms", () => {
 test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
   setMentionIndex(
     new Map([
-      ["ankit", "U111"],
-      ["regan", "U222"],
-      ["regan bell", "U222"],
+      ["fixture-gamma", "U111"],
+      ["fixture-delta", "U222"],
+      ["fixture delta long", "U222"],
       ["ren", "U888"],
       ["renée", "U999"],
     ]),
   );
   try {
-    assert.equal(toSlackMrkdwn("thanks @ankit!"), "thanks <@U111>!");
-    assert.equal(toSlackMrkdwn("@Regan Bell said so"), "<@U222> said so");
-    assert.equal(toSlackMrkdwn("cc @regan can you look"), "cc <@U222> can you look");
+    assert.equal(toSlackMrkdwn("thanks @fixture-gamma!"), "thanks <@U111>!");
+    assert.equal(toSlackMrkdwn("@Fixture Delta Long said so"), "<@U222> said so");
+    assert.equal(toSlackMrkdwn("cc @fixture-delta can you look"), "cc <@U222> can you look");
     assert.equal(toSlackMrkdwn("ping @unknown-person"), "ping @unknown-person");
-    assert.equal(toSlackMrkdwn("email me a@ankit.com"), "email me a@ankit.com");
-    assert.equal(toSlackMrkdwn("`@ankit` and ```\n@ankit\n```"), "`@ankit` and ```\n@ankit\n```");
+    assert.equal(
+      toSlackMrkdwn("email me person@fixture-gamma.example.test"),
+      "email me person@fixture-gamma.example.test",
+    );
+    assert.equal(
+      toSlackMrkdwn("`@fixture-gamma` and ```\n@fixture-gamma\n```"),
+      "`@fixture-gamma` and ```\n@fixture-gamma\n```",
+    );
     assert.equal(toSlackMrkdwn("already <@U111> encoded"), "already <@U111> encoded");
-    assert.equal(toSlackMrkdwn("see https://medium.com/@ankit/post"), "see <https://medium.com/@ankit/post>");
-    assert.equal(toSlackMrkdwn("install @ankit/shared please"), "install @ankit/shared please");
-    assert.equal(toSlackMrkdwn("[ping @ankit](https://x.com)"), "<https://x.com|ping @ankit>");
-    assert.equal(toSlackMrkdwn("**@ankit** owns it"), "*<@U111>* owns it");
-    assert.equal(toSlackMrkdwn("_@ankit_ too"), "_<@U111>_ too");
+    assert.equal(
+      toSlackMrkdwn("see https://example.test/@fixture-gamma/post"),
+      "see <https://example.test/@fixture-gamma/post>",
+    );
+    assert.equal(toSlackMrkdwn("install @fixture-gamma/shared please"), "install @fixture-gamma/shared please");
+    assert.equal(toSlackMrkdwn("[ping @fixture-gamma](https://x.com)"), "<https://x.com|ping @fixture-gamma>");
+    assert.equal(toSlackMrkdwn("**@fixture-gamma** owns it"), "*<@U111>* owns it");
+    assert.equal(toSlackMrkdwn("_@fixture-gamma_ too"), "_<@U111>_ too");
     assert.equal(toSlackMrkdwn("ping @Renée about it"), "ping <@U999> about it");
-    assert.equal(toSlackMrkdwn("hi @Ankit Gupta Sharma Rao"), "hi @Ankit Gupta Sharma Rao");
-    assert.equal(toSlackMrkdwn("hi @Ankit Torres"), "hi @Ankit Torres");
+    assert.equal(toSlackMrkdwn("hi @Fixture Gamma Long Display"), "hi @Fixture Gamma Long Display");
+    assert.equal(toSlackMrkdwn("hi @Fixture Gamma Other"), "hi @Fixture Gamma Other");
   } finally {
     setMentionIndex(new Map());
   }

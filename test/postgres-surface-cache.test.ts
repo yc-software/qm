@@ -178,13 +178,23 @@ test("pg surface-cache: mentions JSONB round-trips and survives a mention-less e
   const cache = createPostgresSurfaceCache(URL!);
   try {
     await cache.ingest([
-      { container: "Cm", ts: "9.0", text: "hi @jordan", mentions: { U1: "jordan", U2: "avery" }, createdAt: 1 },
+      {
+        container: "Cm",
+        ts: "9.0",
+        text: "hi @fixture-beta",
+        mentions: { U1: "fixture-beta", U2: "fixture-alpha" },
+        createdAt: 1,
+      },
     ]);
     let msgs = await cache.readMessages("Cm");
-    assert.deepEqual(msgs[0]!.mentions, { U1: "jordan", U2: "avery" });
-    await cache.ingest([{ container: "Cm", ts: "9.0", text: "hi @jordan edited", editedAt: 5, createdAt: 1 }]);
+    assert.deepEqual(msgs[0]!.mentions, { U1: "fixture-beta", U2: "fixture-alpha" });
+    await cache.ingest([{ container: "Cm", ts: "9.0", text: "hi @fixture-beta edited", editedAt: 5, createdAt: 1 }]);
     msgs = await cache.readMessages("Cm");
-    assert.deepEqual(msgs[0]!.mentions, { U1: "jordan", U2: "avery" }, "a mention-less edit keeps the prior mentions");
+    assert.deepEqual(
+      msgs[0]!.mentions,
+      { U1: "fixture-beta", U2: "fixture-alpha" },
+      "a mention-less edit keeps the prior mentions",
+    );
   } finally {
     await cache.close();
   }

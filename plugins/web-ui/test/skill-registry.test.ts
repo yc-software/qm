@@ -17,7 +17,7 @@ function skill(overrides: Partial<SkillItem> = {}): SkillItem {
 
 test("groups same-name active and archived variants without inventing a global winner", () => {
   const groups = groupSkills([
-    skill({ id: "archived", scope: "personal", scopeId: "personal:jordan", status: "archived" }),
+    skill({ id: "archived", scope: "personal", scopeId: "personal:fixture-beta", status: "archived" }),
     skill({ id: "org", scope: "org", scopeId: "org:acme", shadowed: true }),
     skill({ id: "other", name: "browse" }),
   ]);
@@ -58,7 +58,7 @@ test("scope filtering keeps the matching variant and overrides filtering keeps t
 
 test("filters by status, scope, source, override, and searchable metadata", () => {
   const skills = [
-    skill({ id: "active", scope: "personal", scopeId: "personal:jordan", shadowed: true }),
+    skill({ id: "active", scope: "personal", scopeId: "personal:fixture-beta", shadowed: true }),
     skill({
       id: "archived",
       status: "archived",
@@ -67,7 +67,7 @@ test("filters by status, scope, source, override, and searchable metadata", () =
     }),
   ];
   assert.deepEqual(
-    filterSkills(skills, { query: "jordan", scope: "personal", source: "overrides", status: "active" }).map(
+    filterSkills(skills, { query: "fixture-beta", scope: "personal", source: "overrides", status: "active" }).map(
       (row) => row.id,
     ),
     ["active"],
