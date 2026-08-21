@@ -83,6 +83,8 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
   });
   await store.markFired(c.id, 123);
   await store.recordFire(c.id, { fireKey: "f1", threadRef: "cron:f1", firedAt: 123, reply: "done" });
+  await store.recordFire(c.id, { fireKey: "f2", threadRef: "cron:f2", firedAt: 124 });
+  await store.recordFire(c.id, { fireKey: "f3", threadRef: "cron:f3", firedAt: 125 });
   const factory = createPostgresMapFactory(URL!);
   const reader = createCronStore(
     factory.map<Cron>("map_crons"),
@@ -91,9 +93,12 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
   const got = await reader.get(c.id);
   assert.equal(got?.action, "digest");
   assert.equal(got?.lastFiredAt, 123);
-  assert.deepEqual(await reader.getRuns(c.id), {
-    runs: [{ fireKey: "f1", threadRef: "cron:f1", firedAt: 123, reply: "done" }],
-    total: 1,
+  assert.deepEqual(await reader.getRuns(c.id, 2), {
+    runs: [
+      { fireKey: "f2", threadRef: "cron:f2", firedAt: 124 },
+      { fireKey: "f3", threadRef: "cron:f3", firedAt: 125 },
+    ],
+    total: 3,
   });
 });
 
@@ -118,6 +123,47 @@ test("pg cron store migrates inline fire history without loading it in cron scan
     runs: [{ fireKey: "legacy-fire", threadRef: "cron:legacy:fire", firedAt: 1, reply: "kept" }],
     total: 1,
   });
+});
+
+test("pg cron migration preserves fires written by an old worker during rollout", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const backing = factory.map<Cron>("map_crons");
+  await backing.put("rolling", {
+    id: "rolling",
+    schedule: { firstFireAt: 1 },
+    enabled: true,
+    createdAt: 0,
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    fireLog: [{ fireKey: "before", threadRef: "cron:rolling:before", firedAt: 1 }],
+  });
+  const store = createCronStore(backing, createPostgresCronFireStore(factory.pool, "map_crons", "map_cron_fires"));
+  const client = await (await factory.pool.pool()).connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query("SELECT json FROM map_crons WHERE id = $1 FOR UPDATE", ["rolling"]);
+    const json = locked.rows[0]!.json as Cron;
+    json.fireLog!.push({ fireKey: "during", threadRef: "cron:rolling:during", firedAt: 2 });
+    const migration = store.due(1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await client.query("UPDATE map_crons SET json = $2 WHERE id = $1", ["rolling", json]);
+    await client.query("COMMIT");
+    assert.equal((await migration)[0]?.fireLog, undefined);
+  } finally {
+    await client.query("ROLLBACK").catch(() => undefined);
+    client.release();
+  }
+
+  await backing.merge("rolling", {
+    fireLog: [{ fireKey: "after", threadRef: "cron:rolling:after", firedAt: 3 }],
+  });
+  assert.equal((await store.due(1))[0]?.fireLog, undefined);
+  assert.equal((await backing.get("rolling"))?.fireLog, undefined);
+  assert.deepEqual(
+    (await store.getRuns("rolling")).runs.map((run) => run.fireKey),
+    ["before", "during", "after"],
+  );
 });
 
 test(

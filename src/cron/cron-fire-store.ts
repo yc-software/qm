@@ -9,6 +9,7 @@ export interface CronFirePage {
 
 export interface CronFireStore {
   ready(): Promise<void>;
+  drainInline?(): Promise<void>;
   record(cronId: string, entry: CronFireLogEntry): Promise<void>;
   import(cronId: string, entries: CronFireLogEntry[]): Promise<void>;
   list(cronId: string, limit?: number): Promise<CronFirePage>;
@@ -63,16 +64,6 @@ export function createPostgresCronFireStore(
         FOREIGN KEY (cron_id) REFERENCES ${cronTable}(id) ON DELETE CASCADE
       )`,
     `CREATE INDEX IF NOT EXISTS ${fireTable}_cron_fired_idx ON ${fireTable} (cron_id, fired_at DESC, fire_key DESC)`,
-    `INSERT INTO ${fireTable} (cron_id, fire_key, fired_at, json)
-       SELECT source.id, entry->>'fireKey', (entry->>'firedAt')::BIGINT, entry
-       FROM ${cronTable} source
-       CROSS JOIN LATERAL jsonb_array_elements(
-         CASE WHEN jsonb_typeof(source.json->'fireLog') = 'array' THEN source.json->'fireLog' ELSE '[]'::jsonb END
-       ) AS entry
-       WHERE entry ? 'fireKey' AND entry ? 'firedAt'
-       ON CONFLICT (cron_id, fire_key) DO UPDATE
-       SET fired_at = EXCLUDED.fired_at, json = ${fireTable}.json || EXCLUDED.json`,
-    `UPDATE ${cronTable} SET json = json - 'fireLog' WHERE json ? 'fireLog'`,
   ];
   let readyP: Promise<void> | undefined;
   const ready = () =>
@@ -99,6 +90,26 @@ export function createPostgresCronFireStore(
   };
   return {
     ready,
+    async drainInline() {
+      await ready();
+      await pg.query(
+        `WITH source AS (
+           SELECT id, json FROM ${cronTable} WHERE json ? 'fireLog' FOR UPDATE
+         ), copied AS (
+           INSERT INTO ${fireTable} (cron_id, fire_key, fired_at, json)
+           SELECT source.id, entry->>'fireKey', (entry->>'firedAt')::BIGINT, entry
+           FROM source
+           CROSS JOIN LATERAL jsonb_array_elements(
+             CASE WHEN jsonb_typeof(source.json->'fireLog') = 'array' THEN source.json->'fireLog' ELSE '[]'::jsonb END
+           ) AS entry
+           WHERE entry ? 'fireKey' AND entry ? 'firedAt'
+           ON CONFLICT (cron_id, fire_key) DO UPDATE
+           SET fired_at = EXCLUDED.fired_at, json = ${fireTable}.json || EXCLUDED.json
+         )
+         UPDATE ${cronTable} target SET json = target.json - 'fireLog'
+         FROM source WHERE target.id = source.id`,
+      );
+    },
     async record(cronId, entry) {
       await importEntries(cronId, [entry]);
     },
@@ -107,19 +118,22 @@ export function createPostgresCronFireStore(
     },
     async list(cronId, limit) {
       await ready();
-      const [count, rows] = await Promise.all([
-        pg.q(`SELECT COUNT(*)::BIGINT AS total FROM ${fireTable} WHERE cron_id = $1`, [cronId]),
+      const rows =
         limit === undefined
-          ? pg.q(`SELECT json FROM ${fireTable} WHERE cron_id = $1 ORDER BY fired_at, fire_key`, [cronId])
-          : pg.q(
-              `SELECT json FROM (
-                 SELECT fired_at, fire_key, json FROM ${fireTable}
+          ? await pg.q(
+              `SELECT json, COUNT(*) OVER()::BIGINT AS total
+               FROM ${fireTable} WHERE cron_id = $1 ORDER BY fired_at, fire_key`,
+              [cronId],
+            )
+          : await pg.q(
+              `SELECT json, total FROM (
+                 SELECT fired_at, fire_key, json, COUNT(*) OVER()::BIGINT AS total
+                 FROM ${fireTable}
                  WHERE cron_id = $1 ORDER BY fired_at DESC, fire_key DESC LIMIT $2
                ) recent ORDER BY fired_at, fire_key`,
               [cronId, limit],
-            ),
-      ]);
-      return { runs: rows.map((row) => row.json as CronFireLogEntry), total: Number(count[0]?.total ?? 0) };
+            );
+      return { runs: rows.map((row) => row.json as CronFireLogEntry), total: Number(rows[0]?.total ?? 0) };
     },
     async delete(cronId) {
       await ready();

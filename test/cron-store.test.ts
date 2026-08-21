@@ -233,7 +233,7 @@ test("recordFire appends compact durable fire log entries and replaces duplicate
   assert.equal(after.runs[1]?.reply, "second updated");
 });
 
-test("scheduler scans do not load persisted fire history", async () => {
+test("due scheduler scans do not load persisted fire history", async () => {
   const backing = createMemoryMap<Cron>();
   await backing.put("old", {
     ...base,
@@ -250,8 +250,8 @@ test("scheduler scans do not load persisted fire history", async () => {
   });
 
   const store = createCronStore(backing);
-  const [listed] = await store.list();
-  assert.equal(listed?.fireLog, undefined);
+  const [due] = await store.due(1);
+  assert.equal(due?.fireLog, undefined);
   assert.equal((await backing.get("old"))?.fireLog, undefined);
   assert.equal((await store.getRuns("old")).total, 100);
 });

@@ -69,6 +69,7 @@ export function createCronStore(
       try {
         await backing.get("__cron_fire_log_migration__");
         await fires.ready();
+        if (fires.drainInline) await fires.drainInline();
       } catch (error) {
         readyP = undefined;
         throw error;
@@ -78,8 +79,11 @@ export function createCronStore(
     if (!cron) return null;
     const { fireLog, ...rest } = cron;
     if (fireLog?.length) {
-      await fires.import(cron.id, fireLog);
-      await backing.merge(cron.id, { fireLog: undefined });
+      if (fires.drainInline) await fires.drainInline();
+      else {
+        await fires.import(cron.id, fireLog);
+        await backing.merge(cron.id, { fireLog: undefined });
+      }
     }
     return rest;
   };
@@ -115,10 +119,12 @@ export function createCronStore(
     },
     async get(id) {
       await ready();
+      if (fires.drainInline) await fires.drainInline();
       return withoutFireLog(await backing.get(id));
     },
     async list() {
       await ready();
+      if (fires.drainInline) await fires.drainInline();
       return (await Promise.all((await backing.all()).map(withoutFireLog))) as Cron[];
     },
     async update(id, patch) {
@@ -154,6 +160,7 @@ export function createCronStore(
     },
     async recordFire(id, entry) {
       await ready();
+      if (fires.drainInline) await fires.drainInline();
       if (!(await withoutFireLog(await backing.get(id)))) return;
       await fires.record(id, entry);
     },
@@ -215,7 +222,10 @@ export function createCronStore(
     },
     async due(now) {
       const due: Array<Cron & { scheduledAt: number }> = [];
-      for (const c of await backing.all()) {
+      await ready();
+      if (fires.drainInline) await fires.drainInline();
+      for (const row of await backing.all()) {
+        const c = (await withoutFireLog(row))!;
         if (c.archived || !c.enabled) continue;
         const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
         if (scheduledAt !== undefined && now >= scheduledAt) due.push({ ...c, nextFireAt: scheduledAt, scheduledAt });
