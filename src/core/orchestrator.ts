@@ -44,7 +44,7 @@ import {
 } from "../credentials/connector-status.ts";
 import { renderComputerBlock, renderResidentLoginsBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
-import { estimateCostUsd } from "../ratelimit/budget.ts";
+import { budgetAdjustmentForRequest, estimateCostUsd, modelCallCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -2535,6 +2535,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId });
               } catch (err) {
                 console.error("[orchestrator] failed to persist LLM request snapshot:", errMessage(err));
+              }
+              // Correct the budget toward the provider-metered usage (#586).
+              // Signed: a cache-heavy claude turn was BOOKED at the full
+              // fixed rate over input+cacheRead+cacheWrite and the metered
+              // cost is lower — the difference is credited back, so the
+              // ceiling tracks the real bill instead of phantom cache cost.
+              const adjustment = budgetAdjustmentForRequest(rec.usage ?? null);
+              if (adjustment !== 0) {
+                void deps.budget?.record(actor.id, adjustment);
               }
             },
           });
