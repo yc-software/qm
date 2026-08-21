@@ -5,6 +5,21 @@ export interface ActorAssertion {
   isExternalGuest?: boolean;
   isBot?: boolean;
   displayName?: string;
+  /**
+   * Own-team member whose principal could not be resolved in email identity
+   * mode (email not currently visible in the directory). Refused like a
+   * guest — fail closed, never a fallback Slack-ID principal — but as its
+   * OWN state, so logs and the user-facing refusal say "unresolved member"
+   * instead of masquerading as "external guest" (#626).
+   */
+  principalUnresolved?: true;
+  /**
+   * The users.info lookup itself failed — the classification below is a
+   * placeholder, not an identity claim. Distinct from every checked state
+   * (guest, internal, principal-unresolved) so callers can retry or fall
+   * back to last-known rather than acting on "external" (#626).
+   */
+  lookupFailed?: true;
 }
 
 export interface SlackUser {
@@ -53,14 +68,22 @@ export function classifyUser(
   );
   const displayName = user.profile?.display_name || user.real_name || user.name || user.id || "";
   let externalId = String(user.id ?? "");
+  // Email mode keys members on their email — including guests, whose
+  // principal still resolves for refusal copy and audit. An email-LESS
+  // member with no Slack-side external evidence is own-team but
+  // principal-unresolved: kept distinct from an external guest (which the
+  // native flags above decide) so refusal copy and logs name what actually
+  // happened instead of masquerading as external (#626).
+  let principalUnresolved = false;
   if (identity === "email" && !user.is_bot) {
     const email = (user.profile?.email ?? "").trim().toLowerCase();
     if (email.includes("@")) externalId = email;
-    else isGuest = true;
+    else if (!isGuest) principalUnresolved = true;
   }
   return {
     externalId,
     isExternalGuest: isGuest,
+    ...(principalUnresolved ? { principalUnresolved: true as const } : {}),
     ...(user.is_bot ? { isBot: true } : {}),
     ...(displayName ? { displayName } : {}),
   };
