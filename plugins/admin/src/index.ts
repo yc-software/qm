@@ -33,9 +33,15 @@ const BASE_HTML = readFileSync(
   "utf8",
 ).replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH);
 const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+// Browsers normalize \r\n and bare \r to \n before hashing an inline <script>'s
+// content for CSP purposes, so the hash here must be computed over the same
+// normalized form or a CRLF checkout produces a mismatch that blocks the script.
+export function hashAdminScript(script: string): string {
+  return createHash("sha256").update(script.replace(/\r\n?/g, "\n")).digest("base64");
+}
 const ADMIN_CSP = [
   "default-src 'self'",
-  `script-src 'sha256-${createHash("sha256").update(ADMIN_SCRIPT).digest("base64")}'`,
+  `script-src 'sha256-${hashAdminScript(ADMIN_SCRIPT)}'`,
   "style-src 'unsafe-inline'",
   "img-src 'self' data:",
   "connect-src 'self'",
