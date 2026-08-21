@@ -20,10 +20,19 @@ export const appState = {
   me: null as Me | null,
   currentView: "chats" as View,
   viewRenderSeq: 0,
+  mainSurfaceRevision: 0,
   topEl: null as HTMLElement | null,
   listEl: null as HTMLElement | null,
   mainEl: null as HTMLElement | null,
 };
+
+export function claimMainSurface(): number {
+  return ++appState.mainSurfaceRevision;
+}
+
+export function mainSurfaceIsCurrent(revision: number): boolean {
+  return revision === appState.mainSurfaceRevision;
+}
 
 export function can(key: string): boolean {
   return appState.me?.permissions?.includes(key) === true;

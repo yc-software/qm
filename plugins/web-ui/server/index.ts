@@ -1996,8 +1996,8 @@ const apiRoutes: readonly WebRoute[] = [
           lastBeat = now;
         }
         if (run.alive === true || (staleSince !== null && now - staleSince < SSE_STALE_GRACE_MS)) lastProgressAt = now;
-        const terminal = run.status === "done" || run.status === "failed" || run.result != null;
-        if (terminal || run.replyComplete) {
+        const terminal = run.result != null;
+        if (terminal) {
           forgetRun(id);
           sseEvent(res, "done", {
             status: run.status ?? null,

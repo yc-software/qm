@@ -885,8 +885,7 @@ function applyRun(
     st.lastProgressAt = now();
     pushDelta(stream, partial, st, p);
   }
-  const terminal =
-    run.status === "done" || run.status === "failed" || run.result !== null || run.replyComplete === true;
+  const terminal = run.result != null;
   if (!terminal) return "open";
   const res = run.result;
   const delivered = deliveredFilesFromAttachments(res?.attachments);
@@ -1082,8 +1081,8 @@ function streamRunViaSse(
     es.addEventListener("done", (e: MessageEvent) => {
       established = true;
       try {
-        applyRun(stream, partial, st, JSON.parse(e.data) as RunPoll, notify);
-        settle("done");
+        const outcome = applyRun(stream, partial, st, JSON.parse(e.data) as RunPoll, notify);
+        settle(outcome === "terminal" ? "done" : "fallback");
       } catch {
         settle("fallback");
       }

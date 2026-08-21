@@ -101,6 +101,7 @@ import { backgroundLabel, clearWorking, conversationBackground, isAbandonedNewCh
 import { liveTurnThreadRef } from "./working-dot";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
+import { claimMainSurface } from "./shell-state";
 
 installMarkdownSanitizer();
 
@@ -108,6 +109,7 @@ const detachedAgents = new WeakSet<Agent>();
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 interface SettledRowKey {
   index: number;
+  text: string;
   activity: WorkBlock["activity"] | undefined;
   status: WorkBlock["status"] | undefined;
   stale: boolean | undefined;
@@ -239,8 +241,11 @@ export function createChatSurface(
   }
 
   function newChat(context?: { scopeId: string; name: string | null }): string {
-    appState.currentView = "chats";
-    renderSidebarTop();
+    if (!ctx.pane) {
+      claimMainSurface();
+      appState.currentView = "chats";
+      renderSidebarTop();
+    }
     const user = appState.me?.user ?? "anon";
     const threadRef = `web:${user}:${crypto.randomUUID()}`;
     const carried = storedDraft(newChatDraftKey(user));
@@ -1222,6 +1227,7 @@ export function createChatSurface(
     if (
       hit &&
       hit.index === index &&
+      hit.text === messageText(message) &&
       hit.activity === work?.activity &&
       hit.status === work?.status &&
       hit.stale === work?.stale &&
@@ -1236,6 +1242,7 @@ export function createChatSurface(
     const tpl = chatMessage(message, index, isStreaming);
     settledRowCache.set(message as object, {
       index,
+      text: messageText(message),
       activity: work?.activity,
       status: work?.status,
       stale: work?.stale,

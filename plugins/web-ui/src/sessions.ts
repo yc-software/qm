@@ -72,12 +72,14 @@ import {
   scopeChip,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
+import { claimMainSurface, mainSurfaceIsCurrent } from "./shell-state";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, showMainEmpty, syncUrlFromState } from "./shell";
 import { allConversations, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
   beginSessionDrag,
+  cancelPendingSessionClosure,
   endSessionDrag,
   notifySessionsChanged,
   closeSessionSurfaces,
@@ -85,6 +87,7 @@ import {
   openBlankInFocusedPane,
   mountRestoredCanvas,
   drawCanvas,
+  exitSplitIfActive,
   sessionInCanvas,
   splitInterceptsOpen,
   splitState,
@@ -113,6 +116,7 @@ sessionsState.webOnly = ((): boolean => {
 let sessionsLoading = false;
 let sessionsNotice = "";
 let sessionRefreshSeq = 0;
+let mainSessionOpenRevision = 0;
 let recentContextsRequest: Promise<void> | null = null;
 const RECENT_CONTEXT_MAX_AGE_MS = 30_000;
 let renameDraft = "";
@@ -126,6 +130,7 @@ let chatsPageSurface: "all" | "web" | "slack" = "all";
 let chatsPageHost: HTMLElement | null = null;
 
 export function resetSessionsState(): void {
+  mainSessionOpenRevision++;
   sessionsState.list = [];
   sessionsState.loaded = false;
   sessionsState.openMenuId = null;
@@ -857,13 +862,12 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
 }
 
 function onSessionDragStart(e: DragEvent, s: CoreSession): void {
-  if (!s.id) {
+  if (!s.id || !beginSessionDrag(s)) {
     e.preventDefault();
     return;
   }
   e.dataTransfer?.setData("application/x-webui-session", s.id);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-  beginSessionDrag(s);
 }
 
 const placeSessionMenu = (el?: Element): void => {
@@ -1073,7 +1077,8 @@ async function commitRename(s: CoreSession): Promise<void> {
 
 function setArchived(s: CoreSession, archived: boolean): void {
   sessionsState.openMenuId = null;
-  if (archived && s.id) closeSessionSurfaces(s.id);
+  if (archived && s.id) closeSessionSurfaces(s.id, s.threadRef);
+  else if (s.id) cancelPendingSessionClosure(s.id);
   void persistSessionPatch(s.id, { archived });
 }
 
@@ -1195,17 +1200,28 @@ export async function openSession(s: CoreSession, entriesPrefetch?: Promise<Tran
   }
   mountRestoredCanvas();
   if (splitInterceptsOpen(s)) return;
+  const surfaceRevision = claimMainSurface();
+  if (splitState.active) exitSplitIfActive();
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
-  return openSessionInto(mainConversation(), s, entriesPrefetch);
+  return openSessionInto(mainConversation(), s, entriesPrefetch, surfaceRevision);
 }
 
 export async function openSessionInto(
   conv: Conversation,
   s: CoreSession,
   entriesPrefetch?: Promise<TranscriptPage | null>,
+  surfaceRevision?: number,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
+  if (!isCurrent()) return;
   const tracked = conv === mainConversation();
+  const trackedRevision = tracked ? (surfaceRevision ?? claimMainSurface()) : null;
+  const openingRequest = tracked ? ++mainSessionOpenRevision : 0;
+  if (tracked && sessionsState.openingKey) {
+    sessionsState.openingKey = null;
+    renderList();
+  }
   if (!s.id) {
     if (conv.state.threadRef !== s.threadRef) {
       conv.mountContinuable(s.threadRef, null, s.scopeId || null, [], s.channelName ?? null);
@@ -1223,7 +1239,14 @@ export async function openSessionInto(
     renderList();
   }
   const skeletonTimer = window.setTimeout(() => {
-    if (!tracked || sessionsState.openingKey === opening) conv.mountLoadingPane();
+    if (!isCurrent()) return;
+    if (
+      !tracked ||
+      (openingRequest === mainSessionOpenRevision &&
+        sessionsState.openingKey === opening &&
+        mainSurfaceIsCurrent(trackedRevision!))
+    )
+      conv.mountLoadingPane();
   }, 140);
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
@@ -1237,8 +1260,15 @@ export async function openSessionInto(
   ]);
   window.clearTimeout(skeletonTimer);
 
+  if (!isCurrent()) return;
+
   if (tracked) {
-    if (sessionsState.openingKey !== opening) return;
+    if (openingRequest !== mainSessionOpenRevision || sessionsState.openingKey !== opening) return;
+    if (!mainSurfaceIsCurrent(trackedRevision!)) {
+      sessionsState.openingKey = null;
+      renderList();
+      return;
+    }
     sessionsState.openingKey = null;
   }
 

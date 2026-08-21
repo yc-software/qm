@@ -28,7 +28,6 @@ import {
   TAIL_TURNS,
   withBase,
 } from "./core-bridge";
-import { applyRuntimeOptions } from "./model-options";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { brandMark, brandName, icon, initials } from "./ui";
 import { markConnectorConnected } from "./chat";
@@ -41,6 +40,7 @@ import {
   canvasToast,
   drawCanvas,
   exitSplitIfActive,
+  flushSplitPersistence,
   loadPersistedSplit,
   mountRestoredCanvas,
   openBlankInFocusedPane,
@@ -70,12 +70,24 @@ import { renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderSkills } from "./skills";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
-import { appState, can, isView, type AuthMode, type Me, type View } from "./shell-state";
+import {
+  appState,
+  can,
+  claimMainSurface,
+  isView,
+  mainSurfaceIsCurrent,
+  type AuthMode,
+  type Me,
+  type View,
+} from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
+import { personalScopeIdFor } from "./scope-id.ts";
+import { resolveBootDestination } from "./boot-destination.ts";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let authMode: AuthMode = "portal";
 let shellMounted = false;
+let bootInFlight: Promise<void> | null = null;
 
 setSigninRequiredHandler((detail) => {
   authMode = detail.mode ?? authMode;
@@ -331,14 +343,18 @@ function deniedGate() {
 }
 
 function retryBoot(): void {
+  if (bootInFlight) return;
+  renderAuthGate({ kind: "unreachable", pending: true });
   void bootSafely();
 }
 
-function unreachableGate() {
+function unreachableGate(pending = false) {
   return gateShell(html`
     <h1>We couldn't reach the assistant</h1>
     <p class="signin-body">The service didn't respond. This is usually temporary.</p>
-    <button class="btn primary" type="button" @click=${retryBoot}>Try again</button>
+    <button class="btn primary" type="button" ?disabled=${pending} @click=${retryBoot}>
+      ${pending ? "Trying again…" : "Try again"}
+    </button>
     <div class="hint">If this keeps happening, the core service may be down.</div>
   `);
 }
@@ -395,10 +411,11 @@ function devGate(gate: { value?: string; error?: string; pending?: boolean }) {
 export type AuthGate =
   | { kind: "portal" }
   | { kind: "denied" }
-  | { kind: "unreachable" }
+  | { kind: "unreachable"; pending?: boolean }
   | { kind: "dev"; value?: string; error?: string; pending?: boolean };
 
 export function renderAuthGate(gate: AuthGate): void {
+  claimMainSurface();
   shellMounted = false;
   const body = (() => {
     switch (gate.kind) {
@@ -407,7 +424,7 @@ export function renderAuthGate(gate: AuthGate): void {
       case "denied":
         return deniedGate();
       case "unreachable":
-        return unreachableGate();
+        return unreachableGate(gate.pending);
       default:
         return devGate(gate);
     }
@@ -421,6 +438,7 @@ function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | und
 }
 
 export function mountShell(): void {
+  claimMainSurface();
   applySavedSidebarWidth();
   const impersonatedBy = appState.me?.impersonatedBy ?? null;
   let banner: TemplateResult | null = null;
@@ -591,6 +609,7 @@ function onNavClick(e: Event): void {
 }
 
 export function switchView(v: View): void {
+  claimMainSurface();
   closeSidebarOnNarrowView();
   if (appState.currentView === v) {
     refreshActiveView(v);
@@ -675,6 +694,7 @@ function refreshActiveView(v: View): void {
 }
 
 export function showMainEmpty(text: string): void {
+  claimMainSurface();
   exitSplitIfActive();
   mainConversation().state.host = null;
   if (appState.mainEl)
@@ -816,13 +836,24 @@ function openAppEditChat(slug: string): void {
   renderList();
 }
 
-export async function bootSafely(): Promise<void> {
+async function runBootSafely(): Promise<void> {
   try {
     await boot();
   } catch (e) {
     if (shellMounted) swallow("web-ui: boot", e);
     else renderAuthGate({ kind: "unreachable" });
   }
+}
+
+export function bootSafely(): Promise<void> {
+  if (!bootInFlight) {
+    const pending = runBootSafely();
+    const flight = pending.finally(() => {
+      if (bootInFlight === flight) bootInFlight = null;
+    });
+    bootInFlight = flight;
+  }
+  return bootInFlight;
 }
 
 export async function boot(): Promise<void> {
@@ -847,24 +878,21 @@ export async function boot(): Promise<void> {
   appState.me = (await r.json()) as Me;
   authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();
-  const personalScope = `personal:${appState.me.user}`;
+  const personalScope = personalScopeIdFor(appState.me.user);
   const runtimeConfig = await fetchRuntimeConfig(personalScope);
-  if (runtimeConfig) {
-    applyRuntimeOptions(
-      personalScope,
-      runtimeConfig.approvedHarnesses,
-      runtimeConfig.modelsByHarness,
-      runtimeConfig.effective,
-      runtimeConfig.modelCatalog,
-    );
-    seedRuntimeConfig(personalScope, runtimeConfig);
-  }
+  if (runtimeConfig) seedRuntimeConfig(personalScope, runtimeConfig);
   resyncModelSelection();
   mountShell();
+  const surfaceRevision = appState.mainSurfaceRevision;
   ensureDeliveryStream();
   warmDeferredChunks();
+  flushSplitPersistence();
   loadPersistedSplit();
-  await adoptRemoteSplit();
+  await adoptRemoteSplit(2000, () => mainSurfaceIsCurrent(surfaceRevision));
+  if (!mainSurfaceIsCurrent(surfaceRevision)) {
+    await refreshSessions({ showLoading: true });
+    return;
+  }
 
   const params = new URLSearchParams(location.search);
   const {
@@ -874,41 +902,50 @@ export async function boot(): Promise<void> {
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);
-  const viewIntent = isView(wanted) && wanted !== "chats";
+  const destination = resolveBootDestination({
+    wanted,
+    sessionId: wantedSession,
+    item: wantedItem,
+    connectedProvider,
+    appSlug: params.get("slug"),
+  });
   const entriesPrefetch =
-    wantedSession && !viewIntent ? fetchTranscript(wantedSession, { tailTurns: TAIL_TURNS }).catch(() => null) : null;
+    destination.kind === "session"
+      ? fetchTranscript(destination.sessionId, { tailTurns: TAIL_TURNS }).catch(() => null)
+      : null;
 
-  const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
-  if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();
+  if (destination.kind === "bare" && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();
 
   await refreshSessions({ showLoading: true });
+  if (!mainSurfaceIsCurrent(surfaceRevision)) return;
 
-  if (wanted === "app-edit") {
-    const slug = (params.get("slug") ?? "").toLowerCase();
-    if (/^[a-z0-9-]{1,63}$/.test(slug)) {
-      openAppEditChat(slug);
+  if (destination.kind === "app-edit") {
+    if (/^[a-z0-9-]{1,63}$/.test(destination.slug)) {
+      openAppEditChat(destination.slug);
       return;
     }
     showMainEmpty("This edit link is missing a valid app name.");
     return;
   }
 
-  if (wanted === "keychain") {
+  if (destination.kind === "view" && destination.view === "keychain") {
     const provider = params.get("connector");
     const status = params.get("status");
     if (provider && status) noteConnectorResult(provider, status);
     switchView("keychain");
-  } else if (viewIntent) {
-    if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
+  } else if (destination.kind === "view") {
+    if (destination.view === "contexts" || destination.view === "files" || destination.view === "deploys") {
       const scope =
-        params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
+        params.get("scope") ??
+        (destination.item ? resolveProjectScope(await ensureContexts(), destination.item) : null);
+      if (!mainSurfaceIsCurrent(surfaceRevision)) return;
       if (scope) contextsState.selected = scope;
     }
-    if (wanted === "crons" && wantedItem) openCronById(wantedItem);
-    if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
-    switchView(wanted as View);
-  } else if (wantedSession) {
-    const match = sessionsState.list.find((s) => s.id === wantedSession);
+    if (destination.view === "crons" && destination.item) openCronById(destination.item);
+    if (destination.view === "webhooks" && destination.item) openWebhookById(destination.item);
+    switchView(destination.view);
+  } else if (destination.kind === "session") {
+    const match = sessionsState.list.find((s) => s.id === destination.sessionId);
     if (match) {
       mountRestoredCanvas();
       await openSession(match, entriesPrefetch ?? undefined);
@@ -919,7 +956,7 @@ export async function boot(): Promise<void> {
       showMainEmpty("That conversation wasn't found, or you don't have access to it.");
       renderList();
     }
-  } else if (connectedProvider && sessionsState.list.length) {
+  } else if (destination.kind === "provider" && sessionsState.list.length) {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
     mountRestoredCanvas();
     await openSession(recent);

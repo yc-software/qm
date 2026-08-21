@@ -19,6 +19,7 @@ test("live or approval-paused rows bypass the cache (their render reads mutable 
 test("the cache key covers every mutable render input of a settled row", () => {
   for (const field of [
     "hit.index === index",
+    "hit.text === messageText(message)",
     "hit.activity === work?.activity",
     "hit.status === work?.status",
     "hit.stale === work?.stale",

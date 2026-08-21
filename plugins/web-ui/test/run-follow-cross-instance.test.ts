@@ -9,6 +9,7 @@ interface Call {
   portalIdentity?: string;
 }
 const calls: Call[] = [];
+let laggedRunReads = 0;
 const core = createServer((req: IncomingMessage, res) => {
   req.resume();
   req.on("end", () => {
@@ -18,6 +19,22 @@ const core = createServer((req: IncomingMessage, res) => {
     if (url.includes("/v1/runs/r-forbidden")) {
       res.writeHead(404, { "content-type": "application/json" });
       return void res.end(JSON.stringify({ error: "not_found" }));
+    }
+    if (url.includes("/v1/runs/r-lagged")) {
+      laggedRunReads++;
+      res.writeHead(200, { "content-type": "application/json" });
+      return void res.end(
+        JSON.stringify(
+          laggedRunReads === 1
+            ? { status: "done", result: null, alive: true, replyComplete: true, partial: "", activity: [] }
+            : {
+                status: "done",
+                result: { status: "ok", reply: "durable reply" },
+                partial: "",
+                activity: [],
+              },
+        ),
+      );
     }
     res.writeHead(200, { "content-type": "application/json" });
     if (req.method === "POST") return void res.end(JSON.stringify({ accepted: true }));
@@ -69,6 +86,16 @@ test("run events stream opens for a run absent from the instance-local index", a
   assert.match(r.headers.get("content-type") ?? "", /text\/event-stream/);
   controller.abort();
   await r.body?.cancel().catch(() => {});
+});
+
+test("run events wait for a durable result after a terminal status", async () => {
+  const r = await fetch(`${base}/api/runs/r-lagged/events`, { headers, signal: AbortSignal.timeout(5_000) });
+  assert.equal(r.status, 200);
+  const body = await r.text();
+  const done = body.split("\n\n").find((event) => event.startsWith("event: done\n"));
+  assert.ok(done);
+  assert.match(done, /durable reply/);
+  assert.ok(laggedRunReads >= 2);
 });
 
 test("core's viewer gate still fails closed — a run core denies is relayed as not_found", async () => {

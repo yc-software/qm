@@ -225,6 +225,21 @@ test("core-attested liveness (alive:true) resets the idle clock — a long silen
   assert.equal(block?.type === "text" ? block.text : "", "finally");
 });
 
+test("a terminal status waits for the durable result before ending the reply", async () => {
+  instantSleep();
+  stubRuns([
+    { status: "done", result: null, partial: "", alive: true, replyComplete: true },
+    { status: "done", result: { status: "ok", reply: "durable reply" }, partial: "" },
+  ]);
+  const stream = createAssistantMessageEventStream();
+  const partial = blankAssistant();
+
+  await pollRun(stream, partial, "run-result-lag", freshAcc(Date.now()));
+  const final = await drain(stream);
+
+  assert.equal(final.content[0]?.type === "text" ? final.content[0].text : "", "durable reply");
+});
+
 test("a running snapshot WITHOUT alive still hits the idle deadline (stale run record)", async () => {
   let clock = 6_000_000;
   setClock(() => clock);
