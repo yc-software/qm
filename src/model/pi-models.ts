@@ -220,6 +220,12 @@ export function serviceableModelIds(ids: readonly string[], providers: ModelProv
 
 export const ALL_PROVIDERS_AVAILABLE: ModelProviderAvailability = { anthropic: true, openai: true, openrouter: true };
 
+export const NO_PROVIDERS_AVAILABLE: ModelProviderAvailability = {
+  anthropic: false,
+  openai: false,
+  openrouter: false,
+};
+
 export function modelProviderAvailabilityFor(
   harness: string,
   configKeys: ModelProviderAvailability,
@@ -231,8 +237,12 @@ export function modelProviderAvailabilityFor(
   return ALL_PROVIDERS_AVAILABLE;
 }
 
+export function harnessSuppliesOwnModelAuth(harness: string): boolean {
+  return Object.values(modelProviderAvailabilityFor(harness, NO_PROVIDERS_AVAILABLE)).some(Boolean);
+}
+
 export function onlyProvider(provider: ModelProvider): ModelProviderAvailability {
-  return { anthropic: false, openai: false, openrouter: false, [provider]: true };
+  return { ...NO_PROVIDERS_AVAILABLE, [provider]: true };
 }
 
 export function defaultModelForProvider(harness: string, provider: ModelProvider): string | undefined {
