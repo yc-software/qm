@@ -144,6 +144,17 @@ export function codexUsageTotals(params: unknown): LlmCallUsage | null {
   return { input, output, cacheRead, cacheWrite: 0, totalTokens: input + output, costUsd: 0 };
 }
 
+export function usageToTurnTelemetry(usage: LlmCallUsage | null): {
+  cacheUsage: { cacheRead: number; cacheWrite: number; uncachedInput: number };
+  costUsage: { outputTokens: number; costUsd: number };
+} | null {
+  if (!usage) return null;
+  return {
+    cacheUsage: { cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, uncachedInput: usage.input },
+    costUsage: { outputTokens: usage.output, costUsd: usage.costUsd },
+  };
+}
+
 function sumUsage(byThread: ReadonlyMap<string, LlmCallUsage>): LlmCallUsage | null {
   if (!byThread.size) return null;
   const total: LlmCallUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, costUsd: 0 };
@@ -832,6 +843,12 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           payload: { text: reply, stopped: state.stopped || undefined },
           scopeLabel: turn.scopeLabel,
         });
+      // Turn-level usage straight off the same live thread totals the
+      // recordLlmRequest flush reports, so codex turns land in turn_metrics
+      // with cache and spend telemetry like pi and claude. The codex SDK
+      // reports no cost, so costUsd stays 0 (the value already persisted to
+      // session_llm_requests for the same calls).
+      const telemetry = usageToTurnTelemetry(sumUsage(state.usageByThread));
       return {
         reply,
         ...(state.stopped ? { stopped: true as const } : {}),
@@ -839,6 +856,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
         ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
         modelCalls: state.modelCalls,
+        ...(telemetry ?? {}),
         ...(state.tapeWriteFailed ? { tapeWriteFailed: true } : {}),
       };
     } finally {

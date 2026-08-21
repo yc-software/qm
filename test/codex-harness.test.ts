@@ -9,6 +9,7 @@ import {
   codexNonRetryable,
   codexProviderFailure,
   codexUsageTotals,
+  usageToTurnTelemetry,
   codexChildToolAllowed,
   codexReasoningEffort,
   codexReplayCallId,
@@ -71,7 +72,7 @@ rl.on("line", (line) => {
     send({ method: "item/started", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "collabAgentToolCall", id: "collab-1", tool: "spawnAgent", status: "inProgress", senderThreadId: "thread-1", receiverThreadIds: ["child-1"], prompt: "return ALPHA", agentsStates: { "child-1": { status: "running", message: null } } } } });
     send({ method: "thread/tokenUsage/updated", params: { threadId: "child-1", tokenUsage: { total: { inputTokens: 70 }, last: { inputTokens: 70 } } } });
     send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "collabAgentToolCall", id: "collab-1", tool: "spawnAgent", status: "completed", senderThreadId: "thread-1", receiverThreadIds: ["child-1"], prompt: "return ALPHA", agentsStates: { "child-1": { status: "completed", message: "ALPHA" } } } } });
-    send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 250 }, last: { inputTokens: 150 } } } });
+    send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 250, outputTokens: 60, cachedInputTokens: 120 }, last: { inputTokens: 150 } } } });
     send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta: "hello" } });
     send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", id: "item-1", text: "hello", phase: "final_answer", memoryCitation: null } } });
     return send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [], itemsView: "notLoaded" } } });
@@ -205,6 +206,16 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
   assert.equal(result.reply, "hello");
   assert.deepEqual(deltas, ["hello"]);
   assert.deepEqual(modelCalls, [100, 70, 150]);
+  assert.deepEqual(
+    result.cacheUsage,
+    { cacheRead: 120, cacheWrite: 0, uncachedInput: 250 },
+    "turn-level cache telemetry comes off the live thread totals",
+  );
+  assert.deepEqual(
+    result.costUsage,
+    { outputTokens: 60, costUsd: 0 },
+    "turn-level spend is surfaced (codex reports no cost, so it stays 0)",
+  );
   assert.deepEqual(
     entries.map((entry) => entry.type),
     ["user", "tool_call", "tool_result", "assistant"],
@@ -496,6 +507,17 @@ test("Codex never classifies its own infrastructure failures as terminal", () =>
   }
   assert.equal(codexProviderFailure("Codex turn failed").message, "Codex turn failed");
   assert.ok(!(codexProviderFailure("socket hang up") instanceof NonRetryableTurnError));
+});
+
+test("Codex turn telemetry maps thread usage totals onto cache and spend", () => {
+  assert.deepEqual(
+    usageToTurnTelemetry({ input: 250, output: 60, cacheRead: 120, cacheWrite: 0, totalTokens: 430, costUsd: 0 }),
+    {
+      cacheUsage: { cacheRead: 120, cacheWrite: 0, uncachedInput: 250 },
+      costUsage: { outputTokens: 60, costUsd: 0 },
+    },
+  );
+  assert.equal(usageToTurnTelemetry(null), null, "a turn with no usage reports no telemetry");
 });
 
 test("Codex reads cumulative usage totals off the app-server's token notification", () => {
