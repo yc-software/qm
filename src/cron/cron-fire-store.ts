@@ -9,7 +9,7 @@ export interface CronFirePage {
 
 export interface CronFireStore {
   ready(): Promise<void>;
-  drainInline?(): Promise<void>;
+  drainInline?(cronId?: string): Promise<void>;
   record(cronId: string, entry: CronFireLogEntry): Promise<void>;
   import(cronId: string, entries: CronFireLogEntry[]): Promise<void>;
   list(cronId: string, limit?: number): Promise<CronFirePage>;
@@ -64,6 +64,7 @@ export function createPostgresCronFireStore(
         FOREIGN KEY (cron_id) REFERENCES ${cronTable}(id) ON DELETE CASCADE
       )`,
     `CREATE INDEX IF NOT EXISTS ${fireTable}_cron_fired_idx ON ${fireTable} (cron_id, fired_at DESC, fire_key DESC)`,
+    `CREATE INDEX IF NOT EXISTS ${fireTable}_inline_cron_idx ON ${cronTable} (id) WHERE json ? 'fireLog'`,
   ];
   let readyP: Promise<void> | undefined;
   const ready = () =>
@@ -90,11 +91,12 @@ export function createPostgresCronFireStore(
   };
   return {
     ready,
-    async drainInline() {
+    async drainInline(cronId) {
       await ready();
       await pg.query(
         `WITH source AS (
-           SELECT id, json FROM ${cronTable} WHERE json ? 'fireLog' FOR UPDATE
+           SELECT id, json FROM ${cronTable}
+           WHERE json ? 'fireLog'${cronId === undefined ? "" : " AND id = $1"} FOR UPDATE
          ), copied AS (
            INSERT INTO ${fireTable} (cron_id, fire_key, fired_at, json)
            SELECT source.id, entry->>'fireKey', (entry->>'firedAt')::BIGINT, entry
@@ -108,6 +110,7 @@ export function createPostgresCronFireStore(
          )
          UPDATE ${cronTable} target SET json = target.json - 'fireLog'
          FROM source WHERE target.id = source.id`,
+        cronId === undefined ? [] : [cronId],
       );
     },
     async record(cronId, entry) {

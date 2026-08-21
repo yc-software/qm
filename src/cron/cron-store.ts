@@ -69,7 +69,6 @@ export function createCronStore(
       try {
         await backing.get("__cron_fire_log_migration__");
         await fires.ready();
-        if (fires.drainInline) await fires.drainInline();
       } catch (error) {
         readyP = undefined;
         throw error;
@@ -79,7 +78,7 @@ export function createCronStore(
     if (!cron) return null;
     const { fireLog, ...rest } = cron;
     if (fireLog?.length) {
-      if (fires.drainInline) await fires.drainInline();
+      if (fires.drainInline) await fires.drainInline(cron.id);
       else {
         await fires.import(cron.id, fireLog);
         await backing.merge(cron.id, { fireLog: undefined });
@@ -119,7 +118,7 @@ export function createCronStore(
     },
     async get(id) {
       await ready();
-      if (fires.drainInline) await fires.drainInline();
+      if (fires.drainInline) await fires.drainInline(id);
       return withoutFireLog(await backing.get(id));
     },
     async list() {
@@ -160,7 +159,7 @@ export function createCronStore(
     },
     async recordFire(id, entry) {
       await ready();
-      if (fires.drainInline) await fires.drainInline();
+      if (fires.drainInline) await fires.drainInline(id);
       if (!(await withoutFireLog(await backing.get(id)))) return;
       await fires.record(id, entry);
     },
