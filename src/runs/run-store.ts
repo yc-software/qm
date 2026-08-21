@@ -102,3 +102,17 @@ export function errorParks(run: Pick<Run, "errorAttempts" | "maxAttempts" | "att
 export function leaseLapsed(run: Pick<Run, "status" | "leaseExpiresAt">, asOf: number): boolean {
   return run.status === "running" && run.leaseExpiresAt !== null && run.leaseExpiresAt <= asOf;
 }
+
+/**
+ * Delay before a run's next attempt after an ERROR-driven requeue (#602).
+ *
+ * Retries used to be immediate: a rate-limited provider got maxAttempts
+ * requests back-to-back, feeding the very limit that caused the failure.
+ * Exponential from 5s (attempt 2 → 5s, 3 → 10s, …) capped at 60s — enough
+ * spacing for transient provider blips without making a genuinely-failing
+ * run linger. Applied by both run stores on the pending requeue, honored by
+ * the claim paths via the pending row's lease_expires_at (not-before).
+ */
+export function retryBackoffMs(nextErrorAttempt: number): number {
+  return Math.min(5_000 * 2 ** Math.max(0, nextErrorAttempt - 1), 60_000);
+}

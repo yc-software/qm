@@ -863,9 +863,61 @@ function piAssistantError(session: AssistantTextSession): string | null {
   return formatPiAssistantError(lastAssistant.errorMessage);
 }
 
+/**
+ * Provider error types that a retry can plausibly survive — the provider is
+ * alive but refusing (rate limit), degraded (overload / 5xx), or slow
+ * (timeout). Everything else (authentication, permission, invalid request…)
+ * fails identically on the next attempt, so those keep the non-retryable
+ * classification (#602).
+ */
+const RETRYABLE_PROVIDER_ERROR_TYPES = new Set([
+  "rate_limit_error",
+  "overloaded_error",
+  "timeout_error",
+  "api_error",
+  "server_error",
+  "internal_server_error",
+  "service_unavailable",
+  "temporarily_unavailable",
+  "model_service_overloaded",
+]);
+
+function piProviderErrorType(raw: string | undefined): string | null {
+  const message = raw?.trim();
+  if (!message) return null;
+  const jsonAt = message.indexOf("{");
+  if (jsonAt < 0) return null;
+  try {
+    const parsed = JSON.parse(message.slice(jsonAt)) as { error?: { type?: unknown } };
+    const providerType = typeof parsed.error?.type === "string" ? parsed.error.type.trim() : "";
+    return providerType || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Classify a provider stop-error for retry purposes: transient provider
+ * failures (rate limit, overload, 5xx, timeout) become plain errors so the
+ * runs worker retries them with backoff; permanent ones (authentication,
+ * permission, bad request) stay non-retryable — a second attempt would fail
+ * identically (#602).
+ */
+function piTurnErrorFor(raw: string | undefined): Error {
+  const message = formatPiAssistantError(raw);
+  const providerType = piProviderErrorType(raw);
+  if (providerType !== null && RETRYABLE_PROVIDER_ERROR_TYPES.has(providerType)) {
+    // Same formatted message as the non-retryable path — the class carries
+    // the retry decision, the copy stays what operators grep for.
+    return new Error(message);
+  }
+  return new NonRetryableTurnError(message);
+}
+
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
-  const err = piAssistantError(session);
-  if (err) throw new NonRetryableTurnError(err);
+  const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant") as
+    { stopReason?: string; errorMessage?: string } | undefined;
+  if (lastAssistant?.stopReason === "error") throw piTurnErrorFor(lastAssistant.errorMessage);
   return session.getLastAssistantText();
 }
 
@@ -874,8 +926,9 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
     messagesBefore === undefined
       ? session
       : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
-  const detailed = piAssistantError(fresh);
-  if (detailed) return new NonRetryableTurnError(detailed);
+  const lastAssistant = [...fresh.messages].reverse().find((m) => m.role === "assistant") as
+    { stopReason?: string; errorMessage?: string } | undefined;
+  if (lastAssistant?.stopReason === "error") return piTurnErrorFor(lastAssistant.errorMessage);
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
 
