@@ -23,7 +23,7 @@
     "@mariozechner/mini-lit": "^0.2.0",
     "date-fns": "^4.4.0",
     "dockview-core": "^7.0.4",
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.13",
     "jszip": "^3.10.1",
     "lit": "^3.3.1",
     "lru-cache": "^11.5.2",
