@@ -19,9 +19,87 @@ import { answerWebContextRequest } from "./web-context.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
+import type { Deployment } from "../deploy/deploy-store.ts";
+import type { IngestEvent } from "../surface-cache/surface-cache.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+
+function postedUrls(text: string): URL[] {
+  const urls: URL[] = [];
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"'|]+/gi)) {
+    try {
+      urls.push(new URL(match[0]!.replace(/[),.;!?\]]+$/, "")));
+    } catch {
+      // Ignore malformed links; message ingestion must remain best-effort.
+    }
+  }
+  return urls;
+}
+
+function deploymentForPostedUrl(
+  url: URL,
+  deployments: Deployment[],
+  publicWebUrl: string | undefined,
+): Deployment | undefined {
+  if (publicWebUrl) {
+    try {
+      const portal = new URL(publicWebUrl);
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (url.origin === portal.origin && parts[0] === "d" && parts[1]) {
+        const slug = decodeURIComponent(parts[1]);
+        const deployment = deployments.find((d) => d.id === slug || d.name === slug);
+        if (deployment) return deployment;
+      }
+    } catch {
+      // A malformed deployment URL configuration cannot make an external URL trusted.
+    }
+  }
+  return deployments.find((deployment) => {
+    const raw = deployment.endpoint?.publicUrl;
+    if (!raw) return false;
+    try {
+      const published = new URL(raw);
+      const pathMatches = published.pathname.endsWith("/")
+        ? url.pathname.startsWith(published.pathname)
+        : url.pathname === published.pathname || url.pathname.startsWith(`${published.pathname}/`);
+      return url.origin === published.origin && pathMatches;
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function shareDeploymentsPostedByOwner(deps: AppDeps, events: IngestEvent[]): Promise<void> {
+  const candidates = events.flatMap((event) => {
+    if (
+      event.self ||
+      event.deleted ||
+      !event.authorId ||
+      !event.text ||
+      (event.kind !== "channel" && event.kind !== "group")
+    )
+      return [];
+    const urls = postedUrls(event.text);
+    return urls.length
+      ? [{ event, urls, authorId: event.authorId, audience: scopeId(event.kind, event.container) }]
+      : [];
+  });
+  if (!candidates.length) return;
+  const deployments = await deps.deploy.listDeployments();
+  for (const { urls, authorId, audience } of candidates) {
+    const seen = new Set<string>();
+    for (const url of urls) {
+      const deployment = deploymentForPostedUrl(url, deployments, deps.publicWebUrl);
+      if (!deployment || seen.has(deployment.id)) continue;
+      seen.add(deployment.id);
+      if (deployment.ownerScopeId !== scopeId("personal", authorId)) continue;
+      const grants = await deps.deploy.deploymentGrantees(deployment.id);
+      if (grants.some((grant) => grant.scope === audience)) continue;
+      await deps.deploy.shareDeployment(deployment.id, audience, "read", { createdBy: authorId });
+    }
+  }
+}
 
 export function createMessagingMethods(
   deps: AppDeps,
@@ -235,7 +313,11 @@ export function createMessagingMethods(
       await deps.deliveries.enqueue(input);
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
-      if (!deps.surfaceCache || !events.length) return { upserted: 0 };
+      if (!events.length) return { upserted: 0 };
+      await shareDeploymentsPostedByOwner(deps, events).catch((error) =>
+        console.error("[deploy] failed to share a posted deployment link:", errMessage(error)),
+      );
+      if (!deps.surfaceCache) return { upserted: 0 };
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events);
       for (const container of new Set(events.filter((e) => !e.self).map((e) => e.container))) {
