@@ -13,6 +13,7 @@ import type { CustomProviderSpec } from "../model/custom-providers.ts";
 import { DEFAULT_AGENT_MODEL_ID, resolveModel } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
+import { usageToTurnTelemetry } from "./harness.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import type { TaskStore } from "../tasks/task-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
@@ -84,6 +85,7 @@ type LlmCapture = { sessionId: string; step: number; model: string; request: unk
 type ActiveTurn = {
   turn: HarnessTurnInput;
   ref: ToolContextRef;
+  turnUsage: LlmCallUsage | null;
   tools: Map<string, BridgedTool>;
   system: string;
   history: unknown[];
@@ -484,6 +486,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     seenText: new Map(),
     seenTasks: new Map(),
     eventTail: Promise.resolve(),
+    turnUsage: null,
   });
 
   const processEvent = async (event: unknown): Promise<void> => {
@@ -884,6 +887,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       eventTail: Promise.resolve(),
       stopped: false,
       child: false,
+      turnUsage: null,
     };
     active.set(sessionId, state);
     const abort = async (stopped: boolean) => {
@@ -984,6 +988,20 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         } catch (error) {
           swallow("opencode: llm request record", error);
         }
+        const usage = usageFromInfo(info);
+        if (usage) {
+          const prior = state.turnUsage;
+          state.turnUsage = prior
+            ? {
+                input: prior.input + usage.input,
+                output: prior.output + usage.output,
+                cacheRead: prior.cacheRead + usage.cacheRead,
+                cacheWrite: prior.cacheWrite + usage.cacheWrite,
+                totalTokens: prior.totalTokens + usage.totalTokens,
+                costUsd: prior.costUsd + usage.costUsd,
+              }
+            : usage;
+        }
       }
     };
     const prompt = [turn.input, turn.environment].filter((item) => item?.trim()).join("\n\n");
@@ -1072,6 +1090,12 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           payload: { text: reply, stopped: state.stopped || undefined },
           scopeLabel: turn.scopeLabel,
         });
+      // The finally block already awaits the flush before this promise
+      // resolves, so running it here changes no user-visible timing -- it
+      // only lets the turn result carry the usage totals the flush just
+      // recorded. The finally call stays: the splice makes it a no-op here
+      // and it still covers every non-happy path.
+      await flushLlmRequests();
       return {
         reply,
         ...(state.stopped ? { stopped: true as const } : {}),
@@ -1079,6 +1103,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
         ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
         modelCalls: state.captures.length,
+        ...(usageToTurnTelemetry(state.turnUsage) ?? {}),
         ...(tapeWriteFailed ? { tapeWriteFailed: true } : {}),
       };
     } finally {

@@ -150,6 +150,16 @@ test("OpenCode records real usage, cost, and timings for each captured model cal
     totalTokens: 183,
     costUsd: 0.0353,
   });
+  assert.deepEqual(
+    result.cacheUsage,
+    { cacheRead: 50, cacheWrite: 10, uncachedInput: 100 },
+    "turn-level cache telemetry sums the flushed per-capture usage",
+  );
+  assert.deepEqual(
+    result.costUsage,
+    { outputTokens: 20, costUsd: 0.0353 },
+    "turn-level spend carries the provider-computed cost",
+  );
 });
 
 test("OpenCode startup failure reports the sidecar's real output and honors the configured timeout", async (t) => {
