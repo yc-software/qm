@@ -124,3 +124,118 @@ test("unknown tool call rejects", async () => {
   await assert.rejects(() => service.call("nope_tool", {}), /unknown MCP tool/);
   service.close();
 });
+
+function sessionResponse(body: unknown, sessionId: string) {
+  const base = jsonResponse(body);
+  return {
+    ...base,
+    headers: {
+      get: (n: string) => {
+        const name = n.toLowerCase();
+        if (name === "mcp-session-id") return sessionId;
+        return name === "content-type" ? "application/json" : null;
+      },
+    },
+  };
+}
+
+test("mcp client negotiates a session and echoes the id on later calls", async () => {
+  const sessions: Array<string | undefined> = [];
+  const methods: string[] = [];
+  const fetch: McpFetch = async (_url, init) => {
+    const req = JSON.parse(init.body) as { id?: number; method: string };
+    methods.push(req.method);
+    sessions.push(init.headers["mcp-session-id"]);
+    if (req.method === "initialize") return sessionResponse({ jsonrpc: "2.0", id: req.id, result: {} }, "sess-1");
+    if (!init.headers["mcp-session-id"]) return jsonResponse({ error: "No valid session ID provided" }, 400);
+    return jsonResponse({ jsonrpc: "2.0", id: req.id, result: { tools: TOOLS } });
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+  assert.deepEqual((await client.listTools()).map((t) => t.name), ["query", "update"]);
+  assert.deepEqual(methods, ["initialize", "notifications/initialized", "tools/list"]);
+  assert.deepEqual(sessions, [undefined, "sess-1", "sess-1"]);
+});
+
+test("mcp client keeps sessionless servers on the pre-session request shape", async () => {
+  const sessions: Array<string | undefined> = [];
+  const { fetch } = fakeServerFetch();
+  const wrapped: McpFetch = async (url, init) => {
+    sessions.push(init.headers["mcp-session-id"]);
+    return fetch(url, init);
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: wrapped });
+  assert.deepEqual((await client.listTools()).map((t) => t.name), ["query", "update"]);
+  assert.deepEqual((await client.listTools()).map((t) => t.name), ["query", "update"]);
+  assert.ok(sessions.every((s) => s === undefined));
+});
+
+test("mcp client survives a server that does not implement initialize", async () => {
+  const fetch: McpFetch = async (_url, init) => {
+    const req = JSON.parse(init.body) as { id?: number; method: string };
+    if (req.method === "initialize") {
+      return jsonResponse({ jsonrpc: "2.0", id: req.id, error: { code: -32601, message: "Method not found" } });
+    }
+    return jsonResponse({ jsonrpc: "2.0", id: req.id, result: { tools: TOOLS } });
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+  assert.deepEqual((await client.listTools()).map((t) => t.name), ["query", "update"]);
+});
+
+test("mcp client surfaces an unauthorized initialize instead of falling back", async () => {
+  const fetch: McpFetch = async () => jsonResponse({ error: "unauthorized" }, 401);
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+  await assert.rejects(() => client.listTools(), /initialize failed \(HTTP 401\)/);
+});
+
+test("concurrent first calls negotiate one shared session", async () => {
+  let issued = 0;
+  const fetch: McpFetch = async (_url, init) => {
+    const req = JSON.parse(init.body) as { id?: number; method: string };
+    if (req.method === "initialize") {
+      issued += 1;
+      return sessionResponse({ jsonrpc: "2.0", id: req.id, result: {} }, `sess-${issued}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    return jsonResponse({ jsonrpc: "2.0", id: req.id, result: { tools: TOOLS } });
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+  const results = await Promise.all([client.listTools(), client.listTools(), client.listTools()]);
+  assert.equal(issued, 1);
+  assert.ok(results.every((tools) => tools.length === 2));
+});
+
+test("every caller recovers when the server drops the shared session", async () => {
+  let issued = 0;
+  const dead = new Set<string>();
+  const fetch: McpFetch = async (_url, init) => {
+    const req = JSON.parse(init.body) as { id?: number; method: string };
+    if (req.method === "initialize") {
+      issued += 1;
+      return sessionResponse({ jsonrpc: "2.0", id: req.id, result: {} }, `sess-${issued}`);
+    }
+    const active = init.headers["mcp-session-id"];
+    if (req.method === "tools/list" && active && dead.has(active)) return jsonResponse({ error: "gone" }, 404);
+    return jsonResponse({ jsonrpc: "2.0", id: req.id, result: { tools: TOOLS } });
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+  await client.listTools();
+  dead.add("sess-1");
+  const results = await Promise.all([client.listTools(), client.listTools(), client.listTools()]);
+  assert.ok(results.every((tools) => tools.length === 2));
+  assert.equal(issued, 2);
+});
+
+test("a genuine bad request is not retried on a live session", async () => {
+  const calls: string[] = [];
+  const fetch: McpFetch = async (_url, init) => {
+    const req = JSON.parse(init.body) as { id?: number; method: string };
+    calls.push(req.method);
+    if (req.method === "initialize") return sessionResponse({ jsonrpc: "2.0", id: req.id, result: {} }, "sess-1");
+    if (req.method === "tools/call") return jsonResponse({ error: "bad request" }, 400);
+    return jsonResponse({ jsonrpc: "2.0", id: req.id, result: { tools: TOOLS } });
+  };
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+  await assert.rejects(() => client.callTool("update", {}), /tools\/call failed \(HTTP 400\)/);
+  assert.equal(calls.filter((m) => m === "tools/call").length, 1);
+  assert.equal(calls.filter((m) => m === "initialize").length, 1);
+});
