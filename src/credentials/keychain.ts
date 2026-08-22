@@ -692,9 +692,9 @@ export function createKeychain(deps: {
         inflightRefreshes.set(rec.id, pending);
         void pending.finally(() => inflightRefreshes.delete(rec.id));
       }
-      return pending;
-    }
-    if (oauthExpired(rec, t) && !refreshable) return null;
+      const refreshed = await pending;
+      if (refreshed || oauthExpired(rec, t)) return refreshed;
+    } else if (oauthExpired(rec, t) && !refreshable) return null;
     return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
   }
 
