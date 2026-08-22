@@ -1,4 +1,6 @@
 import { test } from "node:test";
+
+import { spawnForeground } from "../scripts/dev/lib/proc.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -398,4 +400,24 @@ test("formatAge renders the bash-compatible shapes", () => {
   assert.equal(formatAge(150), "2m");
   assert.equal(formatAge(3 * 3600 + 5 * 60), "3h05m");
   assert.equal(formatAge(2 * 86400 + 3 * 3600), "2d03h");
+});
+
+
+test("spawnForeground stays attached and surfaces the child's exit code", async () => {
+  // Foreground/service mode is only useful if the caller can WAIT on the tree
+  // and see how it died: an unassisted death must be observable as a non-zero
+  // exit so a service manager's Restart=always reacts (#603).
+  const child = spawnForeground({
+    cwd: process.cwd(),
+    argv: [process.execPath, "-e", "process.exit(3)"],
+    env: { ...process.env },
+  });
+  const code = await new Promise<number | null>((resolve) => {
+    child.on("exit", (c) => resolve(typeof c === "number" ? c : null));
+  });
+  assert.equal(code, 3);
+});
+
+test("spawnForeground rejects an empty argv like spawnDetached", () => {
+  assert.throws(() => spawnForeground({ cwd: process.cwd(), argv: [], env: {} }));
 });

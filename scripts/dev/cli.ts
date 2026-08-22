@@ -29,7 +29,7 @@ import {
   takenSummary,
 } from "./lib/lease.ts";
 import { callerEnvSnapshot, currentBranch, repoRoot } from "./lib/envctx.ts";
-import { killTree, pidAlive, portHolders, spawnDetached } from "./lib/proc.ts";
+import { killTree, pidAlive, portHolders, spawnDetached, spawnForeground } from "./lib/proc.ts";
 import {
   resolveSocketPath,
   streamBootEvents,
@@ -60,6 +60,7 @@ function parseCli() {
         sandbox: { type: "string", default: "auto" },
         "no-slack": { type: "boolean", default: false },
         "no-watch": { type: "boolean", default: false },
+        foreground: { type: "boolean", default: false },
         org: { type: "string" },
       },
     });
@@ -75,7 +76,7 @@ const command = positionals[0] ?? "up";
 const store = poolStore();
 
 const commandOptions: Record<string, readonly string[]> = {
-  up: ["json", "force", "strict", "rotate", "sandbox", "no-slack", "no-watch", "org"],
+  up: ["json", "force", "strict", "rotate", "sandbox", "no-slack", "no-watch", "org", "foreground"],
   down: ["json"],
   status: ["json"],
   restart: ["json"],
@@ -203,6 +204,10 @@ function renderPhase(e: BootPhaseEvent): void {
   console.log(`  ${mark} ${e.name}${e.detail ? ` -- ${e.detail}` : ""}`);
 }
 
+// The foreground `up`'s attached supervisor, so cmdUp can wait on it after a
+// successful boot (#603). Null in the normal detached mode.
+let foregroundSupervisor: ReturnType<typeof spawnForeground> | null = null;
+
 async function bootOnSlot(slot: string, worktree: string, branch: string): Promise<BootResult> {
   const ports = slotPorts(slot);
   const lock = lockDir(slot, store);
@@ -257,12 +262,30 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
   );
 
   const supervisorScript = join(worktree, "scripts/dev/supervisor/main.ts");
-  spawnDetached({
-    cwd: worktree,
-    logFile: join(lock, "supervisor.log"),
-    argv: ["node", supervisorScript, "--slot", slot, "--worktree", worktree, "--store", store],
-    env: callerEnv,
-  });
+  const supervisorArgv = [
+    "node",
+    supervisorScript,
+    "--slot",
+    slot,
+    "--worktree",
+    worktree,
+    "--store",
+    store,
+  ];
+  if (opts.foreground) {
+    // Foreground/service mode: the supervisor stays attached to THIS process
+    // (output inherited → the caller's console or journald), and cmdUp waits
+    // on it after the boot so a service manager owning the lifecycle sees the
+    // real exit and can restart (#603).
+    foregroundSupervisor = spawnForeground({ cwd: worktree, argv: supervisorArgv, env: callerEnv });
+  } else {
+    spawnDetached({
+      cwd: worktree,
+      logFile: join(lock, "supervisor.log"),
+      argv: supervisorArgv,
+      env: callerEnv,
+    });
+  }
 
   const sock = resolveSocketPath(lock);
   if (!(await waitForSupervisor(sock, 60_000))) {
@@ -392,6 +415,7 @@ async function cmdUp(): Promise<number> {
     if (result.ok) {
       emitJson(result);
       printSuccess(result, branch);
+      if (opts.foreground) return await waitForegroundSupervisor();
       return EXIT.ok;
     }
 
@@ -622,6 +646,37 @@ async function cmdLogs(): Promise<number> {
   return EXIT.ok;
 }
 
+/**
+ * Stay attached to the foreground supervisor until it exits (#603).
+ *
+ * SIGTERM/SIGINT (a service manager's stop, Ctrl-C) tear the supervisor tree
+ * down via its own graceful path and exit 0; a supervisor that dies on its
+ * own exits non-zero so `Restart=always` reacts — the detached mode's silent
+ * "active (exited)" failure this flag exists to fix.
+ */
+async function waitForegroundSupervisor(): Promise<number> {
+  const supervisor = foregroundSupervisor;
+  if (supervisor === null) return EXIT.ok;
+  let stopping = false;
+  const forward = (signal: NodeJS.Signals) => {
+    if (stopping) return;
+    stopping = true;
+    // The supervisor owns its children's teardown; give it the signal and let
+    // its exit resolve the waiter below.
+    bestEffort(() => supervisor.kill(signal));
+  };
+  process.on("SIGTERM", forward);
+  process.on("SIGINT", forward);
+  const code = await new Promise<number | null>((resolve) => {
+    supervisor.on("exit", (c) => resolve(typeof c === "number" ? c : null));
+  });
+  foregroundSupervisor = null;
+  if (stopping) return EXIT.ok;
+  out(`dev: foreground supervisor exited (code ${code ?? "signal"})`);
+  // Non-zero on an unassisted death so a supervising unit restarts the tree.
+  return EXIT.internal;
+}
+
 async function main(): Promise<number> {
   if (!validOrgId(orgId)) {
     console.error("dev: --org must be a lowercase DNS label (a-z, 0-9, and hyphens between)");
@@ -644,7 +699,7 @@ async function main(): Promise<number> {
       return await runDoctor({ json: opts.json, fix: opts.fix, store, slack: withSlack });
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|auto] [--no-slack] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|auto] [--no-slack] [--no-watch] [--org id] [--foreground] [--fix]",
       );
       return EXIT.usage;
   }
