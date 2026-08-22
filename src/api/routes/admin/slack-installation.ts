@@ -5,6 +5,23 @@ import { errMessage } from "../../../util/errors.ts";
 import { validateSlackInstallation } from "../../../surfaces/slack-installation.ts";
 import { slackBotManifestCreationUrl } from "../../../surfaces/slack-manifest.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
+import emojiData from "emoji-datasource/emoji.json" with { type: "json" };
+
+type StandardEmojiEntry = [name: string, char: string, category: string];
+let standardEmojiCache: StandardEmojiEntry[] | undefined;
+function standardEmoji(): StandardEmojiEntry[] {
+  if (!standardEmojiCache) {
+    standardEmojiCache = [...emojiData]
+      .filter((e) => e.category !== "Component" && e.unified)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map((e) => [
+        e.short_name,
+        String.fromCodePoint(...e.unified.split("-").map((h) => parseInt(h, 16))),
+        e.category,
+      ]);
+  }
+  return standardEmojiCache;
+}
 
 export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
@@ -81,22 +98,26 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const managed = await ctx.deps.slackInstallation?.get();
   const botToken = managed?.botToken ?? ctx.deps.slackEnvBotToken ?? "";
-  if (!botToken) return sendJson(ctx.res, 404, { error: "not_configured" });
-  const doFetch = ctx.deps.slackInstallationFetch ?? fetch;
-  try {
-    const res = await doFetch("https://slack.com/api/emoji.list", {
-      method: "POST",
-      headers: { authorization: `Bearer ${botToken}`, "content-type": "application/x-www-form-urlencoded" },
-    });
-    const data = (await res.json()) as { ok?: boolean; error?: string; emoji?: Record<string, string> };
-    if (!data.ok) return sendJson(ctx.res, 502, { error: "slack_error", message: data.error ?? "unknown" });
-    const emoji: Record<string, string> = {};
-    for (const [name, url] of Object.entries(data.emoji ?? {})) {
-      if (typeof url === "string" && url.startsWith("alias:")) continue;
-      emoji[name] = url;
+  const emoji: Record<string, string> = {};
+  let customError: string | undefined;
+  if (botToken) {
+    const doFetch = ctx.deps.slackInstallationFetch ?? fetch;
+    try {
+      const res = await doFetch("https://slack.com/api/emoji.list", {
+        method: "POST",
+        headers: { authorization: `Bearer ${botToken}`, "content-type": "application/x-www-form-urlencoded" },
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string; emoji?: Record<string, string> };
+      if (data.ok) {
+        for (const [name, url] of Object.entries(data.emoji ?? {})) {
+          if (typeof url === "string" && url.startsWith("alias:")) continue;
+          emoji[name] = url;
+        }
+      } else customError = data.error ?? "unknown";
+    } catch (error) {
+      customError = errMessage(error);
     }
-    return sendJson(ctx.res, 200, { emoji });
-  } catch (error) {
-    return sendJson(ctx.res, 502, { error: "slack_unreachable", message: errMessage(error) });
-  }
+  } else customError = "not_configured";
+  // The standard set never depends on Slack; ship it even when custom emoji are unavailable.
+  return sendJson(ctx.res, 200, { emoji, standard: standardEmoji(), ...(customError ? { customError } : {}) });
 }

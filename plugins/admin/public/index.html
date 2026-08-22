@@ -167,6 +167,70 @@
         line-height: 1;
         flex: 0 0 auto;
       }
+      .emoji-picker {
+        position: absolute;
+        z-index: 60;
+        margin-top: 6px;
+        width: 340px;
+        max-height: 360px;
+        display: flex;
+        flex-direction: column;
+        background: var(--card, #fff);
+        border: 1px solid var(--border, #d4d4d4);
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+        overflow: hidden;
+      }
+      .emoji-picker input[type="text"] {
+        width: auto;
+        margin: 8px;
+        flex: 0 0 auto;
+      }
+      .emoji-picker-scroll {
+        overflow-y: auto;
+        padding: 0 8px 8px;
+      }
+      .emoji-picker-section {
+        position: sticky;
+        top: 0;
+        background: var(--card, #fff);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted, #737373);
+        padding: 6px 2px 4px;
+      }
+      .emoji-picker-grid {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+      }
+      .emoji-picker-grid button {
+        border: 0;
+        background: none;
+        cursor: pointer;
+        border-radius: 6px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        line-height: 1;
+        padding: 0;
+      }
+      .emoji-picker-grid button:hover {
+        background: var(--secondary, #f5f5f5);
+      }
+      .emoji-picker-grid button img {
+        width: 22px;
+        height: 22px;
+        object-fit: contain;
+      }
+      .emoji-picker-empty {
+        padding: 16px;
+        color: var(--muted, #737373);
+        font-size: 13px;
+      }
       .header-button {
         display: inline-flex;
         align-items: center;
@@ -4521,13 +4585,15 @@
                   </div>
                   <div class="body">
                     <div id="ack-emoji-chips" style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
-                      <input
-                        id="ack-emoji-add"
-                        list="ack-emoji-catalog"
-                        placeholder="+ Add emoji"
-                        style="max-width: 240px"
-                      />
-                      <datalist id="ack-emoji-catalog"></datalist>
+                      <span style="position: relative; display: inline-block">
+                        <button type="button" id="ack-emoji-open" class="ghost" aria-haspopup="true">
+                          + Add emoji
+                        </button>
+                        <div class="emoji-picker hidden" id="ack-emoji-picker">
+                          <input type="text" id="ack-emoji-search" placeholder="Search emoji" autocomplete="off" />
+                          <div class="emoji-picker-scroll" id="ack-emoji-results"></div>
+                        </div>
+                      </span>
                     </div>
                   </div>
                   <div class="foot">
@@ -4988,6 +5054,7 @@
       let cronDestinationEditId = null;
       let webuiModelIds = [];
       let ackEmojiNames = [];
+      let ackEmojiStandard = [];
       let ackEmojiCatalog = {};
       let ackEmojiCatalogLoaded = false;
       const transcriptVisibility = { thinking: true, toolResults: true };
@@ -6580,7 +6647,14 @@
         }
         function initAckEmojiPicker() {
           const chips = $("ack-emoji-chips");
-          const addInput = $("ack-emoji-add");
+          const openBtn = $("ack-emoji-open");
+          const picker = $("ack-emoji-picker");
+          const search = $("ack-emoji-search");
+          const results = $("ack-emoji-results");
+          const emojiChar = (name) => {
+            const hit = (ackEmojiStandard || []).find((e) => e[0] === name);
+            return hit ? hit[1] : "";
+          };
           const renderAckChips = () => {
             chips.querySelectorAll("[data-chip]").forEach((n) => n.remove());
             ackEmojiNames.forEach((name) => {
@@ -6594,13 +6668,17 @@
                 const img = document.createElement("img");
                 img.src = url;
                 img.alt = name;
-                img.style.cssText = "width:16px;height:16px;vertical-align:middle;margin-right:4px";
+                img.className = "ack-emoji-img";
+                img.style.marginRight = "4px";
                 label.appendChild(img);
+              } else {
+                const ch = emojiChar(name);
+                if (ch) label.appendChild(document.createTextNode(ch + " "));
               }
               label.appendChild(document.createTextNode(":" + name + ":"));
               const x = document.createElement("button");
               x.type = "button";
-              x.textContent = "×";
+              x.textContent = "\u00d7";
               x.setAttribute("aria-label", "Remove " + name);
               x.style.cssText = "border:0;background:none;cursor:pointer;padding:0;font-size:14px;line-height:1";
               x.onclick = () => {
@@ -6610,45 +6688,113 @@
               };
               chip.appendChild(label);
               chip.appendChild(x);
-              chips.insertBefore(chip, addInput);
+              chips.insertBefore(chip, openBtn.parentElement);
             });
-            const dl = $("ack-emoji-catalog");
-            dl.textContent = "";
-            Object.keys(ackEmojiCatalog)
-              .filter((n) => !ackEmojiNames.includes(n))
-              .sort()
-              .forEach((n) => {
-                const o = document.createElement("option");
-                o.value = n;
-                dl.appendChild(o);
-              });
           };
-          const addEmoji = () => {
-            const name = addInput.value
-              .trim()
-              .replace(/^:+|:+$/g, "")
-              .toLowerCase();
+          const addEmoji = (name) => {
             if (!name || !/^[a-z0-9_+-]+$/.test(name)) return;
             if (!ackEmojiNames.includes(name)) {
               ackEmojiNames.push(name);
               renderAckChips();
               autoSaveAckEmoji();
             }
-            addInput.value = "";
-            renderAckChips();
           };
-          addInput.onchange = addEmoji;
-          addInput.onkeydown = (e) => {
+          const emojiButton = (name, render) => {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.title = ":" + name + ":";
+            b.setAttribute("aria-label", name);
+            render(b);
+            b.onclick = () => {
+              addEmoji(name);
+              closePicker();
+            };
+            return b;
+          };
+          const renderResults = () => {
+            const q = search.value.trim().toLowerCase().replace(/:/g, "");
+            results.textContent = "";
+            const taken = new Set(ackEmojiNames);
+            const sections = [];
+            const custom = Object.keys(ackEmojiCatalog)
+              .filter((n) => !taken.has(n) && (!q || n.includes(q)))
+              .sort();
+            if (custom.length) {
+              sections.push([
+                "Custom",
+                custom.map((n) =>
+                  emojiButton(n, (b) => {
+                    const img = document.createElement("img");
+                    img.src = ackEmojiCatalog[n];
+                    img.alt = n;
+                    img.loading = "lazy";
+                    b.appendChild(img);
+                  }),
+                ),
+              ]);
+            }
+            const byCategory = new Map();
+            (ackEmojiStandard || []).forEach((e) => {
+              const name = e[0];
+              if (taken.has(name) || ackEmojiCatalog[name]) return;
+              if (q && !name.includes(q)) return;
+              if (!byCategory.has(e[2])) byCategory.set(e[2], []);
+              byCategory.get(e[2]).push(emojiButton(name, (b) => (b.textContent = e[1])));
+            });
+            byCategory.forEach((buttons, category) => sections.push([category, buttons]));
+            if (!sections.length) {
+              const empty = document.createElement("div");
+              empty.className = "emoji-picker-empty";
+              empty.textContent = "No emoji match \u201c" + search.value.trim() + "\u201d";
+              results.appendChild(empty);
+              return;
+            }
+            sections.forEach(([title, buttons]) => {
+              const head = document.createElement("div");
+              head.className = "emoji-picker-section";
+              head.textContent = title;
+              const grid = document.createElement("div");
+              grid.className = "emoji-picker-grid";
+              buttons.forEach((b) => grid.appendChild(b));
+              results.appendChild(head);
+              results.appendChild(grid);
+            });
+          };
+          const closePicker = () => {
+            picker.classList.add("hidden");
+            document.removeEventListener("mousedown", onOutside);
+          };
+          const onOutside = (e) => {
+            if (!picker.contains(e.target) && e.target !== openBtn) closePicker();
+          };
+          openBtn.onclick = () => {
+            if (!picker.classList.contains("hidden")) return closePicker();
+            picker.classList.remove("hidden");
+            search.value = "";
+            renderResults();
+            search.focus();
+            document.addEventListener("mousedown", onOutside);
+          };
+          search.oninput = renderResults;
+          search.onkeydown = (e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              closePicker();
+            }
             if (e.key === "Enter") {
               e.preventDefault();
-              addEmoji();
+              const first = results.querySelector("button");
+              if (first) first.click();
             }
           };
           if (!ackEmojiCatalogLoaded) {
             ackEmojiCatalogLoaded = true;
             api("GET", "/api/slack-emoji")
               .then((res) => {
-                if (res && res.ok && res.data && res.data.emoji) ackEmojiCatalog = res.data.emoji;
+                if (res && res.ok && res.data) {
+                  if (res.data.emoji) ackEmojiCatalog = res.data.emoji;
+                  if (Array.isArray(res.data.standard)) ackEmojiStandard = res.data.standard;
+                }
                 renderAckChips();
               })
               .catch(() => {});
