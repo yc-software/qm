@@ -11,7 +11,7 @@ interface FakeSmtp {
 }
 
 async function fakeSmtp(
-  options: { offerStartTls?: boolean; rejectAuth?: boolean; rejectRecipient?: boolean } = {},
+  options: { offerStartTls?: boolean; rejectAuth?: boolean; rejectRecipient?: boolean; mechanisms?: string } = {},
 ): Promise<FakeSmtp> {
   const transcript: string[] = [];
   const messages: string[] = [];
@@ -19,6 +19,7 @@ async function fakeSmtp(
     let buffer = "";
     let inData = false;
     let message = "";
+    let authStep: "idle" | "user" | "pass" = "idle";
     socket.setEncoding("utf8");
     socket.write("220 fake.smtp.test ESMTP\r\n");
     socket.on("data", (chunk: string) => {
@@ -38,14 +39,27 @@ async function fakeSmtp(
           continue;
         }
         transcript.push(line);
+        if (authStep === "user") {
+          authStep = "pass";
+          socket.write("334 UGFzc3dvcmQ6\r\n");
+          continue;
+        }
+        if (authStep === "pass") {
+          authStep = "idle";
+          socket.write(options.rejectAuth ? "535 5.7.8 bad credentials\r\n" : "235 2.7.0 Accepted\r\n");
+          continue;
+        }
         const verb = line.split(" ")[0]!.toUpperCase();
         if (verb === "EHLO")
           socket.write(
-            `250-fake.smtp.test\r\n${options.offerStartTls ? "250-STARTTLS\r\n" : ""}250 AUTH PLAIN LOGIN\r\n`,
+            `250-fake.smtp.test\r\n${options.offerStartTls ? "250-STARTTLS\r\n" : ""}250 AUTH ${options.mechanisms ?? "PLAIN LOGIN"}\r\n`,
           );
-        else if (verb === "AUTH")
-          socket.write(options.rejectAuth ? "535 5.7.8 bad credentials\r\n" : "235 2.7.0 Accepted\r\n");
-        else if (verb === "MAIL") socket.write("250 2.1.0 Ok\r\n");
+        else if (verb === "AUTH") {
+          if (/^AUTH LOGIN$/i.test(line)) {
+            authStep = "user";
+            socket.write("334 VXNlcm5hbWU6\r\n");
+          } else socket.write(options.rejectAuth ? "535 5.7.8 bad credentials\r\n" : "235 2.7.0 Accepted\r\n");
+        } else if (verb === "MAIL") socket.write("250 2.1.0 Ok\r\n");
         else if (verb === "RCPT")
           socket.write(options.rejectRecipient ? "550 5.1.1 no such user\r\n" : "250 2.1.5 Ok\r\n");
         else if (verb === "DATA") {
@@ -103,14 +117,21 @@ test("a message is delivered over the full SMTP conversation", async (t) => {
   assert.match(receipt, /queued as FAKE1/);
   assert.deepEqual(
     server.transcript.map((line) => line.split(" ")[0]),
-    ["EHLO", "AUTH", "MAIL", "RCPT", "DATA", "QUIT"],
+    ["EHLO", "AUTH", Buffer.from("apikey").toString("base64"), Buffer.from("s3cret").toString("base64"), "MAIL", "RCPT", "DATA", "QUIT"],
   );
+  assert.equal(server.transcript[1]!, "AUTH LOGIN");
+  assert.match(server.messages[0]!, /^\.leading dot survives$/m);
+});
+
+test("AUTH PLAIN is used when the server does not advertise LOGIN", async (t) => {
+  const server = await fakeSmtp({ mechanisms: "PLAIN" });
+  t.after(() => server.close());
+  assert.equal(await smtpDeliver(options(server.port), null), "authenticated");
   assert.match(server.transcript[1]!, /^AUTH PLAIN /);
   assert.equal(
     Buffer.from(server.transcript[1]!.slice("AUTH PLAIN ".length), "base64").toString("utf8"),
     "\0apikey\0s3cret",
   );
-  assert.match(server.messages[0]!, /^\.leading dot survives$/m);
 });
 
 test("a rejected recipient and rejected credentials both surface as errors", async (t) => {
@@ -137,7 +158,7 @@ test("verification authenticates without sending a message", async (t) => {
   assert.equal(await smtpDeliver(options(server.port), null), "authenticated");
   assert.deepEqual(
     server.transcript.map((line) => line.split(" ")[0]),
-    ["EHLO", "AUTH", "QUIT"],
+    ["EHLO", "AUTH", Buffer.from("apikey").toString("base64"), Buffer.from("s3cret").toString("base64"), "QUIT"],
   );
   assert.equal(server.messages.length, 0);
 });

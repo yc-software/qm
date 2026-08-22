@@ -159,13 +159,13 @@ async function openSocket(options: SmtpOptions, timeoutMs: number): Promise<Sock
 }
 
 function authSteps(mechanisms: string, username: string, password: string): string[] {
-  if (/\bPLAIN\b/.test(mechanisms))
-    return [`AUTH PLAIN ${Buffer.from(`\0${username}\0${password}`, "utf8").toString("base64")}`];
-  return [
-    "AUTH LOGIN",
-    Buffer.from(username, "utf8").toString("base64"),
-    Buffer.from(password, "utf8").toString("base64"),
-  ];
+  if (/\bLOGIN\b/i.test(mechanisms))
+    return [
+      "AUTH LOGIN",
+      Buffer.from(username, "utf8").toString("base64"),
+      Buffer.from(password, "utf8").toString("base64"),
+    ];
+  return [`AUTH PLAIN ${Buffer.from(`\0${username}\0${password}`, "utf8").toString("base64")}`];
 }
 
 function clientName(host: string): string {
