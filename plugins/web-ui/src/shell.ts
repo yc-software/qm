@@ -42,6 +42,7 @@ import {
   canvasToast,
   drawCanvas,
   exitSplitIfActive,
+  focusedPaneConversationTitle,
   loadPersistedSplit,
   mountRestoredCanvas,
   restoredCanvasNeedsSessionList,
@@ -57,8 +58,10 @@ import {
   renderList,
   resetSessionsState,
   sessionsState,
+  sessionTitle,
   toggleWebOnly,
 } from "./sessions";
+import { formatWebDocumentTitle } from "./document-title";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
 import { renderFiles } from "./files";
@@ -97,6 +100,26 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const sessionId = splitState.active ? null : fromState;
   const next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
+  syncDocumentTitle();
+}
+
+export function syncDocumentTitle(): void {
+  const next = formatWebDocumentTitle(brandName(), activeConversationTitle());
+  if (document.title !== next) document.title = next;
+}
+
+function activeConversationTitle(): string | null {
+  if (appState.currentView !== "chats") return null;
+  if (splitState.active) return focusedPaneConversationTitle();
+  const chat = mainConversation().state;
+  const sessionId = chat.sessionId ?? chat.rememberedSessionId;
+  const threadRef = chat.threadRef ?? chat.rememberedThreadRef;
+  const session =
+    (sessionId ? sessionsState.list.find((s) => s.id === sessionId) : undefined) ??
+    (threadRef ? sessionsState.list.find((s) => s.threadRef === threadRef) : undefined);
+  if (session) return sessionTitle(session);
+  if (threadRef) return "New chat";
+  return null;
 }
 
 const appEl = document.getElementById("app");
