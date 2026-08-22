@@ -1,4 +1,5 @@
 import { html, nothing, render, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
 import {
   ArrowLeft,
   Boxes,
@@ -9,6 +10,7 @@ import {
   Hash,
   ListFilter,
   Lock,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -32,7 +34,7 @@ import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, fieldSelect, formatBytes, icon, initials, relTime, toggleFormMenu } from "./ui";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { mainConversation } from "./conversations";
-import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
+import { groupDmTitle, openSession, refreshSessions, renderList, sessionsState, slackLogo, surfaceOf } from "./sessions";
 import { activityOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
@@ -102,6 +104,10 @@ export const contextsState = {
   slackValue: "",
   slackBusy: false,
   slackError: "",
+  renaming: false,
+  renameDraft: "",
+  renameSaving: false,
+  renameError: "",
 };
 
 let contextsLoading = false;
@@ -160,6 +166,7 @@ export function resetContextsState(): void {
   contextsState.slackValue = "";
   contextsState.slackBusy = false;
   contextsState.slackError = "";
+  clearProjectRename();
   cancelMemberSearchTimer();
   contextsNotice = "";
   memberSearchSeq++;
@@ -449,6 +456,8 @@ function detailTpl(c: CoreContext): TemplateResult {
   const { title, sub, glyph } = contextMeta(c);
   const sessions = sessionsIn(c.scopeId);
   const completelyEmpty = sessions.length === 0 && scopeResourcesEmpty(c.scopeId);
+  const canRename = Boolean(c.project) && isProjectOwner(c);
+  const renaming = canRename && contextsState.renaming;
   return html`
     <div class="context-detail">
       <button class="context-back" type="button" @click=${() => selectContext(null)}>
@@ -457,10 +466,65 @@ function detailTpl(c: CoreContext): TemplateResult {
       <div class="context-detail-head">
         <span class="context-glyph large">${icon(glyph, 22)}</span>
         <div class="context-detail-titles">
-          <h1 class="pane-title">
-            ${title}
-            ${c.isPrivate ? html`<span class="context-lock" title="Private channel">${icon(Lock, 14)}</span>` : nothing}
-          </h1>
+          ${
+            renaming
+              ? html`
+                  <div class="context-rename">
+                    <input
+                      class="context-rename-input"
+                      data-focus-key="project-rename"
+                      aria-label="Rename project"
+                      maxlength="200"
+                      autocomplete="off"
+                      .value=${live(contextsState.renameDraft)}
+                      ?disabled=${contextsState.renameSaving}
+                      @input=${(event: InputEvent) => {
+                        contextsState.renameDraft = (event.currentTarget as HTMLInputElement).value;
+                        contextsState.renameError = "";
+                      }}
+                      @keydown=${(event: KeyboardEvent) => {
+                        if (event.isComposing || event.keyCode === 229) return;
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void commitProjectDetailRename(c);
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelProjectRename();
+                        }
+                      }}
+                      @blur=${() => void commitProjectDetailRename(c)}
+                    />
+                    ${
+                      contextsState.renameError
+                        ? html`<div class="form-error" aria-live="polite">${contextsState.renameError}</div>`
+                        : nothing
+                    }
+                  </div>
+                `
+              : html`
+                  <h1 class="pane-title">
+                    ${title}
+                    ${
+                      c.isPrivate
+                        ? html`<span class="context-lock" title="Private channel">${icon(Lock, 14)}</span>`
+                        : nothing
+                    }
+                    ${
+                      canRename
+                        ? html`<button
+                            class="project-icon-button context-rename-edit"
+                            type="button"
+                            aria-label="Rename project"
+                            title="Rename project"
+                            @click=${() => beginProjectRename(c)}
+                          >
+                            ${icon(Pencil, 15)}
+                          </button>`
+                        : nothing
+                    }
+                  </h1>
+                `
+          }
           <div class="context-sub">
             ${c.project ? sub : `${sub} The agent's files and memory here are separate from your other contexts.`}
           </div>
@@ -536,6 +600,68 @@ function projectPeople(context: CoreContext): string[] {
 
 function isProjectOwner(context: CoreContext): boolean {
   return context.project?.ownerId === appState.me?.user;
+}
+
+function clearProjectRename(): void {
+  contextsState.renaming = false;
+  contextsState.renameDraft = "";
+  contextsState.renameSaving = false;
+  contextsState.renameError = "";
+}
+
+function beginProjectRename(context: CoreContext): void {
+  if (!context.project || !isProjectOwner(context)) return;
+  memberSearchSeq++;
+  cancelMemberSearchTimer();
+  contextsState.memberProjectId = null;
+  contextsState.memberQuery = "";
+  contextsState.memberMatches = [];
+  contextsState.memberSearching = false;
+  contextsState.memberError = "";
+  contextsState.memberSearchedQuery = "";
+  contextsState.renaming = true;
+  contextsState.renameDraft = context.project.name;
+  contextsState.renameSaving = false;
+  contextsState.renameError = "";
+  drawContexts();
+  queueMicrotask(() => document.querySelector<HTMLInputElement>(".context-rename-input")?.focus());
+}
+
+function cancelProjectRename(): void {
+  if (!contextsState.renaming || contextsState.renameSaving) return;
+  clearProjectRename();
+  drawContexts();
+}
+
+async function commitProjectDetailRename(context: CoreContext): Promise<void> {
+  if (!contextsState.renaming || !context.project || contextsState.renameSaving) return;
+  if (!isProjectOwner(context)) {
+    clearProjectRename();
+    drawContexts();
+    return;
+  }
+  const project = context.project;
+  const next = contextsState.renameDraft.trim();
+  if (!next || next === project.name) {
+    clearProjectRename();
+    drawContexts();
+    return;
+  }
+  const resetSeq = contextsResetSeq;
+  contextsState.renameSaving = true;
+  contextsState.renameError = "";
+  drawContexts();
+  const ok = await renameProject(project, next);
+  if (resetSeq !== contextsResetSeq) return;
+  if (!ok) {
+    contextsState.renameSaving = false;
+    contextsState.renameError = "Couldn't rename this project.";
+    drawContexts();
+    queueMicrotask(() => document.querySelector<HTMLInputElement>(".context-rename-input")?.focus());
+    return;
+  }
+  clearProjectRename();
+  drawContexts();
 }
 
 function memberLabel(context: CoreContext, principalId: string): string {
@@ -1145,6 +1271,7 @@ export async function renameProject(project: CoreProject, name: string): Promise
     if (!updated) return false;
     upsertProject(updated);
     if (appState.currentView === "contexts") drawContexts();
+    renderList();
     return true;
   } catch {
     return false;
@@ -1243,6 +1370,7 @@ function toggleMemberPicker(context: CoreContext): void {
   contextsState.slackValue = "";
   contextsState.slackBusy = false;
   contextsState.slackError = "";
+  clearProjectRename();
   drawContexts();
   if (contextsState.memberProjectId)
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#project-member-search")?.focus());
@@ -1261,6 +1389,7 @@ function closeMemberPicker(): void {
   contextsState.slackValue = "";
   contextsState.slackBusy = false;
   contextsState.slackError = "";
+  clearProjectRename();
   drawContexts();
 }
 
@@ -1455,6 +1584,7 @@ function selectContext(scopeId: string | null): void {
   contextsState.slackValue = "";
   contextsState.slackBusy = false;
   contextsState.slackError = "";
+  clearProjectRename();
   contextsState.selected = scopeId;
   contextsState.resources = null;
   contextsState.resourcesScope = null;

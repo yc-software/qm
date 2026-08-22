@@ -5059,6 +5059,40 @@ a.chat-row-open {
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+.context-detail-head .pane-title .context-rename-edit {
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+.context-detail-head .pane-title:hover .context-rename-edit,
+.context-detail-head .pane-title .context-rename-edit:focus-visible {
+  opacity: 1;
+}
+.context-rename {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+}
+.context-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.context-rename-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
+}
+.context-rename-input:disabled {
+  opacity: 0.7;
+}
 .context-detail-titles {
   flex: 1;
   min-width: 0;
