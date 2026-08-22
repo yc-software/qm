@@ -1,4 +1,4 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, usePgPool, type Pool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { DurableByteStore } from "./durable-byte-store.ts";
 import {
@@ -61,10 +61,11 @@ function rowToArtifact(r: Record<string, unknown>): FileArtifact {
 }
 
 export function createPostgresFileArtifactStore(
-  connectionString: string,
+  connection: string | Pool,
   byteStore: DurableByteStore,
 ): FileArtifactStore {
-  const { q, query } = createPgPool(connectionString, SCHEMA);
+  const database = typeof connection === "string" ? createPgPool(connection, SCHEMA) : usePgPool(connection, SCHEMA);
+  const { q, query } = database;
 
   async function getRow(id: string): Promise<FileArtifact | null> {
     const rows = await q("SELECT * FROM file_artifacts WHERE id = $1", [id]);
@@ -170,5 +171,7 @@ export function createPostgresFileArtifactStore(
     async delete(id) {
       await query("DELETE FROM file_artifacts WHERE id = $1", [id]);
     },
+
+    close: database.close,
   };
 }

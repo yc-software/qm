@@ -154,3 +154,28 @@ test("pg rows survive across store instances (no per-process cache to diverge)",
   const reader = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
   assert.ok(await reader.get("across"));
 });
+
+test("pg store closes an owned pool", { skip }, async () => {
+  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+  await store.get("missing");
+  const closing = store.close?.();
+  assert.equal(store.close?.(), closing);
+  await closing;
+  await assert.rejects(store.get("missing"), /pg-pool: closed/);
+});
+
+test("pg store does not close a borrowed pool", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  const store = createPostgresFileArtifactStore(pool, createMemoryDurableByteStore());
+  try {
+    await store.get("missing");
+    const closing = store.close?.();
+    assert.equal(store.close?.(), closing);
+    await closing;
+    await assert.rejects(store.get("missing"), /pg-pool: closed/);
+    assert.deepEqual((await pool.query("SELECT 1 AS ok")).rows, [{ ok: 1 }]);
+  } finally {
+    await pool.end();
+  }
+});

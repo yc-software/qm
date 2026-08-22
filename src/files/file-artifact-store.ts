@@ -70,6 +70,8 @@ export interface FileArtifactStore {
   setEnabled(id: string, enabled: boolean): Promise<void>;
 
   delete(id: string): Promise<void>;
+
+  close?(): Promise<void>;
 }
 
 export function fileArtifactId(seed: string, direction: FileDirection, batchIndex: number): string {

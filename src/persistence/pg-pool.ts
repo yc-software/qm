@@ -107,7 +107,10 @@ export function createPgPool(connectionString: string, statements: string[]): Pg
   const schema = statements.map((s) => s.trim()).filter((s) => s.length > 0);
   for (const stmt of schema) assertOneStatement(stmt);
   let poolP: Promise<Pool> | null = null;
+  let closed = false;
+  let closeP: Promise<void> | null = null;
   function pool(): Promise<Pool> {
+    if (closed) return Promise.reject(new Error("pg-pool: closed"));
     if (!poolP) {
       poolP = (async () => {
         const pg = (await import("pg")).default;
@@ -134,13 +137,52 @@ export function createPgPool(connectionString: string, statements: string[]): Pg
   async function q(text: string, params: unknown[] = []): Promise<Rows> {
     return (await query(text, params)).rows;
   }
-  async function close(): Promise<void> {
-    if (poolP) await (await poolP).end();
+  function close(): Promise<void> {
+    if (closeP) return closeP;
+    closed = true;
+    closeP = poolP ? poolP.then((activePool) => activePool.end()) : Promise.resolve();
+    return closeP;
   }
   async function applySchema(schemaSql: string): Promise<void> {
     const stmt = schemaSql.trim();
     assertOneStatement(stmt);
     await applyDdl(await pool(), [stmt]);
+  }
+  return { pool, q, query, schema: applySchema, close };
+}
+
+export function usePgPool(borrowedPool: Pool, statements: string[]): PgPool {
+  const schema = statements.map((s) => s.trim()).filter((s) => s.length > 0);
+  for (const stmt of schema) assertOneStatement(stmt);
+  let schemaP: Promise<void> | null = null;
+  let closed = false;
+  let closeP: Promise<void> | null = null;
+  async function pool(): Promise<Pool> {
+    if (closed) throw new Error("pg-pool: closed");
+    schemaP ??= applyDdl(borrowedPool, schema).catch((error) => {
+      schemaP = null;
+      throw error;
+    });
+    await schemaP;
+    return borrowedPool;
+  }
+  async function query(text: string, params: unknown[] = []): Promise<{ rows: Rows; rowCount: number }> {
+    const result = await (await pool()).query(text, params);
+    return { rows: result.rows as Rows, rowCount: result.rowCount ?? 0 };
+  }
+  async function q(text: string, params: unknown[] = []): Promise<Rows> {
+    return (await query(text, params)).rows;
+  }
+  async function applySchema(schemaSql: string): Promise<void> {
+    const statement = schemaSql.trim();
+    assertOneStatement(statement);
+    await applyDdl(await pool(), [statement]);
+  }
+  function close(): Promise<void> {
+    if (closeP) return closeP;
+    closed = true;
+    closeP = Promise.resolve();
+    return closeP;
   }
   return { pool, q, query, schema: applySchema, close };
 }
