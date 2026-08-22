@@ -24,6 +24,7 @@ import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { CapabilityUnsupportedError } from "./sandbox.ts";
 import type {
   AgentComputerProfile,
   ExecOptions,
@@ -33,6 +34,7 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
+import { directRequest, type DirectExecOptions, type ScopedCommand } from "./scoped-exec.ts";
 
 const HOME_DIR = "/home/sprite";
 const WORKSPACE_BASENAME = "workspace";
@@ -45,11 +47,290 @@ const RESTART_TIMEOUT_MS = 60_000;
 const CHECK_TIMEOUT_MS = 30_000;
 const GUEST_PROBE_TIMEOUT_SEC = 15;
 const DEFAULT_SPRITES_BASE_URL = "https://api.sprites.dev";
+const DIRECT_HELPER_RESPONSE_MAX_BYTES = 256 * 1024 * 1024;
+export const DIRECT_HELPER_EXECUTABLE = "/usr/bin/python3";
+export const DIRECT_HELPER_SCRIPT = String.raw`
+import base64
+import ctypes
+import json
+import os
+import re
+import select
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+dynamic_keys = {"AGENT_API_URL", "AGENT_API_TOKEN", "AGENT_OAUTH_CONSENT_TOKEN", "AGENT_CREDENTIAL_TOKEN", "AGENT_OUTBOX"}
+runtime_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+input_cap = 16 * 1024 * 1024
+output_cap = 64 * 1024 * 1024
+request_cap = 128 * 1024 * 1024
+result_cap = 256 * 1024 * 1024
+env_name = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+kill_uid_pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+helper_pid = os.getpid()
+kill_uid = sys.argv[1] if len(sys.argv) == 2 else None
+if not isinstance(kill_uid, str) or not kill_uid_pattern.fullmatch(kill_uid):
+    raise SystemExit(400)
+cancel_requested = threading.Event()
+
+def request_cancel(_signum, _frame):
+    cancel_requested.set()
+
+signal.signal(signal.SIGTERM, request_cancel)
+
+def output(value):
+    encoded = json.dumps(value, separators=(",", ":"))
+    if len(encoded.encode()) > result_cap:
+        encoded = json.dumps({"error": "direct helper result exceeds limit"}, separators=(",", ":"))
+    sys.stdout.write(encoded)
+
+def canonical(value):
+    return isinstance(value, str) and value.startswith("/") and value != "/" and not value.endswith("/") and "\\" not in value and "\0" not in value and all(part not in ("", ".", "..") for part in value.split("/")[1:])
+
+def bounded(value, fallback, cap):
+    result = fallback if value is None else value
+    return result if isinstance(result, int) and not isinstance(result, bool) and 0 <= result <= cap else None
+
+def fail(message):
+    output({"error": message})
+    raise SystemExit(0)
+
+def enable_subreaper():
+    if sys.platform != "linux":
+        return
+    try:
+        with open("/proc/self/stat", "rb") as stat_file:
+            stat_file.read(1)
+        if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+            fail("direct helper containment unavailable")
+    except SystemExit:
+        raise
+    except Exception:
+        fail("direct helper containment unavailable")
+
+def descendants():
+    if sys.platform != "linux":
+        return set()
+    parents = {}
+    try:
+        entries = os.scandir("/proc")
+    except Exception:
+        return set()
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", "r", encoding="utf-8") as stat_file:
+                    stat = stat_file.read()
+                fields = stat[stat.rfind(")") + 2:].split()
+                parents[int(entry.name)] = int(fields[1])
+            except Exception:
+                continue
+    result = set()
+    changed = True
+    while changed:
+        changed = False
+        for pid, parent in parents.items():
+            if pid != helper_pid and pid not in result and (parent == helper_pid or parent in result):
+                result.add(pid)
+                changed = True
+    return result
+
+raw = bytearray()
+while len(raw) <= request_cap:
+    if cancel_requested.is_set():
+        fail("direct helper cancelled")
+    readable, _, _ = select.select([sys.stdin.buffer], [], [], 0.05)
+    if not readable:
+        continue
+    chunk = os.read(sys.stdin.fileno(), min(65536, request_cap + 1 - len(raw)))
+    if not chunk:
+        break
+    raw.extend(chunk)
+if len(raw) > request_cap:
+    raise SystemExit(400)
+try:
+    request = json.loads(raw)
+except Exception:
+    fail("invalid direct request")
+
+argv = request.get("argv") if isinstance(request, dict) else None
+if not isinstance(argv, list) or not argv or len(argv) > 4096 or any(not isinstance(arg, str) or "\0" in arg for arg in argv) or not canonical(argv[0]):
+    fail("invalid direct argv")
+root_dir = request.get("rootDir")
+cwd = request.get("cwd")
+if not canonical(root_dir) or not canonical(cwd):
+    fail("invalid direct path")
+root = os.path.normpath(root_dir)
+workdir = os.path.normpath(cwd)
+relative = os.path.relpath(workdir, root)
+if relative == ".." or relative.startswith("../") or os.path.isabs(relative) or ".." in cwd.split("/"):
+    fail("direct cwd escapes rootDir")
+dynamic_env_keys = request.get("dynamicEnvKeys", [])
+if not isinstance(dynamic_env_keys, list) or any(not isinstance(key, str) or key not in dynamic_keys for key in dynamic_env_keys) or len(set(dynamic_env_keys)) != len(dynamic_env_keys):
+    fail("invalid dynamic env keys")
+allowed_env_keys = request.get("allowedEnvKeys", [])
+if not isinstance(allowed_env_keys, list) or any(not isinstance(key, str) or not env_name.fullmatch(key) or key == "PATH" or key.startswith("AGENT_") for key in allowed_env_keys) or len(set(allowed_env_keys)) != len(allowed_env_keys):
+    fail("invalid allowed env keys")
+env = request.get("env")
+if not isinstance(env, dict):
+    fail("invalid direct env")
+for key, value in env.items():
+    if not isinstance(key, str) or not env_name.fullmatch(key) or (key == "PATH" and value != runtime_path) or (key != "PATH" and key not in dynamic_env_keys and key not in allowed_env_keys) or (key.startswith("AGENT_") and key not in dynamic_env_keys) or not isinstance(value, str) or "\0" in value:
+        fail("invalid direct env")
+timeout_ms = bounded(request.get("timeoutMs"), 600000, 86400000)
+stdout_max = bounded(request.get("stdoutMaxBytes"), 4 * 1024 * 1024, output_cap)
+stderr_max = bounded(request.get("stderrMaxBytes"), 4 * 1024 * 1024, output_cap)
+if timeout_ms is None or stdout_max is None or stderr_max is None:
+    fail("invalid direct limits")
+try:
+    stdin = base64.b64decode(request.get("stdinB64", ""), validate=True)
+except Exception:
+    fail("invalid direct stdin")
+if len(stdin) > input_cap:
+    fail("direct stdin exceeds limit")
+try:
+    root_real = os.path.realpath(root)
+    cwd_real = os.path.realpath(workdir)
+    executable_real = os.path.realpath(argv[0])
+    if cwd_real != root_real and not cwd_real.startswith(root_real + os.sep):
+        fail("direct cwd escapes rootDir")
+    if executable_real != argv[0] or not os.path.isfile(executable_real):
+        fail("direct executable is not canonical")
+except SystemExit:
+    raise
+except Exception:
+    fail("direct path is not available")
+enable_subreaper()
+if cancel_requested.is_set():
+    fail("direct helper cancelled")
+try:
+    child = subprocess.Popen(argv, cwd=cwd_real, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+except Exception:
+    fail("direct helper could not start executable")
+
+stdout_parts = []
+stderr_parts = []
+totals = {"stdout": 0, "stderr": 0}
+limit_exceeded = threading.Event()
+stdout_done = threading.Event()
+stderr_done = threading.Event()
+child_lock = threading.Lock()
+
+def kill_tree():
+    with child_lock:
+        if child.returncode is None:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except Exception:
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+        if sys.platform == "linux":
+            for _ in range(32):
+                found = descendants()
+                if not found:
+                    break
+                for pid in found:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
+                for pid in found:
+                    if pid == child.pid:
+                        continue
+                    try:
+                        os.waitpid(pid, os.WNOHANG)
+                    except Exception:
+                        pass
+                time.sleep(0.005)
+
+def read_stream(name, stream, parts, limit, done):
+    try:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                return
+            remaining = max(0, limit - totals[name])
+            if remaining:
+                parts.append(chunk[:remaining])
+            totals[name] += len(chunk)
+            if totals[name] > limit:
+                limit_exceeded.set()
+                kill_tree()
+    finally:
+        done.set()
+
+def write_stdin():
+    try:
+        child.stdin.write(stdin)
+        child.stdin.close()
+    except Exception:
+        pass
+
+threads = [
+    threading.Thread(target=read_stream, args=("stdout", child.stdout, stdout_parts, stdout_max, stdout_done), daemon=True),
+    threading.Thread(target=read_stream, args=("stderr", child.stderr, stderr_parts, stderr_max, stderr_done), daemon=True),
+    threading.Thread(target=write_stdin, daemon=True),
+]
+for thread in threads:
+    thread.start()
+deadline = time.monotonic() + max(1, timeout_ms) / 1000
+timed_out = False
+cancelled = False
+while True:
+    if cancel_requested.is_set():
+        cancelled = True
+        kill_tree()
+        break
+    if limit_exceeded.is_set():
+        kill_tree()
+        break
+    if time.monotonic() >= deadline:
+        timed_out = True
+        kill_tree()
+        break
+    with child_lock:
+        child_finished = child.poll() is not None
+    if child_finished and stdout_done.is_set() and stderr_done.is_set():
+        kill_tree()
+        break
+    time.sleep(0.005)
+with child_lock:
+    child.wait()
+for thread in threads:
+    thread.join(timeout=1)
+return_code = 130 if cancelled else 124 if timed_out else 122 if limit_exceeded.is_set() else child.returncode if child.returncode >= 0 else 1
+signal_name = None
+if child.returncode < 0:
+    try:
+        signal_name = signal.Signals(-child.returncode).name
+    except Exception:
+        signal_name = None
+result = {
+    "stdoutB64": base64.b64encode(b"".join(stdout_parts)).decode("ascii"),
+    "stderrB64": base64.b64encode(b"".join(stderr_parts)).decode("ascii"),
+    "code": return_code,
+    "timedOut": timed_out,
+    "outputLimitExceeded": limit_exceeded.is_set(),
+    "stdoutTruncated": totals["stdout"] > stdout_max,
+    "stderrTruncated": totals["stderr"] > stderr_max,
+}
+if signal_name:
+    result["signal"] = signal_name
+output(result)
+`;
 
 export interface SpritesClientLike {
   getSprite(name: string): Promise<unknown>;
   createSprite(name: string): Promise<unknown>;
   deleteSprite(name: string): Promise<void>;
+  sprite?(name: string): unknown;
 }
 
 export interface SpritesSandboxOptions {
@@ -86,6 +367,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   const baseUrl = (opts.baseUrl ?? DEFAULT_SPRITES_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
+  const nativeDirect = Boolean(opts.token && typeof fetchImpl === "function");
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
 
@@ -98,6 +380,313 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     rc: number;
     stdout: Buffer;
     stderr: Buffer;
+  }
+
+  async function execDirectNative(
+    name: string,
+    request: {
+      argv: string[];
+      cwd: string;
+      rootDir: string;
+      env: Record<string, string>;
+      allowedEnvKeys: string[];
+      dynamicEnvKeys: string[];
+      stdin?: Uint8Array;
+      timeoutMs: number;
+      stdoutMaxBytes: number;
+      stderrMaxBytes: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<
+    RawExec & {
+      timedOut: boolean;
+      outputLimitExceeded: boolean;
+      stdoutTruncated: boolean;
+      stderrTruncated: boolean;
+      signal?: string;
+    }
+  > {
+    if (signal?.aborted) throw signal.reason ?? new Error("sprites direct execution aborted");
+    const killUid = randomUUID();
+    const helperCommand = `import sys;sys.argv.append(${JSON.stringify(killUid)});${DIRECT_HELPER_SCRIPT}`;
+    const url = new URL(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec`);
+    for (const arg of [DIRECT_HELPER_EXECUTABLE, "-c", helperCommand]) url.searchParams.append("cmd", arg);
+    url.searchParams.set("path", DIRECT_HELPER_EXECUTABLE);
+    url.searchParams.set("stdin", "true");
+    url.searchParams.set("max_run_after_disconnect", "0s");
+    const payload = Buffer.from(
+      JSON.stringify({
+        argv: request.argv,
+        rootDir: request.rootDir,
+        cwd: request.cwd,
+        env: request.env,
+        allowedEnvKeys: request.allowedEnvKeys,
+        dynamicEnvKeys: request.dynamicEnvKeys,
+        ...(request.stdin ? { stdinB64: Buffer.from(request.stdin).toString("base64") } : {}),
+        timeoutMs: request.timeoutMs,
+        stdoutMaxBytes: request.stdoutMaxBytes,
+        stderrMaxBytes: request.stderrMaxBytes,
+      }),
+    );
+    const timeoutSignal = AbortSignal.timeout(request.timeoutMs + EXIT_GRACE_MS);
+    const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+    const cleanupRemote = async (): Promise<void> => {
+      try {
+        await killDirectSession(name, killUid);
+      } catch (cleanupError) {
+        throw new Error("sprites direct cancellation cleanup failed", { cause: cleanupError });
+      }
+    };
+    const cancelRemote = async (error: unknown): Promise<never> => {
+      await cleanupRemote();
+      throw signal?.reason ?? error;
+    };
+    let response: Response;
+    try {
+      response = await fetchImpl(url.toString(), {
+        method: "POST",
+        headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/octet-stream" },
+        body: payload,
+        signal: requestSignal,
+      });
+    } catch (error) {
+      if (signal?.aborted) return await cancelRemote(error);
+      if (timeoutSignal.aborted) {
+        await cleanupRemote();
+        return {
+          rc: 124,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          timedOut: true,
+          outputLimitExceeded: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        };
+      }
+      await cleanupRemote();
+      throw new Error("sprites direct execution request failed", { cause: error });
+    }
+    if (!response.ok || !response.body) {
+      await cleanupRemote();
+      throw new Error("sprites direct execution request failed");
+    }
+    const timeoutResult = (): RawExec & {
+      timedOut: boolean;
+      outputLimitExceeded: boolean;
+      stdoutTruncated: boolean;
+      stderrTruncated: boolean;
+      signal?: string;
+    } => ({
+      rc: 124,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      timedOut: true,
+      outputLimitExceeded: false,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    });
+    const responseChunks: Buffer[] = [];
+    let responseBytes = 0;
+    const reader = response.body.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value?.length) continue;
+        responseBytes += value.length;
+        if (responseBytes > DIRECT_HELPER_RESPONSE_MAX_BYTES)
+          throw new Error("sprites direct execution response exceeded limit");
+        responseChunks.push(Buffer.from(value));
+      }
+    } catch (error) {
+      if (signal?.aborted) return await cancelRemote(error);
+      if (timeoutSignal.aborted) {
+        await cleanupRemote();
+        return timeoutResult();
+      }
+      await cleanupRemote();
+      throw new Error("sprites direct execution response failed", { cause: error });
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+    const stdout: Buffer[] = [];
+    try {
+      const responseBytesAll = Buffer.concat(responseChunks);
+      let exitCode = -1;
+      let offset = 0;
+      while (offset < responseBytesAll.length) {
+        const frameType = responseBytesAll[offset++]!;
+        if (frameType === 3) {
+          if (offset >= responseBytesAll.length)
+            throw new Error("sprites direct execution returned an invalid exit frame");
+          exitCode = responseBytesAll[offset++]!;
+          continue;
+        }
+        if (frameType !== 1 && frameType !== 2)
+          throw new Error("sprites direct execution returned an unsupported frame");
+        const start = offset;
+        while (offset < responseBytesAll.length && responseBytesAll[offset]! >= 4) offset++;
+        const frame = responseBytesAll.subarray(start, offset);
+        if (frameType === 1) stdout.push(frame);
+      }
+      if (exitCode < 0) throw new Error("sprites direct execution returned no exit frame");
+    } catch (error) {
+      await cleanupRemote();
+      throw error;
+    }
+    let envelope: {
+      stdoutB64?: string;
+      stderrB64?: string;
+      code?: number;
+      timedOut?: boolean;
+      outputLimitExceeded?: boolean;
+      stdoutTruncated?: boolean;
+      stderrTruncated?: boolean;
+      signal?: string;
+      error?: string;
+    };
+    try {
+      envelope = JSON.parse(Buffer.concat(stdout).toString("utf8")) as typeof envelope;
+    } catch (error) {
+      await cleanupRemote();
+      throw new Error("sprites direct helper returned an invalid result", { cause: error });
+    }
+    if (!envelope || typeof envelope !== "object") {
+      await cleanupRemote();
+      throw new Error("sprites direct helper returned an invalid result");
+    }
+    if (envelope.error !== undefined && typeof envelope.error !== "string") {
+      await cleanupRemote();
+      throw new Error("sprites direct helper returned an invalid result");
+    }
+    if (envelope.error) throw new Error(`sprites direct helper failed: ${envelope.error}`);
+    if (
+      typeof envelope.code !== "number" ||
+      typeof envelope.stdoutB64 !== "string" ||
+      typeof envelope.stderrB64 !== "string"
+    ) {
+      await cleanupRemote();
+      throw new Error("sprites direct helper returned an invalid result");
+    }
+    return {
+      rc: envelope.code,
+      stdout: Buffer.from(envelope.stdoutB64, "base64"),
+      stderr: Buffer.from(envelope.stderrB64, "base64"),
+      timedOut: !!envelope.timedOut,
+      outputLimitExceeded: !!envelope.outputLimitExceeded,
+      stdoutTruncated: !!envelope.stdoutTruncated,
+      stderrTruncated: !!envelope.stderrTruncated,
+      ...(envelope.signal ? { signal: envelope.signal } : {}),
+    };
+  }
+
+  async function killDirectSession(name: string, killUid: string): Promise<void> {
+    const sessionsUrl = `${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec`;
+    const deadline = Date.now() + 15_000;
+    for (let attempt = 0; attempt < 50 && Date.now() < deadline; attempt++) {
+      const attemptTimeout = Math.max(1, Math.min(2_000, deadline - Date.now()));
+      const response = await fetchImpl(sessionsUrl, {
+        method: "GET",
+        headers: { authorization: `Bearer ${opts.token ?? ""}` },
+        signal: AbortSignal.timeout(attemptTimeout),
+      });
+      if (!response.ok) throw new Error("sprites direct session lookup failed");
+      let sessions: unknown;
+      try {
+        sessions = await response.json();
+      } catch {
+        throw new Error("sprites direct session lookup failed");
+      }
+      let listed: unknown[] | null = null;
+      if (Array.isArray(sessions)) listed = sessions;
+      else if (
+        sessions &&
+        typeof sessions === "object" &&
+        Array.isArray((sessions as { sessions?: unknown }).sessions)
+      ) {
+        listed = (sessions as { sessions: unknown[] }).sessions;
+      }
+      if (!listed) throw new Error("sprites direct session lookup failed");
+      const matches = listed.filter(
+        (session): session is { id: string | number; command: string; is_active: true } =>
+          !!session &&
+          typeof session === "object" &&
+          (session as { is_active?: unknown }).is_active === true &&
+          typeof (session as { command?: unknown }).command === "string" &&
+          (session as { command: string }).command.includes(killUid) &&
+          ["string", "number"].includes(typeof (session as { id?: unknown }).id),
+      );
+      if (matches.length > 1) throw new Error("sprites direct session identity is ambiguous");
+      if (matches.length === 1) {
+        const sessionId = String(matches[0]!.id);
+        if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) throw new Error("sprites direct session identity is invalid");
+        const killUrl = new URL(
+          `${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec/${encodeURIComponent(sessionId)}/kill`,
+        );
+        killUrl.searchParams.set("signal", "SIGTERM");
+        killUrl.searchParams.set("timeout", "10s");
+        const killed = await fetchImpl(killUrl.toString(), {
+          method: "POST",
+          headers: { authorization: `Bearer ${opts.token ?? ""}` },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!killed.ok) throw new Error("sprites direct session kill failed");
+        const events = await readKillEvents(killed);
+        const completionCount = events.filter((event) => event.type === "complete").length;
+        if (
+          events.length === 0 ||
+          events.some((event) => event.type === "error" || event.type === "timeout") ||
+          completionCount !== 1 ||
+          events.at(-1)?.type !== "complete" ||
+          typeof events.at(-1)?.exit_code !== "number"
+        ) {
+          throw new Error("sprites direct session kill failed");
+        }
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("sprites direct session not found");
+  }
+
+  async function readKillEvents(response: Response): Promise<Array<{ type: string; exit_code?: unknown }>> {
+    if (!response.body) throw new Error("sprites direct session kill failed");
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const reader = response.body.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value?.length) continue;
+        total += value.length;
+        if (total > 1024 * 1024) throw new Error("sprites direct session kill failed");
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+    const text = Buffer.concat(chunks).toString("utf8").trim();
+    if (!text) throw new Error("sprites direct session kill failed");
+    let parsed: unknown;
+    try {
+      parsed = text.startsWith("[") ? JSON.parse(text) : text.split("\n").map((line) => JSON.parse(line));
+    } catch {
+      throw new Error("sprites direct session kill failed");
+    }
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some(
+        (event) =>
+          !event ||
+          typeof event !== "object" ||
+          typeof (event as { type?: unknown }).type !== "string" ||
+          !["signal", "timeout", "exited", "killed", "error", "complete"].includes((event as { type: string }).type),
+      )
+    ) {
+      throw new Error("sprites direct session kill failed");
+    }
+    return parsed as Array<{ type: string; exit_code?: unknown }>;
   }
 
   async function postExec(name: string, argv: string[], timeoutSec: number, body?: Uint8Array): Promise<RawExec> {
@@ -297,6 +886,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     backend: "sprites",
     writablePersistence: "resident_disk",
     processSessions: true,
+    directExecution: nativeDirect,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
       os: "Ubuntu 26.04 LTS — Fly Sprite microVM (auto-sleeps when idle; the whole disk persists)",
@@ -412,7 +1002,11 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       try {
         // Scratch boxes are credential-free and wiped at release; they don't get the links.
         const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
+        const prep = await execRaw(
+          name,
+          `${shq(DIRECT_HELPER_EXECUTABLE)} -c ${shq("")} && mkdir -p ${shq(workspaceDir)}${credLinks}`,
+          60,
+        );
         if (prep.code !== 0)
           throw new Error(`sprites provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 
@@ -455,6 +1049,23 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       } finally {
         signal.removeEventListener("abort", onAbort);
       }
+    },
+
+    async runDirect(handle: SandboxHandle, command: ScopedCommand, execOpts?: DirectExecOptions): Promise<ExecResult> {
+      if (!nativeDirect) throw new CapabilityUnsupportedError(profile.backend, "structured direct execution");
+      const request = directRequest(handle.rootDir, command, execOpts);
+      execOpts?.signal?.throwIfAborted();
+      const result = await execDirectNative(handle.id, request, execOpts?.signal);
+      return {
+        stdout: result.stdout.toString("utf8"),
+        stderr: result.stderr.toString("utf8"),
+        code: result.rc,
+        timedOut: result.timedOut,
+        ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
+        ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
+        ...(result.outputLimitExceeded ? { outputLimitExceeded: true } : {}),
+        ...(result.signal ? { signal: result.signal } : {}),
+      };
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

@@ -3,6 +3,7 @@ import { Sha256 } from "@aws-crypto/sha256-js";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { sleep } from "../util/async.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import type { DirectExecRequest } from "./scoped-exec.ts";
 
 type CredentialProvider = () => Promise<{
   accessKeyId: string;
@@ -233,6 +234,7 @@ export interface VmFetchOptions {
   port?: number;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }
 
 export async function vmFetch(
@@ -251,7 +253,7 @@ export async function vmFetch(
       ...(payload ? { "content-type": "application/json" } : {}),
     },
     ...(payload ? { body: payload } : {}),
-    signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000),
+    signal: AbortSignal.any([AbortSignal.timeout(opts.timeoutMs ?? 120_000), ...(opts.signal ? [opts.signal] : [])]),
   });
   return { status: res.status, text: await res.text() };
 }
@@ -267,6 +269,10 @@ interface MicrovmExecResult {
   stderr: string;
   code: number;
   timedOut: boolean;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
+  outputLimitExceeded?: boolean;
+  signal?: string;
 }
 
 export interface MicrovmClient {
@@ -277,8 +283,10 @@ export interface MicrovmClient {
     path: string,
     body?: unknown,
     timeoutMs?: number,
+    signal?: AbortSignal,
   ): Promise<{ status: number; text: string }>;
   execRaw(id: string, endpoint: string, cmd: string, timeoutSec: number): Promise<MicrovmExecResult>;
+  execvRaw(id: string, endpoint: string, request: DirectExecRequest, signal?: AbortSignal): Promise<MicrovmExecResult>;
   writeAbs(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void>;
   waitDaemon(id: string, endpoint: string): Promise<void>;
   ensureRunning(id: string, endpoint: string): Promise<void>;
@@ -304,6 +312,7 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
     path: string,
     body?: unknown,
     timeoutMs?: number,
+    signal?: AbortSignal,
   ): Promise<{ status: number; text: string }> {
     const send = async (): Promise<{ status: number; text: string }> =>
       vmFetch(endpoint, await tokenFor(id), path, {
@@ -311,6 +320,7 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
         body,
         port: agentPort,
         ...(timeoutMs ? { timeoutMs } : {}),
+        ...(signal ? { signal } : {}),
         ...fetchOpt,
       });
     let res = await send();
@@ -326,6 +336,54 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
     if (res.status !== 200) throw new Error(`microVM exec failed (${res.status}): ${res.text.slice(0, 300)}`);
     const j = JSON.parse(res.text) as { stdout?: string; stderr?: string; code: number; timedOut?: boolean };
     return { stdout: j.stdout ?? "", stderr: j.stderr ?? "", code: j.code, timedOut: !!j.timedOut };
+  }
+
+  async function execvRaw(
+    id: string,
+    endpoint: string,
+    request: DirectExecRequest,
+    signal?: AbortSignal,
+  ): Promise<MicrovmExecResult> {
+    const res = await daemon(
+      id,
+      endpoint,
+      "/execv",
+      {
+        argv: request.argv,
+        cwd: request.cwd,
+        rootDir: request.rootDir,
+        env: request.env,
+        allowedEnvKeys: request.allowedEnvKeys,
+        dynamicEnvKeys: request.dynamicEnvKeys,
+        ...(request.stdin ? { stdinB64: Buffer.from(request.stdin).toString("base64") } : {}),
+        timeoutMs: request.timeoutMs,
+        stdoutMaxBytes: request.stdoutMaxBytes,
+        stderrMaxBytes: request.stderrMaxBytes,
+      },
+      request.timeoutMs + 15_000,
+      signal,
+    );
+    if (res.status !== 200) throw new Error(`microVM direct exec failed (${res.status}): ${res.text.slice(0, 300)}`);
+    const j = JSON.parse(res.text) as {
+      stdout?: string;
+      stderr?: string;
+      code: number;
+      timedOut?: boolean;
+      stdoutTruncated?: boolean;
+      stderrTruncated?: boolean;
+      outputLimitExceeded?: boolean;
+      signal?: string;
+    };
+    return {
+      stdout: j.stdout ?? "",
+      stderr: j.stderr ?? "",
+      code: j.code,
+      timedOut: !!j.timedOut,
+      ...(j.stdoutTruncated ? { stdoutTruncated: true } : {}),
+      ...(j.stderrTruncated ? { stderrTruncated: true } : {}),
+      ...(j.outputLimitExceeded ? { outputLimitExceeded: true } : {}),
+      ...(j.signal ? { signal: j.signal } : {}),
+    };
   }
 
   async function writeAbs(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void> {
@@ -371,5 +429,14 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
     await waitDaemon(id, endpoint);
   }
 
-  return { tokenFor, daemon, execRaw, writeAbs, waitDaemon, ensureRunning, evict: (id) => void tokenById.delete(id) };
+  return {
+    tokenFor,
+    daemon,
+    execRaw,
+    execvRaw,
+    writeAbs,
+    waitDaemon,
+    ensureRunning,
+    evict: (id) => void tokenById.delete(id),
+  };
 }

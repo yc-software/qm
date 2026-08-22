@@ -13,6 +13,7 @@ import {
   type SandboxHandle,
   type TeardownOptions,
 } from "./sandbox.ts";
+import type { DirectExecOptions, ScopedCommand } from "./scoped-exec.ts";
 
 export type SandboxBackendName = "sprites" | "aws" | "local" | "smolmachines";
 
@@ -113,6 +114,12 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
       return forHandle(handle).run(handle, command, execOpts);
     },
+    ...(some((s) => typeof s.runDirect === "function")
+      ? {
+          runDirect: (handle: SandboxHandle, command: ScopedCommand, execOpts?: DirectExecOptions) =>
+            requireCap(forHandle(handle), "runDirect", handle.scopeId).runDirect(handle, command, execOpts),
+        }
+      : {}),
     readFile(handle, relPath) {
       return forHandle(handle).readFile(handle, relPath);
     },

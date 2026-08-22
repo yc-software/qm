@@ -26,6 +26,7 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
+import { directRequest, type DirectExecOptions, type ScopedCommand } from "./scoped-exec.ts";
 
 const DEFAULT_LOCAL_SANDBOX_IMAGE = "qm-sandbox-local:latest";
 const HOME_DIR = "/root";
@@ -211,6 +212,53 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     return { stdout: j.stdout ?? "", stderr: j.stderr ?? "", code: j.code, timedOut: !!j.timedOut };
   }
 
+  async function execDirectRaw(
+    name: string,
+    request: ReturnType<typeof directRequest>,
+    signal?: AbortSignal,
+  ): Promise<ExecResult> {
+    const res = await daemon(
+      name,
+      "/execv",
+      {
+        argv: request.argv,
+        cwd: request.cwd,
+        rootDir: request.rootDir,
+        env: request.env,
+        allowedEnvKeys: request.allowedEnvKeys,
+        dynamicEnvKeys: request.dynamicEnvKeys,
+        ...(request.stdin ? { stdinB64: Buffer.from(request.stdin).toString("base64") } : {}),
+        timeoutMs: request.timeoutMs,
+        stdoutMaxBytes: request.stdoutMaxBytes,
+        stderrMaxBytes: request.stderrMaxBytes,
+      },
+      request.timeoutMs + 15_000,
+      signal,
+    );
+    if (res.status !== 200)
+      throw new Error(`local sandbox direct exec failed (${res.status}): ${res.text.slice(0, 300)}`);
+    const j = JSON.parse(res.text) as {
+      stdout?: string;
+      stderr?: string;
+      code: number;
+      timedOut?: boolean;
+      stdoutTruncated?: boolean;
+      stderrTruncated?: boolean;
+      outputLimitExceeded?: boolean;
+      signal?: string;
+    };
+    return {
+      stdout: j.stdout ?? "",
+      stderr: j.stderr ?? "",
+      code: j.code,
+      timedOut: !!j.timedOut,
+      ...(j.stdoutTruncated ? { stdoutTruncated: true } : {}),
+      ...(j.stderrTruncated ? { stderrTruncated: true } : {}),
+      ...(j.outputLimitExceeded ? { outputLimitExceeded: true } : {}),
+      ...(j.signal ? { signal: j.signal } : {}),
+    };
+  }
+
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
     const res = await daemon(name, "/write", { path: absPath, b64: Buffer.from(data).toString("base64") }, 120_000);
     if (res.status !== 200)
@@ -319,6 +367,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     backend: "local-docker",
     writablePersistence: "resident_disk",
     processSessions: true,
+    directExecution: true,
     egressEnforcement: "none",
     spec: {
       os: `Debian 12 (bookworm), glibc — local Docker container on a ${arch()} host (dev only)`,
@@ -425,6 +474,13 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       } finally {
         signal.removeEventListener("abort", onAbort);
       }
+    },
+
+    async runDirect(handle: SandboxHandle, command: ScopedCommand, execOpts?: DirectExecOptions): Promise<ExecResult> {
+      const request = directRequest(handle.rootDir, command, execOpts);
+      execOpts?.signal?.throwIfAborted();
+      await ensureRunning(handle.id);
+      return execDirectRaw(handle.id, request, execOpts?.signal);
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

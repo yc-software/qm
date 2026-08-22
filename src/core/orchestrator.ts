@@ -24,7 +24,8 @@ import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../direc
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { GapPhase, LeaseAttempt, SessionStore } from "../sessions/session-store.ts";
 import { isOverheardEntry } from "../sessions/session-store.ts";
-import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
+import { CapabilityUnsupportedError, supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
+import { DIRECT_DYNAMIC_ENV_KEYS, type ScopedCommand } from "../sandbox/scoped-exec.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
@@ -1017,7 +1018,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const cutoverModeOf = (service: string): DeviceFlowCutoverMode => cutoverModes.get(service) ?? "legacy";
       const quarantinedServices = brokeredTools
-        .filter((tool) => cutoverModeOf(tool.service) === "ephemeral_only")
+        .filter((tool) => cutoverModeOf(tool.service) !== "legacy")
         .map((tool) => tool.service);
       const brokerCutoverServices = brokeredTools
         .filter((tool) => cutoverModeOf(tool.service) !== "legacy")
@@ -1314,16 +1315,32 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           swallow("gap-work emit", e);
         }
       };
-      const ephemeralOnlyDenyRules = brokeredTools
-        .filter((candidate) => cutoverModeOf(candidate.service) === "ephemeral_only")
-        .map((tool) => ({
-          pattern: `(^|[\\s;&|()])${tool.binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[\\s;&|()])`,
+      const brokerCutoverDenyRules = brokeredTools
+        .filter((candidate) => cutoverModeOf(candidate.service) !== "legacy")
+        .flatMap((tool) => [tool.binary, `/usr/local/bin/${tool.binary}`])
+        .map((binary) => ({
+          pattern: `(^|[\\s;&|()])${binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[\\s;&|()])`,
           decision: "deny" as const,
-          reason: `credential-bearing service ${tool.service} must be run with credential_exec`,
+          reason: `credential-bearing executable ${binary} must be run with credential_exec`,
         }));
-      const commandPolicy = ephemeralOnlyDenyRules.length
-        ? { ...resolution.commandPolicy, rules: [...ephemeralOnlyDenyRules, ...resolution.commandPolicy.rules] }
-        : resolution.commandPolicy;
+      const directOnlyDenyRules = [
+        ...new Set(
+          (deps.deploymentLayer?.directTools ?? [])
+            .filter((tool) => tool.directOnly)
+            .flatMap((tool) => [tool.binary, `/usr/local/bin/${tool.binary}`]),
+        ),
+      ].map((binary) => ({
+        pattern: `(^|[\\s;&|()])${binary.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}($|[\\s;&|()])`,
+        decision: "deny" as const,
+        reason: `descriptor-owned service ${binary} must be run with credential_exec`,
+      }));
+      const commandPolicy =
+        directOnlyDenyRules.length || brokerCutoverDenyRules.length
+          ? {
+              ...resolution.commandPolicy,
+              rules: [...directOnlyDenyRules, ...brokerCutoverDenyRules, ...resolution.commandPolicy.rules],
+            }
+          : resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
       const reachAvailable = !!deps.reachExec && !!deps.directory && conversation.kind === "dm";
       const {
@@ -1795,6 +1812,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
+        const directProfile = deps.sandbox.profileFor
+          ? await deps.sandbox.profileFor(memoryScopeId)
+          : deps.sandbox.profile;
+        const directExecutionAvailable = !!deps.sandbox.runDirect && directProfile.directExecution === true;
         const tools = createToolContext({
           sandbox: deps.sandbox,
           provision,
@@ -1825,26 +1846,42 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           auditLog: deps.auditLog,
           createdBy: actor.id,
           ...(() => {
+            const directTools = deps.deploymentLayer?.directTools ?? [];
             const available =
-              strictReadOnly || actor.type !== "internal"
+              strictReadOnly || input.background === true || actor.type !== "internal" || !directExecutionAvailable
                 ? []
-                : brokeredTools.filter(
-                    (tool) => cutoverModeOf(tool.service) !== "legacy" && deps.layerBrokerFor?.(tool),
-                  );
+                : directTools.filter((tool) => {
+                    const brokered = brokeredTools.find(
+                      (candidate) => candidate.service === tool.service || candidate.binary === tool.binary,
+                    );
+                    return (
+                      !brokered || (cutoverModeOf(brokered.service) !== "legacy" && !!deps.layerBrokerFor?.(brokered))
+                    );
+                  });
             if (!available.length) return {};
             return {
               credentialExecServices: available.map(({ service, binary }) => ({ service, binary })),
               credentialExec: async (
                 service: string,
                 args: string[],
-                opts?: { timeoutSeconds?: number; signal?: AbortSignal },
+                opts?: { timeoutSeconds?: number; signal?: AbortSignal; stdin?: string },
               ) => {
                 const tool = available.find((candidate) => candidate.service === service);
-                if (!tool || cutoverModeOf(service) === "legacy") {
+                if (!tool) {
                   throw new Error(`credential_exec service is unavailable: ${service}`);
                 }
-                const broker = deps.layerBrokerFor?.(tool);
-                if (!broker) throw new Error(`credential_exec broker is unavailable: ${service}`);
+                const runDirect = deps.sandbox.runDirect;
+                if (!runDirect || !directExecutionAvailable) {
+                  throw new CapabilityUnsupportedError(directProfile.backend, "structured credential execution");
+                }
+                const declaredEnvKeys = deps.deploymentLayer?.commandEnvByExecutable?.[tool.binary];
+                if (!declaredEnvKeys) {
+                  throw new Error(`credential_exec environment is not declared for ${service}`);
+                }
+                const brokered = brokeredTools.find(
+                  (candidate) => candidate.service === tool.service || candidate.binary === tool.binary,
+                );
+                const broker = brokered ? deps.layerBrokerFor?.(brokered) : undefined;
                 const composed = [shq(tool.binary), ...args.map(shq)].join(" ");
                 const gate = evaluateCommandWithLayer(
                   composed,
@@ -1861,28 +1898,58 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     gate.approvalKey,
                   );
                 }
-                let aws;
-                try {
-                  aws = await broker.credsForActor(actor.id);
-                } catch {
-                  deps.credentialUsage?.record({
-                    slug: service,
-                    host: "sts.amazonaws.com",
-                    status: cutoverModeOf(service) === "ephemeral_only" ? "ephemeral_failed_closed" : "legacy_fallback",
-                    scopeLabel: scopeId,
-                    principalId: actor.id,
-                  });
-                  throw new Error(`credential_exec could not vend credentials for ${service}`);
+                let awsEnv: Record<string, string | undefined> = {};
+                if (broker) {
+                  let aws;
+                  try {
+                    aws = await broker.credsForActor(actor.id);
+                  } catch {
+                    const mode = cutoverModeOf(service);
+                    deps.credentialUsage?.record({
+                      slug: service,
+                      host: "sts.amazonaws.com",
+                      status: mode === "ephemeral_only" ? "ephemeral_failed_closed" : "prefer_ephemeral_failed_closed",
+                      scopeLabel: scopeId,
+                      principalId: actor.id,
+                    });
+                    throw new Error(`credential_exec could not vend credentials for ${service}`);
+                  }
+                  if (aws) {
+                    awsEnv = {
+                      AWS_ACCESS_KEY_ID: aws.accessKeyId,
+                      AWS_SECRET_ACCESS_KEY: aws.secretAccessKey,
+                      AWS_SESSION_TOKEN: aws.sessionToken,
+                      AWS_REGION: aws.region,
+                      AWS_DEFAULT_REGION: aws.region,
+                    };
+                  }
                 }
-                const awsEnv = {
-                  AWS_ACCESS_KEY_ID: aws.accessKeyId,
-                  AWS_SECRET_ACCESS_KEY: aws.secretAccessKey,
-                  AWS_SESSION_TOKEN: aws.sessionToken,
-                  AWS_REGION: aws.region,
-                  AWS_DEFAULT_REGION: aws.region,
+                const directEnv: Record<string, string> = {};
+                try {
+                  for (const key of declaredEnvKeys) {
+                    const value = key in awsEnv ? awsEnv[key] : await deps.secretSource?.get(key);
+                    if (value !== undefined) directEnv[key] = value;
+                  }
+                } catch {
+                  throw new Error(`credential_exec could not resolve environment for ${service}`);
+                }
+                const dynamicEnv = Object.fromEntries(
+                  DIRECT_DYNAMIC_ENV_KEYS.flatMap((key) =>
+                    connectorEnv[key] !== undefined ? [[key, connectorEnv[key]]] : [],
+                  ),
+                );
+                const executablePath = `/usr/local/bin/${tool.binary}`;
+                const direct: ScopedCommand = {
+                  argv: [executablePath, ...args],
+                  executablePath,
+                  allowedEnvKeys: declaredEnvKeys,
                 };
-                const mask = createSecretValueMasker(awsEnv);
+                const mask = createSecretValueMasker(
+                  { ...directEnv, ...dynamicEnv },
+                  { minimumLength: 1, maskNonSecretKeys: true },
+                );
                 let handle;
+                let ownsHandle = false;
                 let result: Awaited<ReturnType<typeof deps.sandbox.run>> | undefined;
                 let runError: unknown;
                 let cleanupError: unknown;
@@ -1890,46 +1957,53 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   handle = await deps.sandbox.provision(
                     resolution.layers.filter((layer) => layer.mode === "ro" && layer.mountPath === "global"),
                     {
-                      env: awsEnv,
                       egress: resolution.egress,
                       ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
                       scratch: { key: `credential-exec:${session.id}:${randomUUID()}` },
                       routeScopeId: memoryScopeId,
                     },
                   );
-                  deps.credentialUsage?.record({
-                    slug: service,
-                    host: "sts.amazonaws.com",
-                    status: "ephemeral_vended",
-                    scopeLabel: scopeId,
-                    principalId: actor.id,
-                  });
-                  deps.auditLog.record({
-                    at: Date.now(),
-                    principalId: actor.id,
-                    action: "credential.materialize",
-                    resource: `${service} (ephemeral broker)`,
-                    scopeLabel: scopeId,
-                  });
+                  ownsHandle = true;
+                  if (broker) {
+                    deps.credentialUsage?.record({
+                      slug: service,
+                      host: "sts.amazonaws.com",
+                      status: "ephemeral_vended",
+                      scopeLabel: scopeId,
+                      principalId: actor.id,
+                    });
+                    deps.auditLog.record({
+                      at: Date.now(),
+                      principalId: actor.id,
+                      action: "credential.materialize",
+                      resource: `${service} (ephemeral broker)`,
+                      scopeLabel: scopeId,
+                    });
+                  } else {
+                    deps.auditLog.record({
+                      at: Date.now(),
+                      principalId: actor.id,
+                      action: "credential.direct_exec",
+                      resource: `${service} (descriptor-owned environment)`,
+                      scopeLabel: scopeId,
+                    });
+                  }
                   const requestedMs = opts?.timeoutSeconds == null ? deps.execTimeoutMs : opts.timeoutSeconds * 1000;
                   const timeoutMs =
                     requestedMs != null && deps.execTimeoutCeilingMs != null
                       ? Math.min(requestedMs, deps.execTimeoutCeilingMs)
                       : requestedMs;
-                  result = await deps.sandbox.run(
-                    handle,
-                    composed,
-                    timeoutMs !== undefined || opts?.signal
-                      ? {
-                          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-                          ...(opts?.signal ? { signal: opts.signal } : {}),
-                        }
-                      : undefined,
-                  );
+                  result = await runDirect(handle, direct, {
+                    env: directEnv,
+                    ...(Object.keys(dynamicEnv).length ? { dynamicEnv } : {}),
+                    ...(opts?.stdin !== undefined ? { stdin: opts.stdin } : {}),
+                    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+                    ...(opts?.signal ? { signal: opts.signal } : {}),
+                  });
                 } catch (error) {
                   runError = error;
                 } finally {
-                  if (handle) {
+                  if (handle && ownsHandle) {
                     let lastError: unknown;
                     for (let attempt = 1; attempt <= 3; attempt++) {
                       try {

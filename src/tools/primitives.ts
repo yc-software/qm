@@ -156,7 +156,7 @@ export interface ToolContext extends SurfaceToolDeps {
   credentialExec?(
     service: string,
     args: string[],
-    opts?: { timeoutSeconds?: number; signal?: AbortSignal },
+    opts?: { timeoutSeconds?: number; signal?: AbortSignal; stdin?: string },
   ): Promise<ExecResult>;
   execute(
     command: string,
