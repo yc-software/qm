@@ -33,9 +33,15 @@ const BASE_HTML = readFileSync(
   "utf8",
 ).replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH);
 const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+
+/** Browsers normalize inline-script line endings before checking CSP hashes. */
+export function cspScriptHash(script: string): string {
+  return createHash("sha256").update(script.replace(/\r\n?/g, "\n")).digest("base64");
+}
+
 const ADMIN_CSP = [
   "default-src 'self'",
-  `script-src 'sha256-${createHash("sha256").update(ADMIN_SCRIPT).digest("base64")}'`,
+  `script-src 'sha256-${cspScriptHash(ADMIN_SCRIPT)}'`,
   "style-src 'unsafe-inline'",
   "img-src 'self' data:",
   "connect-src 'self'",
