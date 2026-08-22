@@ -225,3 +225,30 @@ test("a read-only wake never reaches the sandbox (execute stripped), so no exec 
     "a read-only wake spins no sandbox exec",
   );
 });
+
+test("every connected account slot reaches the exec env, not just the winning one", async () => {
+  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slots-")) }));
+  const host = "gmail.googleapis.com";
+  await built.connectorTokens.setConnectorToken(host, "U1", { accessToken: "u1-default" });
+  await built.connectorTokens.setConnectorToken(host, "U1", { accessToken: "u1-company" }, "company");
+
+  fakeSprites.reset();
+  const dm = await built.app.turn(turn("dm", "!run true"));
+  assert.equal(dm.status, "ok");
+  assert.ok(execScriptsMention(`export ${envKey(host)}=`), "the primary slot keeps the unsuffixed name");
+  assert.ok(execScriptsMention("u1-default"), "the default slot stays the primary token");
+  assert.ok(execScriptsMention(`${envKey(host)}__COMPANY=`), "the second slot gets its own variable");
+  assert.ok(execScriptsMention("u1-company"), "the second slot's token value is present");
+});
+
+test("a single connected slot injects only the unsuffixed variable", async () => {
+  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "one-slot-")) }));
+  const host = "gmail.googleapis.com";
+  await built.connectorTokens.setConnectorToken(host, "U1", { accessToken: "u1-only" });
+
+  fakeSprites.reset();
+  const dm = await built.app.turn(turn("dm", "!run true"));
+  assert.equal(dm.status, "ok");
+  assert.ok(execScriptsMention(`export ${envKey(host)}=`));
+  assert.ok(!execScriptsMention(`${envKey(host)}__`), "no per-slot variables when there is nothing to disambiguate");
+});
