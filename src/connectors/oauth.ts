@@ -154,23 +154,42 @@ const { exchange: defaultExchange, refresh: defaultRefresh } = makeTokenAdapters
 
 const googleExchange: OAuthExchangeAdapter = async (args) => {
   const { client, accountType } = args;
+  const requestedAccountType = accountType ?? "default";
   const { hosts, token, raw } = await defaultExchange(args);
-  if (accountType === "company" && client.hostedDomain) {
-    const idToken = typeof raw?.id_token === "string" ? raw.id_token : "";
-    let claims: Record<string, unknown> | undefined;
-    try {
-      if (idToken) claims = decodeJwt(idToken);
-    } catch (e) {
-      swallow("google id_token decode", e);
-    }
-    const hd = typeof claims?.hd === "string" ? claims.hd : "";
+  const idToken = typeof raw?.id_token === "string" ? raw.id_token : "";
+  let claims: Record<string, unknown> | undefined;
+  try {
+    if (idToken) claims = decodeJwt(idToken);
+  } catch (e) {
+    swallow("google id_token decode", e);
+  }
+  const hd = typeof claims?.hd === "string" ? claims.hd : "";
+  const email = typeof claims?.email === "string" ? claims.email : "";
+  let classifiedAccountType: AccountType | undefined;
+  if (hd) classifiedAccountType = "company";
+  else if (email) classifiedAccountType = "personal";
+  if (!classifiedAccountType && requestedAccountType !== "default") {
+    throw new Error("Google did not identify the selected account — reconnect and choose an account");
+  }
+  if (!classifiedAccountType) return { hosts, token };
+  if (requestedAccountType !== "default" && requestedAccountType !== classifiedAccountType) {
+    throw new Error(
+      requestedAccountType === "company"
+        ? "selected account is not a Google Workspace account — pick your company Google account"
+        : "selected account is a Google Workspace account — pick your personal Google account",
+    );
+  }
+  if (classifiedAccountType === "company" && client.hostedDomain) {
     if (hd.toLowerCase() !== client.hostedDomain.toLowerCase()) {
       throw new Error(
         `connected account is not in the ${client.hostedDomain} workspace — pick your company Google account`,
       );
     }
   }
-  return { hosts, token };
+  return {
+    hosts,
+    token: { ...token, accountType: classifiedAccountType },
+  };
 };
 
 const github = makeTokenAdapters({ acceptJson: true, rejectErrorBody: true, label: "github" });
@@ -245,7 +264,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
       "oauth2.googleapis.com",
       "accounts.google.com",
     ],
-    authParams: { access_type: "offline", prompt: "consent" },
+    authParams: { access_type: "offline", prompt: "consent select_account" },
     exchange: googleExchange,
     setupGuide: {
       console: "Google Cloud Console → APIs & Services → Credentials",

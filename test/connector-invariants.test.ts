@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { PROVIDERS, sealOAuthState } from "../src/connectors/oauth.ts";
-import { envKey } from "../src/credentials/connector-token.ts";
+import { accountEnvKey, envKey } from "../src/credentials/connector-token.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -188,6 +188,38 @@ test("F1/F3 — a DM injects the requester's connector token; a channel injects 
   assert.equal(ch.status, "ok");
   assert.ok(!execScriptsMention(gmailExport), "a channel must inject NO per-user connector token");
   assert.ok(!execScriptsMention("u1-gmail"), "the channel's exec env must not carry the token value");
+});
+
+test("a DM exposes both Google accounts under stable account-specific environment keys", async () => {
+  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "multi-google-")) }));
+  await built.connectorTokens.setConnectorToken(
+    "gmail.googleapis.com",
+    "U1",
+    { accessToken: "company-google", accountType: "company" },
+    "company",
+  );
+  await built.connectorTokens.setConnectorToken(
+    "gmail.googleapis.com",
+    "U1",
+    { accessToken: "personal-google", accountType: "personal" },
+    "personal",
+  );
+
+  fakeSprites.reset();
+  const dm = await built.app.turn(turn("dm", "!run true"));
+
+  assert.equal(dm.status, "ok");
+  assert.ok(execScriptsMention(`export ${accountEnvKey("gmail.googleapis.com", "company")}=`));
+  assert.ok(execScriptsMention(`export ${accountEnvKey("gmail.googleapis.com", "personal")}=`));
+  assert.ok(execScriptsMention("company-google"));
+  assert.ok(execScriptsMention("personal-google"));
+  const authScript = fakeSprites.execScripts().find((script) => script.includes(envKey("gmail.googleapis.com")));
+  assert.ok(authScript);
+  const genericOffset = authScript.indexOf(`${envKey("gmail.googleapis.com")}=`, 0);
+  assert.ok(genericOffset >= 0);
+  const genericAssignment = authScript.slice(genericOffset, genericOffset + 100);
+  assert.match(genericAssignment, /company-google/);
+  assert.doesNotMatch(genericAssignment, /personal-google/);
 });
 
 function wake(text: string, readOnly: boolean): TurnRequest {

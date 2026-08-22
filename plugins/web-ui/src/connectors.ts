@@ -100,6 +100,42 @@ interface KeychainConnectorCredential {
   needsReconnect?: boolean;
 }
 
+type GoogleAccountType = "default" | "personal" | "company";
+
+interface GoogleAccountState {
+  accountType: GoogleAccountType;
+  connected: boolean;
+  needsReconnect: boolean;
+}
+
+function googleAccountLabel(accountType: GoogleAccountType): string {
+  if (accountType === "company") return "Work Google";
+  if (accountType === "personal") return "Personal Google";
+  return "Google account";
+}
+
+function googleAccountStates(credentials: KeychainConnectorCredential[]): GoogleAccountState[] {
+  const order: GoogleAccountType[] = ["company", "personal", "default"];
+  return order.flatMap((accountType) => {
+    const matches = credentials.filter((credential) => (credential.accountType ?? "default") === accountType);
+    if (!matches.length) return [];
+    return [
+      {
+        accountType,
+        connected: matches.some((credential) => credential.connected),
+        needsReconnect: matches.some((credential) => Boolean(credential.needsReconnect)),
+      },
+    ];
+  });
+}
+
+function nextGoogleAccountType(accounts: GoogleAccountState[]): GoogleAccountType | undefined {
+  if (!accounts.length || accounts.some((account) => account.accountType === "default")) return undefined;
+  if (!accounts.some((account) => account.accountType === "company")) return "company";
+  if (!accounts.some((account) => account.accountType === "personal")) return "personal";
+  return undefined;
+}
+
 interface KeychainGrant {
   id: string;
   credentialId: string;
@@ -446,6 +482,8 @@ function drawConnectors(loading = false): void {
         .filter((host): host is string => Boolean(host)),
     );
     const credentials = keychainConnectorCredentials.filter((credential) => hosts.has(credential.host));
+    const googleAccounts = id === "google" ? googleAccountStates(credentials) : [];
+    const nextGoogleAccount = nextGoogleAccountType(googleAccounts);
     const credentialsById = new Map(
       credentials.map((credential) => [credential.credentialId, { id: credential.credentialId, kind: "connector" }]),
     );
@@ -453,6 +491,26 @@ function drawConnectors(loading = false): void {
     let connectionState: TemplateResult | string = html`<span class="kc-state neutral">Not connected</span>`;
     if (needsReconnect) connectionState = html`<span class="kc-state warning">Reconnect needed</span>`;
     else if (connected) connectionState = "";
+    let connectorAction: TemplateResult | string = "";
+    if (
+      available &&
+      id === "google" &&
+      googleAccounts.length < 2 &&
+      ((!connected && !needsReconnect) || googleAccounts.length > 0)
+    ) {
+      const label = nextGoogleAccount ? "Add another account" : "Reconnect Google";
+      connectorAction = html`<button
+        class="btn"
+        type="button"
+        @click=${() => void startConnector(id, nextGoogleAccount)}
+      >
+        ${googleAccounts.length ? html`${icon(Plus, 15)}<span>${label}</span>` : "Connect Google"}
+      </button>`;
+    } else if (available && id !== "google") {
+      connectorAction = html`<button class="btn" type="button" @click=${() => void startConnector(id)}>
+        ${connected || needsReconnect ? "Reconnect" : "Connect account"}
+      </button>`;
+    }
     return html`
       <article class="kc-resource kc-account">
         <div class="kc-resource-main">
@@ -467,6 +525,46 @@ function drawConnectors(loading = false): void {
         </div>
         ${meta.desc ? html`<p class="kc-resource-description">${meta.desc}</p>` : ""}
         ${needsReconnect && p.refreshError ? html`<div class="kc-inline-warning" role="status">Refresh failed: ${p.refreshError}</div>` : ""}
+        ${
+          id === "google" && googleAccounts.length
+            ? html`<div class="kc-access-block kc-connected-accounts">
+                <div class="kc-access-label">Connected accounts</div>
+                ${googleAccounts.map(
+                  (account) =>
+                    html`<div class="kc-access-row">
+                      <div>
+                        <strong>${googleAccountLabel(account.accountType)}</strong>
+                        <div>
+                          ${account.needsReconnect ? "Reconnect required" : "Gmail, Calendar, Drive, and files"}
+                        </div>
+                      </div>
+                      <div class="kc-account-actions">
+                        ${
+                          account.needsReconnect
+                            ? html`<button
+                                class="kc-text-action"
+                                type="button"
+                                @click=${() => void startConnector(id, account.accountType)}
+                              >
+                                Reconnect
+                              </button>`
+                            : ""
+                        }
+                        <button
+                          class="kc-text-action danger"
+                          type="button"
+                          data-confirm-key=${`disconnect:${id}:${account.accountType}`}
+                          ?disabled=${keychainOperations.mutationInFlight}
+                          @click=${() => void revokeConnector(id, account.accountType)}
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    </div>`,
+                )}
+              </div>`
+            : ""
+        }
         ${
           grants.length
             ? html`<div class="kc-access-block">
@@ -493,8 +591,20 @@ function drawConnectors(loading = false): void {
             : ""
         }
         <div class="kc-resource-actions">
-          ${available ? html`<button class="btn" type="button" @click=${() => void startConnector(id)}>${connected || needsReconnect ? "Reconnect" : "Connect account"}</button>` : ""}
-          ${connected || needsReconnect ? html`<button class="kc-text-action danger" type="button" data-confirm-key=${`disconnect:${id}`} ?disabled=${keychainOperations.mutationInFlight} @click=${() => void revokeConnector(id)}>Disconnect</button>` : ""}
+          ${connectorAction}
+          ${
+            id !== "google" && (connected || needsReconnect)
+              ? html`<button
+                  class="kc-text-action danger"
+                  type="button"
+                  data-confirm-key=${`disconnect:${id}`}
+                  ?disabled=${keychainOperations.mutationInFlight}
+                  @click=${() => void revokeConnector(id)}
+                >
+                  Disconnect
+                </button>`
+              : ""
+          }
         </div>
       </article>
     `;
@@ -770,12 +880,13 @@ async function createDrop(): Promise<void> {
   }
 }
 
-async function startConnector(provider: string): Promise<void> {
+async function startConnector(provider: string, accountType?: GoogleAccountType): Promise<void> {
   const stateEpoch = keychainOperations.captureEpoch();
   connectorNotice = "";
   try {
     const r = await api<{ authorizeUrl?: string }>(`/api/connectors/${encodeURIComponent(provider)}/start`, {
       method: "POST",
+      body: JSON.stringify(accountType ? { accountType } : {}),
     });
     if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
     if (r.authorizeUrl) {
@@ -790,13 +901,17 @@ async function startConnector(provider: string): Promise<void> {
   drawConnectors(false);
 }
 
-async function revokeConnector(provider: string): Promise<void> {
+async function revokeConnector(provider: string, accountType?: GoogleAccountType): Promise<void> {
   const hosts = new Set(
     (connectorProviders[provider]?.hosts ?? [])
       .map((entry) => (typeof entry === "string" ? entry : entry.host))
       .filter((host): host is string => Boolean(host)),
   );
-  const providerCredentials = keychainConnectorCredentials.filter((credential) => hosts.has(credential.host));
+  const providerCredentials = keychainConnectorCredentials.filter(
+    (credential) =>
+      hosts.has(credential.host) &&
+      (accountType === undefined || (credential.accountType ?? "default") === accountType),
+  );
   const credentialIds = new Set(providerCredentials.map((credential) => credential.credentialId));
   const credentialsById = new Map(
     providerCredentials.map((credential) => [
@@ -812,7 +927,7 @@ async function revokeConnector(provider: string): Promise<void> {
     : "";
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
-    title: `Disconnect ${CONNECTOR_LABELS[provider]?.name ?? provider}?`,
+    title: `Disconnect ${accountType ? googleAccountLabel(accountType) : (CONNECTOR_LABELS[provider]?.name ?? provider)}?`,
     body: `${impact} Automations using this account may stop working.`.trim(),
     action: "Disconnect account",
     run: async () => {
@@ -822,7 +937,7 @@ async function revokeConnector(provider: string): Promise<void> {
       confirmationOpener = null;
       drawConnectors();
       try {
-        await performRevokeConnector(provider, operation.epoch);
+        await performRevokeConnector(provider, operation.epoch, accountType);
       } finally {
         if (keychainOperations.finishMutation(operation)) drawConnectors();
       }
@@ -831,10 +946,17 @@ async function revokeConnector(provider: string): Promise<void> {
   drawConnectors();
 }
 
-async function performRevokeConnector(provider: string, stateEpoch: number): Promise<void> {
+async function performRevokeConnector(
+  provider: string,
+  stateEpoch: number,
+  accountType?: GoogleAccountType,
+): Promise<void> {
   connectorNotice = "";
   try {
-    await api("/api/connectors/revoke", { method: "POST", body: JSON.stringify({ provider }) });
+    await api("/api/connectors/revoke", {
+      method: "POST",
+      body: JSON.stringify({ provider, ...(accountType ? { accountType } : {}) }),
+    });
   } catch (e) {
     if (keychainOperations.isCurrentEpoch(stateEpoch)) connectorNotice = errMessage(e, "Could not disconnect.");
   }

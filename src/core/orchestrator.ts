@@ -28,7 +28,7 @@ import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbo
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
-import { envKey } from "../credentials/connector-token.ts";
+import { accountEnvKey, envKey } from "../credentials/connector-token.ts";
 import {
   renderKeychainManifest,
   type MaterializedEnvCred,
@@ -1069,10 +1069,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       if (!strictReadOnly && deps.connectorTokens && conversation.kind === "dm") {
         for (const host of CONNECTOR_HOSTS) {
+          const typedTokens: Partial<Record<"personal" | "company", string>> = {};
+          for (const accountType of ["personal", "company"] as const) {
+            const status = await deps.connectorTokens.connectorTokenStatus(host, actor.id, accountType);
+            if (!status.connected) continue;
+            const accountToken = await deps.connectorTokens.connectorAccessToken(host, actor.id, accountType);
+            if (!accountToken) continue;
+            typedTokens[accountType] = accountToken;
+            connectorEnv[accountEnvKey(host, accountType)] = accountToken;
+          }
+          const defaultStatus = await deps.connectorTokens.connectorTokenStatus(host, actor.id, "default");
+          const defaultToken = defaultStatus.connected
+            ? await deps.connectorTokens.connectorAccessToken(host, actor.id, "default")
+            : null;
           const token =
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
+            defaultToken ??
+            typedTokens.company ??
+            typedTokens.personal ??
+            (await deps.connectorTokens.connectorAccessToken(host, actor.id));
           if (token) connectorEnv[envKey(host)] = token;
         }
       }

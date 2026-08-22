@@ -339,6 +339,19 @@ test("mint refuses an unconfigured provider even when PUBLIC_WEB_URL is set", as
   }
 });
 
+test("consent mint rejects account slots for non-Google providers", async () => {
+  const srv = start(async () => {
+    throw new Error("must not exchange");
+  });
+  try {
+    const res = await mint(srv.base, await consentTok("U1"), { provider: "github", accountType: "personal" });
+    assert.equal(res.status, 400);
+    assert.match(await res.text(), /accountType is only supported for Google/);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("an expired consent link reports an expiry status", async () => {
   const srv = start(async () => {
     throw new Error("must not exchange");

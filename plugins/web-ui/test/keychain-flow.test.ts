@@ -156,7 +156,9 @@ test("keychain rows reserve success badges for actionable states", () => {
 });
 
 test("keychain actions keep secondary weight and compact mobile sizing", () => {
-  assert.match(connectorsSource, /\$\{available \? html`<button class="btn" type="button"/);
+  assert.match(connectorsSource, /available\s*&&\s*id === "google"\s*&&\s*googleAccounts\.length < 2/);
+  assert.match(connectorsSource, /!connected\s*&&\s*!needsReconnect/);
+  assert.match(connectorsSource, /Add another account/);
   assert.doesNotMatch(shellCssSource, /\.kc-hero-actions \.btn\s*\{\s*flex:\s*1;/);
   assert.doesNotMatch(shellCssSource, /sidebar-closed \.kc-hero-copy/);
 });

@@ -3816,6 +3816,12 @@ a.chat-row-open {
 .kc-access-row + .kc-access-row {
   border-top: 1px solid var(--kc-line);
 }
+.kc-account-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
 .kc-credential-facts {
   display: flex;
   align-items: center;
@@ -3949,6 +3955,19 @@ a.chat-row-open {
   .kc-hero-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+  .kc-access-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .kc-account-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .kc-account-actions .kc-text-action {
+    min-height: 32px;
+    padding: 5px 0;
   }
   .kc-summary {
     display: grid;

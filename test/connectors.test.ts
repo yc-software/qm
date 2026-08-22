@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
+import { accountEnvKey, envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import {
   createKeychain,
@@ -53,6 +53,8 @@ test("operator token fallback can model per-user credentials and host-wide servi
 
 test("envKey: the host-wide form keeps its documented shape; per-user keys never collide across principals", () => {
   assert.equal(envKey("gmail.googleapis.com"), "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM");
+  assert.equal(accountEnvKey("gmail.googleapis.com", "company"), "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM__COMPANY");
+  assert.equal(accountEnvKey("gmail.googleapis.com", "personal"), "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM__PERSONAL");
   assert.notEqual(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a-b@c.com"));
   assert.notEqual(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a_b@c.com"));
   assert.equal(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a.b@c.com"));

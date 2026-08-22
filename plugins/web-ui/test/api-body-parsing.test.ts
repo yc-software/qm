@@ -81,3 +81,30 @@ test("routes that historically tolerated an empty body still do", async () => {
   const forked = calls.at(-1);
   assert.deepEqual(forked?.body, { principalId: "alice" });
 });
+
+test("connector start forwards an optional Google account type", async () => {
+  const r = await fetch(`${base}/api/connectors/google/start`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ accountType: "company" }),
+  });
+  assert.equal(r.status, 200);
+  const started = calls.at(-1);
+  const url = new URL(started?.url ?? "", "http://core.test");
+  assert.equal(url.pathname, "/v1/connectors/oauth/google/start");
+  assert.equal(url.searchParams.get("accountType"), "company");
+});
+
+test("connector revoke forwards the selected Google account only", async () => {
+  const r = await fetch(`${base}/api/connectors/revoke`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ provider: "google", accountType: "personal" }),
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(calls.at(-1)?.body, {
+    principalId: "alice",
+    provider: "google",
+    accountType: "personal",
+  });
+});
