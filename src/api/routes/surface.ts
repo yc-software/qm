@@ -8,6 +8,7 @@ import {
   modelProviderAvailabilityFor,
   modelSupportedByHarness,
   resolveModel,
+  supportedEffortLevelsForModel,
   serviceableModelIds,
   ALL_PROVIDERS_AVAILABLE,
   FAST_MODE_MODEL_IDS,
@@ -1205,10 +1206,19 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
   const advertisedModelIds = new Set(Object.values(modelsByHarness).flat());
   const modelCatalog = Object.fromEntries(
     [...advertisedModelIds].flatMap((id) => {
-      const model = catalog.find((candidate) => candidate.id === id);
-      if (model) return [[id, { name: model.name, provider: model.provider }]];
       const resolved = resolveModel(id);
-      return resolved ? [[id, { name: resolved.name, provider: resolved.provider }]] : [];
+      if (resolved) {
+        return [
+          [
+            id,
+            { name: resolved.name, provider: resolved.provider, effortLevels: supportedEffortLevelsForModel(resolved) },
+          ],
+        ];
+      }
+      // Not resolvable server-side (e.g. a dynamic OpenRouter id): advertise the
+      // catalog entry without effort levels so the UI falls back to its defaults.
+      const listed = catalog.find((candidate) => candidate.id === id);
+      return listed ? [[id, { name: listed.name, provider: listed.provider }]] : [];
     }),
   );
   return {

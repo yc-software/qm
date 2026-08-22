@@ -34,6 +34,8 @@ import { errMessage, swallow } from "../../chassis/src/errors";
 import { icon } from "./ui";
 import {
   EFFORT_LEVELS,
+  effortOptionsFor,
+  supportsEffort,
   applyRuntimeOptions,
   defaultEffortForModel,
   defaultModelValue,
@@ -336,6 +338,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     );
     composerState.effortLevel =
       (config.effective.effortLevel as EffortLevel | undefined) ?? defaultEffortForModel(currentModelOption().model);
+    if (!supportsEffort(currentModelOption(), composerState.effortLevel)) {
+      composerState.effortLevel = effortOptionsFor(currentModelOption())[0]!.value;
+    }
     composerState.fastMode =
       config.effective.fastMode === true && modelSupportsFastMode(scopeKey(), config.effective.modelId);
     if (agent && (!ctx.chat.state.threadRef || !threadModelPicks.has(ctx.chat.state.threadRef)))
@@ -519,7 +524,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                             label: effortLabel(composerState.effortLevel),
                             title: "Effort",
                             selected: composerState.effortLevel,
-                            options: EFFORT_LEVELS,
+                            options: effortOptionsFor(currentModelOption()),
                             disabled: inputBlocked,
                             onSelect: (value: string) => selectEffort(value as EffortLevel, agent),
                           })
@@ -879,7 +884,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                       ? html`
                           <div class="menu-title">Effort</div>
                           <div class="settings-seg" role="group" aria-label="Effort">
-                            ${EFFORT_LEVELS.map(
+                            ${effortOptionsFor(selected).map(
                               (option) => html`
                                 <button
                                   class="settings-chip ${option.value === composerState.effortLevel ? "active" : ""}"
@@ -1559,9 +1564,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const previousDefaultEffort = defaultEffortForModel(currentModelOption().model);
     if (ctx.chat.state.threadRef) rememberThreadPick(ctx.chat.state.threadRef, option.value);
     agent.state.model = option.model;
-    if (composerState.effortLevel === previousDefaultEffort) {
+    if (composerState.effortLevel === previousDefaultEffort || !supportsEffort(option, composerState.effortLevel)) {
       composerState.effortLevel = defaultEffortForModel(option.model);
       persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel);
+    }
+    if (!supportsEffort(option, composerState.effortLevel)) {
+      composerState.effortLevel = effortOptionsFor(option)[0]!.value;
     }
     if (composerState.openMenu !== "settings") composerState.openMenu = null;
     ctx.chat.drawActiveChat(agent);

@@ -184,6 +184,23 @@ export function resolveModel(id: string): PiModel | undefined {
   );
 }
 
+/**
+ * Effort levels a model can actually run, per its pi-ai capabilities:
+ * `reasoning: false` leaves only the provider default ("auto"), and a `null`
+ * entry in `thinkingLevelMap` marks that level as unsupported. "ultracode"
+ * aliases to "max" at turn time, so it tracks "max" support.
+ */
+export function supportedEffortLevelsForModel(model: PiModel): string[] {
+  if (!model.reasoning) return ["auto"];
+  const map = (model.thinkingLevelMap ?? {}) as Partial<Record<string, string | null>>;
+  const levels: string[] = ["auto"];
+  for (const level of ["low", "medium", "high", "xhigh", "max"]) {
+    if (map[level] !== null) levels.push(level);
+  }
+  if (map.max !== null) levels.push("ultracode");
+  return levels;
+}
+
 export function auxiliaryModelForProvider(provider: string): string | undefined {
   return MODEL_REGISTRY.find((m) => m.auxiliary && resolveModel(m.id)?.provider === provider)?.id;
 }

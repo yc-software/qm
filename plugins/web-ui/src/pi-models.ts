@@ -37,6 +37,23 @@ export function getBaseModel(id: string, fallback?: { name: string; provider: st
   throw new Error(`Unsupported model: ${id}`);
 }
 
+/**
+ * Effort levels a model can actually run, per its pi-ai capabilities:
+ * `reasoning: false` leaves only the provider default ("auto"), and a `null`
+ * entry in `thinkingLevelMap` marks that level as unsupported. "ultracode"
+ * aliases to "max" at turn time, so it tracks "max" support.
+ */
+export function supportedEffortLevels(model: PiModel): string[] {
+  if (!model.reasoning) return ["auto"];
+  const map = (model.thinkingLevelMap ?? {}) as Partial<Record<string, string | null>>;
+  const levels: string[] = ["auto"];
+  for (const level of ["low", "medium", "high", "xhigh", "max"]) {
+    if (map[level] !== null) levels.push(level);
+  }
+  if (map.max !== null) levels.push("ultracode");
+  return levels;
+}
+
 function cloneModel(model: PiModel, id: string, name: string): PiModel {
   return { ...structuredClone(model), id, name };
 }

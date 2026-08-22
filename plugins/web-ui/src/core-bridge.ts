@@ -496,7 +496,7 @@ export interface RuntimeConfig {
   scopeId: string;
   approvedHarnesses: string[];
   modelsByHarness: Record<string, string[]>;
-  modelCatalog: Record<string, { name: string; provider: string }>;
+  modelCatalog: Record<string, { name: string; provider: string; effortLevels?: readonly string[] }>;
   orgDefault: { harnessId: string; modelId: string; effortLevel?: string; fastMode?: boolean; revision: number };
   scopeOverride: {
     harnessId: string;

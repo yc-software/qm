@@ -1,5 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { getBaseModel } from "./pi-models.ts";
+import { getBaseModel, supportedEffortLevels } from "./pi-models.ts";
 
 export type ModelOptionValue = string;
 export interface ModelOption {
@@ -10,6 +10,42 @@ export interface ModelOption {
   label: string;
   buttonLabel: string;
   groupLabel: string;
+}
+
+export interface RuntimeCatalogEntry {
+  name: string;
+  provider: string;
+  /** Server-verified effort levels for this model, when known. */
+  effortLevels?: readonly string[];
+}
+
+/** Levels a harness actually forwards; codex drops everything above xhigh. */
+const HARNESS_EFFORT_CAPS: Record<string, readonly string[]> = {
+  codex: ["auto", "low", "medium", "high", "xhigh"],
+};
+
+const effortOverrides = new Map<string, readonly string[]>();
+
+function noteEffortLevels(id: string, catalog: Readonly<Record<string, RuntimeCatalogEntry>>): void {
+  const levels = catalog[id]?.effortLevels;
+  if (levels?.length) effortOverrides.set(id, levels);
+}
+
+/**
+ * Effort options the given model/harness can actually run. Falls back to the
+ * full list when the model's capabilities are unknown.
+ */
+export function effortOptionsFor(option: ModelOption): Array<{ value: EffortLevel; label: string }> {
+  const override = effortOverrides.get(option.model.id);
+  const supported = override?.length ? [...override] : supportedEffortLevels(option.model);
+  const cap = HARNESS_EFFORT_CAPS[option.harnessId];
+  const allowed = new Set(cap ? supported.filter((level) => cap.includes(level)) : supported);
+  const filtered = EFFORT_LEVELS.filter((entry) => allowed.has(entry.value));
+  return filtered.length ? filtered : EFFORT_LEVELS;
+}
+
+export function supportsEffort(option: ModelOption, level: EffortLevel): boolean {
+  return effortOptionsFor(option).some((candidate) => candidate.value === level);
 }
 
 interface ModelMeta {
@@ -105,12 +141,13 @@ function buildOption(
   id: string,
   harnessId = "pi",
   qualified = false,
-  catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
+  catalog: Readonly<Record<string, RuntimeCatalogEntry>> = {},
 ): ModelOption | null {
   try {
     const dynamic = catalog[id];
     const meta = MODEL_CATALOG[id] ?? (dynamic ? { label: dynamic.name, buttonLabel: dynamic.name } : null);
     if (!meta) return null;
+    noteEffortLevels(id, catalog);
     const model = getBaseModel(id, dynamic);
     return {
       value: qualified ? `${harnessId}:${id}` : id,
@@ -129,7 +166,7 @@ function buildOptions(
   ids: readonly string[],
   harnessId = "pi",
   qualified = false,
-  catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
+  catalog: Readonly<Record<string, RuntimeCatalogEntry>> = {},
 ): ModelOption[] {
   const seen = new Set<string>();
   const out: ModelOption[] = [];
@@ -182,7 +219,7 @@ export function applyPickerModelIds(ids: readonly string[] | null | undefined, b
 export function runtimeModelOptions(
   approvedHarnesses: readonly string[],
   modelsByHarness: Readonly<Record<string, readonly string[]>>,
-  catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
+  catalog: Readonly<Record<string, RuntimeCatalogEntry>> = {},
 ): ModelOption[] {
   const options = approvedHarnesses.flatMap((harnessId) => {
     const configured = buildOptions(modelsByHarness[harnessId] ?? [], harnessId, true, catalog);
@@ -198,7 +235,7 @@ export function applyRuntimeOptions(
   approvedHarnesses: readonly string[],
   modelsByHarness: Readonly<Record<string, readonly string[]>>,
   effective: { harnessId: string; modelId: string },
-  catalog: Readonly<Record<string, { name: string; provider: string }>> = {},
+  catalog: Readonly<Record<string, RuntimeCatalogEntry>> = {},
 ): void {
   const options = runtimeModelOptions(approvedHarnesses, modelsByHarness, catalog);
   const applied = { options, defaultValue: `${effective.harnessId}:${effective.modelId}` };
