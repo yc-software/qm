@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   doctorCommon,
   localDoctorSecrets,
+  modelProviderProbeUrl,
   requiredSlackScopes,
   slackManifestBotScopes,
 } from "../src/backends/doctor.ts";
@@ -615,4 +616,24 @@ test("doctor without required local values warns-and-skips the live Slack check 
     if (priorApp !== undefined) process.env.SLACK_APP_TOKEN = priorApp;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("modelProviderProbeUrl probes the official endpoints when no override is configured", () => {
+  assert.equal(modelProviderProbeUrl("openai", undefined), "https://api.openai.com/v1/models");
+  assert.equal(modelProviderProbeUrl("anthropic", "  "), "https://api.anthropic.com/v1/models?limit=1");
+  assert.equal(modelProviderProbeUrl("openrouter", undefined), "https://openrouter.ai/api/v1/key");
+});
+
+test("modelProviderProbeUrl honours the configured OpenAI-compatible endpoint (#525)", () => {
+  assert.equal(modelProviderProbeUrl("openai", "https://gw.internal:8443/openai/v1/"), "https://gw.internal:8443/openai/v1/models");
+  // Loopback and private hosts stay allowed, matching the shared endpoint parser.
+  assert.equal(modelProviderProbeUrl("openai", "http://127.0.0.1:8010/v1"), "http://127.0.0.1:8010/v1/models");
+});
+
+test("modelProviderProbeUrl rejects override values the shared parser rejects", () => {
+  assert.throws(() => modelProviderProbeUrl("openai", "ftp://example.com/v1"), /must be an http\(s\) URL/);
+  assert.throws(() => modelProviderProbeUrl("openai", "https://user:pass@example.com/v1"), /must not contain credentials/);
+  assert.throws(() => modelProviderProbeUrl("openai", "https://example.com/v1?x=1"), /must not contain a query string/);
+  assert.throws(() => modelProviderProbeUrl("openai", "https://example.com/v1#frag"), /must not contain a fragment/);
+  assert.throws(() => modelProviderProbeUrl("openai", "not a url"), /is not a valid URL/);
 });
