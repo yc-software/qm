@@ -10,6 +10,26 @@ export interface MemoryPolicy {
 
 export const DEFAULT_MEMORY_POLICY: MemoryPolicy = { recall: "visible", capture: "writable" };
 
+// Tightness ranking per axis: "off" is the most restrictive (nothing
+// captured / nothing recalled), "visible" the least. Tighten-only
+// composition: a narrower scope may move toward off, never back.
+const RECALL_TIGHTNESS: Record<MemoryRecallMode, number> = { off: 0, writable: 1, visible: 2 };
+
+export function composeMemoryPolicy(floor: MemoryPolicy, tighter?: MemoryPolicy): MemoryPolicy {
+  /** Compose two memory policies the way the other scope-keyed governance
+   * settings compose: *floor* (typically the org value) sets the privacy
+   * floor, *tighter* (a narrower scope's stored value) may only restrict
+   * further. Capture has two levels (off is tighter than writable); recall
+   * composes by tightness rank (#559).
+   */
+  const scope = tighter ?? floor;
+  return {
+    capture: floor.capture === "off" || scope.capture === "off" ? "off" : "writable",
+    recall:
+      RECALL_TIGHTNESS[floor.recall] <= RECALL_TIGHTNESS[scope.recall] ? floor.recall : scope.recall,
+  };
+}
+
 export function parseMemoryRecallMode(value: string | undefined): MemoryRecallMode {
   return value === "off" || value === "writable" || value === "visible" ? value : DEFAULT_MEMORY_POLICY.recall;
 }

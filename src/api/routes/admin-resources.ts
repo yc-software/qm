@@ -32,6 +32,7 @@ import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
 import { errMessage } from "../../util/errors.ts";
 import { parseSecurityPosture, SECURITY_POSTURES, type SecurityPosture } from "../../security/security-posture.ts";
+import { DEFAULT_MEMORY_POLICY, type MemoryPolicy } from "../../memory/policy.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
@@ -123,6 +124,36 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { value: { session: b.session, always: b.always } };
       },
       (deps, scope, modes) => deps.config!.setApprovalGrantModes(scope, modes),
+    ),
+  },
+  {
+    id: "memory-policy",
+    kind: "custom",
+    target: "any",
+    label:
+      "Memory capture and recall for this scope. The org value is a privacy floor: narrower scopes may tighten (capture off, recall restricted) but cannot loosen it.",
+    readKey: "memoryPolicy",
+    get: (deps, scope) => deps.config!.getMemoryPolicyDurable(scope),
+    apply: generic<MemoryPolicy>(
+      (body) => {
+        const b = body as { recall?: unknown; capture?: unknown };
+        if (b.recall !== undefined && !["off", "writable", "visible"].includes(String(b.recall))) {
+          return { error: 'memory-policy recall must be "off" | "writable" | "visible"' };
+        }
+        if (b.capture !== undefined && !["off", "writable"].includes(String(b.capture))) {
+          return { error: 'memory-policy capture must be "off" | "writable"' };
+        }
+        if (b.recall === undefined && b.capture === undefined) {
+          return { error: "memory-policy requires { recall, capture }" };
+        }
+        return {
+          value: {
+            recall: (b.recall as MemoryPolicy["recall"]) ?? DEFAULT_MEMORY_POLICY.recall,
+            capture: (b.capture as MemoryPolicy["capture"]) ?? DEFAULT_MEMORY_POLICY.capture,
+          },
+        };
+      },
+      (deps, scope, policy) => deps.config!.setMemoryPolicy(scope, policy),
     ),
   },
   {

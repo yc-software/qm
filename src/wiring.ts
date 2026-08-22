@@ -11,6 +11,7 @@ import {
   type PersistedSoulRevision,
   type PersistedCommandPolicy,
   type PersistedSecurityPosture,
+  type PersistedMemoryPolicy,
   type PersistedApprovalGrantModes,
   type PersistedEgressPolicy,
   type PersistedScopedFlag,
@@ -25,6 +26,7 @@ import {
   type PersistedTurnWallClock,
   type PersistedDeploymentIdentity,
 } from "./resolution/config-store.ts";
+import { parseMemoryCaptureMode, parseMemoryRecallMode } from "./memory/policy.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
@@ -461,6 +463,11 @@ export function buildApp(
     turnWallClocks: artifactMap<PersistedTurnWallClock>("turn_wall_clock_configs"),
     deploymentIdentity: artifactMap<PersistedDeploymentIdentity>("deployment_identity"),
     defaultSecurityPosture: config.securityPosture,
+    memoryPolicies: artifactMap<PersistedMemoryPolicy>("memory_policies"),
+    defaultMemoryPolicy: {
+      recall: parseMemoryRecallMode(config.memoryRecall),
+      capture: parseMemoryCaptureMode(config.memoryCapture),
+    },
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
   void configStore.hydrate?.();

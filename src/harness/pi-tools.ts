@@ -38,6 +38,7 @@ export interface ToolContextRef {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    summary?: string;
   }>;
   pausedOnApproval?: boolean;
   emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
@@ -2986,6 +2987,31 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "stay_silent"]);
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
+// Cap for a strict-gate approval's rendered arguments. Matches the
+// LLM-generated approval summary cap in the orchestrator, so a huge tool
+// payload can't flood the approval surface an integrator renders (#560).
+const APPROVAL_ARGS_SUMMARY_MAX = 300;
+
+function approvalArgsSummary(params: unknown): string | undefined {
+  /** Render a gated tool call's arguments for the approval record.
+
+   * A strict-posture approver must see the action, not just the tool name:
+   * "execute `rm -rf /var/data`" is a decidable ask, "execute" alone is not.
+   * Deterministic (no LLM round-trip), bounded, and omitted for calls with
+   * no arguments or unrenderable ones (#560).
+   */
+  if (params === undefined || params === null) return undefined;
+  let rendered: string;
+  try {
+    rendered = typeof params === "string" ? params : JSON.stringify(params);
+  } catch {
+    return undefined;
+  }
+  if (!rendered) return undefined;
+  return rendered.length > APPROVAL_ARGS_SUMMARY_MAX
+    ? `${rendered.slice(0, APPROVAL_ARGS_SUMMARY_MAX)}\u2026`
+    : rendered;
+}
 
 function withToolApprovalGate(
   tool: ToolDefinition,
@@ -3007,21 +3033,29 @@ function withToolApprovalGate(
     async execute(callId: string, params: unknown) {
       const gate = ref.toolApprovalGate;
       if (gate && !gate(tool.name)) {
+        const argsSummary = approvalArgsSummary(params);
         ref.pendingApprovals?.push({
           command: tool.name,
           reason: STRICT_TOOL_APPROVAL_REASON,
           kind: "approval",
           approvalKey: `tool:${tool.name}`,
+          ...(argsSummary ? { summary: argsSummary } : {}),
         });
         ref.pausedOnApproval = true;
         await rec.recordCall(callId, {
           tool: tool.name,
           blocked: "needs_approval",
           reason: STRICT_TOOL_APPROVAL_REASON,
+          ...(argsSummary ? { args: argsSummary } : {}),
         });
         return rec.recordResult(
           callId,
-          { tool: tool.name, blocked: "needs_approval", reason: STRICT_TOOL_APPROVAL_REASON },
+          {
+            tool: tool.name,
+            blocked: "needs_approval",
+            reason: STRICT_TOOL_APPROVAL_REASON,
+            ...(argsSummary ? { args: argsSummary } : {}),
+          },
           {
             content: [
               { type: "text" as const, text: `[blocked: needs human approval] ${STRICT_TOOL_APPROVAL_REASON}` },

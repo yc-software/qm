@@ -1,4 +1,5 @@
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
+import type { MemoryPolicy } from "./memory/policy.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -121,6 +122,11 @@ export interface Resolution {
   commandPolicy: CommandPolicy;
   securityPolicy: ResolvedSecurityPolicy;
   approvalGrantModes: ApprovalGrantModes;
+  /** Effective memory capture/recall for the resolved scope (org floor
+   * composed with the scope's stored value). Absent on resolutions built
+   * before this field existed / in tests — readers fall back to the
+   * deployment-wide default (#559). */
+  memoryPolicy?: MemoryPolicy;
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
 }

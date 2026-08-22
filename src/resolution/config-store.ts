@@ -8,6 +8,7 @@ import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { isHarnessId, modelSupportedByHarness } from "../model/pi-models.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
+import { composeMemoryPolicy, DEFAULT_MEMORY_POLICY, type MemoryPolicy } from "../memory/policy.ts";
 import type { ApprovalGrantModes } from "../types.ts";
 import {
   deriveConnectorKey,
@@ -41,6 +42,10 @@ type SoulSnapshot = PersistedSoul | null;
 export interface PersistedCommandPolicy {
   scopeId: ScopeId;
   policy: CommandPolicy;
+}
+export interface PersistedMemoryPolicy {
+  scopeId: ScopeId;
+  policy: MemoryPolicy;
 }
 export interface PersistedSecurityPosture {
   scopeId: ScopeId;
@@ -150,6 +155,9 @@ export interface ScopedConfigStore {
   getSecurityPosture(id: ScopeId): SecurityPosture;
   getSecurityPostureDurable(id: ScopeId): Promise<SecurityPosture>;
   setSecurityPosture(id: ScopeId, posture: SecurityPosture): Promise<void>;
+  getMemoryPolicyDurable(id: ScopeId): Promise<MemoryPolicy>;
+  setMemoryPolicy(id: ScopeId, policy: MemoryPolicy): Promise<void>;
+  clearMemoryPolicy(id: ScopeId): void;
   clearSecurityPosture(id: ScopeId): void;
   getApprovalGrantModes(id: ScopeId): ApprovalGrantModes;
   getApprovalGrantModesDurable(id: ScopeId): Promise<ApprovalGrantModes>;
@@ -245,6 +253,8 @@ export function createMemoryConfigStore(
     deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
     connectorSecretKey?: Buffer | string;
     defaultSecurityPosture?: SecurityPosture;
+    memoryPolicies?: DurableMap<PersistedMemoryPolicy>;
+    defaultMemoryPolicy?: MemoryPolicy;
   } = {},
 ): ScopedConfigStore {
   const souls = new Map<ScopeId, { content: string; version: number }>();
@@ -273,6 +283,8 @@ export function createMemoryConfigStore(
   const commandPolicyStore = opts.commandPolicies ?? createMemoryMap<PersistedCommandPolicy>();
   const securityPostureStore = opts.securityPostures ?? createMemoryMap<PersistedSecurityPosture>();
   const approvalGrantModesStore = opts.approvalGrantModes ?? createMemoryMap<PersistedApprovalGrantModes>();
+  const memoryPolicyStore = opts.memoryPolicies ?? createMemoryMap<PersistedMemoryPolicy>();
+  const defaultMemoryPolicy = opts.defaultMemoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const egressStore = opts.egressPolicies ?? createMemoryMap<PersistedEgressPolicy>();
   const unfulfilledInsightsStore = opts.unfulfilledInsights ?? createMemoryMap<PersistedScopedFlag>();
   const externalSlackParticipantsStore = opts.externalSlackParticipants ?? createMemoryMap<PersistedScopedFlag>();
@@ -604,6 +616,26 @@ export function createMemoryConfigStore(
         securityPostureStore.put(id, { scopeId: id, posture: effective }),
       );
       securityPostures.set(id, effective);
+    },
+    async getMemoryPolicyDurable(id) {
+      const orgPolicy = (await memoryPolicyStore.get(org))?.policy ?? defaultMemoryPolicy;
+      if (id === org) return { ...orgPolicy };
+      return composeMemoryPolicy(orgPolicy, (await memoryPolicyStore.get(id))?.policy);
+    },
+    async setMemoryPolicy(id, policy) {
+      // Store the composed effective value, mirroring setSecurityPosture, so
+      // reads stay single-lookup and a stored scope value can never be looser
+      // than the org floor even if the floor tightens later.
+      const effective =
+        id === org
+          ? policy
+          : composeMemoryPolicy((await memoryPolicyStore.get(org))?.policy ?? defaultMemoryPolicy, policy);
+      await writeQueue(`memoryPolicy:${id}`, () =>
+        memoryPolicyStore.put(id, { scopeId: id, policy: effective }),
+      );
+    },
+    clearMemoryPolicy(id) {
+      persist(`memoryPolicy:${id}`, "memory policy", () => memoryPolicyStore.delete(id));
     },
     clearSecurityPosture(id) {
       securityPostures.delete(id);
