@@ -171,6 +171,40 @@ qm, cutting the branch from `upstream/main` and checking the outgoing diff, comm
 messages, and screenshots for organization identifiers before it pushes. Nothing under
 `deploy/layers/` ever travels upstream.
 
+## Procedural memory (Memorable)
+
+QM can remember _how_ it solved a task, not just what was said. With the
+[Memorable](https://github.com/NIkhil-cmd-cmd/memorable-qm) integration enabled, a finished
+session's tool-call trace is parsed — deterministically, no LLM involved — into a
+structured procedure (which files changed, which commands verified the work, in what
+order, with real exit codes) and stored in QM's own Postgres. When a later session starts
+on a similar task, a short pointer (~290 tokens) is recalled and injected into the
+prompt, telling the agent where the fix landed last time and authorizing it to skip
+re-diagnosis.
+
+- Off by default. Set `MEMORABLE=1` to enable the capture relay and recall injection;
+  `QM_MEMORABLE=0` is the kill-switch that wins over everything.
+- Consent is per scope and fail-closed: writes happen only for scopes explicitly set to
+  `read-write` via `memorable enable` (unset means deny).
+- Storage rides QM's own database (`memorable_procedures` / `memorable_mode` tables in
+  the same `DATABASE_URL` Postgres) — no second store.
+- Injected context is wrapped in a data-not-instructions envelope, control-character
+  stripped, and size-capped at write time.
+
+```mermaid
+flowchart LR
+  subgraph QM["QM host process"]
+    LOOP["agent loop"] -->|emits tool_call / tool_result| SE[("session_entries")]
+    SE -->|last run for thread done| RELAY["session-end relay"]
+  end
+  RELAY -->|trace JSON, stdin| CLI["memorable CLI"]
+  CLI -->|POST /v1/extract| API["extraction worker<br/>stateless · deterministic · no LLM"]
+  API -->|procedure draft| CLI
+  CLI -->|write iff consent read-write| DB[("memorable_* tables<br/>in QM's own Postgres")]
+  DB -->|recall top hit| CLI
+  CLI -->|"~300-token pointer, or nothing"| LOOP
+```
+
 ## Going deeper
 
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end

@@ -3,6 +3,7 @@ import type {
   Conversation,
   Principal,
   PendingApprovalRecord,
+  ScopeId,
   SurfaceContextQuery,
   SurfaceContextResult,
   TurnRequest,
@@ -135,6 +136,7 @@ export interface OrchestratorDeps {
   mcp?: McpToolService;
   memoryPolicy?: MemoryPolicy;
   memoryStrategy?: MemoryStrategy;
+  memorable?: (scopeId: ScopeId, task: string) => Promise<string | null>;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
   skillsReady?: Promise<void>;

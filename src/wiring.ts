@@ -200,6 +200,9 @@ import { createMemoryTaskStore } from "./tasks/memory-task-store.ts";
 import { createPostgresTaskStore } from "./tasks/postgres-task-store.ts";
 import type { TaskStore } from "./tasks/task-store.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
+import { captureSession } from "./memorable/capture.ts";
+import { memorableInject } from "./memorable/inject.ts";
+import { relayRecord } from "./memorable/relay.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, EGRESS_PROXY_AUD } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
@@ -1122,6 +1125,9 @@ export function buildApp(
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
     memoryStrategy,
+    ...(config.memorableEnabled
+      ? { memorable: (scopeId: ScopeId, task: string) => memorableInject(config.memorableBin, scopeId, task) }
+      : {}),
     skills,
     skillBundles,
     skillsReady,
@@ -1352,6 +1358,19 @@ export function buildApp(
       });
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
+  if (config.memorableEnabled) {
+    runs.onTerminal((run) => {
+      void (async () => {
+        if (await runs.activeForThread(run.sessionId)) return;
+        const session = await sessions.getByThread(run.sessionId);
+        if (!session) return;
+        const capture = captureSession(session.id, await sessions.getEntries(session.id));
+        if (!capture.tool_calls.length) return;
+        if (!capture.scope_id) capture.scope_id = session.scopeId;
+        await relayRecord(config.memorableBin, capture);
+      })().catch(swallowAs("memorable: record relay", undefined));
+    });
+  }
   let lastSignalPrune = 0;
   const orphanedSignalSweeper = createSweeper(
     async () => {

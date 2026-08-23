@@ -954,6 +954,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const memoryBlock = recalled
         ? `\n\n## What you remember\nYou're in ${memoryContext}. A memory tagged \`(said in …)\` was stated in another context — apply it only if that tag matches here; untagged memories are general.\n\n${recalled}`
         : "";
+      const memorableBlock =
+        useMemory && deps.memorable && input.text.trim()
+          ? await deps.memorable(memoryScopeId, input.text).catch(swallowAs("orchestrator: memorable recall", null))
+          : null;
 
       let onboardingBlock = "";
       if (useMemory && conversation.kind === "dm" && onboardingSkillVisible(visibleSkills)) {
@@ -1639,6 +1643,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
         }
         systemPrompt += memoryBlock;
+        if (memorableBlock) systemPrompt += `\n\n${memorableBlock}`;
         if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;
 
         const isRetry = (input.attempt ?? 1) > 1;

@@ -146,6 +146,8 @@ export interface Config {
   insightsIntervalMs: number;
   reachDeniedNotifyChannel?: string;
   scratchExecEnabled: boolean;
+  memorableEnabled: boolean;
+  memorableBin: string;
   reachExecEnabled: boolean;
   sharedOwnerAuthIsolation: boolean;
   surfaceDebugFooter: boolean;
@@ -969,6 +971,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       numEnvStrict("INSIGHTS_INTERVAL_MS", env.INSIGHTS_INTERVAL_MS) ?? CONFIG_DEFAULTS.insightsIntervalMs,
     ...(env.REACH_DENIED_NOTIFY_CHANNEL ? { reachDeniedNotifyChannel: env.REACH_DENIED_NOTIFY_CHANNEL.trim() } : {}),
     scratchExecEnabled: boolEnvStrict("EXECUTE_SCRATCH", env.EXECUTE_SCRATCH) ?? false,
+    memorableEnabled: (boolEnvStrict("MEMORABLE", env.MEMORABLE) ?? false) && env.QM_MEMORABLE !== "0",
+    memorableBin: env.MEMORABLE_BIN?.trim() || "memorable",
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     sharedOwnerAuthIsolation: boolEnvStrict("SHARED_OWNER_AUTH_ISOLATION", env.SHARED_OWNER_AUTH_ISOLATION) ?? false,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
