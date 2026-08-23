@@ -44,7 +44,7 @@ import {
 } from "../credentials/connector-status.ts";
 import { renderComputerBlock, renderResidentLoginsBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
-import { estimateCostUsd } from "../ratelimit/budget.ts";
+import { costFromUsage, estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -2528,7 +2528,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             },
             recordModelCall: (rec) => {
               deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-              void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
             },
             recordLlmRequest: async (rec) => {
               try {
@@ -2536,6 +2535,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               } catch (err) {
                 console.error("[orchestrator] failed to persist LLM request snapshot:", errMessage(err));
               }
+              void deps.budget?.record(actor.id, costFromUsage(rec.usage));
             },
           });
         };

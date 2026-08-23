@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBudgetTracker, estimateCostUsd } from "../src/ratelimit/budget.ts";
+import { costFromUsage, createBudgetTracker, estimateCostUsd } from "../src/ratelimit/budget.ts";
 import { DEFAULT_AGENT_INPUT_USD_PER_MTOK } from "../src/model/pi-models.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -58,4 +58,29 @@ test("a principal over budget is refused by the app", async () => {
   const second = await app.turn(dm("again"));
   assert.equal(second.status, "refused");
   assert.match(second.reason ?? "", /budget exceeded/);
+});
+
+test("costFromUsage prefers the provider-reported cost when it is usable", () => {
+  assert.equal(costFromUsage({ input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0.03 }), 0.03);
+});
+
+test("costFromUsage falls back to a token-total estimate without a usable cost", () => {
+  const fallback = { input: 500_000, output: 300_000, cacheRead: 100_000, cacheWrite: 100_000, costUsd: 0 };
+  assert.equal(costFromUsage(fallback), DEFAULT_AGENT_INPUT_USD_PER_MTOK);
+  assert.equal(
+    costFromUsage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: Number.NaN }),
+    0,
+    "no tokens and no cost means nothing to bill",
+  );
+});
+
+test("costFromUsage treats missing metering as zero cost", () => {
+  assert.equal(costFromUsage(null), 0);
+  assert.equal(costFromUsage(undefined), 0);
+});
+
+test("metered output tokens count against the budget even with no input growth", async () => {
+  const b = createBudgetTracker({ limitUsd: DEFAULT_AGENT_INPUT_USD_PER_MTOK, windowMs: 60_000 });
+  await b.record("U1", costFromUsage({ input: 0, output: 2_000_000, cacheRead: 0, cacheWrite: 0, costUsd: 0 }), 1000);
+  assert.equal((await b.check("U1", 1000)).allowed, false);
 });

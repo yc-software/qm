@@ -16,6 +16,25 @@ export function estimateCostUsd(inputTokens: number, usdPerMTok = DEFAULT_AGENT_
   return (inputTokens / 1_000_000) * usdPerMTok;
 }
 
+export function costFromUsage(
+  usage:
+    | {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        costUsd: number;
+      }
+    | null
+    | undefined,
+): number {
+  if (!usage) return 0;
+  if (Number.isFinite(usage.costUsd) && usage.costUsd > 0) return usage.costUsd;
+  const tokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  if (!Number.isFinite(tokens) || tokens <= 0) return 0;
+  return estimateCostUsd(tokens);
+}
+
 export function createBudgetTracker(
   opts: { limitUsd?: number; orgLimitUsd?: number; windowMs?: number } = {},
 ): BudgetTracker {
