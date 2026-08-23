@@ -31,14 +31,21 @@ import {
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
-import { dockerBasePort, sandboxCoreEnv, securityScreenEnv, type QmConfig } from "../config.ts";
+import { dockerBasePort, dockerBindAddress, sandboxCoreEnv, securityScreenEnv, type QmConfig } from "../config.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../secrets.ts";
 import { readDeploymentState, withDeploymentLock, writeDeploymentState, type DeploymentState } from "../state.ts";
 
+const publishHost = (config: QmConfig): string | undefined => {
+  const address = dockerBindAddress(config);
+  if (address === undefined) return undefined;
+  return address.includes(":") ? `[${address}]` : address;
+};
+
 /** Deployment-layer transport for docker: signed HTTP to the locally published core port. */
 export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
-  urlOf: (config) => new URL(`http://127.0.0.1:${dockerBasePort(config)}/v1/deployment-layer`),
+  urlOf: (config) =>
+    new URL(`http://${publishHost(config) ?? "127.0.0.1"}:${dockerBasePort(config)}/v1/deployment-layer`),
 });
 
 const safe = (s: string): string => s.replace(/[^A-Za-z0-9_.-]/g, "-");
@@ -416,7 +423,11 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     for (const m of skillMounts(ctx)) args.push("-v", m);
   }
   if (def.docker.hostPortOffset !== undefined) {
-    args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
+    const host = publishHost(ctx.config);
+    args.push(
+      "-p",
+      `${host === undefined ? "" : `${host}:`}${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`,
+    );
   }
   args.push(image);
   return { args, cleanup };
@@ -552,7 +563,9 @@ export async function dockerUp(
     step(`network: ${ctx.network}`);
     for (const def of ordered(runnableServices(config.services))) {
       const ports =
-        def.docker.hostPortOffset !== undefined ? ` (host :${baseHostPort(ctx) + def.docker.hostPortOffset})` : "";
+        def.docker.hostPortOffset !== undefined
+          ? ` (host ${publishHost(ctx.config) ?? ""}:${baseHostPort(ctx) + def.docker.hostPortOffset})`
+          : "";
       step(
         `${def.name}: image ${ctx.buildFrom ? `build deploy/${def.name}/Dockerfile` : imageRef(ctx, def.name)}${ports}`,
       );
@@ -647,7 +660,7 @@ function printUrls(ctx: DockerCtx): void {
   ok(`stack up — ${ctx.config.orgId}`);
   const has = (s: ServiceName): boolean => ctx.config.services.includes(s);
   const url = (s: ServiceName): string =>
-    `http://localhost:${baseHostPort(ctx) + serviceDef(s).docker.hostPortOffset!}`;
+    `http://${publishHost(ctx.config) ?? "localhost"}:${baseHostPort(ctx) + serviceDef(s).docker.hostPortOffset!}`;
   if (has("portal")) note(`   portal : ${url("portal")}  (public front door)`);
   if (has("auth"))
     note(`   auth   : ${url("portal")}/idp/authorize  (sign-in broker, published only through the portal)`);

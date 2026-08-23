@@ -138,6 +138,16 @@ test("basePort must be a positive integer", () => {
   withConfig({ basePort: 1.5 }, ({ path }) => assert.throws(() => loadConfigAt(path), /basePort/));
 });
 
+test("bindAddress must be an IPv4 or IPv6 literal", () => {
+  withConfig({ bindAddress: "127.0.0.1" }, ({ path }) =>
+    assert.equal(loadConfigAt(path).config.bindAddress, "127.0.0.1"),
+  );
+  withConfig({ bindAddress: "::1" }, ({ path }) => assert.equal(loadConfigAt(path).config.bindAddress, "::1"));
+  withConfig({ bindAddress: "localhost" }, ({ path }) => assert.throws(() => loadConfigAt(path), /bindAddress/));
+  withConfig({ bindAddress: "" }, ({ path }) => assert.throws(() => loadConfigAt(path), /bindAddress/));
+  withConfig({ bindAddress: 1 }, ({ path }) => assert.throws(() => loadConfigAt(path), /bindAddress/));
+});
+
 test("plugins: image is OPTIONAL (source plugins); env attaches to either; bad image rejected", () => {
   withConfig({ plugins: [{ name: "intercom", env: { INTERCOM_REGION: "us" } }] }, ({ path }) => {
     const { config } = loadConfigAt(path);

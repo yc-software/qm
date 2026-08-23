@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { isAbsolute, resolve } from "node:path";
 import { CliError, die, errMessage } from "./log.ts";
 import {
@@ -143,6 +144,7 @@ export interface QmConfig {
   model?: string;
   modelProvider?: ModelProvider;
   basePort?: number;
+  bindAddress?: string;
   services: DeclaredServiceName[];
   plugins: PluginEntry[];
   skills: string[];
@@ -200,6 +202,14 @@ export function loadConfigInDir(dir: string, overrides?: { target?: Target }): {
 export const appPrefixOf = (config: QmConfig): string => config.appPrefix ?? config.orgId;
 
 export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT", config.basePort ?? 8080);
+
+export function dockerBindAddress(config: QmConfig): string | undefined {
+  const fromEnv = process.env.QM_BIND_ADDRESS?.trim();
+  if (fromEnv && isIP(fromEnv) === 0) {
+    throw new CliError(`QM_BIND_ADDRESS must be an IPv4 or IPv6 literal, got ${JSON.stringify(fromEnv)}`);
+  }
+  return fromEnv || config.bindAddress;
+}
 
 export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.test(ref);
 
@@ -495,6 +505,7 @@ const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "model",
   "modelProvider",
   "basePort",
+  "bindAddress",
   "services",
   "plugins",
   "skills",
@@ -711,6 +722,15 @@ function validate(raw: unknown, path: string): QmConfig {
       throw new CliError(`${path}: "basePort" must be a positive integer (the docker host port base)`);
     }
     out.basePort = bp;
+  }
+  if (o["bindAddress"] !== undefined) {
+    const address = o["bindAddress"];
+    if (typeof address !== "string" || isIP(address) === 0) {
+      throw new CliError(
+        `${path}: "bindAddress" must be an IPv4 or IPv6 literal (the host address docker publishes ports on; omit it to publish on every interface)`,
+      );
+    }
+    out.bindAddress = address;
   }
   const identityName = (key: "botName" | "orgName", cap: number, what: string): string | undefined => {
     if (o[key] === undefined) return undefined;

@@ -77,6 +77,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
         orgId: "sekrit",
         publicUrl: "http://localhost:8080",
         target: "docker",
+        bindAddress: "127.0.0.1",
         services: ["core", "slack"],
         plugins: [
           {
@@ -149,6 +150,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     );
     assert.ok(!argv.includes("config-placeholder"), "non-secret config env cannot shadow or expose secret values");
     assert.ok(argv.includes("--env-file"), "secrets travel via --env-file");
+    assert.ok(argv.includes('"-p","127.0.0.1:8080:8080"'), "bindAddress prefixes every published host port");
     assert.ok(argv.includes("FLY_SANDBOX_APP_NAME=sekrit-sandboxes"), "non-secret env still flows as -e");
     assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
     assert.ok(argv.includes("LINEAR_REGION=us"), "undeclared plugin env still flows as -e");
