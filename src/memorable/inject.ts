@@ -19,7 +19,19 @@ const ESCAPE_SEQUENCES = new RegExp([
   '\\x1b\\[[0-9;:?]*[ -/]*[@-~]',          // CSI — colours, cursor moves
   '\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)?', // OSC — window title, hyperlinks
   '\\x1b[PX^_][^\\x1b]*(?:\\x1b\\\\)?',      // DCS, SOS, PM, APC
-  '\\x1b[ -/]*[0-~]',                      // two-character and charset escapes
+  // Two-character escapes, enumerated rather than matched as \x1b + any
+  // byte. The broad form removed a real sequence whole but also ate the
+  // character after a STRAY escape (`\x1btail` -> `ail`), losing a caller
+  // character to be terminal-accurate about text that goes to a model, not a
+  // terminal. Enumerating gets both: a real sequence goes whole, and a lone
+  // escape is dropped on its own by the bare-\x1b alternative below.
+  '\\x1b[()*+][@-~]',                      // 94-charset designator, e.g. ESC ( B
+  '\\x1b[\\-./][@-~]',                      // 96-charset designator
+  '\\x1b#[0-9]',                           // DEC line size, e.g. ESC # 8
+  '\\x1b%[@G]',                            // charset selection
+  '\\x1b [@-~]',                           // ANSI conformance level
+  '\\x1b[@-Z\\\\-_]',                        // C1 single-byte equivalents
+  '\\x1b[0-9:;<=>?]',                      // save/restore cursor, keypad mode
   '\\x1b',                                 // a stray ESC, last resort
 ].join('|'), 'g');
 
