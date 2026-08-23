@@ -28,7 +28,12 @@ export function memorableInject(bin: string, scopeId: string, task: string): Pro
     child.stdout.on("data", (c: Buffer) => chunks.push(c));
     child.on("exit", (code) => {
       const text = Buffer.concat(chunks).toString("utf8").replace(CONTROL_CHARS, "").trim();
-      finish(code === 0 && text.startsWith(ENVELOPE_PREFIX) ? text.slice(0, MAX_INJECTION_CHARS) : null);
+      // Over-length is dropped, never truncated. The guardrail that marks the
+      // block as inert data sits at the END of it, so slicing to fit would
+      // remove exactly the sentence that makes the injection safe — and a
+      // multi-step plan is long enough for that to be reachable.
+      const usable = code === 0 && text.startsWith(ENVELOPE_PREFIX) && text.length <= MAX_INJECTION_CHARS;
+      finish(usable ? text : null);
     });
     child.stdin.on("error", () => {});
     child.stdin.end(task);

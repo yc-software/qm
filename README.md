@@ -190,6 +190,15 @@ re-diagnosis.
   the same `DATABASE_URL` Postgres) — no second store.
 - Injected context is wrapped in a data-not-instructions envelope, control-character
   stripped, and size-capped at write time.
+- A prompt that is several things at once can be answered with a **plan** instead of one
+  procedure: several stored procedures in dependency order, each naming the files its
+  verified run wrote and the command that proved it. The order is not guessed — a
+  procedure that writes a file and one that reads it are a dependency, in that direction,
+  and both facts are already in the recorded steps. Steps that share no dependency are
+  marked as safe to run in parallel, and anything memory cannot cover is stated as such
+  rather than covered by the nearest vaguely-similar procedure. Opt in per call with
+  `memorable inject --chain` (or `MEMORABLE_CHAIN=1`); the block uses the same envelope
+  and the same size cap, so nothing in the harness changes to accept one.
 
 ```mermaid
 flowchart LR
@@ -202,7 +211,7 @@ flowchart LR
   API -->|procedure draft| CLI
   CLI -->|write iff consent read-write| DB[("memorable_* tables<br/>in QM's own Postgres")]
   DB -->|recall top hit| CLI
-  CLI -->|"~300-token pointer, or nothing"| LOOP
+  CLI -->|"~300-token pointer, a multi-step plan, or nothing"| LOOP
 ```
 
 ## Going deeper
