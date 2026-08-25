@@ -74,11 +74,6 @@ export async function resolveRuntimeChoiceDurable(
     config.getBaseModelOwnDurable(orgScopeId),
     scope === orgScopeId ? null : config.getBaseModelOwnDurable(scope),
   ]);
-  // A dynamic OpenRouter model only exists in this process after the catalog
-  // has been fetched. A cold worker (fresh start, or one that never served the
-  // model picker) would otherwise reject a perfectly approved selection with
-  // "is not approved". Hydrate before resolving when any candidate model is
-  // unknown to the local registry.
   if (hydrateModelCatalog) {
     const candidates = [requested?.modelId, scopedStored?.modelId, orgStored?.modelId];
     if (candidates.some((modelId) => modelId && !resolveModel(modelId))) await hydrateModelCatalog();

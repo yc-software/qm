@@ -117,8 +117,6 @@ test("durable runtime resolution hydrates the model catalog before rejecting an 
   await config.flushScope(PERSONAL);
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-4-8" };
 
-  // Without a hydrator a cold process cannot resolve the dynamic model and
-  // silently falls back to the org default instead of serving the selection.
   assert.deepEqual(await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback), fallback);
 
   let hydrations = 0;
@@ -140,8 +138,6 @@ test("durable runtime resolution hydrates the model catalog before rejecting an 
   });
   assert.equal(hydrations, 1);
 
-  // An explicitly requested dynamic model on a cold process hydrates too,
-  // instead of throwing "is not approved".
   assert.deepEqual(
     await resolveRuntimeChoiceDurable(
       config,
@@ -154,7 +150,6 @@ test("durable runtime resolution hydrates the model catalog before rejecting an 
     { harnessId: "pi", modelId: "testvendor/cold-router-model" },
   );
 
-  // A warm registry skips the fetch entirely.
   const before = hydrations;
   await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback, undefined, hydrate);
   assert.equal(hydrations, before);
