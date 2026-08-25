@@ -55,7 +55,7 @@ import {
   isValidCapabilityTimezone,
   type CapabilityClaims,
 } from "../auth/capability-token.ts";
-import type { GapWork, HarnessLlmRequestRecord } from "../harness/harness.ts";
+import type { GapWork, HarnessLlmRequestRecord, HarnessTurnResult } from "../harness/harness.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
 import {
   renderSecurityPolicyPrompt,
@@ -1007,6 +1007,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         commandUses.set(key, n - 1);
         return true;
       };
+      const quarantineReleaseApprovals: Array<{
+        command: string;
+        reason: string;
+        purpose: string;
+        summary: string;
+        approvalKey: string;
+        grantModes: { session: boolean; always: boolean };
+      }> = [];
+      const quarantinePreview = (payload: string): string => {
+        const cleaned = payload
+          .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        return cleaned.length > 240 ? `${cleaned.slice(0, 240)}…` : cleaned;
+      };
       const brokeredTools = deps.brokeredTools ?? [];
       const cutoverModes = new Map<string, DeviceFlowCutoverMode>();
       for (const tool of brokeredTools) {
@@ -1411,7 +1426,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             };
           } else if (p && p.sessionId === session.id) {
             const scope = input.approval.scope ?? "once";
-            if (scope !== "once" && !resolution.approvalGrantModes[scope]) {
+            const recordDisallowsScope =
+              scope !== "once" &&
+              p.grantModes?.[scope] === false &&
+              p.approvalKey?.startsWith("security-screen-release:") === true;
+            if (scope !== "once" && (!resolution.approvalGrantModes[scope] || recordDisallowsScope)) {
               deps.auditLog.record({
                 at: Date.now(),
                 principalId: actor.id,
@@ -1423,14 +1442,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               return {
                 status: "pending_approval",
                 sessionId: session.id,
-                reason: `the "${scope}" approval option is disabled by an admin here — approve once or deny`,
+                reason: recordDisallowsScope
+                  ? `quarantined content can only be released once — approve once or deny`
+                  : `the "${scope}" approval option is disabled by an admin here — approve once or deny`,
                 pendingApprovals: [
                   {
                     requestId: input.approval.requestId,
                     command: p.command,
                     reason: p.reason ?? "requires approval",
                     blocksInput: p.blocksInput !== false,
-                    grantModes: resolution.approvalGrantModes,
+                    grantModes: p.grantModes ?? resolution.approvalGrantModes,
                     ...(p.matched ? { matched: p.matched } : {}),
                     ...(p.purpose ? { purpose: p.purpose } : {}),
                     ...(p.summary ? { summary: p.summary } : {}),
@@ -2370,6 +2391,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         : undefined;
                     if (verdict?.decision === "auto" && !verdict.unscreened) return true;
                     if (verdict?.decision === "strict") {
+                      const releaseKey = `security-screen-release:${toolLabel}`;
+                      if (authorizeCommand(releaseKey)) {
+                        deps.auditLog.record({
+                          at: Date.now(),
+                          principalId: actor.id,
+                          action: "security_posture.tool_result_release",
+                          resource: input.surface ?? "unknown",
+                          scopeLabel: scopeId,
+                          status: "allowed",
+                          detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
+                        });
+                        return true;
+                      }
                       deps.auditLog.record({
                         at: Date.now(),
                         principalId: actor.id,
@@ -2379,6 +2413,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         status: "refused",
                         detail: JSON.stringify({ reason: "screen_verdict", tool: toolLabel }),
                       });
+                      if (!quarantineReleaseApprovals.some((qa) => qa.approvalKey === releaseKey)) {
+                        quarantineReleaseApprovals.push({
+                          command: `release quarantined ${toolLabel} output`,
+                          reason: verdict.reason
+                            ? `security screen flagged this ${toolLabel} output: ${verdict.reason}`
+                            : `security screen flagged this ${toolLabel} output`,
+                          purpose: `Release the quarantined ${toolLabel} output into the conversation (once), or keep it blocked.`,
+                          summary: `Blocked content preview: ${quarantinePreview(result)}`,
+                          approvalKey: releaseKey,
+                          grantModes: { session: false, always: false },
+                        });
+                      }
                       return false;
                     }
                     deps.auditLog.record({
@@ -2937,7 +2983,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sourceAssistantEntrySeq = [...emittedEntries].reverse().find((e) => e.type === "assistant")?.seq;
         if (isPollFire && result.silent && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
-        } else if (result.pendingApprovals?.length) {
+        } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
           const approvals: PendingApproval[] = [];
           const grantModesField =
             resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
@@ -2945,11 +2991,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : { grantModes: resolution.approvalGrantModes };
           const request = replayableRequest(input);
           const prepared: Array<{ requestId: string; record: PendingApprovalRecord; approval: PendingApproval }> = [];
-          for (const pa of result.pendingApprovals) {
+          const turnApprovals: Array<
+            NonNullable<HarnessTurnResult["pendingApprovals"]>[number] & {
+              summary?: string;
+              grantModes?: { session: boolean; always: boolean };
+            }
+          > = [...(result.pendingApprovals ?? []), ...quarantineReleaseApprovals];
+          for (const pa of turnApprovals) {
             const blocks = approvalBlocksInput(pa.kind, outcome);
             const command = pa.command;
             const requestId = commandApprovalId(session.id, command);
-            const summary = await approvalSummary(scopeId, command, pa.reason, pa.purpose);
+            const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
             prepared.push({
               requestId,
               record: {
@@ -2959,7 +3011,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 reason: pa.reason,
                 request,
                 blocksInput: blocks,
-                ...grantModesField,
+                ...(pa.grantModes ? { grantModes: pa.grantModes } : grantModesField),
                 ...(pa.matched ? { matched: pa.matched } : {}),
                 ...(pa.purpose ? { purpose: pa.purpose } : {}),
                 ...(summary ? { summary } : {}),
@@ -2971,7 +3023,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 command,
                 reason: pa.reason,
                 blocksInput: blocks,
-                ...grantModesField,
+                ...(pa.grantModes ? { grantModes: pa.grantModes } : grantModesField),
                 ...(pa.matched ? { matched: pa.matched } : {}),
                 ...(pa.purpose ? { purpose: pa.purpose } : {}),
                 ...(summary ? { summary } : {}),

@@ -24,6 +24,7 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!paused-approval ",
   "!collect-approval ",
   "!collect-exec ",
+  "!screened-run ",
   "!double-exec ",
   "!read ",
   "!write ",
@@ -304,6 +305,34 @@ export function createMockHarness(): Harness {
             usedTool = true;
             reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
           }
+        } else if (command0.startsWith("!screened-run ")) {
+          const command = cmd.slice(cmd.indexOf("!screened-run ") + "!screened-run ".length);
+          await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+          const result = await turn.tools.execute(command);
+          const output = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
+          const screen = turn.screenToolResult
+            ? await turn.screenToolResult("execute", output, false).catch(() => "unscreened" as const)
+            : true;
+          if (screen === false) {
+            const stub = "[tool output quarantined by Auto security posture]";
+            await turn.emit({
+              type: "tool_result",
+              payload: {
+                tool: "execute",
+                quarantined: true,
+                quarantineReason: "screen_verdict",
+                result: stub,
+                isError: true,
+              },
+              scopeLabel: turn.scopeLabel,
+            });
+            reply = stub;
+          } else {
+            await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+            reply = output;
+          }
+          turn.onProgress?.({ toolCalls: 1 });
+          usedTool = true;
         } else if (command0.startsWith("!reach ")) {
           const rest = command0.slice("!reach ".length);
           const sp = rest.indexOf(" ");
