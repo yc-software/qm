@@ -264,7 +264,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     `CREATE INDEX IF NOT EXISTS session_entries_user_ts ON session_entries(created_at) WHERE type = 'user'`,
     `CREATE INDEX IF NOT EXISTS session_entries_session_created ON session_entries(session_id, created_at DESC)`,
     `CREATE OR REPLACE FUNCTION entry_search_text(payload text) RETURNS text
-        LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $entry_search_text$
+        LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $entry_search_text$
         DECLARE j json;
         BEGIN
           j := replace(payload, '\\u0000', '')::json;

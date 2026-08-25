@@ -593,7 +593,7 @@ test("pg sessions table indexes scoped activity pages", { skip }, async () => {
   }
 });
 
-test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => {
+test("pg exception-handling functions are marked parallel-unsafe", { skip }, async () => {
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -610,13 +610,18 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
     const result = await raw.query(
       `SELECT proname, proparallel
          FROM pg_proc
-        WHERE oid IN ('safe_json(text)'::regprocedure, 'safe_jsonb(text)'::regprocedure)`,
+        WHERE oid IN (
+          'safe_json(text)'::regprocedure,
+          'safe_jsonb(text)'::regprocedure,
+          'entry_search_text(text)'::regprocedure
+        )`,
     );
     assert.deepEqual(
       new Map(result.rows.map((row) => [row.proname as string, row.proparallel as string])),
       new Map([
         ["safe_json", "u"],
         ["safe_jsonb", "u"],
+        ["entry_search_text", "u"],
       ]),
     );
     assert.equal(
