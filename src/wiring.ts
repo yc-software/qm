@@ -182,6 +182,7 @@ import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-h
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
+import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryTaskStore } from "./tasks/memory-task-store.ts";
@@ -820,11 +821,22 @@ export function buildApp(
     },
   };
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
+  const hydrateModelCatalog = async (): Promise<unknown> => {
+    if (!(await modelCredentials.availability()).openrouter) return undefined;
+    return selectableModelCatalog(overrides.modelCredentialFetch);
+  };
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) =>
-    resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, input.scopeLabel, fallback, {
-      ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
-      ...(input.model ? { modelId: input.model } : {}),
-    }),
+    resolveRuntimeChoiceDurable(
+      configStore,
+      runtimeOrgScope,
+      input.scopeLabel,
+      fallback,
+      {
+        ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
+        ...(input.model ? { modelId: input.model } : {}),
+      },
+      hydrateModelCatalog,
+    ),
   );
 
   const leaseTtlMs = config.leaseTtlMs;

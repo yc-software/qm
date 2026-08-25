@@ -1,5 +1,11 @@
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
-import { defaultModelForHarness, isHarnessId, modelSupportedByHarness, type HarnessId } from "../model/pi-models.ts";
+import {
+  defaultModelForHarness,
+  isHarnessId,
+  modelSupportedByHarness,
+  resolveModel,
+  type HarnessId,
+} from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
 import type { Harness, HarnessTurnInput } from "./harness.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
@@ -59,6 +65,7 @@ export async function resolveRuntimeChoiceDurable(
   scope: ScopeId,
   fallback: RuntimeChoice,
   requested?: Partial<RuntimeChoice>,
+  hydrateModelCatalog?: () => Promise<unknown>,
 ): Promise<RuntimeChoice> {
   const approved = (await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId];
   const [orgStored, scopedStored, orgLegacy, scopedLegacy] = await Promise.all([
@@ -67,6 +74,15 @@ export async function resolveRuntimeChoiceDurable(
     config.getBaseModelOwnDurable(orgScopeId),
     scope === orgScopeId ? null : config.getBaseModelOwnDurable(scope),
   ]);
+  // A dynamic OpenRouter model only exists in this process after the catalog
+  // has been fetched. A cold worker (fresh start, or one that never served the
+  // model picker) would otherwise reject a perfectly approved selection with
+  // "is not approved". Hydrate before resolving when any candidate model is
+  // unknown to the local registry.
+  if (hydrateModelCatalog) {
+    const candidates = [requested?.modelId, scopedStored?.modelId, orgStored?.modelId];
+    if (candidates.some((modelId) => modelId && !resolveModel(modelId))) await hydrateModelCatalog();
+  }
   const view: Pick<ScopedConfigStore, "getApprovedHarnesses" | "getRuntimeSelection" | "getBaseModel"> = {
     getApprovedHarnesses: () => approved,
     getRuntimeSelection: (id: ScopeId) => {
