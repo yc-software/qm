@@ -6,10 +6,11 @@ fronts every surface. It does provider-neutral **OIDC** sign-in (Google Workspac
 is the email-first deployment default) and reverse-proxies — over Fly's private 6PN — to the
 surfaces, which all stay **private** (no public `[http_service]` of their own):
 
-| Path        | → upstream        | Notes                                                                         |
-| ----------- | ----------------- | ----------------------------------------------------------------------------- |
-| `/*` (root) | `<prefix>-web-ui` | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
-| `/admin/*`  | `<prefix>-admin`  | governance — admin access derived from the core (`canAdminister`)             |
+| Path          | → upstream        | Notes                                                                         |
+| ------------- | ----------------- | ----------------------------------------------------------------------------- |
+| `/*` (root)   | `<prefix>-web-ui` | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
+| `/admin/*`    | `<prefix>-admin`  | governance — admin access derived from the core (`canAdminister`)             |
+| `/m/:id/:key` | core              | public bearer HTML playgrounds (miniapps); no session; CSP-sandboxed          |
 
 User deployments are never served on this authenticated origin; they use the dedicated apps domain.
 
@@ -27,10 +28,12 @@ surfaces, and it does **not** import the core.
    the subject from userinfo. The verified `sub` **is** the core principal id. It mints a
    signed `portal_session` cookie (`{sub, org, auth, exp}`, HMAC, 8h sliding lifetime with a
    24h absolute maximum by default).
-3. **Proxy** — every other path requires a valid session. The portal picks the upstream by the
-   **exact first path segment**, strips the prefix, and proxies to the private upstream,
-   synthesizing the surface cookie for compatibility and attaching a short-lived signed portal
-   identity. Surfaces pass that identity to core, which verifies it before any user-scoped action.
+3. **Proxy** — inbound webhooks, OAuth callbacks, and miniapp playgrounds (`GET /m/:id/:key`)
+   pass through to core without a session. Every other path requires a valid session. The portal
+   picks the upstream by the **exact first path segment**, strips the prefix, and proxies to the
+   private upstream, synthesizing the surface cookie for compatibility and attaching a short-lived
+   signed portal identity. Surfaces pass that identity to core, which verifies it before any
+   user-scoped action.
 
 ## Security model (the parts that must be right)
 

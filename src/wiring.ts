@@ -109,6 +109,7 @@ import {
 } from "./files/durable-byte-store.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
+import { type MiniappRecord, type MiniappStore } from "./miniapps/miniapp.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
@@ -365,6 +366,7 @@ export interface BuiltApp {
   sandboxMigration: SandboxMigrationRunner;
   blobTransfer: BlobTransferStore;
   files: FileArtifactStore;
+  miniapps: MiniappStore;
   livenessCache: LivenessCache;
   deviceFlowCutover: DeviceFlowCutoverStore;
   replayDedupe?: ReplayDedupe;
@@ -581,6 +583,7 @@ export function buildApp(
   const files: FileArtifactStore = config.databaseUrl
     ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes)
     : createMemoryFileArtifactStore(fileBytes);
+  const miniapps: MiniappStore = artifactMap<MiniappRecord>("miniapps");
   const baseMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
@@ -1012,6 +1015,7 @@ export function buildApp(
     sessions,
     workspace,
     files,
+    miniapps,
     sandbox,
     connectorTokens,
     modelGateway,
@@ -1564,6 +1568,7 @@ export function buildApp(
     advisoryLock,
     blobTransfer,
     files,
+    miniapps,
     livenessCache,
     deviceFlowCutover,
     ...(replayDedupe ? { replayDedupe } : {}),
@@ -1648,6 +1653,7 @@ export function serverDeps(
     runs: built.runs,
     workspace: built.workspace,
     files: built.files,
+    miniapps: built.miniapps,
     memory: built.memory,
     blobTransfer: built.blobTransfer,
     sandboxBackend: built.sandbox.profile.backend,

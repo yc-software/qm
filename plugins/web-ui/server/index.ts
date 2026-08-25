@@ -2346,6 +2346,27 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     return found.route.handle({ req, res, url, user, params: found.params });
   }
 
+  if (method === "GET" && path.startsWith("/m/")) {
+    const rest = path.slice("/m/".length);
+    const slash = rest.indexOf("/");
+    if (slash === -1) return json(res, 404, { error: "not_found" });
+    const id = decodeURIComponent(rest.slice(0, slash));
+    const key = decodeURIComponent(rest.slice(slash + 1).split("/")[0] ?? "");
+    const corePath = `/m/${encodeURIComponent(id)}/${encodeURIComponent(key)}${url.search}`;
+    const up = await fetch(`${CORE}${corePath}`, { method: "GET", redirect: "manual" });
+    const buf = Buffer.from(await up.arrayBuffer());
+    res.removeHeader("x-frame-options");
+    res.writeHead(up.status, {
+      "content-type": up.headers.get("content-type") ?? "text/html; charset=utf-8",
+      "content-length": String(buf.length),
+      "content-security-policy": up.headers.get("content-security-policy") ?? UNTRUSTED_CONTENT_SANDBOX_CSP,
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
+      "cache-control": up.headers.get("cache-control") ?? "private, no-cache",
+    });
+    return res.end(buf);
+  }
+
   if (method === "GET" && path.startsWith("/deployments/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
