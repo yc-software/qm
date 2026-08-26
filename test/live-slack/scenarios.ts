@@ -293,7 +293,7 @@ export const scenarios: Scenario[] = [
       const m1 = ctx.marker("q1");
       const m2 = ctx.marker("q2");
       const root = await ch.mention(
-        `First question (tag ${m1}): name three Italian cities, with one sentence about each.`,
+        `First question (tag ${m1}): briefly describe Rome, Venice, and Florence, with one sentence about each.`,
       );
       await sleep(3000);
       await ch.threadReply(root, `Second question (tag ${m2}): also, what is 17 * 23? Answer both questions.`);
@@ -302,10 +302,10 @@ export const scenarios: Scenario[] = [
       const texts = botMsgs.map((m) => m.text ?? "").filter((t) => t.length > 0);
       const dupes = texts.filter((t, i) => texts.indexOf(t) !== i);
       assert.strictEqual(dupes.length, 0, `duplicate bot replies detected: ${dupes[0]?.slice(0, 120)}`);
-      await ctx.judge(
-        "Across these consecutive bot replies, did the assistant end up addressing BOTH the Italian-cities question and the 17*23 arithmetic question (answer 391), without ignoring or dropping either?",
-        texts.join("\n---\n"),
-      );
+      const combined = texts.join("\n").toLowerCase();
+      for (const expected of ["rome", "venice", "florence", "391"]) {
+        assert.match(combined, new RegExp(`\\b${expected}\\b`), `consecutive replies dropped ${expected}`);
+      }
     },
   },
   {
