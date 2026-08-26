@@ -646,22 +646,13 @@ export function makeRunResumeStreamFn(
   return fn as unknown as StreamFn;
 }
 
-export async function queueApprovalTurn(
-  threadRef: string,
-  agent: Agent,
-  decision: ApprovalDecision,
-  getTurnOptions?: () => TurnOptions,
-): Promise<QueuedRun> {
-  const { text, attachments } = await latestUserTurn(agent);
-  const submit = await api<{ runId?: string }>("/api/turn", {
+export async function resolveApproval(decision: ApprovalDecision): Promise<string> {
+  const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
     method: "POST",
-    body: JSON.stringify({
-      ...turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, attachments),
-      approval: decision,
-    }),
+    body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
   });
   if (!submit.runId) throw new Error("Could not continue after the approval.");
-  return { runId: submit.runId, text };
+  return submit.runId;
 }
 
 export function makeOpenerStreamFn(

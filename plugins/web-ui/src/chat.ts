@@ -50,13 +50,14 @@ import {
   makeCoreStreamFn,
   makeOpenerStreamFn,
   makeRunResumeStreamFn,
-  queueApprovalTurn,
+  resolveApproval,
   TAIL_TURNS,
   type ApprovalDecision,
   type AssistantWork,
   type CoreSession,
   type DeliveredFile,
   type PendingApproval,
+  type RunPoll,
   type SessionBackgroundOutput,
   type SessionBackgroundView,
   type SessionEntry,
@@ -520,9 +521,9 @@ export function createChatSurface(
     drawActiveChat(agent);
     try {
       const threadRef = chatState.threadRef;
-      await queueApprovalTurn(threadRef, agent, decision, currentTurnOptions);
+      const runId = await resolveApproval(decision);
       if (chatState.normalStreamFn && chatState.onWork)
-        await resumeTrackedRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork);
+        await resumeRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork, runId);
     } catch (err) {
       if (agent === chatState.agent) {
         ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
@@ -538,6 +539,12 @@ export function createChatSurface(
           void 0;
         }
         await refreshTranscriptFromEntries(agent);
+      }
+      const active = chatState.agent;
+      if (active) {
+        await active.waitForIdle();
+        await syncPendingApprovals(active);
+        drawActiveChat(active);
       }
     }
   }
@@ -562,6 +569,17 @@ export function createChatSurface(
 
   function hasUnresolvedApproval(): boolean {
     return activePendingApprovals().length > 0;
+  }
+
+  async function syncPendingApprovals(agent: Agent, messages = agent.state.messages): Promise<void> {
+    const id = chatState.sessionId;
+    if (!id || agent !== chatState.agent) return;
+    const r = await api<{ approvals: PendingApproval[] }>(`/api/sessions/${encodeURIComponent(id)}/approvals`).catch(
+      () => null,
+    );
+    if (!r || id !== chatState.sessionId || agent !== chatState.agent) return;
+    for (const message of messages) delete (message as AssistantWork).work?.pendingApprovals;
+    attachPendingApprovals(messages, r.approvals ?? [], transcriptModel());
   }
 
   async function refreshTranscriptFromEntries(agent: Agent): Promise<void> {
@@ -591,14 +609,7 @@ export function createChatSurface(
         generation,
         refreshedInherited ? entriesToMessages(refreshedInherited, transcriptModel()) : null,
       );
-      try {
-        const r = await api<{ approvals: PendingApproval[] }>(
-          `/api/sessions/${encodeURIComponent(sessionId)}/approvals`,
-        );
-        attachPendingApprovals(messages, r.approvals ?? [], transcriptModel());
-      } catch {
-        void 0;
-      }
+      await syncPendingApprovals(agent, messages);
       if (
         !forkOriginController.isCurrentRefresh(generation) ||
         sessionId !== chatState.sessionId ||
@@ -656,24 +667,16 @@ export function createChatSurface(
     }
   }
 
-  async function resumeTrackedRun(
+  async function resumeRun(
     agent: Agent,
     threadRef: string,
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
+    runId: string,
+    initialRun?: RunPoll,
   ): Promise<boolean> {
-    if (!agent.state.messages.length) return false;
-    let activeRun: Awaited<ReturnType<typeof activeRunForThread>>;
-    try {
-      activeRun = await activeRunForThread(threadRef);
-    } catch {
-      return false;
-    }
-    if (agent === chatState.agent && threadRef === chatState.threadRef)
-      ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
     if (
-      !activeRun.runId ||
-      !activeRun.run ||
+      !agent.state.messages.length ||
       agent !== chatState.agent ||
       appState.currentView !== "chats" ||
       agent.state.isStreaming
@@ -696,7 +699,7 @@ export function createChatSurface(
       .map((m) => messageText(m).trim())
       .filter(Boolean)
       .join("\n\n");
-    agent.streamFn = makeRunResumeStreamFn(activeRun.runId, activeRun.run, onWork, runSlot, seedText);
+    agent.streamFn = makeRunResumeStreamFn(runId, initialRun, onWork, runSlot, seedText);
     try {
       await agent.continue();
     } catch (err) {
@@ -709,6 +712,24 @@ export function createChatSurface(
       }
     }
     return true;
+  }
+
+  async function resumeTrackedRun(
+    agent: Agent,
+    threadRef: string,
+    normalStreamFn: Agent["streamFn"],
+    onWork: (work: WorkBlock) => void,
+  ): Promise<boolean> {
+    let activeRun: Awaited<ReturnType<typeof activeRunForThread>>;
+    try {
+      activeRun = await activeRunForThread(threadRef);
+    } catch {
+      return false;
+    }
+    if (agent === chatState.agent && threadRef === chatState.threadRef)
+      ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
+    if (!activeRun.runId || !activeRun.run) return false;
+    return resumeRun(agent, threadRef, normalStreamFn, onWork, activeRun.runId, activeRun.run);
   }
 
   function adoptActiveSessionFromList(agent: Agent): void {

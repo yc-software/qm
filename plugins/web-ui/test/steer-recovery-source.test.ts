@@ -20,7 +20,7 @@ test("a server-side run starting for an open conversation attaches the view (wor
 });
 
 test("resuming a tracked run pulls the transcript first so the triggering message is on screen", () => {
-  const at = chat.indexOf("async function resumeTrackedRun");
+  const at = chat.indexOf("async function resumeRun");
   assert.ok(at >= 0);
   const body = chat.slice(at, chat.indexOf("agent.streamFn = makeRunResumeStreamFn", at));
   assert.match(body, /await refreshTranscriptFromEntries\(agent\);/);
