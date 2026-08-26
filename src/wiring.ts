@@ -429,7 +429,9 @@ export function buildApp(
       ...(config.openrouterApiKey ? { openrouter: config.openrouterApiKey } : {}),
     },
   });
-  const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"));
+  const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
+    directorySyncProtected: config.emailAuthPrincipals,
+  });
   void identity.hydrate();
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
@@ -1178,6 +1180,15 @@ export function buildApp(
     webhooks,
     deliveries,
     directory,
+    ...(config.emailAuthPrincipals?.length
+      ? {
+          emailAuthMembers: config.emailAuthPrincipals.map((principalId) => ({
+            principalId,
+            displayName: principalId,
+            type: "internal" as const,
+          })),
+        }
+      : {}),
     projects,
     environments,
     deploy: deployService,

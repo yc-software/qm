@@ -220,6 +220,29 @@ function stageSecret(app: string, name: string, value: string): void {
   if (result.status !== 0) throw new CliError(`failed to stage ${name} on ${app}`);
 }
 
+export function stageFlyEmailAllowlist(
+  config: QmConfig,
+  configDir: string,
+  selectedWorkloads: ReadonlySet<string>,
+): void {
+  const values = readEnvFile(join(configDir, ".env"));
+  const value = deploymentSecretValue("AUTH_ALLOWED_EMAILS", values.get("AUTH_ALLOWED_EMAILS"));
+  if (value === undefined) return;
+  if (isInvalidSecret("AUTH_ALLOWED_EMAILS", value)) {
+    throw new CliError("required secret AUTH_ALLOWED_EMAILS is missing or invalid");
+  }
+  const secret = computedSecrets(config).find((candidate) => candidate.name === "AUTH_ALLOWED_EMAILS");
+  if (!secret) return;
+  const staged: string[] = [];
+  for (const [workload, names] of secretDestinations(secret)) {
+    if (!selectedWorkloads.has(workload)) continue;
+    const app = `${appPrefixOf(config)}-${workload}`;
+    for (const name of names) stageSecret(app, name, value);
+    staged.push(app);
+  }
+  if (staged.length) step(`AUTH_ALLOWED_EMAILS: staged from .env on ${staged.join(", ")}`);
+}
+
 function flySensitive(args: string[], failure: string): string {
   const result = spawnSync(flyBin(), args, { encoding: "utf8" });
   if (result.status !== 0) throw new CliError(failure);
@@ -1106,6 +1129,10 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
       note("");
       ok(`deployment images for ${ctx.appPrefix} built.`);
       return;
+    }
+
+    if (!opts.dryRun) {
+      stageFlyEmailAllowlist(config, configDir, new Set([...services, ...plugins.map((plugin) => plugin.name)]));
     }
 
     const gateSecrets = (app: string, header: string, path: string, required: string[], timingKey: string): boolean => {
