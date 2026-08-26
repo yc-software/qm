@@ -52,6 +52,15 @@ test("store kinds default to memory and accept postgres", () => {
     () => loadConfig({ SESSION_STORE: "postgres" }),
     /missing or insecure required core secrets: DATABASE_URL/,
   );
+  assert.throws(
+    () =>
+      loadConfig({
+        PIPEDREAM_CLIENT_ID: "client",
+        PIPEDREAM_CLIENT_SECRET: "secret",
+        PIPEDREAM_PROJECT_ID: "wrong",
+      }),
+    /PIPEDREAM_PROJECT_ID must start with proj_/,
+  );
 });
 
 test("deploy provider defaults to docker and rejects unknown values", () => {
@@ -379,6 +388,86 @@ test("Fly identity and Slack runtime settings are parsed once into Config", () =
     appToken: "xapp-test",
     apiUrl: "https://slack.example/api",
   });
+});
+
+test("Pipedream Connect configuration is all-or-nothing", () => {
+  assert.equal(loadConfig({}).pipedream, undefined);
+  assert.equal(
+    loadConfig({
+      PIPEDREAM_CLIENT_ID: " ",
+      PIPEDREAM_CLIENT_SECRET: " ",
+      PIPEDREAM_PROJECT_ID: " ",
+    }).pipedream,
+    undefined,
+  );
+  assert.throws(
+    () => loadConfig({ PIPEDREAM_CLIENT_ID: "client" }),
+    /PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET, and PIPEDREAM_PROJECT_ID must be set together/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        PIPEDREAM_CLIENT_ID: " ",
+        PIPEDREAM_CLIENT_SECRET: "secret",
+        PIPEDREAM_PROJECT_ID: "proj_test",
+      }),
+    /PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET, and PIPEDREAM_PROJECT_ID must be set together/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: "production",
+        PIPEDREAM_CLIENT_ID: "client",
+        PIPEDREAM_CLIENT_SECRET: "secret",
+        PIPEDREAM_PROJECT_ID: "invalid",
+      }),
+    /missing or insecure required core secrets/,
+  );
+  assert.deepEqual(
+    loadConfig({
+      PIPEDREAM_CLIENT_ID: "client",
+      PIPEDREAM_CLIENT_SECRET: "secret",
+      PIPEDREAM_PROJECT_ID: "proj_test",
+      PIPEDREAM_ENVIRONMENT: "production",
+      PIPEDREAM_API_URL: "https://api.example.test",
+      PIPEDREAM_MCP_URL: "https://mcp.example.test/v3",
+    }).pipedream,
+    {
+      mode: "direct",
+      clientId: "client",
+      clientSecret: "secret",
+      projectId: "proj_test",
+      environment: "production",
+      apiUrl: "https://api.example.test",
+      mcpUrl: "https://mcp.example.test/v3",
+    },
+  );
+  assert.deepEqual(
+    loadConfig({
+      PIPEDREAM_BROKER_URL: "https://broker.example.test/integrations/",
+      PIPEDREAM_BROKER_TOKEN: "tenant-token",
+    }).pipedream,
+    {
+      mode: "broker",
+      brokerUrl: "https://broker.example.test/integrations",
+      brokerToken: "tenant-token",
+    },
+  );
+  assert.throws(
+    () => loadConfig({ PIPEDREAM_BROKER_URL: "https://broker.example.test/integrations" }),
+    /PIPEDREAM_BROKER_URL and PIPEDREAM_BROKER_TOKEN must be set together/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        PIPEDREAM_CLIENT_ID: "client",
+        PIPEDREAM_CLIENT_SECRET: "secret",
+        PIPEDREAM_PROJECT_ID: "proj_test",
+        PIPEDREAM_BROKER_URL: "https://broker.example.test/integrations",
+        PIPEDREAM_BROKER_TOKEN: "tenant-token",
+      }),
+    /directly or through a broker/,
+  );
 });
 
 test("maxClaims defaults from CONFIG_DEFAULTS and MAX_CLAIMS overrides", () => {

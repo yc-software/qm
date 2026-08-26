@@ -12,6 +12,8 @@ type SecretGate =
   | "google-oauth"
   | "dropbox-oauth"
   | "linear-oauth"
+  | "pipedream"
+  | "pipedream-broker"
   | "email-auth"
   | "model-anthropic"
   | "model-openai"
@@ -41,6 +43,8 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "GOOGLE_OAUTH_CLIENT_SECRET", requiredWhen: "google-oauth" },
   { name: "DROPBOX_OAUTH_CLIENT_SECRET", requiredWhen: "dropbox-oauth" },
   { name: "LINEAR_OAUTH_CLIENT_SECRET", requiredWhen: "linear-oauth" },
+  { name: "PIPEDREAM_CLIENT_SECRET", requiredWhen: "pipedream" },
+  { name: "PIPEDREAM_BROKER_TOKEN", requiredWhen: "pipedream-broker" },
 ];
 
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
@@ -55,6 +59,8 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "google-oauth": (env) => Boolean(env.GOOGLE_OAUTH_CLIENT_ID),
   "dropbox-oauth": (env) => Boolean(env.DROPBOX_OAUTH_CLIENT_ID),
   "linear-oauth": (env) => Boolean(env.LINEAR_OAUTH_CLIENT_ID),
+  pipedream: (env) => Boolean(env.PIPEDREAM_CLIENT_ID?.trim()),
+  "pipedream-broker": (env) => Boolean(env.PIPEDREAM_BROKER_URL?.trim()),
   "email-auth": (env) => env.AUTH_ALLOWED_EMAILS !== undefined,
   "model-anthropic": (env) => env.MODEL_PROVIDER?.trim() === "anthropic",
   "model-openai": (env) => env.MODEL_PROVIDER?.trim() === "openai",

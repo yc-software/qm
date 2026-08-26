@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { live } from "lit/directives/live.js";
+import { ref } from "lit/directives/ref.js";
 import { Check, ChevronDown, createElement, type IconNode } from "lucide";
 
 export function brandName(): string {
@@ -35,15 +35,22 @@ export function fieldSelect(props: {
   compact?: boolean;
   className?: string;
 }): TemplateResult {
+  const syncValue = (element?: Element) => {
+    const view = element?.ownerDocument.defaultView;
+    if (!view || !(element instanceof view.HTMLSelectElement) || props.value === undefined) return;
+    queueMicrotask(() => {
+      if (element.isConnected) element.value = props.value!;
+    });
+  };
   return html`<span
     class=${`field-select${props.compact ? " compact" : ""}${props.className ? ` ${props.className}` : ""}`}
   >
     <select
+      ${ref(syncValue)}
       id=${props.id ?? nothing}
       aria-label=${props.ariaLabel ?? nothing}
       aria-describedby=${props.describedBy ?? nothing}
       data-focus-key=${props.focusKey ?? nothing}
-      .value=${props.value === undefined ? nothing : live(props.value)}
       ?disabled=${props.disabled ?? false}
       @change=${(e: Event) => props.onChange((e.currentTarget as HTMLSelectElement).value, e)}
     >

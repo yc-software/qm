@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { readdirSync } from "node:fs";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 
 const srcDir = new URL("../src/", import.meta.url);
 const ui = readFileSync(new URL("ui.ts", srcDir), "utf8");
@@ -42,10 +43,22 @@ test("no page keeps its own select chrome now that one rule owns it", () => {
   assert.doesNotMatch(css, /\.deploy-sort select \{/);
 });
 
-test("the dropdown holds the caller's value against re-renders (live) and stale DOM state", () => {
-  // .value on a <select> commits before its <option> children exist on first render,
-  // and lit's default dirty-check skips re-asserting it when the DOM has drifted —
-  // so the caller's value must go through live(), and options mark their own selected.
-  assert.match(ui, /import \{ live \} from "lit\/directives\/live\.js"/);
-  assert.match(ui, /\.value=\$\{props\.value === undefined \? nothing : live\(props\.value\)\}/);
+test("the dropdown applies the caller's value after its options exist", async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document });
+  const [{ html, render }, { fieldSelect }] = await Promise.all([import("lit"), import("../src/ui.ts")]);
+  const root = dom.window.document.querySelector<HTMLElement>("#root")!;
+  render(
+    fieldSelect({
+      value: "read-write",
+      onChange: () => undefined,
+      options: [
+        html`<option value="read">Read only</option>`,
+        html`<option value="read-write">Read and write with approval</option>`,
+      ],
+    }),
+    root,
+  );
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  assert.equal(root.querySelector<HTMLSelectElement>("select")?.value, "read-write");
 });

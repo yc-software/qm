@@ -610,11 +610,16 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
     const result = await raw.query(
       `SELECT proname, proparallel
          FROM pg_proc
-        WHERE oid IN ('safe_json(text)'::regprocedure, 'safe_jsonb(text)'::regprocedure)`,
+        WHERE oid IN (
+          'entry_search_text(text)'::regprocedure,
+          'safe_json(text)'::regprocedure,
+          'safe_jsonb(text)'::regprocedure
+        )`,
     );
     assert.deepEqual(
       new Map(result.rows.map((row) => [row.proname as string, row.proparallel as string])),
       new Map([
+        ["entry_search_text", "u"],
         ["safe_json", "u"],
         ["safe_jsonb", "u"],
       ]),

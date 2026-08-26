@@ -179,6 +179,18 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Linear OAuth client secret.",
   },
   {
+    name: "PIPEDREAM_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "PIPEDREAM_CLIENT_ID" } },
+    description: "Pipedream Connect project client secret.",
+  },
+  {
+    name: "PIPEDREAM_BROKER_TOKEN",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "PIPEDREAM_BROKER_URL" } },
+    description: "Tenant-scoped credential for a managed Pipedream integration broker.",
+  },
+  {
     name: "SLACK_BOT_TOKEN",
     service: "slack",
     required: false,

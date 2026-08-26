@@ -96,7 +96,14 @@ import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/work
 import { createMemoryService, type MemoryService } from "./memory/memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { combineMcpToolServices, createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createIntegrationConnectionStore, type IntegrationConnection } from "./integrations/integration-store.ts";
+import { PipedreamClient } from "./integrations/pipedream-client.ts";
+import { PipedreamBrokerClient } from "./integrations/pipedream-broker-client.ts";
+import {
+  createPipedreamIntegrationService,
+  type PipedreamIntegrationService,
+} from "./integrations/pipedream-service.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -338,6 +345,7 @@ export interface BuiltApp {
   refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
+  pipedream: PipedreamIntegrationService;
   acl: AclStore;
   skills: SkillStore;
   skillBundles: SkillBundleStore;
@@ -585,7 +593,42 @@ export function buildApp(
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
-  const mcpToolService = createMcpToolService({ servers: mcpServers, audit: auditLog });
+  const registeredMcpToolService = createMcpToolService({ servers: mcpServers, audit: auditLog });
+  const integrationConnections = createIntegrationConnectionStore(
+    artifactMap<IntegrationConnection>("integration_connections"),
+  );
+  const pipedreamBindingSecret = config.pipedream
+    ? (config.connectorSecretKey ??
+      config.signingSecret ??
+      (config.pipedream.mode === "direct" ? config.pipedream.clientSecret : config.pipedream.brokerToken))
+    : undefined;
+  const pipedream = createPipedreamIntegrationService({
+    store: integrationConnections,
+    audit: auditLog,
+    ...(config.pipedream?.mode === "broker" ? { sharedScopeId: `org:${config.orgId}` } : {}),
+    ...(pipedreamBindingSecret ? { approvalSecret: pipedreamBindingSecret } : {}),
+    ...(config.pipedream
+      ? {
+          client:
+            config.pipedream.mode === "direct"
+              ? new PipedreamClient({
+                  clientId: config.pipedream.clientId,
+                  clientSecret: config.pipedream.clientSecret,
+                  projectId: config.pipedream.projectId,
+                  environment: config.pipedream.environment,
+                  ...(config.pipedream.apiUrl ? { apiUrl: config.pipedream.apiUrl } : {}),
+                  ...(config.pipedream.mcpUrl ? { mcpUrl: config.pipedream.mcpUrl } : {}),
+                  externalIdSecret: pipedreamBindingSecret!,
+                })
+              : new PipedreamBrokerClient({
+                  url: config.pipedream.brokerUrl,
+                  token: config.pipedream.brokerToken,
+                  externalIdSecret: pipedreamBindingSecret!,
+                }),
+        }
+      : {}),
+  });
+  const mcpToolService = combineMcpToolServices([registeredMcpToolService, pipedream]);
   const mcpTools = () => mcpToolService.toolDefs();
   const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
@@ -1537,6 +1580,7 @@ export function buildApp(
     refreshCustomProviders,
     mcpServers,
     mcpToolService,
+    pipedream,
     acl,
     skills,
     skillBundles,
@@ -1607,6 +1651,7 @@ export function serverDeps(
     refreshCustomProviders: built.refreshCustomProviders,
     mcpServers: built.mcpServers,
     mcpToolService: built.mcpToolService,
+    pipedream: built.pipedream,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     harnessId: config.harness,
     connectorTokens: built.connectorTokens,

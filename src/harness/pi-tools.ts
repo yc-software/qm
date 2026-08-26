@@ -2782,6 +2782,22 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
               `mcp server ${d.serverId}`,
             );
           } catch (error) {
+            if (error instanceof NeedsApproval) {
+              ref.pendingApprovals?.push({
+                command: error.command,
+                reason: error.approvalReason,
+                kind: error.kind,
+                matched: error.matched,
+                ...(error.approvalKey ? { approvalKey: error.approvalKey } : {}),
+              });
+              ref.pausedOnApproval = true;
+              return recordResult(
+                callId,
+                { tool: d.name, blocked: "needs_approval", reason: error.approvalReason },
+                { ...text(`[blocked: needs human approval] ${error.approvalReason}`), terminate: true },
+                true,
+              );
+            }
             return recordResult(
               callId,
               { tool: d.name, mcpServer: d.serverId, failed: true },

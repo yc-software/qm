@@ -553,6 +553,43 @@ test("the screen never rewrites a policy denial either", async () => {
   assert.equal(persisted.quarantined, undefined);
 });
 
+test("an MCP write approval pauses the turn with its stable integration key", async () => {
+  const gated: ToolContext = {
+    ...fakeToolContext(),
+    async callMcpTool() {
+      throw new NeedsApproval(
+        "integrations",
+        "HubSpot tool create_contact can change external data",
+        "approval",
+        undefined,
+        "integration:apn_123:create_contact",
+      );
+    },
+  };
+  const ref: ToolContextRef = { current: gated, pendingApprovals: [], scopeLabel: "channel:C1" };
+  const integration = createPiTools(ref, {
+    mcpTools: () => [
+      {
+        name: "integrations",
+        serverId: "pipedream",
+        remoteName: "integrations",
+        description: "Connected business apps",
+        inputSchema: { type: "object" },
+        readOnly: false,
+      },
+    ],
+  }).find((tool) => tool.name === "integrations");
+  const result = (await call(integration, {
+    action: "call_tool",
+    account_id: "apn_123",
+    tool: "create_contact",
+  })) as { terminate?: boolean; content: Array<{ text?: string }> };
+  assert.equal(result.terminate, true);
+  assert.equal(ref.pausedOnApproval, true);
+  assert.equal(ref.pendingApprovals?.[0]?.approvalKey, "integration:apn_123:create_contact");
+  assert.match(result.content[0]?.text ?? "", /needs human approval/);
+});
+
 test("a real tool result on the same session is still screened", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {
