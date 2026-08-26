@@ -87,6 +87,7 @@ else if (a[0] === "secrets" && a[1] === "list") {
       "PORTAL_IDENTITY_SECRET",
       "SECURITY_SCREEN_PROXY_TOKEN",
       "SKILL_SIGNING_SECRET",
+      "SPRITES_TOKEN",
     ]
       .map((name) => `${name} digest`)
       .join("\n"),

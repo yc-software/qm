@@ -265,6 +265,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
       "PORTAL_IDENTITY_SECRET=identity",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=f",
+      "SPRITES_TOKEN=sp",
       "PUBLIC_API_URL=https://core.example.test",
       "SLACK_BOT_TOKEN=xoxb",
       "SLACK_APP_TOKEN=xapp",
@@ -342,6 +343,7 @@ test("fly secrets push warns that staged secrets are not live when machines are 
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
+      "SPRITES_TOKEN=sp",
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -398,6 +400,7 @@ test("fly secrets push stays quiet about staging when no machines are running", 
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
+      "SPRITES_TOKEN=sp",
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -450,6 +453,7 @@ test("fly secrets push removes the disabled Fly app publisher token", async () =
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
+      "SPRITES_TOKEN=sp",
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -495,6 +499,7 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
       "PORTAL_IDENTITY_SECRET=identity",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
+      "SPRITES_TOKEN=sp",
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -975,7 +980,7 @@ test("fly secrets push rejects weak signing keys before staging anything", async
   };
   writeFileSync(
     join(dir, ".env"),
-    `CAPABILITY_SECRET=cap\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nCORE_SIGNING_SECRET=short\nSKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}\nFLY_SANDBOX_API_TOKEN=f\n`,
+    `CAPABILITY_SECRET=cap\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nCORE_SIGNING_SECRET=short\nSKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}\nFLY_SANDBOX_API_TOKEN=f\nSPRITES_TOKEN=sp\n`,
   );
   const fake = fakeFly(dir, "");
   try {
@@ -1010,6 +1015,7 @@ test("fly secrets push refuses an unmarked pre-existing app", async () => {
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       `FLY_SANDBOX_API_TOKEN=FlyV1-scoped`,
+      "SPRITES_TOKEN=sp",
       `PORTAL_IDENTITY_SECRET=${"identity".repeat(4)}`,
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
     ].join("\n"),
@@ -1057,6 +1063,7 @@ test("fly secrets push refuses a same-named app outside the configured Fly organ
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       `FLY_SANDBOX_API_TOKEN=FlyV1-scoped`,
+      "SPRITES_TOKEN=sp",
       `PORTAL_IDENTITY_SECRET=${"identity".repeat(4)}`,
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
     ].join("\n"),
@@ -1364,6 +1371,7 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
+      "SPRITES_TOKEN=sp",
       "PORTAL_IDENTITY_SECRET=identity",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "ADMIN_GRANTS=admin@example.com:org_admin",

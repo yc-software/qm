@@ -7,6 +7,7 @@ import { sandboxCoreEnv, type QmConfig } from "../src/config.ts";
 import { FLY_TEMPLATE_ENV_DEFAULTS } from "../src/target-env-defaults.ts";
 import {
   computedSecrets,
+  FIRST_PARTY_SECRET_SPECS,
   renderEnvExample,
   runtimeSecretNames,
   secretDestinations,
@@ -192,6 +193,16 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
   );
 });
 
+test("the fly target requires the sprites token, because its core template always runs sprites sandboxes", () => {
+  for (const config of [
+    makeConfig({ target: "fly" }),
+    makeConfig({ target: "fly", sandbox: { app: "acme-sb" } }),
+    makeConfig({ target: "fly", sandbox: { backend: "sprites", app: "acme-sb" } }),
+  ]) {
+    assert.ok(secretByName(config, "SPRITES_TOKEN").required);
+  }
+});
+
 test("naming a base model provider makes that provider's key a required deployment secret", () => {
   for (const [provider, key] of [
     ["anthropic", "ANTHROPIC_API_KEY"],
@@ -274,6 +285,34 @@ test("FLY_TEMPLATE_ENV_DEFAULTS stays in sync with deploy/core/fly.toml", () => 
   }
   assert.doesNotMatch(toml, /^\s*DEPLOY_PROVIDER\s*=/m);
   assert.doesNotMatch(packaged, /^\s*DEPLOY_PROVIDER\s*=/m);
+});
+
+function conditionEnvNames(condition: unknown, out: Set<string>): void {
+  if (!condition || typeof condition !== "object") return;
+  const node = condition as { kind?: string; name?: string; names?: string[]; conditions?: unknown[] };
+  if (node.kind?.startsWith("env-")) {
+    if (node.name) out.add(node.name);
+    for (const name of node.names ?? []) out.add(name);
+  }
+  for (const nested of node.conditions ?? []) conditionEnvNames(nested, out);
+}
+
+test("every deploy/core/fly.toml env that gates a secret is declared in FLY_TEMPLATE_ENV_DEFAULTS", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const toml = readFileSync(join(root, "deploy", "core", "fly.toml"), "utf8");
+  const gating = new Set<string>();
+  for (const spec of FIRST_PARTY_SECRET_SPECS) {
+    if (typeof spec.required !== "boolean") conditionEnvNames(spec.required.when, gating);
+  }
+  for (const name of gating) {
+    const set = toml.match(new RegExp(`^\\s*${name}\\s*=\\s*"([^"]*)"`, "m"));
+    if (!set) continue;
+    assert.equal(
+      FLY_TEMPLATE_ENV_DEFAULTS.core?.[name],
+      set[1],
+      `deploy/core/fly.toml sets ${name}="${set[1]}", so FLY_TEMPLATE_ENV_DEFAULTS.core must declare it or the secret gate cannot see the value core boots with`,
+    );
+  }
 });
 
 test("config secretEnv extras enter the computed set as required operator secrets, virtual services folding onto core", () => {
