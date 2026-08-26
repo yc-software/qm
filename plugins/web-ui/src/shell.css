@@ -2605,7 +2605,7 @@ a.chat-row-open {
   z-index: 30;
   width: 230px;
   max-width: calc(100vw - 36px);
-  max-height: min(320px, 52vh);
+  max-height: min(320px, var(--menu-available-height, 52vh));
   overflow-y: auto;
   padding: 6px;
   border: 1px solid var(--border);
@@ -2619,6 +2619,10 @@ a.chat-row-open {
   right: 0;
   left: auto;
   width: 230px;
+}
+.menu-popover.drop-down {
+  top: calc(100% + 8px);
+  bottom: auto;
 }
 .menu-title {
   padding: 6px 8px 5px;
@@ -4596,7 +4600,7 @@ a.chat-row-open {
     width: min(286px, calc(100vw - 30px));
   }
   .menu-popover {
-    max-height: 42vh;
+    max-height: min(320px, var(--menu-available-height, 42vh));
   }
   .message-bubble {
     max-width: 94%;

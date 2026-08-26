@@ -87,3 +87,10 @@ test("long model menus stay searchable and show the selected effort", () => {
   assert.match(composer, /option\.groupLabel/);
   assert.match(composer, /suffix: `· \$\{effortLabel\(composerState\.effortLevel\)}`/);
 });
+
+test("composer menus stay inside the visible viewport", () => {
+  assert.match(composer, /function placeComposerMenu\(kind: ComposerMenu\)/);
+  assert.match(composer, /window\.visualViewport/);
+  assert.match(composer, /--menu-available-height/);
+  assert.match(composer, /classList\.toggle\("drop-down", placeBelow\)/);
+});
