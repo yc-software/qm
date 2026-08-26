@@ -1904,6 +1904,37 @@ a.chat-row-open {
   color: var(--foreground);
   line-height: 1.4;
 }
+.approval-summary-detail > summary.approval-summary-line {
+  cursor: pointer;
+  list-style: none;
+}
+.approval-summary-detail > summary.approval-summary-line::-webkit-details-marker {
+  display: none;
+}
+.approval-summary-detail > summary.approval-summary-line::after {
+  content: " \25be Show full text";
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.approval-summary-detail[open] > summary.approval-summary-line::after {
+  content: " \25b4 Hide full text";
+}
+.approval-detail-text {
+  font-size: 13px;
+  color: var(--foreground);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--foreground) 5%, var(--background));
+}
 .approval-summary {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 13px;

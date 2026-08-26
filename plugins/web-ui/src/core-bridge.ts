@@ -309,6 +309,7 @@ export interface PendingApproval {
   reason?: string;
   purpose?: string;
   summary?: string;
+  summaryDetail?: string;
   matched?: string;
   grantModes?: { session: boolean; always: boolean };
   blocksInput?: boolean;

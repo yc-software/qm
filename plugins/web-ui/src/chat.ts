@@ -1948,6 +1948,17 @@ export function createChatSurface(
     return workedLabel("Worked", secs);
   }
 
+  function approvalSummaryLine(a: PendingApproval): TemplateResult | typeof nothing {
+    if (!a.summary) return nothing;
+    if (!a.summaryDetail || a.summaryDetail === a.summary) {
+      return html`<div class="approval-summary-line">${a.summary}</div>`;
+    }
+    return html`<details class="approval-summary-detail">
+      <summary class="approval-summary-line">${a.summary}</summary>
+      <div class="approval-detail-text">${a.summaryDetail}</div>
+    </details>`;
+  }
+
   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
     const summary = firstLine(a.command, 80);
     const truncated = a.command.includes("\n") || a.command.length > 80;
@@ -1956,7 +1967,7 @@ export function createChatSurface(
         <span class="approval-title">Approval needed</span>
         ${a.reason ? html`<span class="approval-reason-badge">${a.reason}</span>` : nothing}
       </div>
-      ${a.summary ? html`<div class="approval-summary-line">${a.summary}</div>` : nothing}
+      ${approvalSummaryLine(a)}
       ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">Why</span>${a.purpose}</div>` : nothing}
       ${
         expanded
