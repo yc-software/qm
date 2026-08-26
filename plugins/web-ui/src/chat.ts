@@ -50,7 +50,7 @@ import {
   makeCoreStreamFn,
   makeOpenerStreamFn,
   makeRunResumeStreamFn,
-  runApprovalTurn,
+  queueApprovalTurn,
   TAIL_TURNS,
   type ApprovalDecision,
   type AssistantWork,
@@ -519,15 +519,10 @@ export function createChatSurface(
     ctx.composer.state.error = "";
     drawActiveChat(agent);
     try {
-      await runApprovalTurn(
-        chatState.threadRef,
-        agent,
-        decision,
-        currentTurnOptions,
-        chatState.onWork ?? undefined,
-        undefined,
-        runSlot,
-      );
+      const threadRef = chatState.threadRef;
+      await queueApprovalTurn(threadRef, agent, decision, currentTurnOptions);
+      if (chatState.normalStreamFn && chatState.onWork)
+        await resumeTrackedRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork);
     } catch (err) {
       if (agent === chatState.agent) {
         ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
@@ -559,7 +554,7 @@ export function createChatSurface(
     for (const m of agent.state.messages) {
       if ((m as { role?: string }).role !== "assistant") continue;
       for (const approval of (m as AssistantWork).work?.pendingApprovals ?? []) {
-        byId.set(approval.requestId, approval);
+        if (!chatState.resolvingApprovals.has(approval.requestId)) byId.set(approval.requestId, approval);
       }
     }
     return [...byId.values()];

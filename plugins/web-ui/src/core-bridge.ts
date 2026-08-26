@@ -646,19 +646,22 @@ export function makeRunResumeStreamFn(
   return fn as unknown as StreamFn;
 }
 
-export async function runApprovalTurn(
+export async function queueApprovalTurn(
   threadRef: string,
   agent: Agent,
   decision: ApprovalDecision,
-  getTurnOptions: (() => TurnOptions) | undefined,
-  onWork: WorkObserver | undefined,
-  signal?: AbortSignal,
-  slot?: RunSlot,
-): Promise<void> {
-  const stream = createAssistantMessageEventStream();
-  await drive(stream, agent.state.model, threadRef, agent, getTurnOptions, signal, onWork, decision, false, slot);
-  const outcome = await stream.result();
-  if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
+  getTurnOptions?: () => TurnOptions,
+): Promise<QueuedRun> {
+  const { text, attachments } = await latestUserTurn(agent);
+  const submit = await api<{ runId?: string }>("/api/turn", {
+    method: "POST",
+    body: JSON.stringify({
+      ...turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, attachments),
+      approval: decision,
+    }),
+  });
+  if (!submit.runId) throw new Error("Could not continue after the approval.");
+  return { runId: submit.runId, text };
 }
 
 export function makeOpenerStreamFn(
