@@ -37,13 +37,14 @@ import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversa
 import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
 import {
-  addBlankPane,
   adoptRemoteSplit,
   canvasToast,
   drawCanvas,
   exitSplitIfActive,
   loadPersistedSplit,
   mountRestoredCanvas,
+  openBlankInFocusedPane,
+  openThreadInFocusedPane,
   restoredCanvasNeedsSessionList,
   splitState,
 } from "./split";
@@ -53,7 +54,6 @@ import {
   openSession,
   closeOpenSessionMenu,
   refreshSessions,
-  renderChatsPage,
   renderList,
   resetSessionsState,
   sessionsState,
@@ -513,13 +513,13 @@ export function renderSidebarTop(): void {
     html`
       <button
         class="new-chat"
-        title=${splitState.active ? "New session" : "New chat"}
+        title="New chat"
         @click=${() => {
           closeSidebarOnNarrowView();
-          if (!addBlankPane()) mainConversation().newChat();
+          openBlankInFocusedPane();
         }}
       >
-        ${icon(ICON.newChat, 17)}<span>${splitState.active ? "New session" : "New chat"}</span>
+        ${icon(ICON.newChat, 17)}<span>New chat</span>
       </button>
       <nav class="nav" @click=${onNavClick}>
         ${navGroup(
@@ -608,8 +608,8 @@ export function switchView(v: View): void {
   syncUrlFromState();
   switch (v) {
     case "chats":
-      if (splitState.active) drawCanvas();
-      else void renderChatsPage();
+      mountRestoredCanvas();
+      drawCanvas();
       renderList();
       break;
     case "webhooks":
@@ -644,8 +644,7 @@ export function switchView(v: View): void {
 function refreshActiveView(v: View): void {
   switch (v) {
     case "chats":
-      if (splitState.active) void refreshSessions({ silent: true, refreshContexts: true });
-      else void renderChatsPage();
+      void refreshSessions({ silent: true, refreshContexts: true });
       break;
     case "contexts":
       void renderContexts();
@@ -813,7 +812,7 @@ function openAppEditChat(slug: string): void {
     return;
   }
   if (!storedDraft(threadRef)) saveDraft(threadRef, `Update my deployed app "${slug}": `);
-  mainConversation().mountContinuable(threadRef, null, null, []);
+  openThreadInFocusedPane(threadRef);
   renderList();
 }
 
@@ -911,7 +910,7 @@ export async function boot(): Promise<void> {
   } else if (wantedSession) {
     const match = sessionsState.list.find((s) => s.id === wantedSession);
     if (match) {
-      exitSplitIfActive();
+      mountRestoredCanvas();
       await openSession(match, entriesPrefetch ?? undefined);
     } else if (mountRestoredCanvas()) {
       canvasToast("That conversation wasn't found, or you don't have access to it.");
@@ -922,9 +921,9 @@ export async function boot(): Promise<void> {
     }
   } else if (connectedProvider && sessionsState.list.length) {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
-    exitSplitIfActive();
+    mountRestoredCanvas();
     await openSession(recent);
-  } else if (!mountRestoredCanvas() && !mainConversation().state.threadRef) {
-    mainConversation().newChat();
+  } else {
+    mountRestoredCanvas();
   }
 }

@@ -77,11 +77,13 @@ import { appState, closeSidebarOnNarrowView, renderSidebarTop, showMainEmpty, sy
 import { allConversations, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
-  addBlankPane,
   beginSessionDrag,
   endSessionDrag,
   notifySessionsChanged,
   closeSessionSurfaces,
+  openBackgroundInCanvas,
+  openBlankInFocusedPane,
+  mountRestoredCanvas,
   drawCanvas,
   sessionInCanvas,
   splitInterceptsOpen,
@@ -385,12 +387,12 @@ function toggleRecentProject(scopeId: string): void {
   renderList();
 }
 
-function startProjectChat(event: Event, scopeId: string, name: string | null): void {
+function startProjectChat(event: Event, scopeId: string, _name: string | null): void {
   event.stopPropagation();
   closeSidebarOnNarrowView();
   sessionsState.collapsedProjectScopes.delete(scopeId);
-  if (addBlankPane(scopeId)) return;
-  addPendingSession(mainConversation().newChat({ scopeId, name }), scopeId, name);
+  openBlankInFocusedPane(scopeId);
+  renderList();
 }
 
 function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
@@ -603,8 +605,7 @@ function statusMarks(s: CoreSession): TemplateResult {
 function openBackgroundInspector(e: Event, s: CoreSession): void {
   e.stopPropagation();
   e.preventDefault();
-  mainConversation().requestBackgroundPanel(s.id || null, s.threadRef);
-  void openSession(s);
+  if (!openBackgroundInCanvas(s)) void openSession(s);
 }
 
 function isActiveRow(s: CoreSession): boolean {
@@ -1192,6 +1193,7 @@ export async function openSession(s: CoreSession, entriesPrefetch?: Promise<Tran
     if (splitState.active) drawCanvas();
     syncUrlFromState(s.id || null);
   }
+  mountRestoredCanvas();
   if (splitInterceptsOpen(s)) return;
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();

@@ -40,14 +40,9 @@ test("targets and highlights stay honest when the layout changes mid-drag", () =
   );
 });
 
-test("the single-view overlay hides splits the drop cannot honor", () => {
-  const single = split.match(/^function showSingleDropOverlay\([\s\S]*?\n\}/m)?.[0] ?? "";
-  assert.ok(single, "showSingleDropOverlay not found");
-  assert.match(
-    single,
-    /currentChatParams\(\) !== null/,
-    "a dirty unsaved chat cannot seed a pane, so no split targets",
-  );
-  assert.match(single, /state\.sessionId !== drag\?\.sessionId/, "dropping the chat onto itself cannot split");
-  assert.match(single, /splittable \? zonesTpl\(act\) : zoneTpl\("center", "Open here", act\("center"\)\)/);
+test("session drags always target the canvas — there is no single-view handoff", () => {
+  const begin = split.match(/^export function beginSessionDrag\([\s\S]*?\n}/m)?.[0] ?? "";
+  assert.ok(begin, "beginSessionDrag not found");
+  assert.match(begin, /refreshSessionDrag\(\);/);
+  assert.doesNotMatch(split, /showSingleDropOverlay|currentChatParams|activateCanvas/);
 });
