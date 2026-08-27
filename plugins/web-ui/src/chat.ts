@@ -1085,8 +1085,7 @@ export function createChatSurface(
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
           <section class="chat-scroll" @scroll=${onTranscriptScroll}>
             <div class="message-stack ${messages.length || chatState.forkSession ? "" : "empty-stack"}">
-              ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing}
-              ${messageContent}
+              ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
