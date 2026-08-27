@@ -41,6 +41,7 @@ import {
   canvasToast,
   drawCanvas,
   exitSplitIfActive,
+  focusedPaneSession,
   loadPersistedSplit,
   mountRestoredCanvas,
   openBlankInFocusedPane,
@@ -56,6 +57,7 @@ import {
   refreshSessions,
   renderList,
   resetSessionsState,
+  sessionTitle,
   sessionsState,
   toggleWebOnly,
 } from "./sessions";
@@ -72,6 +74,7 @@ import { renderSkills } from "./skills";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
+import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let authMode: AuthMode = "portal";
@@ -206,6 +209,7 @@ export async function signOut(): Promise<void> {
   resetContextsState();
   resetKeychainState();
   mainConversation().composer.resetComposer();
+  updateDocumentTitle();
   if (!portal) {
     renderAuthGate({ kind: "dev" });
     return;
@@ -483,6 +487,7 @@ export function mountShell(): void {
 }
 
 export function renderSidebarTop(): void {
+  syncDocumentTitle();
   if (!appState.topEl) return;
   const navRow = (v: View, glyph: IconNode, label: string) =>
     html`<a
@@ -575,6 +580,26 @@ export function renderSidebarTop(): void {
       `}
     `,
     appState.topEl,
+  );
+}
+
+export function syncDocumentTitle(): void {
+  if (!appState.me) {
+    updateDocumentTitle();
+    return;
+  }
+  const state = mainConversation().state;
+  const active = splitState.active
+    ? focusedPaneSession()
+    : activeSessionForDocumentTitle(sessionsState.list, {
+        openingKey: sessionsState.openingKey,
+        sessionId: state.sessionId,
+        threadRef: state.threadRef,
+      });
+  updateDocumentTitle(
+    appState.currentView,
+    active ? sessionTitle(active) : null,
+    Boolean(active || (!splitState.active && state.threadRef)),
   );
 }
 

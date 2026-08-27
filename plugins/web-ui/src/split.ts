@@ -48,7 +48,7 @@ import { icon } from "./ui";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
 import { appState } from "./shell-state";
-import { renderSidebarTop, switchView } from "./shell";
+import { renderSidebarTop, switchView, syncDocumentTitle } from "./shell";
 import { sleep } from "./chat";
 import {
   createConversation,
@@ -199,6 +199,7 @@ function buildDock(): DockviewApi {
   });
   api.onDidActivePanelChange((e) => {
     splitState.focusedId = e.panel?.id ?? null;
+    syncDocumentTitle();
   });
   api.onDidMaximizedGroupChange(() => {
     for (const a of groupActions) a.draw();
@@ -264,6 +265,7 @@ function ensureCanvas(): boolean {
   }
   ensureDeliveryStream();
   splitState.focusedId = dockApi.activePanel?.id ?? dockApi.panels[0]?.id ?? null;
+  syncDocumentTitle();
   headerSignature = computeHeaderSignature();
   return true;
 }
@@ -324,6 +326,7 @@ export function exitSplitIfActive(): void {
   if (dockApi) lastLayout = dockApi.toJSON();
   splitState.active = false;
   splitState.focusedId = null;
+  syncDocumentTitle();
   persist();
   disposeDock();
   canvasHost = null;
@@ -699,11 +702,18 @@ function refreshHeaders(): void {
   headerSignature = computeHeaderSignature();
   for (const t of paneTabs) t.draw();
   for (const c of paneContents.values()) c.syncTitle();
+  syncDocumentTitle();
 }
 
 function paneSession(panel: IDockviewPanel): CoreSession | undefined {
   const { sessionId } = panelParams(panel);
   return sessionId ? sessionsState.list.find((s) => s.id === sessionId) : undefined;
+}
+
+export function focusedPaneSession(): CoreSession | undefined {
+  if (!splitState.active || !dockApi) return undefined;
+  const panel = (splitState.focusedId && dockApi.getPanel(splitState.focusedId)) || dockApi.activePanel;
+  return panel ? paneSession(panel) : undefined;
 }
 
 function paneTitle(panel: IDockviewPanel): string {

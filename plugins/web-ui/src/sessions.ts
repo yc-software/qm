@@ -73,7 +73,14 @@ import {
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
-import { appState, closeSidebarOnNarrowView, renderSidebarTop, showMainEmpty, syncUrlFromState } from "./shell";
+import {
+  appState,
+  closeSidebarOnNarrowView,
+  renderSidebarTop,
+  showMainEmpty,
+  syncDocumentTitle,
+  syncUrlFromState,
+} from "./shell";
 import { allConversations, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
@@ -260,6 +267,7 @@ function visibleSessions(): CoreSession[] {
 }
 
 export function renderList(): void {
+  syncDocumentTitle();
   if (!appState.listEl) return;
   const visible = visibleSessions();
   const active = visible.filter((s) => !s.archived);
