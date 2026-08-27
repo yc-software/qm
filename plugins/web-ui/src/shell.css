@@ -6769,6 +6769,12 @@ h3.ambient-field-label {
   display: none;
 }
 
+/* …but archive has no group-level counterpart (the header's X closes the pane, it doesn't
+   archive), so a lone tab keeps its archive button. */
+.dockview-theme-qm .dv-single-tab .split-tab-archive {
+  display: inline-flex;
+}
+
 /* Multi-tab groups (tabbing is new capability the old canvas lacked): segmented chips in
    the app's own control idiom — the active tab is the standard raised card (page bg, 1px
    border, tiny shadow, 34px like .icon-btn), inactive tabs are muted text with the shared
@@ -6882,6 +6888,12 @@ h3.ambient-field-label {
     opacity 0.12s ease,
     width 0.12s ease,
     min-width 0.12s ease;
+}
+
+/* When the archive button is present it takes the auto margin; the close button that
+   follows sits snug beside it instead of splitting the leftover space. */
+.split-tab-archive + .split-tab-close {
+  margin-left: 2px;
 }
 
 .dv-tab:not(.dv-active-tab):not(:hover):not(:focus-within) .split-tab-close {

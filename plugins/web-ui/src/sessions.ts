@@ -1079,6 +1079,16 @@ async function commitRename(s: CoreSession): Promise<void> {
   await persistSessionPatch(s.id, { title: desired });
 }
 
+/** Archive a session by id — closes any surface showing it and updates the Recents list immediately. */
+export function archiveSessionById(sessionId: string): void {
+  const s = sessionsState.list.find((x) => x.id === sessionId);
+  if (s && !s.archived) {
+    setArchived(s, true);
+    return;
+  }
+  closeSessionSurfaces(sessionId);
+  if (!s) void persistSessionPatch(sessionId, { archived: true });
+}
 function setArchived(s: CoreSession, archived: boolean): void {
   sessionsState.openMenuId = null;
   if (archived && s.id) closeSessionSurfaces(s.id);

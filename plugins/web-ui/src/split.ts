@@ -1,6 +1,7 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import {
+  Archive,
   Binoculars,
   Box,
   Brain,
@@ -65,6 +66,7 @@ import {
   renderList,
   sessionsState,
   sessionTitle,
+  archiveSessionById,
   syncWorkingPulse,
 } from "./sessions";
 import { conversationBackground, type RowIndicators } from "./session-list";
@@ -941,6 +943,7 @@ class PaneTab implements ITabRenderer {
     const working = paneIsWorking(panel);
     const awaiting = paneAwaitsInput(panel);
     const background = paneBackground(panel);
+    const sessionId = panelParams(panel).sessionId;
     this.element.title = crumb ? `${crumb} / ${title}` : title;
     render(
       html`
@@ -965,6 +968,23 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text">${title}</span>
+        ${
+          this.inStrip && sessionId
+            ? html`<button
+                class="icon-btn subtle split-tab-close split-tab-archive"
+                type="button"
+                title="Archive session"
+                aria-label="Archive session"
+                @pointerdown=${(e: Event) => e.stopPropagation()}
+                @click=${(e: Event) => {
+                  e.stopPropagation();
+                  archiveSessionById(sessionId);
+                }}
+              >
+                ${icon(Archive, 13)}
+              </button>`
+            : nothing
+        }
         ${
           this.inStrip
             ? html`<button
