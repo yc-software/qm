@@ -7244,6 +7244,11 @@ h3.ambient-field-label {
 [data-density] .composer-error {
   flex-basis: 100%;
 }
+[data-density="card"] .chat-scroll,
+[data-density="strip"] .chat-scroll {
+  display: none;
+}
+
 .pane-card {
   min-height: 0;
   overflow: hidden;

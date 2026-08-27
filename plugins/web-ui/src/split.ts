@@ -827,13 +827,14 @@ class PaneContent implements IContentRenderer {
         return;
       }
       this.syncDensity();
-      this.conversation.drawActiveChat(undefined, { forceScroll: true });
     });
     if (p.api.isVisible) void this.load();
   }
 
   private syncDensity(): void {
-    this.element.dataset.density = this.density = paneDensity(this.element);
+    const next = paneDensity(this.element);
+    if (!next || next === this.density) return;
+    this.element.dataset.density = this.density = next;
     for (const handler of this.redrawOnResize) handler();
   }
 

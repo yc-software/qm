@@ -1082,17 +1082,14 @@ export function createChatSurface(
               : nothing
           }
           ${glanceTier || ctx.pane ? nothing : sessionTopbar()}
-          ${
-            glanceTier
-              ? paneGlance(agent, messages, glanceTier)
-              : html`<section class="chat-scroll" @scroll=${onTranscriptScroll}>
-                  <div class="message-stack ${messages.length || chatState.forkSession ? "" : "empty-stack"}">
-                    ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing}
-                    ${messageContent}
-                    ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
-                  </div>
-                </section>`
-          }
+          ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
+          <section class="chat-scroll" @scroll=${onTranscriptScroll}>
+            <div class="message-stack ${messages.length || chatState.forkSession ? "" : "empty-stack"}">
+              ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing}
+              ${messageContent}
+              ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
+            </div>
+          </section>
           <div class="chat-bottom-dock">
             ${backgroundActivityStrip()} ${liveWorkDock(agent)} ${ctx.composer.composerForm(agent)}
           </div>
