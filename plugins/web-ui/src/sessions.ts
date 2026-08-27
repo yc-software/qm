@@ -1400,8 +1400,21 @@ export function sessionsReady(): Promise<void> {
   return sessionsState.loaded ? Promise.resolve() : listReady;
 }
 
-export async function refreshSessions(
+let latestSessionsRefresh: Promise<boolean> | null = null;
+
+export function refreshSessions(
   opts: { showLoading?: boolean; silent?: boolean; refreshContexts?: boolean; patchEpoch?: number } = {},
+): Promise<boolean> {
+  const run: Promise<boolean> = runSessionsRefresh(opts, () =>
+    latestSessionsRefresh === run ? null : latestSessionsRefresh,
+  );
+  latestSessionsRefresh = run;
+  return run;
+}
+
+async function runSessionsRefresh(
+  opts: { showLoading?: boolean; silent?: boolean; refreshContexts?: boolean; patchEpoch?: number },
+  newerRun: () => Promise<boolean> | null,
 ): Promise<boolean> {
   loadRecentContexts(opts.refreshContexts === true);
   const seq = ++sessionRefreshSeq;
@@ -1413,19 +1426,20 @@ export async function refreshSessions(
   }
   try {
     const r = await api<{ sessions: CoreSession[] }>("/api/sessions");
-    if (seq !== sessionRefreshSeq || patchEpoch !== sessionPatchEpoch) return false;
+    if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
+    if (patchEpoch !== sessionPatchEpoch) return false;
     sessionsState.list = reconcileSessions(r.sessions ?? [], sessionsState.list);
     sessionsState.loaded = true;
     sessionsNotice = "";
     return true;
   } catch (e) {
-    if (seq !== sessionRefreshSeq) return false;
+    if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
     if (!opts.silent) sessionsNotice = errMessage(e, "Failed to load conversations.");
     return false;
   } finally {
-    listSettled?.();
-    listSettled = null;
     if (seq === sessionRefreshSeq) {
+      listSettled?.();
+      listSettled = null;
       sessionsLoading = false;
       renderList();
     }

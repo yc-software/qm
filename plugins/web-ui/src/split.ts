@@ -71,8 +71,7 @@ import {
 } from "./sessions";
 import { conversationBackground, type RowIndicators } from "./session-list";
 import { setScopedSession, type SessionTool } from "./session-scope";
-import type { CoreSession } from "./core-bridge";
-import { fetchUiState, putUiState } from "./core-bridge";
+import { fetchTranscript, fetchUiState, putUiState, TAIL_TURNS, type CoreSession } from "./core-bridge";
 
 export const splitState = {
   active: false,
@@ -875,10 +874,19 @@ class PaneContent implements IContentRenderer {
       session = sessionsState.list.find((s) => s.id === wanted);
     }
     if (!session) {
-      this.conversation.mountReadOnly(
-        { id: wanted, threadRef: threadRef ?? "", scopeId: "", title: "" } as CoreSession,
-        [],
-      );
+      const page = await fetchTranscript(wanted, { tailTurns: TAIL_TURNS }).catch(() => null);
+      if (this.disposed) return;
+      session = page?.session;
+      if (!session) {
+        this.conversation.mountReadOnly(
+          { id: wanted, threadRef: threadRef ?? "", scopeId: "", title: "" } as CoreSession,
+          [],
+        );
+        return;
+      }
+      await openSessionInto(this.conversation, session, Promise.resolve(page));
+      if (this.disposed) return;
+      refreshHeaders();
       return;
     }
     if (background) {
