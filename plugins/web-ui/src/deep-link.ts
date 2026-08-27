@@ -17,7 +17,7 @@ export function deepLinkPath(
   }
   if (view !== "chats") return `${b}/${encodeURIComponent(view)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
   if (itemId) throw new Error("the chats view is addressed by session, not by item id");
-  return `${b}/${sessionId ? `?session=${encodeURIComponent(sessionId)}` : ""}`;
+  return sessionId ? `${b}/s/${encodeURIComponent(sessionId)}` : `${b}/`;
 }
 
 function decodeSegment(seg: string): string | null {
@@ -44,16 +44,28 @@ export function parseDeepLink(
   if (pathView === "projects") {
     projectItem = projectKind ? decodeSegment(segments[2] ?? "") : decodeSegment(segments[1] ?? "");
   }
-  const requestedView = params.get("view") ?? (pathView === "projects" ? "contexts" : pathView);
+  const sessionSeg = pathView === "s" ? decodeSegment(segments[1] ?? "") : null;
+  let fallbackView = pathView;
+  if (pathView === "projects") fallbackView = "contexts";
+  else if (pathView === "s") fallbackView = "chats";
+  const requestedView = params.get("view") ?? fallbackView;
   const view = requestedView === "connectors" ? "keychain" : requestedView;
   return {
     view,
-    session: params.get("session"),
-    item:
-      pathView === "projects" && projectKind && projectItem
-        ? `${projectKind}:${projectItem}`
-        : (projectItem ?? decodeSegment(segments[1] ?? "")),
+    session: sessionSeg ?? params.get("session"),
+    item: itemFor(pathView, projectKind, projectItem, segments),
   };
+}
+
+function itemFor(
+  pathView: string | null,
+  projectKind: string | null,
+  projectItem: string | null,
+  segments: string[],
+): string | null {
+  if (pathView === "s") return null;
+  if (pathView === "projects" && projectKind && projectItem) return `${projectKind}:${projectItem}`;
+  return projectItem ?? decodeSegment(segments[1] ?? "");
 }
 
 export function sessionLink(origin: string, base: string, sessionId: string): string {
