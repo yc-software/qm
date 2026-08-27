@@ -58,3 +58,15 @@ test("the highlighted strip is a real drop target, not just a glow", () => {
   assert.match(end, /drawStripDrops\(\)/, "zones vanish when the drag ends");
   assert.match(css, /\.strip-zones \{/, "the overlay is styled");
 });
+
+test("native tab drags advertise every pane as a target from drag start", () => {
+  assert.match(split, /api\.onWillDragPanel\(\(\) => beginTabDragHint\(\)\);/);
+  assert.match(split, /api\.onWillDragGroup\(\(\) => beginTabDragHint\(\)\);/);
+  const hint = split.match(/^function beginTabDragHint\([\s\S]*?\n\}/m)?.[0] ?? "";
+  assert.ok(hint, "beginTabDragHint not found");
+  assert.match(hint, /classList\.add\("tab-dragging"\)/);
+  assert.match(hint, /classList\.remove\("tab-dragging"\)/, "the hint clears when the drag ends");
+  assert.match(hint, /addEventListener\("dragend"/, "cleared on dragend");
+  assert.match(hint, /addEventListener\("drop"/, "and on drop");
+  assert.match(css, /\.split-canvas\.tab-dragging \.dv-groupview \{/, "the target styling exists");
+});

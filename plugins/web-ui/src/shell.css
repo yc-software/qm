@@ -7106,6 +7106,13 @@ h3.ambient-field-label {
   color: var(--foreground);
 }
 
+/* A native tab drag lights every pane up as a valid target from drag start;
+   dockview's own dropzone still handles the precise edge choice on hover. */
+.split-canvas.tab-dragging .dv-groupview {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+
 .split-canvas.session-dragging .dv-tabs-and-actions-container {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 55%, var(--border));
   background: color-mix(in srgb, var(--primary) 6%, transparent);

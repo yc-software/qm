@@ -187,6 +187,11 @@ function buildDock(): DockviewApi {
     }
   };
   api.onWillDrop(holdTileCap);
+  // A native tab/group drag gets the same courtesy as a sidebar session drag: every
+  // pane advertises itself as a drop target from the moment the drag starts, instead
+  // of waiting to be discovered by hover (dockview only paints its dropzone on dragover).
+  api.onWillDragPanel(() => beginTabDragHint());
+  api.onWillDragGroup(() => beginTabDragHint());
   const guarded = new WeakSet<IDockviewGroupPanel>();
   api.onDidLayoutChange(() => {
     host.classList.toggle("one-pane", api.panels.length === 1);
@@ -607,6 +612,17 @@ function refreshSessionDrag(): void {
 
 function drawStripDrops(): void {
   for (const s of stripDrops) s.draw();
+}
+
+function beginTabDragHint(): void {
+  canvasHost?.classList.add("tab-dragging");
+  const end = (): void => {
+    canvasHost?.classList.remove("tab-dragging");
+    document.removeEventListener("dragend", end, true);
+    document.removeEventListener("drop", end, true);
+  };
+  document.addEventListener("dragend", end, true);
+  document.addEventListener("drop", end, true);
 }
 
 export function endSessionDrag(): void {
