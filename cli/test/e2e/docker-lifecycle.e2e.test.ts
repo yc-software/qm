@@ -99,6 +99,20 @@ test(
         assert.ok(!inspect(portal).Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
       });
 
+      await t.test("services receive their private-network aliases", () => {
+        const portal = suffix(deploymentContainers(org), "portal")!;
+        const aliases = JSON.parse(
+          execFileSync(
+            "docker",
+            ["inspect", "-f", `{{json (index .NetworkSettings.Networks "qm-${org}").Aliases}}`, portal],
+            {
+              encoding: "utf8",
+            },
+          ),
+        ) as string[];
+        assert.ok(aliases.includes(`qm-${org}-portal.internal`), aliases.join(", "));
+      });
+
       await t.test("computed secrets from the deployment ./.env reach the core container", () => {
         const core = suffix(deploymentContainers(org), "core")!;
         const got = execFileSync("docker", ["exec", core, "printenv", "CORE_SIGNING_SECRET"], {

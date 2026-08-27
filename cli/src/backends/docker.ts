@@ -366,7 +366,7 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
       out,
       brokerWiring(service, {
         publicUrl: config.publicUrl,
-        authBaseUrl: "http://auth:8080",
+        authBaseUrl: `http://${dockerPrefix(config)}-auth.internal:8080`,
         ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
           ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
           : {}),
@@ -477,6 +477,8 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     ctx.network,
     "--network-alias",
     service,
+    "--network-alias",
+    `${cname(ctx, service)}.internal`,
     "--restart",
     "no",
   ];

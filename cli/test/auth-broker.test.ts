@@ -97,8 +97,8 @@ test("a configured botName brands the docker service env for core and auth", () 
 test("docker and AWS wire the broker with parity", () => {
   const docker = configWith(configText());
   const dockerPortal = dockerServiceEnv(docker, "portal");
-  assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://auth:8080");
-  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://auth:8080/token");
+  assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://qm-acme-auth.internal:8080");
+  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://qm-acme-auth.internal:8080/token");
   assert.equal(dockerPortal.OIDC_ISSUER, "https://agent.example.com/idp");
   assert.equal(dockerServiceEnv(docker, "auth").AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
   assert.equal(dockerServiceEnv(docker, "web-ui").AUTH_BROKER_UPSTREAM, undefined);
