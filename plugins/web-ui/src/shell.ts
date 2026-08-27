@@ -60,6 +60,7 @@ import {
   sessionTitle,
   sessionsState,
   toggleWebOnly,
+  sessionSelectionBar,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
@@ -548,36 +549,39 @@ export function renderSidebarTop(): void {
           `,
         )}
       </nav>
-      ${html`
-        <div class="section-label recents-label">
-          <span>Sessions</span>
-          <button
-            class="chat-search-open"
-            type="button"
-            aria-label="Search your chats"
-            @click=${() => {
-              hideTooltip();
-              openChatSearch();
-            }}
-            @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
-            @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
-            @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
-            @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
-          >
-            ${icon(Search, 13)}
-          </button>
-          <button
-            class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
-            type="button"
-            role="switch"
-            aria-checked=${sessionsState.webOnly ? "true" : "false"}
-            title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
-            @click=${toggleWebOnly}
-          >
-            <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
-          </button>
-        </div>
-      `}
+      ${
+        sessionSelectionBar() ??
+        html`
+          <div class="section-label recents-label">
+            <span>Sessions</span>
+            <button
+              class="chat-search-open"
+              type="button"
+              aria-label="Search your chats"
+              @click=${() => {
+                hideTooltip();
+                openChatSearch();
+              }}
+              @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
+              @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+              @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
+              @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+            >
+              ${icon(Search, 13)}
+            </button>
+            <button
+              class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
+              type="button"
+              role="switch"
+              aria-checked=${sessionsState.webOnly ? "true" : "false"}
+              title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
+              @click=${toggleWebOnly}
+            >
+              <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
+            </button>
+          </div>
+        `
+      }
     `,
     appState.topEl,
   );

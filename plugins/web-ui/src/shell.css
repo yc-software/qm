@@ -7591,3 +7591,69 @@ h3.ambient-field-label {
 .chat-search-failed {
   color: var(--destructive, #b42318);
 }
+
+.session-row.selected .session {
+  background: color-mix(in srgb, var(--primary, #d99a21) 16%, transparent);
+}
+.session-row.selected .session:hover,
+.session-row.selected.active .session {
+  background: color-mix(in srgb, var(--primary, #d99a21) 24%, transparent);
+}
+.session-row .session {
+  user-select: none;
+}
+.section-label.multi-select-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: normal;
+  overflow: visible;
+}
+.multi-select-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.multi-select-summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.multi-select-color {
+  position: relative;
+  display: inline-flex;
+}
+.multi-select-color-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 0;
+  padding: 6px;
+  border-radius: 10px;
+}
+.multi-select-color-popover .session-menu-colors {
+  gap: 6px;
+  margin: 0;
+  padding: 2px;
+  border: 0;
+}
+.multi-select-color-popover .color-swatch {
+  width: 16px;
+  height: 16px;
+}
+.multi-select-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.multi-select-bar .icon-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
