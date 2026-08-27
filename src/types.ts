@@ -280,6 +280,7 @@ export interface SurfaceContextQuery {
   conversationTarget?: string;
   channelId?: string;
   channelName?: string;
+  threadTs?: string;
   count: number;
   viewer?: string;
   before?: string;

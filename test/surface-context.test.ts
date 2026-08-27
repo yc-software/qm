@@ -134,6 +134,18 @@ describe("surface-context pulls", async () => {
     assert.equal(((await res.json()) as any).channel, "#eng");
   });
 
+  it("passes a requested threadTs through to the surface", async () => {
+    const asking = post(
+      "/v1/surface-context",
+      { channel: "#eng", threadTs: "1700.5" },
+      { "x-agent-capability": await cap() },
+    );
+    const query = await fulfillNext(() => ({ messages: [] }));
+    assert.equal(query.channelId, "C-ENG");
+    assert.equal(query.threadTs, "1700.5");
+    assert.equal((await asking).status, 200);
+  });
+
   it("passes a raw channel id straight to the plugin (a public channel the actor can see), skipping the (possibly stale) directory", async () => {
     const asking = post("/v1/surface-context", { channel: "CPUBLIC01" }, { "x-agent-capability": await cap() });
     const query = await fulfillNext(() => ({ messages: [] }));

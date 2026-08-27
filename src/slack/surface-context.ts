@@ -18,8 +18,11 @@ import {
   type ConversationSerializer,
   RECENT_HISTORY_LIMIT,
   RECENT_THREAD_LIMIT,
+  expandThreadReplies,
   slackFileName,
 } from "./conversation-view.ts";
+
+const CONTEXT_EXPANDED_THREADS = 10;
 
 export function createSurfaceContextFulfiller(deps: {
   core: SlackCoreClient;
@@ -79,7 +82,9 @@ export function createSurfaceContextFulfiller(deps: {
       return { raw: res.messages ?? [], hasMore: Boolean(res.has_more) };
     }
     const res = await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT, ...page });
-    return { raw: ((res.messages ?? []) as any[]).slice().reverse(), hasMore: Boolean(res.has_more) };
+    const history = ((res.messages ?? []) as any[]).slice().reverse();
+    const raw = await expandThreadReplies(client, channel, history, { maxThreads: CONTEXT_EXPANDED_THREADS, page });
+    return { raw, hasMore: Boolean(res.has_more) };
   }
 
   async function findMessageAt(
@@ -217,6 +222,7 @@ export function createSurfaceContextFulfiller(deps: {
       } else {
         return post({ error: "malformed context request" });
       }
+      if (typeof q.threadTs === "string" && q.threadTs) threadTs = q.threadTs;
       if (q.file && typeof q.file.ts === "string" && q.file.ts) {
         return await post(await fetchSurfaceFile(client, channel, threadTs, q.file));
       }

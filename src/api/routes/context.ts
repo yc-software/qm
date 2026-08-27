@@ -77,6 +77,7 @@ async function createSurfaceContextRequest(ctx: ApiCtx): Promise<void> {
   );
   const before = typeof b.before === "string" && b.before.trim() ? b.before.trim() : undefined;
   const match = typeof b.match === "string" && b.match.trim() ? b.match.trim().slice(0, 200) : undefined;
+  const threadTs = typeof b.threadTs === "string" && b.threadTs.trim() ? b.threadTs.trim() : undefined;
 
   const resolved = await resolveSurfaceTarget(ctx, b);
   if (!resolved) return;
@@ -84,6 +85,7 @@ async function createSurfaceContextRequest(ctx: ApiCtx): Promise<void> {
     ...resolved.target,
     viewer: capability.actorId,
     count,
+    ...(threadTs ? { threadTs } : {}),
     ...(before ? { before } : {}),
     ...(match ? { match } : {}),
   };

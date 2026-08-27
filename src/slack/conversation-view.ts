@@ -26,6 +26,36 @@ const MEMBERS_SHOW_MAX = 40;
 
 export const slackFileName = (f: SlackFile): string => f.name || f.title || f.id || "file";
 
+export async function expandThreadReplies(
+  client: any,
+  channel: string,
+  history: any[],
+  opts: { maxThreads: number; page?: Record<string, unknown> },
+): Promise<any[]> {
+  const threadParents = history.filter((m: any) => m.ts && Number(m.reply_count) > 0).slice(-opts.maxThreads);
+  const expanded = await Promise.all(
+    threadParents.map(async (p: any) => {
+      try {
+        return (
+          (
+            await client.conversations.replies({
+              channel,
+              ts: p.ts,
+              limit: EXPANDED_THREAD_REPLY_LIMIT,
+              ...(opts.page ?? {}),
+            })
+          ).messages ?? []
+        );
+      } catch {
+        return [];
+      }
+    }),
+  );
+  const byTs = new Map<string, any>();
+  for (const m of [...history, ...expanded.flat()]) if (m?.ts) byTs.set(m.ts, m);
+  return [...byTs.values()];
+}
+
 export function reactionTallies(raw: unknown): ReactionTally[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -120,22 +150,7 @@ export function createConversationSerializer(deps: {
       const history = ((await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT })).messages ?? [])
         .slice()
         .reverse();
-      const threadParents = history.filter((m: any) => m.ts && Number(m.reply_count) > 0).slice(-MAX_EXPANDED_THREADS);
-      const expanded = await Promise.all(
-        threadParents.map(async (p: any) => {
-          try {
-            return (
-              (await client.conversations.replies({ channel, ts: p.ts, limit: EXPANDED_THREAD_REPLY_LIMIT }))
-                .messages ?? []
-            );
-          } catch {
-            return [];
-          }
-        }),
-      );
-      const byTs = new Map<string, any>();
-      for (const m of [...history, ...expanded.flat()]) if (m?.ts) byTs.set(m.ts, m);
-      return [...byTs.values()];
+      return expandThreadReplies(client, channel, history, { maxThreads: MAX_EXPANDED_THREADS });
     } catch {
       return [];
     }
