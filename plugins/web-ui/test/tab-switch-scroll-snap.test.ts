@@ -21,6 +21,6 @@ test("responsive pane summaries do not replace the transcript scroller", () => {
 });
 
 test("hidden panes retain their last meaningful density", () => {
-  const fn = split.match(/private syncDensity\(\): void \{[\s\S]*?\n  \}/)?.[0] ?? "";
+  const fn = split.match(/private syncDensity\(\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(fn, /if \(!next\s*\|\|\s*next === this\.density\) return;/);
 });
