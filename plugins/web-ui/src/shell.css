@@ -2847,6 +2847,9 @@ a.chat-row-open {
 .send-failure .btn {
   color: var(--foreground);
 }
+.user-row .send-failure {
+  justify-content: flex-end;
+}
 .stopped-note {
   display: inline-flex;
   align-items: center;

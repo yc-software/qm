@@ -184,8 +184,9 @@ test("a failed initial submission is retryable with the same client turn id", as
     if (submitted.length === 1) throw new TypeError("Failed to fetch");
     return Response.json({ status: "ok", reply: "delivered" });
   }) as typeof fetch;
+  const userMessage = { role: "user", content: "hello" } as { role: "user"; content: string; sendFailure?: string };
   const agent = {
-    state: { model: MODEL, messages: [{ role: "user", content: "hello" }], tools: [] },
+    state: { model: MODEL, messages: [userMessage], tools: [] },
   } as unknown as import("@earendil-works/pi-agent-core").Agent;
   const streamFn = makeCoreStreamFn("web:alice:one", agent);
 
@@ -194,6 +195,7 @@ test("a failed initial submission is retryable with the same client turn id", as
   assert.equal(failed.stopReason, "error");
   assert.equal(failed.errorMessage, "Message wasn’t sent. Check your connection and try again.");
   assert.equal((failed as { retryableSend?: boolean }).retryableSend, true);
+  assert.equal(userMessage.sendFailure, "Message wasn’t sent. Check your connection and try again.");
 
   const retriedStream = await streamFn(MODEL, {} as import("@earendil-works/pi-ai").Context);
   const retried = await retriedStream.result();

@@ -37,6 +37,13 @@ interface CoreAttachment {
   sizeBytes: number;
   blobId: string;
 }
+type WebUserMessage = AgentMessage & {
+  role: "user" | "user-with-attachments";
+  content: string | Array<{ type: string; text?: string }>;
+  attachments?: PiAttachment[];
+  clientTurnId?: string;
+  sendFailure?: string;
+};
 
 export interface DeliveredFile {
   name: string;
@@ -392,28 +399,34 @@ function baseAssistant(model: Model<Api>): AssistantMessage {
   };
 }
 
+function latestUserMessage(agent: Agent): WebUserMessage | undefined {
+  const messages = agent.state.messages as WebUserMessage[];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message?.role === "user" || message?.role === "user-with-attachments") return message as WebUserMessage;
+  }
+  return undefined;
+}
+
 async function latestUserTurn(
   agent: Agent,
 ): Promise<{ text: string; attachments: CoreAttachment[]; clientTurnId: string }> {
-  const messages = agent.state.messages as Array<AgentMessage & { attachments?: PiAttachment[] }>;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m?.role !== "user" && m?.role !== "user-with-attachments") continue;
-    const text =
-      typeof m.content === "string"
-        ? m.content
-        : (m.content as Array<{ type: string; text?: string }>)
-            .filter((c) => c.type === "text")
-            .map((c) => c.text ?? "")
-            .join("\n");
-    const identified = m as AgentMessage & { attachments?: PiAttachment[]; clientTurnId?: string };
-    identified.clientTurnId ??= crypto.randomUUID();
-    const attachments = await Promise.all(
-      (m.attachments ?? []).filter((a) => typeof a.content === "string" && a.content.length > 0).map(toCoreAttachment),
-    );
-    return { text, attachments, clientTurnId: identified.clientTurnId };
-  }
-  return { text: "", attachments: [], clientTurnId: crypto.randomUUID() };
+  const message = latestUserMessage(agent);
+  if (!message) return { text: "", attachments: [], clientTurnId: crypto.randomUUID() };
+  const text =
+    typeof message.content === "string"
+      ? message.content
+      : (message.content as Array<{ type: string; text?: string }>)
+          .filter((c) => c.type === "text")
+          .map((c) => c.text ?? "")
+          .join("\n");
+  message.clientTurnId ??= crypto.randomUUID();
+  const attachments = await Promise.all(
+    (message.attachments ?? [])
+      .filter((attachment) => typeof attachment.content === "string" && attachment.content.length > 0)
+      .map(toCoreAttachment),
+  );
+  return { text, attachments, clientTurnId: message.clientTurnId };
 }
 
 function attachmentBytes(a: PiAttachment): Uint8Array {
@@ -759,7 +772,10 @@ async function drive(
     work.finishedAt = Date.now();
     notify();
     if (e instanceof TypeError) {
-      fail(stream, partial, "Message wasn’t sent. Check your connection and try again.", true);
+      const errorMessage = "Message wasn’t sent. Check your connection and try again.";
+      const message = latestUserMessage(agent);
+      if (message) message.sendFailure = errorMessage;
+      fail(stream, partial, errorMessage, true);
       return;
     }
     fail(stream, partial, e instanceof Error ? e.message : String(e));

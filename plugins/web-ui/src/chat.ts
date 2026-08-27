@@ -115,6 +115,7 @@ interface SettledRowKey {
   stopReason: unknown;
   errorMessage: unknown;
   approvalDecision: unknown;
+  sendFailure: unknown;
   forkable: boolean;
   tpl: TemplateResult | typeof nothing;
 }
@@ -1203,8 +1204,11 @@ export function createChatSurface(
   async function retryFailedSend(message: AgentMessage, index: number): Promise<void> {
     const agent = chatState.agent;
     if (!agent || agent.state.isStreaming || agent.state.messages[index] !== message) return;
-    if (!(message as AssistantWork).retryableSend) return;
-    agent.state.messages = agent.state.messages.filter((_, current) => current !== index);
+    const failed = message as AgentMessage & { sendFailure?: string };
+    const error = agent.state.messages[index + 1] as AssistantWork | undefined;
+    if (!failed.sendFailure || !error?.retryableSend) return;
+    delete failed.sendFailure;
+    agent.state.messages = agent.state.messages.filter((_, current) => current !== index + 1);
     ctx.composer.state.error = "";
     drawActiveChat(agent);
     try {
@@ -1225,7 +1229,12 @@ export function createChatSurface(
     index: number,
     isStreaming: boolean,
   ): TemplateResult | typeof nothing {
-    const msg = message as AssistantWork & { stopReason?: string; errorMessage?: string; approvalDecision?: string };
+    const msg = message as AssistantWork & {
+      stopReason?: string;
+      errorMessage?: string;
+      approvalDecision?: string;
+      sendFailure?: string;
+    };
     const work = msg.work;
     const cacheable =
       !isStreaming &&
@@ -1243,6 +1252,7 @@ export function createChatSurface(
       hit.stopReason === msg.stopReason &&
       hit.errorMessage === msg.errorMessage &&
       hit.approvalDecision === msg.approvalDecision &&
+      hit.sendFailure === msg.sendFailure &&
       hit.forkable === forkable
     ) {
       return hit.tpl;
@@ -1257,6 +1267,7 @@ export function createChatSurface(
       stopReason: msg.stopReason,
       errorMessage: msg.errorMessage,
       approvalDecision: msg.approvalDecision,
+      sendFailure: msg.sendFailure,
       forkable,
       tpl,
     });
@@ -1269,6 +1280,7 @@ export function createChatSurface(
     if (role === "user" || role === "user-with-attachments") {
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const steered = Boolean((message as { steered?: boolean }).steered);
+      const sendFailure = (message as { sendFailure?: string }).sendFailure;
       return html`
         <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
           ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
@@ -1276,12 +1288,23 @@ export function createChatSurface(
             ${markdown(messageText(message))}
             ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
           </div>
+          ${
+            sendFailure
+              ? html`<div class="send-failure">
+                  <span>${sendFailure}</span>
+                  <button class="btn compact" type="button" @click=${() => void retryFailedSend(message, index)}>
+                    ${icon(RefreshCw, 12)} Retry
+                  </button>
+                </div>`
+              : nothing
+          }
           ${messageMeta(message, index)}
         </article>
       `;
     }
     if (role === "assistant") {
       const msg = message as AssistantMessage;
+      if ((msg as AssistantWork).retryableSend) return nothing;
       const work = isStreaming ? null : (msg as AssistantWork).work;
       const text = messageText(msg).trim();
       const hasText = Boolean(text);
@@ -1293,17 +1316,10 @@ export function createChatSurface(
         Boolean(deliveredFiles?.length) ||
         msg.content.some((chunk) => chunk.type === "thinking" && chunk.thinking.trim());
       if (!hasVisibleContent && msg.stopReason !== "error" && msg.stopReason !== "aborted") return nothing;
-      let errorTpl: TemplateResult | typeof nothing = nothing;
-      if (msg.stopReason === "error" && msg.errorMessage) {
-        errorTpl = (msg as AssistantWork).retryableSend
-          ? html`<div class="send-failure">
-              <span>${msg.errorMessage}</span>
-              <button class="btn compact" type="button" @click=${() => void retryFailedSend(message, index)}>
-                ${icon(RefreshCw, 12)} Retry
-              </button>
-            </div>`
-          : html`<div class="composer-error inline">${msg.errorMessage}</div>`;
-      }
+      const errorTpl =
+        msg.stopReason === "error" && msg.errorMessage
+          ? html`<div class="composer-error inline">${msg.errorMessage}</div>`
+          : nothing;
       return html`
         <article class="message-row assistant-row ${isStreaming ? "streaming" : ""}" data-index=${index}>
           <div class="assistant-body">
