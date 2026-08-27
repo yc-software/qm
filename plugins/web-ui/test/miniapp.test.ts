@@ -16,10 +16,7 @@ test("miniappsIn pulls title and url and stripMiniappDirectives removes the mark
   assert.equal(apps[0]!.title, "Slope");
   assert.equal(apps[0]!.url, "https://qm.test/m/abc/def");
   assert.equal(stripMiniappDirectives(text), "Here you go");
-  assert.equal(
-    stripMiniappDirectives("[[miniapp: sandbox:/mnt/user-data/outputs/x.html | Blocks]]"),
-    "",
-  );
+  assert.equal(stripMiniappDirectives("[[miniapp: sandbox:/mnt/user-data/outputs/x.html | Blocks]]"), "");
 });
 
 test("parseMiniappUrl rejects non-miniapp urls", () => {

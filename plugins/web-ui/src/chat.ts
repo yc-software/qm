@@ -160,7 +160,10 @@ function noteMiniappBoot(path: string, boot: { ok: boolean; error?: string }): v
 window.addEventListener("message", (event) => {
   const data = event.data as { source?: string; path?: string; ok?: boolean; error?: string } | null;
   if (!data || data.source !== "qm-miniapp" || typeof data.path !== "string") return;
-  noteMiniappBoot(data.path, { ok: Boolean(data.ok), ...(typeof data.error === "string" && data.error ? { error: data.error } : {}) });
+  noteMiniappBoot(data.path, {
+    ok: Boolean(data.ok),
+    ...(typeof data.error === "string" && data.error ? { error: data.error } : {}),
+  });
 });
 
 function armMiniappBoot(src: string): void {
@@ -1542,7 +1545,19 @@ export function createChatSurface(
     if (!hljs.getLanguage("html") && !hljs.getLanguage("xml")) {
       void whenHighlightReady().then(() => redrawTranscript());
     }
-    return html`<pre class="miniapp-source" tabindex="0">${unsafeHTML(hljs.highlight(formatted, { language: "html" }).value)}</pre>`;
+    return html`<pre class="miniapp-source" tabindex="0">
+${unsafeHTML(hljs.highlight(formatted, { language: "html" }).value)}</pre>`;
+  }
+
+  function miniappBootState(
+    pane: "play" | "code",
+    boot: { ok: boolean; error?: string } | undefined,
+  ): TemplateResult | typeof nothing {
+    if (pane !== "play") return nothing;
+    if (!boot) return html`<div class="miniapp-boot" role="status">Starting…</div>`;
+    if (!boot.ok)
+      return html`<div class="miniapp-boot err" role="alert">${boot.error || "Playground hit an error."}</div>`;
+    return nothing;
   }
 
   function miniappCard(app: MiniappEmbed): TemplateResult {
@@ -1595,14 +1610,7 @@ export function createChatSurface(
           sandbox="allow-scripts allow-forms allow-pointer-lock allow-modals allow-popups"
           referrerpolicy="no-referrer"
         ></iframe>
-        ${
-          pane === "play" && !boot
-            ? html`<div class="miniapp-boot" role="status">Starting…</div>`
-            : pane === "play" && boot && !boot.ok
-              ? html`<div class="miniapp-boot err" role="alert">${boot.error || "Playground hit an error."}</div>`
-              : nothing
-        }
-        ${pane === "code" ? miniappSourceView(source) : nothing}
+        ${miniappBootState(pane, boot)} ${pane === "code" ? miniappSourceView(source) : nothing}
       </div>
     </div>`;
   }

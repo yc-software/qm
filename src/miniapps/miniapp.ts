@@ -9,7 +9,7 @@ function escapeHtml(s: string): string {
 }
 
 export const MAX_MINIAPP_HTML_BYTES = 512_000;
-export const MINIAPP_TITLE_MAX = 80;
+const MINIAPP_TITLE_MAX = 80;
 export const MINIAPP_CSP =
   "sandbox allow-scripts allow-forms allow-pointer-lock allow-modals allow-popups; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob:; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; worker-src blob:; frame-ancestors *";
 
@@ -50,8 +50,7 @@ const SKIN_RULES =
   "*{scrollbar-width:none}" +
   "*::-webkit-scrollbar{width:0;height:0;display:none}";
 
-const PROBE =
-  `<script id="qm-miniapp-probe">(function(){var err=null;function fail(e){if(!err)err=(e&&e.message)||String(e);tell(false)}function tell(ok){try{parent.postMessage({source:"qm-miniapp",ok:ok,path:location.pathname,error:err||undefined},"*")}catch(x){}document.documentElement.setAttribute("data-qm-miniapp",ok?"ok":"err")}addEventListener("error",function(e){fail(e.error||e.message)},true);addEventListener("unhandledrejection",function(e){fail(e.reason)});function paint(){if(err)return;tell(true)}function afterPaint(){requestAnimationFrame(function(){requestAnimationFrame(paint)})}if(document.readyState==="complete")afterPaint();else addEventListener("load",afterPaint)})();</script>`;
+const PROBE = `<script id="qm-miniapp-probe">(function(){var err=null;function fail(e){if(!err)err=(e&&e.message)||String(e);tell(false)}function tell(ok){try{parent.postMessage({source:"qm-miniapp",ok:ok,path:location.pathname,error:err||undefined},"*")}catch(x){}document.documentElement.setAttribute("data-qm-miniapp",ok?"ok":"err")}addEventListener("error",function(e){fail(e.error||e.message)},true);addEventListener("unhandledrejection",function(e){fail(e.reason)});function paint(){if(err)return;tell(true)}function afterPaint(){requestAnimationFrame(function(){requestAnimationFrame(paint)})}if(document.readyState==="complete")afterPaint();else addEventListener("load",afterPaint)})();</script>`;
 
 export function parseMiniappTheme(raw: string | null | undefined): MiniappTheme | undefined {
   return raw === "dark" || raw === "light" ? raw : undefined;
@@ -69,7 +68,9 @@ export function skinMiniappHtml(html: string, theme?: MiniappTheme): string {
   const stripped = html
     .replace(/<style id="qm-miniapp-skin">[\s\S]*?<\/style>/, "")
     .replace(/<script id="qm-miniapp-probe">[\s\S]*?<\/script>/, "");
-  const withSkin = /<head[^>]*>/i.test(stripped) ? stripped.replace(/<head[^>]*>/i, (m) => `${m}${tag}`) : `${tag}${stripped}`;
+  const withSkin = /<head[^>]*>/i.test(stripped)
+    ? stripped.replace(/<head[^>]*>/i, (m) => `${m}${tag}`)
+    : `${tag}${stripped}`;
   if (/<\/body>/i.test(withSkin)) return withSkin.replace(/<\/body>/i, `${PROBE}</body>`);
   return `${withSkin}${PROBE}`;
 }
@@ -96,7 +97,7 @@ export function assertMiniappOk(html: string): void {
     try {
       new Function(code);
     } catch (e) {
-      throw new Error(`miniapp script does not parse: ${errMessage(e)}`);
+      throw new Error(`miniapp script does not parse: ${errMessage(e)}`, { cause: e });
     }
   }
 }
@@ -138,17 +139,17 @@ export function documentHtml(title: string, html: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title></head><body>${trimmed}</body></html>`;
 }
 
-export function miniappPath(rec: Pick<MiniappRecord, "id" | "key">): string {
+function miniappPath(rec: Pick<MiniappRecord, "id" | "key">): string {
   return `/m/${rec.id}/${rec.key}`;
 }
 
-export function miniappUrl(base: string | undefined, rec: Pick<MiniappRecord, "id" | "key">): string {
+function miniappUrl(base: string | undefined, rec: Pick<MiniappRecord, "id" | "key">): string {
   const path = miniappPath(rec);
   const root = base?.replace(/\/$/, "");
   return root ? `${root}${path}` : path;
 }
 
-export function miniappDirective(url: string, title: string): string {
+function miniappDirective(url: string, title: string): string {
   return `[[miniapp: ${url} | ${title}]]`;
 }
 

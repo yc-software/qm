@@ -552,10 +552,16 @@ test("miniapp and publish results are first-party and never quarantined", async 
   const publish = tools.find((t) => t.name === "publish");
   const mini = (await call(miniapp, { title: "Blocks", html: "<p>hi</p>" })) as { content: Array<{ text?: string }> };
   assert.match(mini.content[0]?.text ?? "", /\[\[miniapp:/);
-  assert.equal(emitted.find((e) => e.type === "tool_result" && e.payload.tool === "miniapp")!.payload.quarantined, undefined);
+  assert.equal(
+    emitted.find((e) => e.type === "tool_result" && e.payload.tool === "miniapp")!.payload.quarantined,
+    undefined,
+  );
   const pub = (await call(publish, { name: "app", dir: "app" })) as { content: Array<{ text?: string }> };
   assert.match(pub.content[0]?.text ?? "", /Published/);
-  assert.equal(emitted.find((e) => e.type === "tool_result" && e.payload.tool === "publish")!.payload.quarantined, undefined);
+  assert.equal(
+    emitted.find((e) => e.type === "tool_result" && e.payload.tool === "publish")!.payload.quarantined,
+    undefined,
+  );
 });
 
 test("the screen never rewrites a policy denial either", async () => {

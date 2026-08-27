@@ -73,7 +73,22 @@ export function miniappSourceSrc(frameSrc: string): string {
   return withMiniappParam(frameSrc, "view", "source");
 }
 
-const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+const VOID_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
 
 export function formatMiniappHtml(html: string): string {
   const holes: string[] = [];

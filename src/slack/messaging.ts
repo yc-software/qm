@@ -13,7 +13,6 @@ import {
   stripAgentRequestDirectives,
   stripMiniappDirectives,
   stripReactionDirectives,
-  type MiniappEmbed,
 } from "./lib.ts";
 
 export type SlackConversationKind = "dm" | "channel" | "group";
@@ -59,16 +58,15 @@ export function cleanAgentReplyForSlack(text: string): {
   text: string;
   reactions: ReactionDirective[];
   agentRequests: AgentRequestDirective[];
-  miniapps: MiniappEmbed[];
 } {
   const extractedReactions = extractReactions(text);
   const extractedRequests = extractAgentRequests(extractedReactions.text);
   const extractedMiniapps = extractMiniapps(extractedRequests.text);
+  const miniappLinks = extractedMiniapps.miniapps.map(({ title, url }) => `${title}: ${url}`).join("\n");
   return {
-    text: extractedMiniapps.text,
+    text: [extractedMiniapps.text, miniappLinks].filter(Boolean).join("\n"),
     reactions: extractedReactions.reactions,
     agentRequests: extractedRequests.requests,
-    miniapps: extractedMiniapps.miniapps,
   };
 }
 

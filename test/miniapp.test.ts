@@ -15,7 +15,7 @@ import {
 import { createToolContext } from "../src/tools/primitives.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
-import { extractMiniapps, parseMiniappUrl, miniappActionBlocks } from "../src/slack/lib.ts";
+import { extractMiniapps, parseMiniappUrl } from "../src/slack/lib.ts";
 import { cleanAgentReplyForSlack, slackSurfaceInstructions } from "../src/slack/messaging.ts";
 
 const SECRET = "miniapp-test-secret-value-32chars!!";
@@ -33,12 +33,21 @@ test("skinMiniappHtml injects host tokens and follows the requested theme", () =
 });
 
 test("assertMiniappOk accepts a real playground and rejects broken ones", () => {
-  assert.doesNotThrow(() => assertMiniappOk("<!doctype html><html><body><canvas id=c></canvas><script>void 0</script></body></html>"));
+  assert.doesNotThrow(() =>
+    assertMiniappOk("<!doctype html><html><body><canvas id=c></canvas><script>void 0</script></body></html>"),
+  );
   assert.throws(() => assertMiniappOk("<!doctype html><html><body></body></html>"), /nothing to show/);
-  assert.throws(() => assertMiniappOk("<!doctype html><html><body><canvas></canvas><script>fetch('/')</script></body></html>"), /network/);
-  assert.throws(() => assertMiniappOk("<!doctype html><html><body><p>x</p><script>function (</script></body></html>"), /does not parse/);
   assert.throws(
-    () => assertMiniappOk("<!doctype html><html><body><p>x</p><script src='https://x.test/a.js'></script></body></html>"),
+    () => assertMiniappOk("<!doctype html><html><body><canvas></canvas><script>fetch('/')</script></body></html>"),
+    /network/,
+  );
+  assert.throws(
+    () => assertMiniappOk("<!doctype html><html><body><p>x</p><script>function (</script></body></html>"),
+    /does not parse/,
+  );
+  assert.throws(
+    () =>
+      assertMiniappOk("<!doctype html><html><body><p>x</p><script src='https://x.test/a.js'></script></body></html>"),
     /inline/,
   );
 });
@@ -72,19 +81,9 @@ test("extractMiniapps strips the directive and keeps a valid url", () => {
   assert.equal(parseMiniappUrl("https://evil.test/x"), null);
 });
 
-test("miniapp Slack buttons are url buttons", () => {
-  const blocks = miniappActionBlocks([{ url: "https://qm.test/m/a/b", title: "Play" }]);
-  assert.equal(blocks[0]!.type, "actions");
-  const btn = (blocks[0] as { elements: Array<{ type: string; url: string }> }).elements[0]!;
-  assert.equal(btn.type, "button");
-  assert.equal(btn.url, "https://qm.test/m/a/b");
-  assert.equal(miniappActionBlocks([{ url: "/m/a/b", title: "Play" }]).length, 0);
-});
-
-test("cleanAgentReplyForSlack strips miniapp markers and Slack does not render them", () => {
+test("cleanAgentReplyForSlack replaces miniapp markers with durable links", () => {
   const cleaned = cleanAgentReplyForSlack("Try this\n[[miniapp: https://qm.test/m/aa/bb | Blocks]]");
-  assert.equal(cleaned.text, "Try this");
-  assert.equal(cleaned.miniapps[0]!.title, "Blocks");
+  assert.equal(cleaned.text, "Try this\nBlocks: https://qm.test/m/aa/bb");
   assert.doesNotMatch(slackSurfaceInstructions("dm"), /\[\[miniapp:/);
 });
 
