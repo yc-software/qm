@@ -2,6 +2,7 @@ import "dockview-core/dist/styles/dockview.css";
 import "./shell.css";
 import { bootSafely } from "./shell";
 import { registerChatSearchHotkey } from "./search";
+import { registerSessionJumpHotkeys } from "./session-jump";
 import { closeFormMenus } from "./ui";
 import { allConversations } from "./conversations";
 import {
@@ -47,4 +48,5 @@ document.addEventListener("keydown", (e) => {
 });
 
 registerChatSearchHotkey();
+registerSessionJumpHotkeys();
 void bootSafely();

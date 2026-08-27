@@ -29,7 +29,7 @@ interface ChatSearchHit {
 
 const MIN_QUERY_LEN = 2;
 const DEBOUNCE_MS = 150;
-const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform);
+export const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform);
 export const SEARCH_HOTKEY_LABEL = isMac ? "⌘K" : "Ctrl+K";
 
 const searchState = {
