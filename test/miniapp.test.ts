@@ -50,6 +50,9 @@ test("assertMiniappOk accepts a real playground and rejects broken ones", () => 
       assertMiniappOk("<!doctype html><html><body><p>x</p><script src='https://x.test/a.js'></script></body></html>"),
     /inline/,
   );
+  assert.doesNotThrow(() =>
+    assertMiniappOk("<!doctype html><html><body><p>x</p><script>void 0</script ></body></html>"),
+  );
 });
 
 test("parseMiniappView only accepts source", () => {

@@ -50,7 +50,82 @@ const SKIN_RULES =
   "*{scrollbar-width:none}" +
   "*::-webkit-scrollbar{width:0;height:0;display:none}";
 
-const PROBE = `<script id="qm-miniapp-probe">(function(){var err=null;function fail(e){if(!err)err=(e&&e.message)||String(e);tell(false)}function tell(ok){try{parent.postMessage({source:"qm-miniapp",ok:ok,path:location.pathname,error:err||undefined},"*")}catch(x){}document.documentElement.setAttribute("data-qm-miniapp",ok?"ok":"err")}addEventListener("error",function(e){fail(e.error||e.message)},true);addEventListener("unhandledrejection",function(e){fail(e.reason)});function paint(){if(err)return;tell(true)}function afterPaint(){requestAnimationFrame(function(){requestAnimationFrame(paint)})}if(document.readyState==="complete")afterPaint();else addEventListener("load",afterPaint)})();</script>`;
+const PROBE_START = "<!--qm-miniapp-probe:start-->";
+const PROBE_END = "<!--qm-miniapp-probe:end-->";
+const SKIN_START = "<!--qm-miniapp-skin:start-->";
+const SKIN_END = "<!--qm-miniapp-skin:end-->";
+
+const PROBE = `${PROBE_START}<script id="qm-miniapp-probe">(function(){var err=null;function fail(e){if(!err)err=(e&&e.message)||String(e);tell(false)}function tell(ok){try{parent.postMessage({source:"qm-miniapp",ok:ok,path:location.pathname,error:err||undefined},"*")}catch(x){}document.documentElement.setAttribute("data-qm-miniapp",ok?"ok":"err")}addEventListener("error",function(e){fail(e.error||e.message)},true);addEventListener("unhandledrejection",function(e){fail(e.reason)});function paint(){if(err)return;tell(true)}function afterPaint(){requestAnimationFrame(function(){requestAnimationFrame(paint)})}if(document.readyState==="complete")afterPaint();else addEventListener("load",afterPaint)})();</script>${PROBE_END}`;
+
+function stripMarkedBlock(value: string, start: string, end: string): string {
+  let out = value;
+  for (;;) {
+    const from = out.indexOf(start);
+    if (from === -1) return out;
+    const to = out.indexOf(end, from + start.length);
+    if (to === -1) return out;
+    out = out.slice(0, from) + out.slice(to + end.length);
+  }
+}
+
+interface HtmlElement {
+  attrs: string;
+  content: string;
+  from: number;
+  to: number;
+}
+
+function findHtmlElement(html: string, name: string, from = 0): HtmlElement | undefined {
+  const lower = html.toLowerCase();
+  const open = `<${name.toLowerCase()}`;
+  const close = `</${name.toLowerCase()}`;
+  let openAt = from;
+  for (;;) {
+    openAt = lower.indexOf(open, openAt);
+    if (openAt === -1) return undefined;
+    const boundary = lower[openAt + open.length];
+    if (boundary === ">" || boundary === "/" || /\s/.test(boundary ?? "")) break;
+    openAt += open.length;
+  }
+  const openEnd = lower.indexOf(">", openAt + open.length);
+  if (openEnd === -1) return undefined;
+  let closeAt = openEnd + 1;
+  for (;;) {
+    closeAt = lower.indexOf(close, closeAt);
+    if (closeAt === -1) return undefined;
+    const closeEnd = lower.indexOf(">", closeAt + close.length);
+    if (closeEnd === -1) return undefined;
+    if (!lower.slice(closeAt + close.length, closeEnd).trim()) {
+      return {
+        attrs: html.slice(openAt + open.length, openEnd),
+        content: html.slice(openEnd + 1, closeAt),
+        from: openAt,
+        to: closeEnd + 1,
+      };
+    }
+    closeAt += close.length;
+  }
+}
+
+function removeHtmlElements(html: string, name: string): string {
+  let out = html;
+  for (;;) {
+    const element = findHtmlElement(out, name);
+    if (!element) return out;
+    out = `${out.slice(0, element.from)} ${out.slice(element.to)}`;
+  }
+}
+
+function textOutsideTags(html: string): string {
+  let out = "";
+  let inTag = false;
+  for (const char of html) {
+    if (char === "<") inTag = true;
+    else if (char === ">") inTag = false;
+    else if (!inTag) out += char;
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
 
 export function parseMiniappTheme(raw: string | null | undefined): MiniappTheme | undefined {
   return raw === "dark" || raw === "light" ? raw : undefined;
@@ -64,10 +139,8 @@ export function skinMiniappHtml(html: string, theme?: MiniappTheme): string {
   const root = theme
     ? `:root{color-scheme:${theme};${tokenBlock(theme === "dark" ? DARK : LIGHT)}}`
     : `:root{color-scheme:light;${tokenBlock(LIGHT)}}@media (prefers-color-scheme:dark){:root{color-scheme:dark;${tokenBlock(DARK)}}}`;
-  const tag = `<style id="qm-miniapp-skin">${root}${SKIN_RULES}</style>`;
-  const stripped = html
-    .replace(/<style id="qm-miniapp-skin">[\s\S]*?<\/style>/, "")
-    .replace(/<script id="qm-miniapp-probe">[\s\S]*?<\/script>/, "");
+  const tag = `${SKIN_START}<style id="qm-miniapp-skin">${root}${SKIN_RULES}</style>${SKIN_END}`;
+  const stripped = stripMarkedBlock(stripMarkedBlock(html, SKIN_START, SKIN_END), PROBE_START, PROBE_END);
   const withSkin = /<head[^>]*>/i.test(stripped)
     ? stripped.replace(/<head[^>]*>/i, (m) => `${m}${tag}`)
     : `${tag}${stripped}`;
@@ -76,29 +149,28 @@ export function skinMiniappHtml(html: string, theme?: MiniappTheme): string {
 }
 
 export function assertMiniappOk(html: string): void {
-  const body = html.match(/<body\b[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html;
-  const visible = body
-    .replace(/<script\b[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const hasStage = /<(canvas|svg|input|button|select)\b/i.test(body);
+  const body = findHtmlElement(html, "body")?.content ?? html;
+  const visible = textOutsideTags(removeHtmlElements(removeHtmlElements(body, "script"), "style"));
+  const hasStage = ["canvas", "svg", "input", "button", "select"].some((name) => findHtmlElement(body, name));
   if (!visible && !hasStage) throw new Error("miniapp has nothing to show — add a canvas, a control, or some text");
   if (/\bfetch\s*\(|XMLHttpRequest|navigator\.sendBeacon/i.test(html)) {
     throw new Error("miniapp cannot use the network — inline everything");
   }
-  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
-    const attrs = m[1] ?? "";
-    if (/\bsrc\s*=/i.test(attrs)) throw new Error("miniapp scripts must be inline — no src=");
-    if (/\btype\s*=\s*["']module["']/i.test(attrs)) throw new Error("miniapp cannot use type=module");
-    const code = (m[2] ?? "").trim();
-    if (!code) continue;
-    try {
-      new Function(code);
-    } catch (e) {
-      throw new Error(`miniapp script does not parse: ${errMessage(e)}`, { cause: e });
+  let from = 0;
+  for (;;) {
+    const script = findHtmlElement(html, "script", from);
+    if (!script) break;
+    if (/\bsrc\s*=/i.test(script.attrs)) throw new Error("miniapp scripts must be inline — no src=");
+    if (/\btype\s*=\s*["']module["']/i.test(script.attrs)) throw new Error("miniapp cannot use type=module");
+    const code = script.content.trim();
+    if (code) {
+      try {
+        new Function(code);
+      } catch (e) {
+        throw new Error(`miniapp script does not parse: ${errMessage(e)}`, { cause: e });
+      }
     }
+    from = script.to;
   }
 }
 

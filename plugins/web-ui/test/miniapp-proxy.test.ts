@@ -3,14 +3,17 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
+let lastCoreUrl = "";
+
 const core = createServer((req: IncomingMessage, res) => {
+  lastCoreUrl = req.url ?? "";
   if ((req.url ?? "").startsWith("/m/")) {
     res.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "content-security-policy":
         "sandbox allow-scripts allow-forms allow-pointer-lock allow-modals allow-popups; default-src 'none'; connect-src 'none'",
     });
-    return void res.end(`<canvas data-url="${req.url ?? ""}"></canvas><script>void 0</script>`);
+    return void res.end("<canvas></canvas><script>void 0</script>");
   }
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "not_found" }));
@@ -41,6 +44,6 @@ test("miniapp HTML is public, sandboxed, and iframeable", async () => {
   assert.ok(!/allow-same-origin/.test(csp));
   assert.equal(r.headers.get("x-frame-options"), null);
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
-  const themed = await fetch(`${base}/m/aa/bb?theme=light`);
-  assert.match(await themed.text(), /theme=light/);
+  await fetch(`${base}/m/aa/bb?theme=light`);
+  assert.match(lastCoreUrl, /theme=light/);
 });
