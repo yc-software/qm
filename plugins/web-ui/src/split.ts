@@ -97,6 +97,7 @@ let pendingSeed: PendingSeed | null = null;
 const paneContents = new Map<string, PaneContent>();
 const paneTabs = new Set<PaneTab>();
 const groupActions = new Set<GroupActions>();
+const stripDrops = new Set<StripDrop>();
 let sessionDrag: { sessionId: string; threadRef: string } | null = null;
 let toastMsg = "";
 let toastTimer: number | null = null;
@@ -170,6 +171,7 @@ function buildDock(): DockviewApi {
     createComponent: () => new PaneContent(),
     createTabComponent: () => new PaneTab(),
     createRightHeaderActionComponent: () => new GroupActions(),
+    createPrefixHeaderActionComponent: () => new StripDrop(),
     singleTabMode: "fullwidth",
     disableFloatingGroups: true,
   });
@@ -184,17 +186,6 @@ function buildDock(): DockviewApi {
     }
   };
   api.onWillDrop(holdTileCap);
-  api.onUnhandledDragOver((e) => {
-    if (sessionDrag && (e.target === "tab" || e.target === "header_space")) e.accept();
-  });
-  api.onDidDrop((e) => {
-    const drag = sessionDrag;
-    endSessionDrag();
-    const anchor = e.group?.activePanel ?? e.group?.panels[0];
-    if (!drag || !anchor || focusExistingPane(drag.sessionId)) return;
-    const at = e.panel ? e.group?.panels.indexOf(e.panel) : undefined;
-    tabIntoPane(anchor.id, { sessionId: drag.sessionId, threadRef: drag.threadRef }, at === -1 ? undefined : at);
-  });
   const guarded = new WeakSet<IDockviewGroupPanel>();
   api.onDidLayoutChange(() => {
     host.classList.toggle("one-pane", api.panels.length === 1);
@@ -241,6 +232,7 @@ function disposeDock(): void {
   paneContents.clear();
   paneTabs.clear();
   groupActions.clear();
+  stripDrops.clear();
   toastEl = null;
 }
 
@@ -281,7 +273,6 @@ function addPane(
   position?: {
     referencePanel: string;
     direction: "left" | "right" | "above" | "below" | "within";
-    index?: number;
   },
 ): IDockviewPanel {
   return dockApi!.addPanel({
@@ -502,13 +493,9 @@ function splitPane(paneId: string, edge: SplitEdge, params: PaneParams): void {
   persist();
 }
 
-function tabIntoPane(paneId: string, params: PaneParams, index?: number): boolean {
+function tabIntoPane(paneId: string, params: PaneParams): boolean {
   if (!dockApi || !roomForAnotherPane()) return false;
-  const fresh = addPane(params, {
-    referencePanel: paneId,
-    direction: "within",
-    ...(index === undefined ? {} : { index }),
-  });
+  const fresh = addPane(params, { referencePanel: paneId, direction: "within" });
   fresh.api.setActive();
   persist();
   return true;
@@ -601,18 +588,28 @@ export function beginSessionDrag(s: CoreSession): void {
   refreshSessionDrag();
 }
 
+// A strip drop joins the session to that group as a tab — offered only when it would
+// really add one (not already on the canvas, below the pane ceiling).
+function stripJoinable(drag = sessionDrag): boolean {
+  return Boolean(drag && !paneShowing(drag.sessionId) && (dockApi?.panels.length ?? 0) < MAX_PANES);
+}
+
 function refreshSessionDrag(): void {
-  const drag = sessionDrag;
-  if (!drag) return;
-  const addsTab = !paneShowing(drag.sessionId) && (dockApi?.panels.length ?? 0) < MAX_PANES;
-  canvasHost?.classList.toggle("session-dragging", addsTab);
+  if (!sessionDrag) return;
+  canvasHost?.classList.toggle("session-dragging", stripJoinable());
+  drawStripDrops();
   syncAllZones();
+}
+
+function drawStripDrops(): void {
+  for (const s of stripDrops) s.draw();
 }
 
 export function endSessionDrag(): void {
   if (!sessionDrag) return;
   sessionDrag = null;
   canvasHost?.classList.remove("session-dragging");
+  drawStripDrops();
   if (splitState.active) syncAllZones();
 }
 
@@ -981,6 +978,46 @@ class PaneTab implements ITabRenderer {
 
   dispose(): void {
     paneTabs.delete(this);
+  }
+}
+
+// The strip highlight needs a target behind it: with full-width single tabs dockview's
+// header space is zero-width and a tab only accepts its outer reorder edges, so an
+// external session drag has nothing real to land on. Dockview owns this element's
+// lifecycle, so the zone is mounted and torn down with its group.
+class StripDrop implements IHeaderActionsRenderer {
+  readonly element: HTMLElement;
+  private group: IDockviewGroupPanel | null = null;
+
+  constructor() {
+    this.element = document.createElement("div");
+    this.element.className = "split-zones strip-zones";
+  }
+
+  init(props: IGroupHeaderProps): void {
+    this.group = props.group;
+    stripDrops.add(this);
+    this.draw();
+  }
+
+  draw(): void {
+    const group = this.group;
+    render(
+      group && stripJoinable()
+        ? zoneTpl("center", "Open as tab", () => {
+            const drag = sessionDrag;
+            endSessionDrag();
+            const anchor = group.activePanel ?? group.panels[0];
+            if (!drag || !anchor || focusExistingPane(drag.sessionId)) return;
+            tabIntoPane(anchor.id, { sessionId: drag.sessionId, threadRef: drag.threadRef });
+          })
+        : nothing,
+      this.element,
+    );
+  }
+
+  dispose(): void {
+    stripDrops.delete(this);
   }
 }
 

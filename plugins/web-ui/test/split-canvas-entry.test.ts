@@ -60,31 +60,17 @@ test("a pane is an element in this document — never a second copy of the app",
 });
 
 test("a conversation dropped on a pane's tab strip joins that pane — and only there", () => {
-  const accept = split.match(/api\.onUnhandledDragOver\(\(e\) => \{[\s\S]*?\n {2}\}\);/)?.[0] ?? "";
-  assert.ok(accept, "onUnhandledDragOver not wired");
-  assert.match(accept, /sessionDrag && \(e\.target === "tab" \|\| e\.target === "header_space"\)/);
-  assert.doesNotMatch(accept, /"content"|"edge"/);
-
-  const drop = split.match(/api\.onDidDrop\(\(e\) => \{[\s\S]*?\n {2}\}\);/)?.[0] ?? "";
-  assert.ok(drop, "onDidDrop not wired");
-  assert.match(drop, /tabIntoPane\(anchor\.id, \{ sessionId: drag\.sessionId, threadRef: drag\.threadRef \}/);
-  assert.match(drop, /focusExistingPane\(drag\.sessionId\)/, "a conversation already on screen is focused, not cloned");
-  assert.match(drop, /endSessionDrag\(\);/, "the zone overlays must come down with the drag");
-
-  assert.match(accept, /if \(sessionDrag/, "only a live session drag may be accepted");
-});
-
-test("a strip drop lands where a dragged pane header would, not merely at the end", () => {
-  const drop = fn(split, "buildDock");
-  assert.match(drop, /e\.panel \? e\.group\?\.panels\.indexOf\(e\.panel\) : undefined/);
-  assert.match(drop, /tabIntoPane\([\s\S]{0,120}at === -1 \? undefined : at\)/);
-
-  const into = fn(split, "tabIntoPane");
-  assert.match(into, /index\?: number/, "tabIntoPane must accept an insertion index");
-  assert.match(into, /direction: "within"/);
-  assert.match(into, /index === undefined \? \{\} : \{ index \}/, "and forward it to addPane");
-  const add = fn(split, "addPane");
-  assert.match(add, /index\?: number/, "addPane must pass dockview its own position.index");
+  const strip = split.match(/^class StripDrop[\s\S]*?\n\}/m)?.[0] ?? "";
+  assert.ok(strip, "StripDrop not wired");
+  assert.match(split, /createPrefixHeaderActionComponent: \(\) => new StripDrop\(\)/);
+  assert.match(strip, /tabIntoPane\(anchor\.id, \{ sessionId: drag\.sessionId, threadRef: drag\.threadRef \}\)/);
+  assert.match(
+    strip,
+    /focusExistingPane\(drag\.sessionId\)/,
+    "a conversation already on screen is focused, not cloned",
+  );
+  assert.match(strip, /endSessionDrag\(\);/, "the zone overlays must come down with the drag");
+  assert.match(strip, /stripJoinable\(\)/, "only a live session drag that would really add a tab");
 });
 
 test("the pane body no longer offers a tab zone", () => {

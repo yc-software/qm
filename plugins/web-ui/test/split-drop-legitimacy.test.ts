@@ -20,14 +20,14 @@ test("a pane only offers the drops that will really happen", () => {
 });
 
 test("the tab strips light up as targets from the moment the drag starts", () => {
-  const refresh = split.match(/^function refreshSessionDrag\([\s\S]*?\n\}/m)?.[0] ?? "";
-  assert.ok(refresh, "refreshSessionDrag not found");
+  const joinable = split.match(/^function stripJoinable\([\s\S]*?\n\}/m)?.[0] ?? "";
+  assert.ok(joinable, "stripJoinable not found");
   assert.match(
-    refresh,
+    joinable,
     /!paneShowing\(drag\.sessionId\) && \(dockApi\?\.panels\.length \?\? 0\) < MAX_PANES/,
     "but only when a strip drop would really add a tab",
   );
-  assert.match(refresh, /classList\.toggle\("session-dragging", addsTab\)/);
+  assert.match(split, /classList\.toggle\("session-dragging", stripJoinable\(\)\)/);
   assert.match(split, /classList\.remove\("session-dragging"\)/);
   assert.match(css, /\.split-canvas\.session-dragging \.dv-tabs-and-actions-container \{/);
 });
@@ -45,4 +45,16 @@ test("session drags always target the canvas — there is no single-view handoff
   assert.ok(begin, "beginSessionDrag not found");
   assert.match(begin, /refreshSessionDrag\(\);/);
   assert.doesNotMatch(split, /showSingleDropOverlay|currentChatParams|activateCanvas/);
+});
+
+test("the highlighted strip is a real drop target, not just a glow", () => {
+  const strip = split.match(/^class StripDrop[\s\S]*?\n\}/m)?.[0] ?? "";
+  assert.ok(strip, "StripDrop not found");
+  assert.match(split, /createPrefixHeaderActionComponent: \(\) => new StripDrop\(\)/, "dockview owns its lifecycle");
+  assert.match(strip, /zoneTpl\("center", "Open as tab"/, "the strip offers an explicit join target");
+  assert.match(strip, /tabIntoPane\(anchor\.id/, "dropping on the strip really adds a tab");
+  assert.match(strip, /stripJoinable\(\)/, "and only when that drop would really add a tab");
+  const end = split.match(/^export function endSessionDrag\([\s\S]*?\n\}/m)?.[0] ?? "";
+  assert.match(end, /drawStripDrops\(\)/, "zones vanish when the drag ends");
+  assert.match(css, /\.strip-zones \{/, "the overlay is styled");
 });
