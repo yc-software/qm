@@ -22,9 +22,9 @@ This package is published to npm as `@yc-software/qm`, with npm provenance attes
 building workflow. A release is one dispatch of `.github/workflows/release.yml` from
 `main`: it signs and pushes the first-party images, publishes the package pinning their
 digests, and then tags `v<version>` and creates the GitHub release with the resolved
-digests attached. The version comes from `cli/package.json`, which CI requires a pull
-request to bump whenever it changes what the package ships; a tag that already exists
-stops the release rather than moving. The checked-in image manifest is a sentinel that
+digests attached. The version comes from `cli/package.json`, bumped when a release is cut rather than by
+every pull request that touches the package; a tag that already exists stops the release
+rather than moving. The checked-in image manifest is a sentinel that
 a deployment overrides with real digests. The packed-artifact test exercises the consumer
 path locally.
 

@@ -89,39 +89,6 @@ jobs:
           npm run typecheck:contract
           node --test "deploy/stacks/*/test/*.test.ts"
 
-  cli-version:
-    name: CLI version bump
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Require a version bump when the published package changes
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
-          changed=$(git diff --name-only "$base" "$HEAD_SHA" -- \
-            cli/bin cli/src cli/templates cli/manifest.json cli/package.json \
-            cli/package-lock.json cli/README.md cli/LICENSE cli/tsconfig.json cli/tsconfig.build.json)
-          [ -n "$changed" ] || exit 0
-          base_version=$(git show "${base}:cli/package.json" | jq -r .version)
-          head_version=$(git show "${HEAD_SHA}:cli/package.json" | jq -r .version)
-          highest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
-          if [ "$base_version" = "$head_version" ] || [ "$highest" != "$head_version" ]; then
-            printf '%s\n' "$changed" >&2
-            echo "these files ship in @yc-software/qm; bump cli/package.json past $base_version" >&2
-            exit 1
-          fi
-          case "$head_version" in
-            [0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "cli/package.json version must be semver, got $head_version" >&2; exit 1 ;;
-          esac
-
   coauthor-trailers:
     name: Co-author trailers
     if: github.event_name == 'pull_request'
