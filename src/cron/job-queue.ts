@@ -1,6 +1,7 @@
 import { PgBoss } from "pg-boss";
 import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 import { errMessage } from "../util/errors.ts";
+import { pgConnectionConfig } from "../persistence/pg-pool.ts";
 
 export interface CronFireJob {
   cronId: string;
@@ -30,7 +31,7 @@ export function createPgBossCronQueue(
   schema: string = "pgboss",
   fireConcurrency: number = 1,
 ): CronJobQueue {
-  const boss = new PgBoss({ connectionString: databaseUrl, schema, max: 5 });
+  const boss = new PgBoss({ ...pgConnectionConfig(databaseUrl), schema, max: 5 });
   boss.on("error", (e) => console.error("[cron-queue] pg-boss error:", errMessage(e)));
   let ticker: Sweeper | null = null;
   let started = false;
