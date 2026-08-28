@@ -25,7 +25,8 @@ const renderedEnvDefaults =
   };
 
 export const TARGET_ENV_DEFAULTS: Record<Target, TargetEnvDefaults> = {
-  docker: () => undefined,
+  docker: (config, service, name) =>
+    service === "core" && name === "SANDBOX_BACKEND" ? config.sandbox?.backend : undefined,
   fly: renderedEnvDefaults(FLY_TEMPLATE_ENV_DEFAULTS),
   aws: renderedEnvDefaults(AWS_RENDER_ENV_DEFAULTS),
 };

@@ -203,6 +203,13 @@ test("the fly target requires the sprites token, because its core template alway
   }
 });
 
+test("an explicit sprites backend on the docker target requires the sprites token", () => {
+  const explicit = makeConfig({ target: "docker", sandbox: { backend: "sprites", app: "acme-sb" } });
+  assert.ok(secretByName(explicit, "SPRITES_TOKEN").required);
+  const implicit = makeConfig({ target: "docker" });
+  assert.ok(!computedSecrets(implicit).some((secret) => secret.name === "SPRITES_TOKEN"));
+});
+
 test("naming a base model provider makes that provider's key a required deployment secret", () => {
   for (const [provider, key] of [
     ["anthropic", "ANTHROPIC_API_KEY"],
@@ -274,44 +281,52 @@ test("real harnesses require and route the sandbox-reachable PUBLIC_API_URL to c
 
 test("FLY_TEMPLATE_ENV_DEFAULTS stays in sync with deploy/core/fly.toml", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const toml = readFileSync(join(root, "deploy", "core", "fly.toml"), "utf8");
-  const packaged = readFileSync(join(root, "cli", "templates", "fly", "core.toml"), "utf8");
-  for (const [name, value] of Object.entries(FLY_TEMPLATE_ENV_DEFAULTS.core ?? {})) {
-    assert.match(
-      toml,
-      new RegExp(`^\\s*${name}\\s*=\\s*"${value}"`, "m"),
-      `deploy/core/fly.toml sets ${name}="${value}"`,
-    );
+  for (const template of FLY_CORE_TEMPLATES(root)) {
+    const toml = readFileSync(template.path, "utf8");
+    for (const [name, value] of Object.entries(FLY_TEMPLATE_ENV_DEFAULTS.core ?? {})) {
+      assert.match(
+        toml,
+        new RegExp(`^\\s*${name}\\s*=\\s*"${value}"`, "m"),
+        `${template.label} sets ${name}="${value}"`,
+      );
+    }
+    assert.doesNotMatch(toml, /^\s*DEPLOY_PROVIDER\s*=/m);
   }
-  assert.doesNotMatch(toml, /^\s*DEPLOY_PROVIDER\s*=/m);
-  assert.doesNotMatch(packaged, /^\s*DEPLOY_PROVIDER\s*=/m);
 });
 
-function conditionEnvNames(condition: unknown, out: Set<string>): void {
+const FLY_CORE_TEMPLATES = (root: string): Array<{ label: string; path: string }> => [
+  { label: "deploy/core/fly.toml", path: join(root, "deploy", "core", "fly.toml") },
+  { label: "cli/templates/fly/core.toml", path: join(root, "cli", "templates", "fly", "core.toml") },
+];
+
+function coreConditionEnvNames(condition: unknown, out: Set<string>): void {
   if (!condition || typeof condition !== "object") return;
-  const node = condition as { kind?: string; name?: string; names?: string[]; conditions?: unknown[] };
-  if (node.kind?.startsWith("env-")) {
+  const node = condition as { kind?: string; service?: string; name?: string; names?: string[]; conditions?: unknown[] };
+  if (node.kind?.startsWith("env-") && node.service === "core") {
     if (node.name) out.add(node.name);
     for (const name of node.names ?? []) out.add(name);
   }
-  for (const nested of node.conditions ?? []) conditionEnvNames(nested, out);
+  for (const nested of node.conditions ?? []) coreConditionEnvNames(nested, out);
 }
 
-test("every deploy/core/fly.toml env that gates a secret is declared in FLY_TEMPLATE_ENV_DEFAULTS", () => {
+test("every fly core template env that gates a secret is declared in FLY_TEMPLATE_ENV_DEFAULTS", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const toml = readFileSync(join(root, "deploy", "core", "fly.toml"), "utf8");
   const gating = new Set<string>();
   for (const spec of FIRST_PARTY_SECRET_SPECS) {
-    if (typeof spec.required !== "boolean") conditionEnvNames(spec.required.when, gating);
+    if (typeof spec.required !== "boolean") coreConditionEnvNames(spec.required.when, gating);
   }
-  for (const name of gating) {
-    const set = toml.match(new RegExp(`^\\s*${name}\\s*=\\s*"([^"]*)"`, "m"));
-    if (!set) continue;
-    assert.equal(
-      FLY_TEMPLATE_ENV_DEFAULTS.core?.[name],
-      set[1],
-      `deploy/core/fly.toml sets ${name}="${set[1]}", so FLY_TEMPLATE_ENV_DEFAULTS.core must declare it or the secret gate cannot see the value core boots with`,
-    );
+  assert.ok(gating.has("SANDBOX_BACKEND"));
+  for (const template of FLY_CORE_TEMPLATES(root)) {
+    const toml = readFileSync(template.path, "utf8");
+    for (const name of gating) {
+      const set = toml.match(new RegExp(`^\\s*${name}\\s*=\\s*"([^"]*)"`, "m"));
+      if (!set) continue;
+      assert.equal(
+        FLY_TEMPLATE_ENV_DEFAULTS.core?.[name],
+        set[1],
+        `${template.label} sets ${name}="${set[1]}", so FLY_TEMPLATE_ENV_DEFAULTS.core must declare it or the secret gate cannot see the value core boots with`,
+      );
+    }
   }
 });
 
