@@ -6031,6 +6031,7 @@
         "Next →": "下一页 →",
         "← Slack": "← Slack",
         Done: "完成",
+        "No memory": "暂无记忆",
         Attempts: "尝试次数",
         Kind: "类型",
         Started: "开始时间",
@@ -6221,6 +6222,11 @@
         if (importedInto) return leading + "已导入到 " + importedInto[1] + trailing;
         const connectedNoPeriod = text.match(/^Connected to (.+)$/);
         if (connectedNoPeriod) return leading + "已连接到 " + connectedNoPeriod[1] + trailing;
+        const missingProviderKey = text.match(/^(.+) cannot run until its (.+) key is configured\.$/);
+        if (missingProviderKey)
+          return (
+            leading + missingProviderKey[1] + " 无法运行，请先配置 " + missingProviderKey[2] + " 密钥。" + trailing
+          );
         return value;
       }
 
@@ -6278,7 +6284,12 @@
           adminLocalizationObserver = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => mutation.addedNodes.forEach((node) => localizeUiTree(node)));
           });
-          adminLocalizationObserver.observe(document.documentElement, { childList: true, subtree: true });
+          adminLocalizationObserver.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: LOCALIZATION_ATTRIBUTES,
+          });
         }
         window.addEventListener("storage", (event) => {
           if (event.key === LOCALE_STORAGE_KEY && (event.newValue === "en" || event.newValue === "zh-CN")) {
@@ -11952,8 +11963,8 @@
         const t = denseList(
           scopes,
           (s) => ({
-            name: scopeKind(s.scopeId) === "org" ? "org" : s.label || shortName(s.scopeId),
-            preview: s.hasMemory ? fmtBytes(s.bytes || 0) : "empty",
+            name: scopeKind(s.scopeId) === "org" ? "Org-wide" : s.label || shortName(s.scopeId),
+            preview: s.hasMemory ? fmtBytes(s.bytes || 0) : "No memory",
             time: s.updatedAt ? relTime(s.updatedAt) : "—",
             href: stateToUrl(
               scopeKind(s.scopeId) === "org"

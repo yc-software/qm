@@ -65,7 +65,10 @@ test("Admin translates skills and deep administration views", () => {
       translateUiText("No packs yet — register one above."),
       translateUiText("Everyone who has used the agent — click a row for their activity, artifacts, and config."),
       translateUiText("Nothing mirrored yet — the surface pushes messages here as it sees them."),
-      translateUiText("No memory stored for this scope yet. Anything you write here, the agent will remember.")
+      translateUiText("No memory stored for this scope yet. Anything you write here, the agent will remember."),
+      translateUiText("Org-wide"),
+      translateUiText("No memory"),
+      translateUiText("claude-opus-5 cannot run until its Anthropic key is configured.")
     ];`,
     context,
   );
@@ -76,7 +79,12 @@ test("Admin translates skills and deep administration views", () => {
     "所有使用过助手的用户；点击一行可查看其活动、资源和配置。",
     "尚无镜像消息；界面收到消息后会将其推送到此处。",
     "当前范围尚无记忆。你在此写入的内容会被助手记住。",
+    "组织范围",
+    "暂无记忆",
+    "claude-opus-5 无法运行，请先配置 Anthropic 密钥。",
   ]);
+  assert.match(html, /name: scopeKind\(s\.scopeId\) === "org" \? "Org-wide"/);
+  assert.match(html, /preview: s\.hasMemory \? fmtBytes\(s\.bytes \|\| 0\) : "No memory"/);
   assert.match(html, /function confirmUi\(message\)/);
   assert.match(html, /function alertUi\(message\)/);
   assert.match(html, /const localized = translateUiText\(msg\)/);
@@ -110,10 +118,8 @@ test("Admin localization excludes transcripts and raw content", () => {
   );
   assert.deepEqual(Array.from(context.values as string[]), ["Files", "文件"]);
   assert.match(html, /new MutationObserver/);
-  assert.match(
-    html,
-    /adminLocalizationObserver\.observe\(document\.documentElement, \{ childList: true, subtree: true \}\)/,
-  );
+  assert.match(html, /adminLocalizationObserver\.observe\(document\.documentElement,[\s\S]*attributes: true/);
+  assert.match(html, /attributeFilter: LOCALIZATION_ATTRIBUTES/);
   assert.doesNotMatch(html, /LOCALIZATION_SKIP_SELECTOR[\s\S]{0,120}textarea, option/);
   assert.match(html, /if \(parent\?\.closest\(LOCALIZATION_SKIP_SELECTOR\)\) return;/);
   assert.match(html, /Judged: "已判断"/);
