@@ -83,11 +83,14 @@ test("concurrentIndexName recognizes retryable concurrent index creation", () =>
 
 test("explicit CA trust overrides connection-string SSL controls without weakening verification", () => {
   const config = pgConnectionConfig(
-    "postgresql://user:pass@db.example/qm?sslmode=verify-full&application_name=qm",
+    "postgresql://user:pass@db.example/qm?ssl=0&sslmode=no-verify&sslnegotiation=direct&uselibpqcompat=true&application_name=qm",
     resolvePgCaTrust({ cert: "PEM" }),
   );
   const url = new URL(config.connectionString);
   assert.equal(url.searchParams.has("sslmode"), false);
+  assert.equal(url.searchParams.has("ssl"), false);
+  assert.equal(url.searchParams.has("sslnegotiation"), false);
+  assert.equal(url.searchParams.has("uselibpqcompat"), false);
   assert.equal(url.searchParams.get("application_name"), "qm");
   assert.deepEqual(config.ssl, { ca: "PEM", rejectUnauthorized: true });
 });
@@ -95,6 +98,23 @@ test("explicit CA trust overrides connection-string SSL controls without weakeni
 test("connection-string SSL controls remain unchanged without explicit CA trust", () => {
   const connectionString = "postgresql://user:pass@db.example/qm?sslmode=require";
   assert.deepEqual(pgConnectionConfig(connectionString, {}), { connectionString });
+});
+
+test("invalid database URLs fail without retaining credential-bearing input", () => {
+  const secret = "do-not-leak";
+  assert.throws(
+    () => pgConnectionConfig(`not a postgres URL ${secret}`, resolvePgCaTrust({ cert: "PEM" })),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === "DATABASE_URL is invalid" &&
+      !JSON.stringify(error).includes(secret) &&
+      !("input" in error),
+  );
+  assert.throws(
+    () => pgConnectionConfig("postgresql:opaque", resolvePgCaTrust({ cert: "PEM" })),
+    /DATABASE_URL is invalid/,
+  );
+  assert.doesNotThrow(() => pgConnectionConfig("postgresql:///qm", resolvePgCaTrust({ cert: "PEM" })));
 });
 
 function pathToUrl(p: string): string {

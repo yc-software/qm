@@ -13,15 +13,17 @@ test("no CA configured → no ssl override (connection string semantics untouche
 });
 
 test("PEM content wires into ssl.ca", () => {
-  assert.deepEqual(resolvePgCaTrust({ cert: PEM }), { ssl: { ca: PEM } });
+  assert.deepEqual(resolvePgCaTrust({ cert: PEM }), { ssl: { ca: PEM, rejectUnauthorized: true } });
 });
 
 test("a cert file is read; inline PEM wins when both are set", () => {
   const dir = mkdtempSync(join(tmpdir(), "pgca-"));
   const file = join(dir, "root.crt");
   writeFileSync(file, PEM);
-  assert.deepEqual(resolvePgCaTrust({ certFile: file }), { ssl: { ca: PEM } });
-  assert.deepEqual(resolvePgCaTrust({ cert: PEM, certFile: "/nope" }), { ssl: { ca: PEM } });
+  assert.deepEqual(resolvePgCaTrust({ certFile: file }), { ssl: { ca: PEM, rejectUnauthorized: true } });
+  assert.deepEqual(resolvePgCaTrust({ cert: PEM, certFile: "/nope" }), {
+    ssl: { ca: PEM, rejectUnauthorized: true },
+  });
 });
 
 test("an unreadable cert file fails loudly, not as silent no-verify", () => {

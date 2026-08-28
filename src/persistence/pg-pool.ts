@@ -113,8 +113,17 @@ export function pgConnectionConfig(
   ssl?: { ca: string; rejectUnauthorized: true };
 } {
   if (!trust.ssl) return { connectionString };
-  const url = new URL(connectionString);
-  for (const name of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) url.searchParams.delete(name);
+  if (!/^postgres(?:ql)?:\/\//i.test(connectionString)) throw new Error("DATABASE_URL is invalid");
+  let url: URL;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    throw new Error("DATABASE_URL is invalid");
+  }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") throw new Error("DATABASE_URL is invalid");
+  for (const name of ["ssl", "sslmode", "sslcert", "sslkey", "sslrootcert", "sslnegotiation", "uselibpqcompat"]) {
+    url.searchParams.delete(name);
+  }
   return { connectionString: url.toString(), ssl: trust.ssl };
 }
 

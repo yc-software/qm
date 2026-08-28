@@ -52,12 +52,25 @@ export function usesSlackOidc(config: QmConfig): boolean {
 export function renderSlackManifests(config: QmConfig): SlackManifests {
   const name = config.botName ?? "qm";
   const bot = JSON.parse(template("slack-manifest.json")) as {
-    display_information: { name: string; description: string };
-    features: { bot_user: { display_name: string } };
+    display_information: { name: string; description: string; background_color: string };
+    features: { bot_user: { display_name: string }; agent_view: { agent_description: string } };
   };
+  const slackEnv = config.env?.slack ?? {};
+  const background = slackEnv.SLACK_BACKGROUND_COLOR?.trim();
+  if (background && !/^#[0-9a-f]{6}$/i.test(background)) {
+    throw new Error("env.slack.SLACK_BACKGROUND_COLOR must be a six-digit hex color");
+  }
   bot.display_information.name = name;
-  bot.display_information.description = `${name} workspace agent for ${config.orgId}`;
+  const description = slackEnv.SLACK_APP_DESCRIPTION?.trim() || `${name} workspace agent for ${config.orgId}`;
+  if (description.length > 140) throw new Error("env.slack.SLACK_APP_DESCRIPTION must be at most 140 characters");
+  bot.display_information.description = description;
+  if (background) bot.display_information.background_color = background;
   bot.features.bot_user.display_name = name;
+  const agentDescription = slackEnv.SLACK_AGENT_DESCRIPTION?.trim();
+  if (agentDescription && agentDescription.length > 300) {
+    throw new Error("env.slack.SLACK_AGENT_DESCRIPTION must be at most 300 characters");
+  }
+  if (agentDescription) bot.features.agent_view.agent_description = agentDescription;
 
   const sso = JSON.parse(template("slack-sso-manifest.json")) as {
     display_information: { name: string; description: string };
