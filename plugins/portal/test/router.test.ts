@@ -230,21 +230,6 @@ test("the webhook passthrough is exact-shape + POST-only (no widening of /v1)", 
   assert.equal((await fetch(`${base}/v1/webhooks`, { method: "POST" })).status, 404);
 });
 
-test("miniapps pass through to the core with NO session so Slack buttons and iframes work", async () => {
-  const r = await fetch(`${base}/m/aa/bb`, { headers: { accept: "text/html" }, redirect: "manual" });
-  assert.equal(r.status, 200);
-  const body = (await r.json()) as { url: string; cookie: string | null };
-  assert.equal(body.url, "/m/aa/bb");
-  assert.equal(body.cookie, null);
-  assert.equal(r.headers.get("x-frame-options"), null);
-});
-
-test("the miniapp passthrough is GET /m/:id/:key only", async () => {
-  assert.equal((await fetch(`${base}/m/aa`, { redirect: "manual" })).status, 401);
-  assert.equal((await fetch(`${base}/m/aa/bb/cc`, { redirect: "manual" })).status, 401);
-  assert.equal((await fetch(`${base}/m/aa/bb`, { method: "POST", redirect: "manual" })).status, 401);
-});
-
 test("the provider callback still passes through publicly with NO session/cookie", async () => {
   const cb = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=s`, { redirect: "manual" });
   assert.equal(cb.status, 200);

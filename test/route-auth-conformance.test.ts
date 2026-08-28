@@ -69,7 +69,6 @@ test("every pinned dedicated-audience route actually resolves in the table", () 
 test("raw routes keep their declared auth contracts (they self-enforce, so the declaration is the pin)", () => {
   const pins: Array<[string, string, RouteAuth]> = [
     ["GET", "/healthz", "public"],
-    ["GET", "/m/sample/sample", "public"],
     ["GET", "/v1/credentials/git/gitlab/acme/repo.git/info/refs", { aud: CREDENTIAL_BROKER_AUD }],
     ["POST", "/v1/credentials/git/gitlab/acme/repo.git/git-upload-pack", { aud: CREDENTIAL_BROKER_AUD }],
   ];

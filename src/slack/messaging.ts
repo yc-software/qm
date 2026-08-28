@@ -8,10 +8,8 @@ import {
   applyReactions,
   botIdentityArgs,
   extractAgentRequests,
-  extractMiniapps,
   extractReactions,
   stripAgentRequestDirectives,
-  stripMiniappDirectives,
   stripReactionDirectives,
 } from "./lib.ts";
 
@@ -61,10 +59,8 @@ export function cleanAgentReplyForSlack(text: string): {
 } {
   const extractedReactions = extractReactions(text);
   const extractedRequests = extractAgentRequests(extractedReactions.text);
-  const extractedMiniapps = extractMiniapps(extractedRequests.text);
-  const miniappLinks = extractedMiniapps.miniapps.map(({ title, url }) => `${title}: ${url}`).join("\n");
   return {
-    text: [extractedMiniapps.text, miniappLinks].filter(Boolean).join("\n"),
+    text: extractedRequests.text,
     reactions: extractedReactions.reactions,
     agentRequests: extractedRequests.requests,
   };
@@ -75,7 +71,7 @@ export function slackSurfaceInstructions(kind: SlackConversationKind): string {
 }
 
 export function stripSlackDirectives(text: string): string {
-  return stripMiniappDirectives(stripAgentRequestDirectives(stripReactionDirectives(text)));
+  return stripAgentRequestDirectives(stripReactionDirectives(text));
 }
 
 export async function applyAndLogReactions(
