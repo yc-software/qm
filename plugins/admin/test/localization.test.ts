@@ -60,7 +60,15 @@ test("Admin localization excludes transcripts and raw content", () => {
     context,
   );
   assert.deepEqual(Array.from(context.values as string[]), ["Files", "文件"]);
-  assert.doesNotMatch(html, /new MutationObserver/);
+  assert.match(html, /new MutationObserver/);
+  assert.match(
+    html,
+    /adminLocalizationObserver\.observe\(document\.documentElement, \{ childList: true, subtree: true \}\)/,
+  );
+  assert.doesNotMatch(html, /LOCALIZATION_SKIP_SELECTOR[\s\S]{0,120}textarea, option/);
+  assert.match(html, /if \(parent\?\.closest\(LOCALIZATION_SKIP_SELECTOR\)\) return;/);
+  assert.match(html, /Judged: "已判断"/);
+  assert.match(html, /"No judgments recorded for this filter yet\.": "当前筛选条件下还没有判断记录。"/);
   assert.match(html, /else th\.textContent = translateUiText\(h\)/);
   assert.match(html, /h\.textContent = translateUiText\(s\.label\)/);
   assert.match(html, /document\.createTextNode\(translateUiText\(VIEW_TITLE\[v\]/);
