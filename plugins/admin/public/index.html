@@ -7254,6 +7254,7 @@
           api("GET", "/api/slack-installation"),
           api("GET", "/api/connector-catalog"),
           api("GET", "/api/scopes/" + encodeURIComponent(orgScope())),
+          loadCustomProviders(),
         ]);
         if (!models.ok || !slack.ok || !catalog.ok || !config.ok) {
           setStatus("st-onboarding-model", "Setup status could not be loaded. Try again.", "err", true);

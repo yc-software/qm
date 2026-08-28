@@ -26,6 +26,8 @@ const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = "admin-custom-provider-proxy-secret";
+process.env.NODE_ENV = "test";
+process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "1";
 
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -110,4 +112,12 @@ test("custom provider UI exposes model discovery and merges returned names", () 
   const before = fingerprint();
   fields["custom-provider-id"]!.value = "other";
   assert.notEqual(fingerprint(), before);
+});
+
+test("onboarding loads saved custom providers on first render", () => {
+  const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+  const start = html.indexOf("async function loadOnboarding()");
+  const end = html.indexOf('$("onboarding-model-provider").onchange', start);
+  assert.ok(start > 0 && end > start);
+  assert.match(html.slice(start, end), /loadCustomProviders\(\)/);
 });
