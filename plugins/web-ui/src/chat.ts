@@ -6,7 +6,6 @@ import "./marked-dedupe";
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import {
   Activity,
   Ban,
@@ -14,7 +13,6 @@ import {
   Check,
   ChevronRight,
   Clock3,
-  Code2,
   Copy,
   FileImage,
   FileText,
@@ -71,16 +69,6 @@ import {
 } from "./core-bridge";
 import { buildTimeline, toolRowKind, type TimelineItem, type ToolPayload, type ToolRowModel } from "./timeline";
 import { CONNECTOR_NAMES, connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
-import {
-  miniappsIn,
-  miniappFrameSrc,
-  miniappSourceSrc,
-  formatMiniappHtml,
-  currentMiniappTheme,
-  stripMiniappDirectives,
-  type MiniappEmbed,
-} from "./miniapp";
-import hljs, { whenHighlightReady } from "./lazy-hljs";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
@@ -129,53 +117,11 @@ interface SettledRowKey {
   approvalDecision: unknown;
   sendFailure: unknown;
   forkable: boolean;
-  miniappKey: string;
   tpl: TemplateResult | typeof nothing;
 }
 const settledRowCache = new WeakMap<object, SettledRowKey>();
 const connectedConnectors = new Set<string>();
-const miniappPaneByUrl = new Map<string, "play" | "code">();
-const miniappSourceByUrl = new Map<string, string>();
-const miniappBootByPath = new Map<string, { ok: boolean; error?: string }>();
-const miniappBootTimerByPath = new Map<string, number>();
 const redrawHooks = new Set<() => void>();
-
-function miniappPathOf(src: string): string {
-  try {
-    return new URL(src, location.origin).pathname;
-  } catch {
-    return src;
-  }
-}
-
-function noteMiniappBoot(path: string, boot: { ok: boolean; error?: string }): void {
-  if (miniappBootByPath.get(path)?.ok && boot.ok) return;
-  miniappBootByPath.set(path, boot);
-  const timer = miniappBootTimerByPath.get(path);
-  if (timer !== undefined) window.clearTimeout(timer);
-  miniappBootTimerByPath.delete(path);
-  for (const hook of redrawHooks) hook();
-}
-
-window.addEventListener("message", (event) => {
-  const data = event.data as { source?: string; path?: string; ok?: boolean; error?: string } | null;
-  if (!data || data.source !== "qm-miniapp" || typeof data.path !== "string") return;
-  noteMiniappBoot(data.path, {
-    ok: Boolean(data.ok),
-    ...(typeof data.error === "string" && data.error ? { error: data.error } : {}),
-  });
-});
-
-function armMiniappBoot(src: string): void {
-  const path = miniappPathOf(src);
-  if (miniappBootByPath.has(path) || miniappBootTimerByPath.has(path)) return;
-  miniappBootTimerByPath.set(
-    path,
-    window.setTimeout(() => {
-      if (!miniappBootByPath.has(path)) noteMiniappBoot(path, { ok: true });
-    }, 1500),
-  );
-}
 let proactiveOpenerStarted = false;
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -563,13 +509,8 @@ export function createChatSurface(
     if (chatState.agent) drawActiveChat();
   }
 
-  function redrawForMiniapp(): void {
-    redrawTranscript();
-  }
-
   function dispose(): void {
     redrawHooks.delete(redrawForConnector);
-    redrawHooks.delete(redrawForMiniapp);
     teardownActiveChat();
   }
 
@@ -1296,13 +1237,6 @@ export function createChatSurface(
       (!work || ((work.status === "complete" || work.status === "failed") && !work.pendingApprovals?.length));
     if (!cacheable) return chatMessage(message, index, isStreaming);
     const forkable = Boolean(chatState.threadRef && chatState.sessionId && chatState.agent);
-    const miniappKey = miniappsIn(messageText(message))
-      .map((app) => {
-        const src = miniappFrameSrc(app.url, withBase, currentMiniappTheme());
-        const boot = miniappBootByPath.get(miniappPathOf(src));
-        return `${app.url}:${miniappPaneByUrl.get(app.url) ?? "play"}:${miniappSourceByUrl.get(app.url) ?? ""}:${boot ? `${boot.ok}:${boot.error ?? ""}` : "pending"}`;
-      })
-      .join("\n");
     const hit = settledRowCache.get(message as object);
     if (
       hit &&
@@ -1315,8 +1249,7 @@ export function createChatSurface(
       hit.errorMessage === msg.errorMessage &&
       hit.approvalDecision === msg.approvalDecision &&
       hit.sendFailure === msg.sendFailure &&
-      hit.forkable === forkable &&
-      hit.miniappKey === miniappKey
+      hit.forkable === forkable
     ) {
       return hit.tpl;
     }
@@ -1332,7 +1265,6 @@ export function createChatSurface(
       approvalDecision: msg.approvalDecision,
       sendFailure: msg.sendFailure,
       forkable,
-      miniappKey,
       tpl,
     });
     return tpl;
@@ -1525,104 +1457,12 @@ export function createChatSurface(
     </a>`;
   }
 
-  function loadMiniappSource(url: string, sourceSrc: string): void {
-    if (miniappSourceByUrl.has(url)) return;
-    miniappSourceByUrl.set(url, "");
-    void fetch(sourceSrc, { cache: "reload" })
-      .then(async (r) => {
-        miniappSourceByUrl.set(url, r.ok ? await r.text() : "Couldn't load the source.");
-        redrawTranscript();
-      })
-      .catch(() => {
-        miniappSourceByUrl.set(url, "Couldn't load the source.");
-        redrawTranscript();
-      });
-  }
-
-  function miniappSourceView(source: string | undefined): TemplateResult {
-    if (!source) return html`<pre class="miniapp-source" tabindex="0">Loading source…</pre>`;
-    const formatted = formatMiniappHtml(source);
-    if (!hljs.getLanguage("html") && !hljs.getLanguage("xml")) {
-      void whenHighlightReady().then(() => redrawTranscript());
-    }
-    return html`<pre class="miniapp-source" tabindex="0">
-${unsafeHTML(hljs.highlight(formatted, { language: "html" }).value)}</pre>`;
-  }
-
-  function miniappBootState(
-    pane: "play" | "code",
-    boot: { ok: boolean; error?: string } | undefined,
-  ): TemplateResult | typeof nothing {
-    if (pane !== "play") return nothing;
-    if (!boot) return html`<div class="miniapp-boot" role="status">Starting…</div>`;
-    if (!boot.ok)
-      return html`<div class="miniapp-boot err" role="alert">${boot.error || "Playground hit an error."}</div>`;
-    return nothing;
-  }
-
-  function miniappCard(app: MiniappEmbed): TemplateResult {
-    const src = miniappFrameSrc(app.url, withBase, currentMiniappTheme());
-    const sourceSrc = miniappSourceSrc(src);
-    const pane = miniappPaneByUrl.get(app.url) ?? "play";
-    if (pane === "code") loadMiniappSource(app.url, sourceSrc);
-    const source = miniappSourceByUrl.get(app.url);
-    const path = miniappPathOf(src);
-    if (pane === "play") armMiniappBoot(src);
-    const boot = miniappBootByPath.get(path);
-    return html`<div class="miniapp-card">
-      <header class="miniapp-card-bar">
-        <span class="miniapp-card-icon">${icon(Files, 16)}</span>
-        <strong class="miniapp-card-title">${app.title}</strong>
-        <nav class="miniapp-tabs" aria-label="Playground views">
-          <button
-            class="miniapp-tab ${pane === "play" ? "on" : ""}"
-            type="button"
-            aria-pressed=${pane === "play"}
-            @click=${() => {
-              miniappPaneByUrl.set(app.url, "play");
-              redrawTranscript();
-            }}
-          >
-            Play
-          </button>
-          <button
-            class="miniapp-tab ${pane === "code" ? "on" : ""}"
-            type="button"
-            aria-pressed=${pane === "code"}
-            @click=${() => {
-              miniappPaneByUrl.set(app.url, "code");
-              loadMiniappSource(app.url, sourceSrc);
-              redrawTranscript();
-            }}
-          >
-            ${icon(Code2, 13)} Code
-          </button>
-        </nav>
-        <a class="miniapp-card-open" href=${src} target="_blank" rel="noreferrer" title="Open in a new tab"
-          >${icon(Maximize2, 14)} Open</a
-        >
-      </header>
-      <div class="miniapp-stage">
-        <iframe
-          class="miniapp-frame ${pane === "code" ? "is-hidden" : ""}"
-          src=${src}
-          title=${app.title}
-          sandbox="allow-scripts allow-forms allow-pointer-lock allow-modals allow-popups"
-          referrerpolicy="no-referrer"
-        ></iframe>
-        ${miniappBootState(pane, boot)} ${pane === "code" ? miniappSourceView(source) : nothing}
-      </div>
-    </div>`;
-  }
-
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const parts: TemplateResult[] = [];
     for (const chunk of message.content) {
       if (chunk.type === "text" && chunk.text.trim()) {
         const links = connectorLinksIn(chunk.text, location.origin);
-        const apps = miniappsIn(chunk.text);
-        let body = stripMiniappDirectives(chunk.text);
-        if (links.length) body = stripConnectorLinks(body);
+        const body = links.length ? stripConnectorLinks(chunk.text) : chunk.text;
         if (body.trim())
           parts.push(
             html`<div class="streaming-text ${isStreaming ? "live-stream" : ""}">
@@ -1630,7 +1470,6 @@ ${unsafeHTML(hljs.highlight(formatted, { language: "html" }).value)}</pre>`;
             </div>`,
           );
         for (const link of links) parts.push(connectorWidget(link));
-        if (!isStreaming) for (const app of apps) parts.push(miniappCard(app));
       }
       if (chunk.type === "thinking" && chunk.thinking.trim()) {
         parts.push(
@@ -2460,7 +2299,6 @@ ${unsafeHTML(hljs.highlight(formatted, { language: "html" }).value)}</pre>`;
   }
 
   redrawHooks.add(redrawForConnector);
-  redrawHooks.add(redrawForMiniapp);
 
   return {
     state: chatState,

@@ -88,14 +88,17 @@ test("tabs share the strip evenly down to a legible floor", () => {
   assert.match(multi, /max-width: 220px;/);
 });
 
+test("hovering a tab does not change its action-slot width", () => {
+  const close = css.match(/^\.split-tab-close \{[^}]*\}/m)?.[0] ?? "";
+  assert.doesNotMatch(close, /transition:[^}]*\b(?:width|min-width)\b/s);
+  assert.doesNotMatch(css, /:not\(:hover\):not\(:focus-within\) \.split-tab-close \{[^}]*(?:width|min-width): 0;/);
+});
+
 test("the per-tab close floats to the end of the tab", () => {
   const close = css.match(/^\.split-tab-close \{[^}]*\}/m)?.[0] ?? "";
   assert.match(close, /margin-left: auto;/);
   assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*flex: 1 1 auto;/);
   assert.match(css, /\.split-pane-title-text \{[^}]*margin-right: 6px;/);
-  const collapsed = css.match(/:not\(:hover\):not\(:focus-within\) \.split-tab-close \{[^}]*\}/)?.[0] ?? "";
-  assert.ok(collapsed, "the collapsed-slot rule not found");
-  assert.doesNotMatch(collapsed, /margin-left:/);
 });
 
 test("the tab overflow menu is lifted above the panes and styled", () => {

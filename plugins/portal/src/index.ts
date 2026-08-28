@@ -959,11 +959,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_WEBHOOK_HEADERS);
   }
 
-  if (method === "GET" && /^\/m\/[^/]+\/[^/]+$/.test(pathname)) {
-    res.removeHeader("x-frame-options");
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, ["accept"]);
-  }
-
   const consentBounce = (): void => {
     res.writeHead(302, { location: `/auth/login?returnTo=${encodeURIComponent(`${pathname}${url.search}`)}` });
     return void res.end();

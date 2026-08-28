@@ -36,14 +36,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         url: `/d/${input.name ?? "dep-1"}/`,
       };
     },
-    async miniapp(input) {
-      return {
-        id: "mini-1",
-        title: input.title,
-        url: "https://qm.test/m/mini-1/key",
-        directive: `[[miniapp: https://qm.test/m/mini-1/key | ${input.title}]]`,
-      };
-    },
     async memorySearch(q) {
       return q.includes("billing") ? ["(2026-05-31) Owns the billing service"] : [];
     },
@@ -537,33 +529,6 @@ test("the screen never rewrites a policy notice — an approval gate stays legib
   assert.equal(pending.length, 1);
 });
 
-test("miniapp and publish results are first-party and never quarantined", async () => {
-  const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
-    current: fakeToolContext(),
-    emit: (e) => {
-      emitted.push(e as Emitted);
-    },
-    scopeLabel: "personal:U1",
-    screenToolResult: async () => false,
-  };
-  const tools = createPiTools(ref);
-  const miniapp = tools.find((t) => t.name === "miniapp");
-  const publish = tools.find((t) => t.name === "publish");
-  const mini = (await call(miniapp, { title: "Blocks", html: "<p>hi</p>" })) as { content: Array<{ text?: string }> };
-  assert.match(mini.content[0]?.text ?? "", /\[\[miniapp:/);
-  assert.equal(
-    emitted.find((e) => e.type === "tool_result" && e.payload.tool === "miniapp")!.payload.quarantined,
-    undefined,
-  );
-  const pub = (await call(publish, { name: "app", dir: "app" })) as { content: Array<{ text?: string }> };
-  assert.match(pub.content[0]?.text ?? "", /Published/);
-  assert.equal(
-    emitted.find((e) => e.type === "tool_result" && e.payload.tool === "publish")!.payload.quarantined,
-    undefined,
-  );
-});
-
 test("the screen never rewrites a policy denial either", async () => {
   const denied: ToolContext = {
     ...fakeToolContext(),
@@ -1049,11 +1014,11 @@ test("readOnly assembles ONLY observational tools — no execute/background/writ
   const readOnly = createPiTools(ref, { controlTools: true, scratchExec: true, reachExec: true, readOnly: true });
 
   const names = (ts: ReturnType<typeof createPiTools>) => new Set(ts.map((t) => t.name));
-  for (const t of ["execute", "background", "read", "write", "publish", "miniapp", "cron", "webhook", "guidance"]) {
+  for (const t of ["execute", "background", "read", "write", "publish", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
   assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory"]);
-  for (const t of ["execute", "background", "read", "write", "publish", "miniapp", "cron", "webhook", "guidance"]) {
+  for (const t of ["execute", "background", "read", "write", "publish", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
 });
@@ -1195,10 +1160,7 @@ test("tool entries carry the call id + faithful model-facing result (WAL replay 
     },
     scopeLabel: "personal:U1",
   };
-  const tools = createPiTools(ref);
-  const execute = tools.find((t) => t.name === "execute")!;
-  const read = tools.find((t) => t.name === "read")!;
-  const memory = tools.find((t) => t.name === "memory")!;
+  const [execute, read, , , memory] = createPiTools(ref);
 
   await callWith(execute, "call-exec", { command: "echo hi" });
   await callWith(read, "call-read", { path: "a.txt" });

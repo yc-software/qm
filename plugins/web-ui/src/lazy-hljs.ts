@@ -8,13 +8,6 @@ type Hljs = {
 
 let real: Hljs | null = null;
 let loading: Promise<void> | null = null;
-const readyWaiters: Array<() => void> = [];
-
-export function whenHighlightReady(): Promise<void> {
-  if (real) return Promise.resolve();
-  ensureLoading();
-  return new Promise((resolve) => readyWaiters.push(resolve));
-}
 
 const LANGS = ["javascript", "typescript", "python", "xml", "css", "json", "bash", "sql", "markdown"] as const;
 const LANG_ALIASES: Record<string, string> = { html: "xml" };
@@ -54,8 +47,6 @@ function ensureLoading(): void {
       }
       real = hljs;
       rerenderMountedBlocks();
-      const waiters = readyWaiters.splice(0);
-      for (const fn of waiters) fn();
     })
     .catch(() => {
       loading = null;
