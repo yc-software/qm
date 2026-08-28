@@ -964,6 +964,17 @@ a.chat-row-open {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.locale-select {
+  width: 74px;
+  flex: 0 0 74px;
+  color: var(--muted-foreground);
+}
+.locale-select > select {
+  cursor: pointer;
+}
+.signin-brand .locale-select {
+  margin-left: auto;
+}
 
 .main {
   flex: 1;
@@ -4604,6 +4615,9 @@ a.chat-row-open {
 }
 
 @media (max-width: 860px) {
+  .locale-select > select {
+    min-height: 44px;
+  }
   .layout {
     position: relative;
   }

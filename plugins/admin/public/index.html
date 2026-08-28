@@ -117,6 +117,32 @@
       .header-controls:empty {
         display: none;
       }
+      .locale-control {
+        display: inline-flex;
+        align-items: center;
+        flex: 0 0 auto;
+      }
+      .locale-control select {
+        width: 58px;
+        min-height: 32px;
+        padding: 4px 6px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--muted);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .locale-control select:focus-visible {
+        outline: 2px solid var(--text);
+        outline-offset: 2px;
+      }
+      @media (max-width: 900px) {
+        .locale-control select {
+          min-height: 44px;
+        }
+      }
       .header-check {
         display: inline-flex;
         align-items: center;
@@ -3782,6 +3808,12 @@
         <a class="header-button" href="/" id="dashboard-link">Dashboard</a><span class="pill" id="who-name"></span
         ><button class="link" id="signout">Sign out</button>
       </div>
+      <label class="locale-control">
+        <select id="locale-select" aria-label="Language" title="Language">
+          <option value="en">EN</option>
+          <option value="zh-CN">中文</option>
+        </select>
+      </label>
     </header>
 
     <p
@@ -4912,6 +4944,217 @@
     </dialog>
 
     <script>
+      const LOCALE_STORAGE_KEY = "qm:locale";
+      const ZH_CN_TRANSLATIONS = {
+        Language: "语言",
+        Dashboard: "工作台",
+        "Sign out": "退出登录",
+        "Page controls": "页面控制",
+        "Checking your access…": "正在检查访问权限…",
+        "Sign in through the portal": "通过门户登录",
+        "This admin surface is reached through the portal. Sign in there to continue.":
+          "管理界面需要通过门户访问，请先在门户中登录。",
+        "Admin is temporarily unavailable": "管理服务暂时不可用",
+        "We couldn't verify your admin access right now — the backend didn't answer. This is usually temporary.":
+          "目前无法验证你的管理权限，后端没有响应，通常只是暂时故障。",
+        "Trying again resolves most cases. If this keeps happening, the core service may be down.":
+          "重试通常可以解决。如果问题持续存在，Core 服务可能已停止。",
+        "Try again": "重试",
+        "You don't have admin access": "你没有管理权限",
+        "The Admin area is limited to governance admins. Your account is signed in and verified — it just isn't granted admin rights.":
+          "管理区域仅限治理管理员使用。你的账户已登录并通过验证，但尚未获得管理权限。",
+        "Signed in as": "当前登录",
+        "Admin rights come from your organization's admin grants. If you need access, ask an existing admin to grant it.":
+          "管理权限由组织管理员授权。如需访问，请联系现有管理员。",
+        "Back to your surfaces": "返回工作台",
+        Artifacts: "资源",
+        System: "系统",
+        Admin: "管理",
+        Insights: "洞察",
+        Onboarding: "初始设置",
+        Governance: "治理",
+        Connectors: "连接器",
+        Users: "用户",
+        Keychain: "密钥链",
+        User: "用户",
+        Metrics: "指标",
+        Egress: "外联访问",
+        Sessions: "会话",
+        Files: "文件",
+        Memory: "记忆",
+        Live: "实时",
+        Audit: "审计",
+        Skills: "技能",
+        Crons: "定时任务",
+        Deployments: "部署",
+        Retention: "留存",
+        Slack: "Slack",
+        Judgments: "判断",
+        "Ack emoji": "确认表情",
+        "← Ack emoji": "← 确认表情",
+        "Coming back soon": "即将恢复",
+        "Temporary setup guide": "临时设置指南",
+        "Get this deployment ready for real conversations. Secrets are validated, encrypted in durable storage, and never displayed again.":
+          "完成部署配置以开始真实对话。密钥会经过验证并加密保存，之后不会再次显示。",
+        "Not ready": "未就绪",
+        "1. Model provider": "1. 模型服务商",
+        "Add the key the agent will use for its base model.": "添加助手基础模型所需的密钥。",
+        Optional: "可选",
+        "2. Slack app": "2. Slack 应用",
+        "Create the Slack app, install it, then add its bot and Socket Mode tokens.":
+          "创建并安装 Slack 应用，然后添加 Bot 与 Socket Mode Token。",
+        "Create Slack app ↗": "创建 Slack 应用 ↗",
+        "Enter Slack tokens": "填写 Slack Token",
+        "3. OAuth apps": "3. OAuth 应用",
+        "Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.":
+          "添加 Google、GitHub、Notion 或其他 OAuth 客户端以启用相应连接器。",
+        "Configure OAuth apps": "配置 OAuth 应用",
+        "Base model": "基础模型",
+        "Choose a supported provider and model. Saving validates the key, stores it write-only, and makes the selected model the organization default.":
+          "选择支持的服务商和模型。保存时会验证密钥、以只写方式存储，并将所选模型设为组织默认值。",
+        Provider: "服务商",
+        Protocol: "协议",
+        "Display name": "显示名称",
+        "Base URL": "基础 URL",
+        "API key": "API 密钥",
+        "Provider id (slug)": "服务商 ID（slug）",
+        "OpenAI-compatible": "兼容 OpenAI",
+        "Anthropic-compatible": "兼容 Anthropic",
+        "Validate key against the endpoint (untick for gateways without a models listing)":
+          "通过接口验证密钥（没有模型列表的网关请取消勾选）",
+        "Save provider": "保存服务商",
+        "Custom providers": "自定义服务商",
+        "Point the deployment at any OpenAI- or Anthropic-compatible endpoint — a vendor like DeepSeek, or a gateway like LiteLLM fronting many models. Keys are validated, stored write-only, and the models join the picker.":
+          "将部署连接到任意兼容 OpenAI 或 Anthropic 的接口，例如 DeepSeek，或管理多个模型的 LiteLLM 网关。密钥会被验证并以只写方式保存，模型将加入选择器。",
+        "Models (one per line: id | name | context | maxTokens)": "模型（每行一个：ID | 名称 | 上下文 | 最大 Token）",
+        "Fetch models": "获取模型",
+        "Fetching models...": "正在获取模型...",
+        "Review and save.": "请检查后保存。",
+        Remove: "移除",
+        Edit: "编辑",
+        Save: "保存",
+        Cancel: "取消",
+        Delete: "删除",
+        Add: "添加",
+        Create: "创建",
+        Update: "更新",
+        Refresh: "刷新",
+        "Search…": "搜索…",
+        "Loading…": "正在加载…",
+        Loading: "正在加载",
+        "No results": "没有结果",
+        "Not configured.": "未配置。",
+        Configured: "已配置",
+        "Validate and save": "验证并保存",
+        "Review change": "审查更改",
+        "Confirm governance change": "确认治理更改",
+        "Confirm change": "确认更改",
+        Allow: "允许",
+        Deny: "拒绝",
+        "Require approval": "需要审批",
+        Organization: "组织",
+        "All scopes": "全部范围",
+        "Current scope": "当前范围",
+        Destination: "目标",
+        Status: "状态",
+        Enabled: "已启用",
+        Disabled: "已禁用",
+        Active: "启用",
+        Ready: "就绪",
+        Failed: "失败",
+        Success: "成功",
+        Name: "名称",
+        Description: "描述",
+        Type: "类型",
+        Scope: "范围",
+        Created: "创建时间",
+        Updated: "更新时间",
+        Actions: "操作",
+        Copy: "复制",
+        Copied: "已复制",
+        Download: "下载",
+        Upload: "上传",
+        "Upload files": "上传文件",
+        "Run now": "立即运行",
+        Previous: "上一页",
+        Next: "下一页",
+        Clear: "清除",
+        Close: "关闭",
+        Details: "详情",
+      };
+      const LOCALIZATION_SKIP_SELECTOR =
+        "script, style, pre, code, textarea, option, .entry, .tool-body, .raw-json, [data-no-localize]";
+      const LOCALIZATION_ATTRIBUTES = ["aria-label", "title", "placeholder"];
+      let adminLocale = readAdminLocale();
+
+      function readAdminLocale() {
+        try {
+          const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
+          if (stored === "en" || stored === "zh-CN") return stored;
+        } catch {}
+        return navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+      }
+
+      function translateUiText(value, locale = adminLocale) {
+        if (locale !== "zh-CN") return value;
+        const leading = value.match(/^\s*/)?.[0] || "";
+        const trailing = value.match(/\s*$/)?.[0] || "";
+        const text = value.trim().replace(/\s+/g, " ");
+        const direct = ZH_CN_TRANSLATIONS[text];
+        if (direct) return leading + direct + trailing;
+        const signedIn = text.match(/^Signed in as (.+)$/);
+        if (signedIn) return leading + "已登录：" + signedIn[1] + trailing;
+        const fetched = text.match(/^Fetched (\d+) models\.(.*)$/);
+        if (fetched) return leading + "已获取 " + fetched[1] + " 个模型。" + fetched[2] + trailing;
+        return value;
+      }
+
+      function localizeUiNode(node) {
+        const parent = node.nodeType === Node.TEXT_NODE ? node.parentElement : node instanceof Element ? node : null;
+        if (parent?.closest(LOCALIZATION_SKIP_SELECTOR)) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+          const translated = translateUiText(node.nodeValue || "");
+          if (translated !== node.nodeValue) node.nodeValue = translated;
+          return;
+        }
+        if (!(node instanceof Element)) return;
+        LOCALIZATION_ATTRIBUTES.forEach((attribute) => {
+          const value = node.getAttribute(attribute);
+          if (!value) return;
+          const translated = translateUiText(value);
+          if (translated !== value) node.setAttribute(attribute, translated);
+        });
+      }
+
+      function localizeUiTree(root) {
+        if (adminLocale !== "zh-CN") return;
+        localizeUiNode(root);
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode();
+        while (node) {
+          localizeUiNode(node);
+          node = walker.nextNode();
+        }
+      }
+
+      function startAdminLocalization() {
+        document.documentElement.lang = adminLocale;
+        $("locale-select").value = adminLocale;
+        $("locale-select").onchange = (event) => {
+          adminLocale = event.currentTarget.value;
+          try {
+            localStorage.setItem(LOCALE_STORAGE_KEY, adminLocale);
+          } catch {}
+          location.reload();
+        };
+        localizeUiTree(document.documentElement);
+        window.addEventListener("storage", (event) => {
+          if (event.key === LOCALE_STORAGE_KEY && (event.newValue === "en" || event.newValue === "zh-CN")) {
+            location.reload();
+          }
+        });
+      }
+
       const $ = (id) => document.getElementById(id);
       const EFFECTS = ["allow", "deny", "require_approval"];
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
@@ -5428,7 +5671,7 @@
         if (!rows.length) {
           const p = document.createElement("p");
           p.className = "empty";
-          p.textContent = emptyMsg;
+          p.textContent = translateUiText(emptyMsg);
           return p;
         }
         const t = document.createElement("table");
@@ -5437,7 +5680,7 @@
         headers.forEach((h) => {
           const th = document.createElement("th");
           if (h && h.nodeType) th.appendChild(h);
-          else th.textContent = h;
+          else th.textContent = translateUiText(h);
           htr.appendChild(th);
         });
         thead.appendChild(htr);
@@ -5455,17 +5698,17 @@
         t.appendChild(tb);
         return tableWrap(t);
       }
-      function dataCard(title, desc, node) {
+      function dataCard(title, desc, node, options = {}) {
         const sec = document.createElement("section");
         sec.className = "card";
         const head = document.createElement("div");
         head.className = "head";
         const h = document.createElement("h2");
-        h.textContent = title;
+        h.textContent = options.rawTitle ? title : translateUiText(title);
         head.appendChild(h);
         if (desc) {
           const p = document.createElement("p");
-          p.textContent = desc;
+          p.textContent = options.rawDescription ? desc : translateUiText(desc);
           head.appendChild(p);
         }
         const body = document.createElement("div");
@@ -5534,6 +5777,7 @@
       $("signout").onclick = signOut;
       $("na-signout").onclick = signOut;
       $("uv-retry").onclick = refresh;
+      startAdminLocalization();
 
       const narrowAdminNav = matchMedia("(max-width: 900px)");
       function revealActiveTab() {
@@ -5559,7 +5803,7 @@
           if (s.label) {
             const h = document.createElement("div");
             h.className = "tab-section";
-            h.textContent = s.label;
+            h.textContent = translateUiText(s.label);
             nav.appendChild(h);
           }
           s.views.forEach((v) => {
@@ -5567,7 +5811,7 @@
             b.className = "tab" + (s.label ? "" : " tab-top") + (v === view ? " active" : "");
             b.type = "button";
             if (ICONS[v]) b.innerHTML = ICONS[v];
-            b.appendChild(document.createTextNode(VIEW_TITLE[v] || v[0].toUpperCase() + v.slice(1)));
+            b.appendChild(document.createTextNode(translateUiText(VIEW_TITLE[v] || v[0].toUpperCase() + v.slice(1))));
             if (v === view) b.setAttribute("aria-current", "page");
             if (DISABLED_VIEWS.has(v)) {
               b.disabled = true;
@@ -5888,14 +6132,14 @@
           const b = document.createElement("button");
           b.type = "button";
           b.className = "back";
-          b.textContent = opts.back.label;
+          b.textContent = translateUiText(opts.back.label);
           b.onclick = opts.back.onClick;
           bar.appendChild(b);
         }
         if (opts.title) {
           const h = document.createElement("h1");
           h.className = "shell-title";
-          h.textContent = opts.title;
+          h.textContent = opts.localizeTitle ? translateUiText(opts.title) : opts.title;
           bar.appendChild(h);
         }
         if (opts.context) {
@@ -5911,7 +6155,8 @@
             const b = document.createElement("button");
             b.type = "button";
             b.className = "shell-tab" + (tab.active ? " active" : "");
-            b.textContent = tab.count != null ? tab.label + " " + Number(tab.count).toLocaleString() : tab.label;
+            const label = translateUiText(tab.label);
+            b.textContent = tab.count != null ? label + " " + Number(tab.count).toLocaleString() : label;
             b.onclick = tab.onClick;
             wrap.appendChild(b);
           });
@@ -5931,7 +6176,7 @@
           w.className = "shell-search";
           const i = document.createElement("input");
           i.type = "search";
-          i.placeholder = opts.search.placeholder || "Search…";
+          i.placeholder = translateUiText(opts.search.placeholder || "Search…");
           i.spellcheck = false;
           i.setAttribute("autocapitalize", "none");
           i.oninput = () => opts.search.onInput(i.value);
@@ -7376,7 +7621,7 @@
           });
           const actions = document.createElement("td");
           const edit = document.createElement("button");
-          edit.textContent = "Edit";
+          edit.textContent = translateUiText("Edit");
           edit.onclick = () => {
             $("custom-provider-id").value = provider.id;
             $("custom-provider-name").value = provider.name;
@@ -7391,7 +7636,7 @@
           };
           const remove = document.createElement("button");
           remove.className = "danger";
-          remove.textContent = "Remove";
+          remove.textContent = translateUiText("Remove");
           remove.onclick = async () => {
             if (!confirm("Remove " + provider.name + "? Its models leave every model picker.")) return;
             const removed = await api("DELETE", "/api/custom-providers/" + encodeURIComponent(provider.id));
@@ -9102,7 +9347,9 @@
         };
         foot.append(save, cancel);
         body.appendChild(foot);
-        return dataCard("Edit cron destination", c.title || c.action || c.message || c.id, body);
+        return dataCard("Edit cron destination", c.title || c.action || c.message || c.id, body, {
+          rawDescription: true,
+        });
       }
       const cronStatusText = (c) => {
         if (c.archived) return "archived";
@@ -9678,7 +9925,7 @@
         pre.style.fontSize = "12px";
         pre.style.margin = "0";
         box.appendChild(dataCard("Instructions", "The SKILL.md the agent reads when this skill is in play.", pre));
-        holder.appendChild(dataCard(k.name || k.id, "", box));
+        holder.appendChild(dataCard(k.name || k.id, "", box, { rawTitle: true }));
         holder.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
 
@@ -13190,6 +13437,7 @@
         const shell = (extra) =>
           pageShell({
             title: "Ack emoji",
+            localizeTitle: true,
             ...(st.container
               ? {
                   back: {
@@ -13292,7 +13540,7 @@
           label: "← Ack emoji",
           onClick: () => go({ view: "ackemoji", container: st.container, decision: st.decision, jid: null }),
         };
-        pageShell({ back, title: "Ack emoji" });
+        pageShell({ back, title: "Ack emoji", localizeTitle: true });
         const detail = document.createElement("div");
         detail.className = "detail judg-detail";
         detail.textContent = "Loading…";
@@ -13306,6 +13554,7 @@
         pageShell({
           back,
           title: "Ack emoji",
+          localizeTitle: true,
           context: slackContainerLabel(p.channel),
           contextGo: { view: "slack", container: p.channel, ts: p.ts },
         });

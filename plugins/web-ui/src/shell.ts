@@ -30,7 +30,7 @@ import {
 } from "./core-bridge";
 import { applyRuntimeOptions } from "./model-options";
 import { errMessage, swallow } from "../../chassis/src/errors";
-import { brandMark, brandName, icon, initials } from "./ui";
+import { brandMark, brandName, fieldSelect, icon, initials } from "./ui";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection, seedRuntimeConfig } from "./composer";
 import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
@@ -76,6 +76,7 @@ import { contextsState, ensureContexts, renderContexts, resetContextsState, reso
 import { appState, can, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
+import { currentLocale, setLocale, type UiLocale } from "./locale";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let authMode: AuthMode = "portal";
@@ -262,13 +263,28 @@ function gateShell(body: unknown) {
     <div class="signin">
       <div class="signin-panel">
         <div class="signin-brand">
-          ${brandMark()}<span>${brandName()}</span>
-          ${authMode === "dev" ? html`<span class="dev-chip">DEV</span>` : nothing}
+          ${brandMark()}<span data-no-localize>${brandName()}</span>
+          ${authMode === "dev" ? html`<span class="dev-chip">DEV</span>` : nothing} ${localeControl()}
         </div>
         ${body}
       </div>
     </div>
   `;
+}
+
+function localeControl(): TemplateResult {
+  return fieldSelect({
+    className: "locale-select",
+    compact: true,
+    ariaLabel: "Language",
+    value: currentLocale(),
+    options: html`<option value="en">EN</option>
+      <option value="zh-CN">中文</option>`,
+    onChange: (value) => {
+      setLocale(value as UiLocale);
+      location.reload();
+    },
+  });
 }
 
 const PORTAL_ATTEMPT_KEY = "qm.portal.signin.attempt";
@@ -455,6 +471,7 @@ export function mountShell(): void {
               <span class="avatar">${initials(appState.me?.user ?? "?")}</span>
               <span class="user-name">${appState.me?.user ?? ""}</span>
             </div>
+            ${localeControl()}
             <theme-toggle .includeSystem=${true} title="Color scheme: light / dark / system"></theme-toggle>
             <button class="icon-btn subtle" title="Sign out" aria-label="Sign out" @click=${signOut}>
               ${icon(LogOut, 17)}

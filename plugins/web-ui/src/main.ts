@@ -12,6 +12,9 @@ import {
   sessionsState,
 } from "./sessions";
 import { closeDeployMenu } from "./deploys";
+import { startLocalization } from "./locale";
+
+startLocalization();
 
 function closeComposerMenus(keepOpenWithin: Element | null): boolean {
   let changed = false;
