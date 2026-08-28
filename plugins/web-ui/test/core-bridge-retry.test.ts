@@ -175,3 +175,31 @@ test("poll requests never put bearer credentials in the URL", async () => {
   assert.ok(urls[0]!.endsWith("/api/runs/run-r5"), urls[0]);
   assert.doesNotMatch(urls[0]!, /[?&](?:rt|token)=/);
 });
+
+test("a failed initial submission is retryable with the same client turn id", async () => {
+  const { makeCoreStreamFn } = await import("../src/core-bridge.ts");
+  const submitted: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_input, init) => {
+    submitted.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    if (submitted.length === 1) throw new TypeError("Failed to fetch");
+    return Response.json({ status: "ok", reply: "delivered" });
+  }) as typeof fetch;
+  const userMessage = { role: "user", content: "hello" } as { role: "user"; content: string; sendFailure?: string };
+  const agent = {
+    state: { model: MODEL, messages: [userMessage], tools: [] },
+  } as unknown as import("@earendil-works/pi-agent-core").Agent;
+  const streamFn = makeCoreStreamFn("web:alice:one", agent);
+
+  const failedStream = await streamFn(MODEL, {} as import("@earendil-works/pi-ai").Context);
+  const failed = await failedStream.result();
+  assert.equal(failed.stopReason, "error");
+  assert.equal(failed.errorMessage, "Message wasn’t sent. Check your connection and try again.");
+  assert.equal((failed as { retryableSend?: boolean }).retryableSend, true);
+  assert.equal(userMessage.sendFailure, "Message wasn’t sent. Check your connection and try again.");
+
+  const retriedStream = await streamFn(MODEL, {} as import("@earendil-works/pi-ai").Context);
+  const retried = await retriedStream.result();
+  assert.equal(retried.stopReason, "stop");
+  assert.equal(submitted[0]?.clientTurnId, submitted[1]?.clientTurnId);
+  assert.match(String(submitted[0]?.clientTurnId), /^[0-9a-f-]{36}$/);
+});

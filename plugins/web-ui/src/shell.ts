@@ -37,13 +37,15 @@ import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversa
 import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
 import {
-  addBlankPane,
   adoptRemoteSplit,
   canvasToast,
   drawCanvas,
   exitSplitIfActive,
+  focusedPaneSession,
   loadPersistedSplit,
   mountRestoredCanvas,
+  openBlankInFocusedPane,
+  openThreadInFocusedPane,
   restoredCanvasNeedsSessionList,
   splitState,
 } from "./split";
@@ -53,11 +55,12 @@ import {
   openSession,
   closeOpenSessionMenu,
   refreshSessions,
-  renderChatsPage,
   renderList,
   resetSessionsState,
+  sessionTitle,
   sessionsState,
   toggleWebOnly,
+  sessionSelectionBar,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
@@ -72,6 +75,7 @@ import { renderSkills } from "./skills";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
+import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let authMode: AuthMode = "portal";
@@ -206,6 +210,7 @@ export async function signOut(): Promise<void> {
   resetContextsState();
   resetKeychainState();
   mainConversation().composer.resetComposer();
+  updateDocumentTitle();
   if (!portal) {
     renderAuthGate({ kind: "dev" });
     return;
@@ -483,6 +488,7 @@ export function mountShell(): void {
 }
 
 export function renderSidebarTop(): void {
+  syncDocumentTitle();
   if (!appState.topEl) return;
   const navRow = (v: View, glyph: IconNode, label: string) =>
     html`<a
@@ -513,13 +519,13 @@ export function renderSidebarTop(): void {
     html`
       <button
         class="new-chat"
-        title=${splitState.active ? "New session" : "New chat"}
+        title="New chat"
         @click=${() => {
           closeSidebarOnNarrowView();
-          if (!addBlankPane()) mainConversation().newChat();
+          openBlankInFocusedPane();
         }}
       >
-        ${icon(ICON.newChat, 17)}<span>${splitState.active ? "New session" : "New chat"}</span>
+        ${icon(ICON.newChat, 17)}<span>New chat</span>
       </button>
       <nav class="nav" @click=${onNavClick}>
         ${navGroup(
@@ -543,38 +549,61 @@ export function renderSidebarTop(): void {
           `,
         )}
       </nav>
-      ${html`
-        <div class="section-label recents-label">
-          <span>Sessions</span>
-          <button
-            class="chat-search-open"
-            type="button"
-            aria-label="Search your chats"
-            @click=${() => {
-              hideTooltip();
-              openChatSearch();
-            }}
-            @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
-            @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
-            @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
-            @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
-          >
-            ${icon(Search, 13)}
-          </button>
-          <button
-            class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
-            type="button"
-            role="switch"
-            aria-checked=${sessionsState.webOnly ? "true" : "false"}
-            title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
-            @click=${toggleWebOnly}
-          >
-            <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
-          </button>
-        </div>
-      `}
+      ${
+        sessionSelectionBar() ??
+        html`
+          <div class="section-label recents-label">
+            <span>Sessions</span>
+            <button
+              class="chat-search-open"
+              type="button"
+              aria-label="Search your chats"
+              @click=${() => {
+                hideTooltip();
+                openChatSearch();
+              }}
+              @mouseenter=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
+              @mouseleave=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+              @focus=${(e: Event) => showTooltip(e.currentTarget as Element, `Search your chats · ${SEARCH_HOTKEY_LABEL}`)}
+              @blur=${(e: Event) => hideTooltip(e.currentTarget as Element)}
+            >
+              ${icon(Search, 13)}
+            </button>
+            <button
+              class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
+              type="button"
+              role="switch"
+              aria-checked=${sessionsState.webOnly ? "true" : "false"}
+              title=${sessionsState.webOnly ? "Showing web chats only" : "Hide non-web conversations"}
+              @click=${toggleWebOnly}
+            >
+              <span>Web only</span><span class="mini-switch"><span class="mini-knob"></span></span>
+            </button>
+          </div>
+        `
+      }
     `,
     appState.topEl,
+  );
+}
+
+export function syncDocumentTitle(): void {
+  if (!appState.me) {
+    updateDocumentTitle();
+    return;
+  }
+  const state = mainConversation().state;
+  const active = splitState.active
+    ? focusedPaneSession()
+    : activeSessionForDocumentTitle(sessionsState.list, {
+        openingKey: sessionsState.openingKey,
+        sessionId: state.sessionId,
+        threadRef: state.threadRef,
+      });
+  updateDocumentTitle(
+    appState.currentView,
+    active ? sessionTitle(active) : null,
+    Boolean(active || (!splitState.active && state.threadRef)),
   );
 }
 
@@ -608,8 +637,8 @@ export function switchView(v: View): void {
   syncUrlFromState();
   switch (v) {
     case "chats":
-      if (splitState.active) drawCanvas();
-      else void renderChatsPage();
+      mountRestoredCanvas();
+      drawCanvas();
       renderList();
       break;
     case "webhooks":
@@ -644,8 +673,7 @@ export function switchView(v: View): void {
 function refreshActiveView(v: View): void {
   switch (v) {
     case "chats":
-      if (splitState.active) void refreshSessions({ silent: true, refreshContexts: true });
-      else void renderChatsPage();
+      void refreshSessions({ silent: true, refreshContexts: true });
       break;
     case "contexts":
       void renderContexts();
@@ -813,7 +841,7 @@ function openAppEditChat(slug: string): void {
     return;
   }
   if (!storedDraft(threadRef)) saveDraft(threadRef, `Update my deployed app "${slug}": `);
-  mainConversation().mountContinuable(threadRef, null, null, []);
+  openThreadInFocusedPane(threadRef);
   renderList();
 }
 
@@ -911,7 +939,7 @@ export async function boot(): Promise<void> {
   } else if (wantedSession) {
     const match = sessionsState.list.find((s) => s.id === wantedSession);
     if (match) {
-      exitSplitIfActive();
+      mountRestoredCanvas();
       await openSession(match, entriesPrefetch ?? undefined);
     } else if (mountRestoredCanvas()) {
       canvasToast("That conversation wasn't found, or you don't have access to it.");
@@ -922,9 +950,9 @@ export async function boot(): Promise<void> {
     }
   } else if (connectedProvider && sessionsState.list.length) {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
-    exitSplitIfActive();
+    mountRestoredCanvas();
     await openSession(recent);
-  } else if (!mountRestoredCanvas() && !mainConversation().state.threadRef) {
-    mainConversation().newChat();
+  } else {
+    mountRestoredCanvas();
   }
 }

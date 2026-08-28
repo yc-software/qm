@@ -336,6 +336,20 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   },
   {
     name: "AUTH_ALLOWED_EMAILS",
+    service: "core",
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "service-enabled", service: "auth" },
+          { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
+        ],
+      },
+    },
+    description: "Email-auth principals protected from unrelated directory-source deactivation.",
+  },
+  {
+    name: "AUTH_ALLOWED_EMAILS",
     service: "portal",
     envName: "OIDC_ALLOWED_EMAILS",
     required: {

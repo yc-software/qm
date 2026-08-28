@@ -63,6 +63,12 @@ computed secret names, tools, skills, and plugins without network access; `up`, 
 `sandbox build` run the same checks first. `doctor` verifies external prerequisites read-only.
 `plan` renders the deployment; AWS mutation requires `up --yes`.
 
+For a single-host Docker deployment, `sandbox.backend: "local"` runs each agent
+computer in its own container. `qm up` builds the local runtime from the CLI's
+pinned sandbox base, mounts the host Docker socket into trusted core, and connects
+core to each sandbox's private network. An explicit `sandbox.image` uses that
+runnable local image instead.
+
 On AWS, `up` snapshots the RDS instance under the deploy lease before its first
 mutation, names the snapshot after the deployment manifest it precedes, and
 records it in that manifest. `rollback` restores code and configuration only,

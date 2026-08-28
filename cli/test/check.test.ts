@@ -178,6 +178,15 @@ test("a bare deployment (no sandbox/, no plugins) passes", () => {
   }
 });
 
+test("docker with sandbox.backend local passes without a Fly sandbox app", () => {
+  const d = deployment(() => {}, { sandbox: { backend: "local", image: "qm-sandbox-local:latest" } });
+  try {
+    assert.doesNotThrow(() => check(d));
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS requires exact ECS/ECR coordinates for discovered plugins", () => {
   const plugin = { name: "linear", image: "ghcr.io/acme/linear:1" };
   const aws = {

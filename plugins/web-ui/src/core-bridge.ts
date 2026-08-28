@@ -37,6 +37,13 @@ interface CoreAttachment {
   sizeBytes: number;
   blobId: string;
 }
+type WebUserMessage = AgentMessage & {
+  role: "user" | "user-with-attachments";
+  content: string | Array<{ type: string; text?: string }>;
+  attachments?: PiAttachment[];
+  clientTurnId?: string;
+  sendFailure?: string;
+};
 
 export interface DeliveredFile {
   name: string;
@@ -309,6 +316,7 @@ export interface PendingApproval {
   reason?: string;
   purpose?: string;
   summary?: string;
+  summaryDetail?: string;
   matched?: string;
   grantModes?: { session: boolean; always: boolean };
   blocksInput?: boolean;
@@ -319,7 +327,11 @@ export interface ApprovalDecision {
   approved: boolean;
   scope?: "once" | "session" | "always";
 }
-export type AssistantWork = AssistantMessage & { work?: WorkBlock; deliveredFiles?: DeliveredFile[] };
+export type AssistantWork = AssistantMessage & {
+  work?: WorkBlock;
+  deliveredFiles?: DeliveredFile[];
+  retryableSend?: boolean;
+};
 
 export interface RunPoll {
   status: "pending" | "running" | "done" | "failed";
@@ -387,24 +399,34 @@ function baseAssistant(model: Model<Api>): AssistantMessage {
   };
 }
 
-async function latestUserTurn(agent: Agent): Promise<{ text: string; attachments: CoreAttachment[] }> {
-  const messages = agent.state.messages as Array<AgentMessage & { attachments?: PiAttachment[] }>;
+function latestUserMessage(agent: Agent): WebUserMessage | undefined {
+  const messages = agent.state.messages as WebUserMessage[];
   for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m?.role !== "user" && m?.role !== "user-with-attachments") continue;
-    const text =
-      typeof m.content === "string"
-        ? m.content
-        : (m.content as Array<{ type: string; text?: string }>)
-            .filter((c) => c.type === "text")
-            .map((c) => c.text ?? "")
-            .join("\n");
-    const attachments = await Promise.all(
-      (m.attachments ?? []).filter((a) => typeof a.content === "string" && a.content.length > 0).map(toCoreAttachment),
-    );
-    return { text, attachments };
+    const message = messages[i];
+    if (message?.role === "user" || message?.role === "user-with-attachments") return message as WebUserMessage;
   }
-  return { text: "", attachments: [] };
+  return undefined;
+}
+
+async function latestUserTurn(
+  agent: Agent,
+): Promise<{ text: string; attachments: CoreAttachment[]; clientTurnId: string }> {
+  const message = latestUserMessage(agent);
+  if (!message) return { text: "", attachments: [], clientTurnId: crypto.randomUUID() };
+  const text =
+    typeof message.content === "string"
+      ? message.content
+      : (message.content as Array<{ type: string; text?: string }>)
+          .filter((c) => c.type === "text")
+          .map((c) => c.text ?? "")
+          .join("\n");
+  message.clientTurnId ??= crypto.randomUUID();
+  const attachments = await Promise.all(
+    (message.attachments ?? [])
+      .filter((attachment) => typeof attachment.content === "string" && attachment.content.length > 0)
+      .map(toCoreAttachment),
+  );
+  return { text, attachments, clientTurnId: message.clientTurnId };
 }
 
 function attachmentBytes(a: PiAttachment): Uint8Array {
@@ -645,19 +667,13 @@ export function makeRunResumeStreamFn(
   return fn as unknown as StreamFn;
 }
 
-export async function runApprovalTurn(
-  threadRef: string,
-  agent: Agent,
-  decision: ApprovalDecision,
-  getTurnOptions: (() => TurnOptions) | undefined,
-  onWork: WorkObserver | undefined,
-  signal?: AbortSignal,
-  slot?: RunSlot,
-): Promise<void> {
-  const stream = createAssistantMessageEventStream();
-  await drive(stream, agent.state.model, threadRef, agent, getTurnOptions, signal, onWork, decision, false, slot);
-  const outcome = await stream.result();
-  if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
+export async function resolveApproval(decision: ApprovalDecision): Promise<string> {
+  const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
+    method: "POST",
+    body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+  });
+  if (!submit.runId) throw new Error("Could not continue after the approval.");
+  return submit.runId;
 }
 
 export function makeOpenerStreamFn(
@@ -728,14 +744,15 @@ async function drive(
     stream.push({ type: "start", partial });
     stream.push({ type: "text_start", contentIndex: 0, partial });
 
-    const { text, attachments } = opener
-      ? { text: "", attachments: [] as CoreAttachment[] }
+    const { text, attachments, clientTurnId } = opener
+      ? { text: "", attachments: [] as CoreAttachment[], clientTurnId: undefined }
       : await latestUserTurn(agent);
 
     const submit = await api<{ status?: string; runId?: string; reply?: string }>("/api/turn", {
       method: "POST",
       body: JSON.stringify({
         ...turnRequestBody(threadRef, text, model, agent, getTurnOptions, attachments),
+        ...(clientTurnId ? { clientTurnId } : {}),
         ...(approval ? { approval } : {}),
         ...(opener ? { proactiveOpener: true } : {}),
       }),
@@ -754,6 +771,13 @@ async function drive(
     work.status = "failed";
     work.finishedAt = Date.now();
     notify();
+    if (e instanceof TypeError) {
+      const errorMessage = "Message wasn’t sent. Check your connection and try again.";
+      const message = latestUserMessage(agent);
+      if (message) message.sendFailure = errorMessage;
+      fail(stream, partial, errorMessage, true);
+      return;
+    }
     fail(stream, partial, e instanceof Error ? e.message : String(e));
   }
 }
@@ -1100,7 +1124,12 @@ function streamRunViaSse(
   });
 }
 
-function fail(stream: AssistantMessageEventStream, partial: AssistantMessage, errorMessage: string): void {
+function fail(
+  stream: AssistantMessageEventStream,
+  partial: AssistantMessage,
+  errorMessage: string,
+  retryableSend = false,
+): void {
   const block = partial.content[0];
   const soFar = block?.type === "text" ? block.text : "";
   const error: AssistantMessage = {
@@ -1108,6 +1137,7 @@ function fail(stream: AssistantMessageEventStream, partial: AssistantMessage, er
     content: [{ type: "text", text: soFar }],
     stopReason: "error",
     errorMessage,
+    ...(retryableSend ? { retryableSend: true } : {}),
   };
   stream.push({ type: "error", reason: "error", error });
   stream.end(error);

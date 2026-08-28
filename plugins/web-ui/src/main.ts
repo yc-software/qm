@@ -4,7 +4,13 @@ import { bootSafely } from "./shell";
 import { registerChatSearchHotkey } from "./search";
 import { closeFormMenus } from "./ui";
 import { allConversations } from "./conversations";
-import { closeOpenSessionMenu, renderList, sessionsState } from "./sessions";
+import {
+  clearSessionSelection,
+  closeOpenSessionMenu,
+  closeSessionSelectionColor,
+  renderList,
+  sessionsState,
+} from "./sessions";
 import { closeDeployMenu } from "./deploys";
 
 function closeComposerMenus(keepOpenWithin: Element | null): boolean {
@@ -27,6 +33,7 @@ document.addEventListener("click", (e) => {
     sessionsState.openMenuId = null;
     renderList();
   }
+  if (!target?.closest(".multi-select-color")) closeSessionSelectionColor();
   closeDeployMenu(target);
 });
 
@@ -34,6 +41,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   closeComposerMenus(null);
   closeOpenSessionMenu();
+  clearSessionSelection();
   closeDeployMenu(null, true);
   closeFormMenus();
 });

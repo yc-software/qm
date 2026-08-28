@@ -1,7 +1,7 @@
 import { httpDeploymentLayerTransport, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CliError, bold, die, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
@@ -18,7 +18,7 @@ import {
   tailString,
   which,
 } from "../util.ts";
-import { manifestRef } from "../manifest.ts";
+import { manifestRef, sandboxBaseRef } from "../manifest.ts";
 import {
   brokerWiring,
   ordered,
@@ -31,7 +31,7 @@ import {
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
-import { dockerBasePort, sandboxCoreEnv, securityScreenEnv, type QmConfig } from "../config.ts";
+import { dockerBasePort, localSandboxActive, sandboxCoreEnv, securityScreenEnv, type QmConfig } from "../config.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../secrets.ts";
 import { readDeploymentState, withDeploymentLock, writeDeploymentState, type DeploymentState } from "../state.ts";
@@ -65,6 +65,69 @@ interface DockerCtx {
 const dockerPrefix = (config: QmConfig): string => `qm-${safe(config.orgId)}`;
 const cname = (ctx: DockerCtx, name: string): string => `${ctx.prefix}-${name}`;
 const pgVolume = (ctx: DockerCtx): string => `${ctx.prefix}-pgdata`;
+
+const localSandboxImage = (config: QmConfig): string =>
+  config.sandbox?.image ?? `${dockerPrefix(config).toLowerCase()}-sandbox-local:latest`;
+
+function localAgentSource(): Buffer {
+  const source = new URL("../../templates/aws/microvm-agent/agent.mjs", import.meta.url);
+  const packaged = new URL("../../../templates/aws/microvm-agent/agent.mjs", import.meta.url);
+  return readFileSync(existsSync(source) ? source : packaged);
+}
+
+function ensureLocalSandboxImage(config: QmConfig): string {
+  const image = localSandboxImage(config);
+  if (config.sandbox?.image) return image;
+  const base = sandboxBaseRef();
+  try {
+    const labeled = capture("docker", [
+      "image",
+      "inspect",
+      "-f",
+      '{{index .Config.Labels "qm.local-sandbox-base"}}',
+      image,
+    ]).trim();
+    if (labeled === base) return image;
+  } catch {
+    // Build the local wrapper when it is absent or stale.
+  }
+  const dir = mkdtempSync(join(tmpdir(), "qm-local-sandbox-"));
+  try {
+    writeFileSync(join(dir, "agent.mjs"), localAgentSource());
+    writeFileSync(
+      join(dir, "Dockerfile"),
+      `ARG BASE\nFROM \${BASE}\nCOPY agent.mjs /opt/qm/agent.mjs\nENV HOME=/root\nWORKDIR /root\nEXPOSE 8080\nCMD ["node", "/opt/qm/agent.mjs"]\n`,
+    );
+    dockerInherit([
+      "build",
+      "--build-arg",
+      `BASE=${base}`,
+      "--label",
+      `qm.local-sandbox-base=${base}`,
+      "-t",
+      image,
+      dir,
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return image;
+}
+
+function hostDockerSocket(): { path: string; gid?: string } {
+  const configured = process.env.DOCKER_HOST?.trim();
+  if (configured && !configured.startsWith("unix://")) {
+    throw new CliError('sandbox.backend "local" requires a Unix Docker socket');
+  }
+  const path = configured?.slice("unix://".length) || "/var/run/docker.sock";
+  let gid: string | undefined;
+  try {
+    gid = capture("stat", ["-c", "%g", path]).trim() || undefined;
+  } catch {
+    throw new CliError(`sandbox.backend "local" cannot read the Docker socket at ${path}`);
+  }
+  return { path, ...(gid ? { gid } : {}) };
+}
 
 function requireDocker(): void {
   if (!which("docker")) die("docker not found on PATH (the docker target needs a running Docker daemon).");
@@ -290,6 +353,10 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
     CORE_API_URL: "http://core:8080",
     ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
   };
+  if (service === "core" && localSandboxActive(config)) {
+    out.DOCKER_HOST = "unix:///var/run/docker.sock";
+    out.QM_CORE_CONTAINER = `${dockerPrefix(config)}-core`;
+  }
   if (service === "portal") {
     if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
     if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://admin:8080";
@@ -299,7 +366,7 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
       out,
       brokerWiring(service, {
         publicUrl: config.publicUrl,
-        authBaseUrl: "http://auth:8080",
+        authBaseUrl: `http://${dockerPrefix(config)}-auth.internal:8080`,
         ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
           ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
           : {}),
@@ -328,6 +395,10 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     const layerSubs = existingLayerSubdirs(ctx);
     if (layerSubs.length) out.DEPLOYMENT_LAYER = "/layer";
     Object.assign(out, ctx.sandboxEnv);
+    if (localSandboxActive(config)) {
+      out.DOCKER_HOST = "unix:///var/run/docker.sock";
+      out.QM_CORE_CONTAINER = `${ctx.prefix}-core`;
+    }
   } else {
     Object.assign(out, dockerServiceEnv(config, service));
   }
@@ -406,6 +477,8 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     ctx.network,
     "--network-alias",
     service,
+    "--network-alias",
+    `${cname(ctx, service)}.internal`,
     "--restart",
     "no",
   ];
@@ -414,6 +487,11 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     args.push("-v", `${ctx.prefix}-coredata:/data`);
     for (const m of layerMounts(ctx)) args.push("-v", m);
     for (const m of skillMounts(ctx)) args.push("-v", m);
+    if (localSandboxActive(ctx.config)) {
+      const socket = hostDockerSocket();
+      args.push("-v", `${socket.path}:/var/run/docker.sock`);
+      if (socket.gid) args.push("--group-add", socket.gid);
+    }
   }
   if (def.docker.hostPortOffset !== undefined) {
     args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
@@ -471,7 +549,13 @@ async function waitPluginUp(name: string): Promise<void> {
 function buildCtx(
   config: QmConfig,
   configDir: string,
-  opts: { sandboxDir?: string; buildFrom: boolean; buildFromPath?: string; envFile?: string },
+  opts: {
+    sandboxDir?: string;
+    buildFrom: boolean;
+    buildFromPath?: string;
+    envFile?: string;
+    localSandboxImage?: string;
+  },
 ): DockerCtx {
   const prefix = dockerPrefix(config);
   const envFile = opts.envFile ? resolve(opts.envFile) : join(configDir, ".env");
@@ -493,7 +577,10 @@ function buildCtx(
   if (signingSecret) ctx.signingSecret = signingSecret;
   const lookup = (name: string): string | undefined => deploymentSecretValue(name, readEnvValue(ctx.envFile, name));
   const sb = sandboxCoreEnv(config, lookup);
-  ctx.sandboxEnv = sb.env;
+  ctx.sandboxEnv = {
+    ...sb.env,
+    ...(opts.localSandboxImage ? { LOCAL_SANDBOX_IMAGE: opts.localSandboxImage } : {}),
+  };
   ctx.missingSandboxSecrets = sb.missingSecrets;
   if (opts.buildFrom) ctx.repoRoot = resolveBuildRepoRoot(opts.buildFromPath, runnableServices(config.services));
   return ctx;
@@ -528,11 +615,13 @@ export async function dockerUp(
   opts: { sandboxDir?: string; buildFrom?: boolean; buildFromPath?: string; envFile?: string; dryRun?: boolean } = {},
 ): Promise<void> {
   if (!opts.dryRun) requireDocker();
+  const resolvedLocalImage = localSandboxActive(config) ? localSandboxImage(config) : undefined;
   const ctx = buildCtx(config, configDir, {
     sandboxDir: opts.sandboxDir,
     buildFrom: opts.buildFrom ?? false,
     buildFromPath: opts.buildFromPath,
     envFile: opts.envFile,
+    ...(resolvedLocalImage ? { localSandboxImage: resolvedLocalImage } : {}),
   });
   const plugins = discoverPlugins(configDir, config).plugins;
 
@@ -550,6 +639,7 @@ export async function dockerUp(
   if (opts.dryRun) {
     ctx.databaseUrl = ensurePostgres(ctx, true);
     step(`network: ${ctx.network}`);
+    if (resolvedLocalImage) step(`sandbox: local image ${resolvedLocalImage}`);
     for (const def of ordered(runnableServices(config.services))) {
       const ports =
         def.docker.hostPortOffset !== undefined ? ` (host :${baseHostPort(ctx) + def.docker.hostPortOffset})` : "";
@@ -582,6 +672,7 @@ export async function dockerUp(
     );
   }
 
+  if (localSandboxActive(config)) ensureLocalSandboxImage(config);
   ensureNetwork(ctx);
   ctx.databaseUrl = ensurePostgres(ctx, false);
   if (!externalDatabaseUrl(ctx)) await waitPostgres(ctx);

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { derivedTomlFor } from "../src/backends/fly.ts";
 import { serviceEnvironment } from "../src/backends/aws.ts";
 import { dockerServiceEnv } from "../src/backends/docker.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../src/secrets.ts";
+import { stageFlyEmailAllowlist } from "../src/backends/fly.ts";
 import { isReservedContainerName, SERVICE_NAMES, serviceDef } from "../src/services.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -96,8 +97,8 @@ test("a configured botName brands the docker service env for core and auth", () 
 test("docker and AWS wire the broker with parity", () => {
   const docker = configWith(configText());
   const dockerPortal = dockerServiceEnv(docker, "portal");
-  assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://auth:8080");
-  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://auth:8080/token");
+  assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://qm-acme-auth.internal:8080");
+  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://qm-acme-auth.internal:8080/token");
   assert.equal(dockerPortal.OIDC_ISSUER, "https://agent.example.com/idp");
   assert.equal(dockerServiceEnv(docker, "auth").AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
   assert.equal(dockerServiceEnv(docker, "web-ui").AUTH_BROKER_UPSTREAM, undefined);
@@ -133,6 +134,18 @@ test("docker and AWS wire the broker with parity", () => {
   assert.equal(serviceEnvironment(aws, "auth").PORT, "8080");
 });
 
+test("docker local wires the host daemon coordinates only into core", () => {
+  const local = configWith(
+    configText().replace(
+      '"plugins": [],',
+      '"sandbox": { "backend": "local", "image": "qm-sandbox-local:latest" }, "plugins": [],',
+    ),
+  );
+  assert.equal(dockerServiceEnv(local, "core").DOCKER_HOST, "unix:///var/run/docker.sock");
+  assert.equal(dockerServiceEnv(local, "core").QM_CORE_CONTAINER, "qm-acme-core");
+  assert.equal(dockerServiceEnv(local, "portal").DOCKER_HOST, undefined);
+});
+
 test("the broker's generated secrets reach both sides under the right names", () => {
   const config = brokerConfig();
   const secrets = computedSecrets(config);
@@ -162,6 +175,7 @@ test("without a configured domain the allowlist becomes a required secret on bot
   assert.ok(allowed.required);
   assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS"]);
   assert.deepEqual(runtimeSecretNames("portal", allowed), ["OIDC_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("core", allowed), ["AUTH_ALLOWED_EMAILS"]);
   const names = new Set(computedSecrets(config).map((secret) => secret.name));
   for (const name of ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) assert.ok(names.has(name), name);
   assert.ok(!names.has("RESEND_API_KEY"));
@@ -215,4 +229,31 @@ test("a broker deployment with no allowlist at all is refused once secret values
     validatePortalTrust(config, "config", new Map([["AUTH_ALLOWED_EMAILS", "admin@example.com"]])),
   );
   assert.doesNotThrow(() => validatePortalTrust(brokerConfig(), "config", new Map()));
+});
+
+test("fly up staging copies a changed .env email allowlist to auth, portal, and core", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-allowlist-up-"));
+  const fly = join(dir, "fly");
+  const log = join(dir, "fly.log");
+  writeFileSync(
+    fly,
+    `#!/usr/bin/env node
+const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.argv.slice(2).join(" ")+" value="+fs.readFileSync(0,"utf8")+"\\n");`,
+  );
+  chmodSync(fly, 0o755);
+  writeFileSync(join(dir, ".env"), "AUTH_ALLOWED_EMAILS=new@example.com,other@example.com\n");
+  const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }));
+  const prior = process.env.FLY_BIN;
+  process.env.FLY_BIN = fly;
+  try {
+    stageFlyEmailAllowlist(config, dir, new Set(["core", "auth", "portal"]));
+  } finally {
+    if (prior === undefined) delete process.env.FLY_BIN;
+    else process.env.FLY_BIN = prior;
+  }
+  const calls = readFileSync(log, "utf8");
+  const prefix = "acme";
+  assert.match(calls, new RegExp(`-a ${prefix}-core AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
+  assert.match(calls, new RegExp(`-a ${prefix}-auth AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
+  assert.match(calls, new RegExp(`-a ${prefix}-portal OIDC_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
 });

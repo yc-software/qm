@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   MODEL_PROVIDER_KEYS,
+  localSandboxActive,
   mockHarnessWarning,
   validatePortalTrust,
   type ModelProvider,
@@ -143,7 +144,9 @@ export async function doctorCommon(
       );
     step("required local secret values: ok");
   }
-  if (config.target === "aws") {
+  if (localSandboxActive(config)) {
+    step("local Docker sandbox: configured");
+  } else if (config.target === "aws") {
     step("AWS Lambda MicroVM sandbox: configured");
   } else if (config.sandbox?.app) {
     requireFlyAuth();

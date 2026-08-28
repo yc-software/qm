@@ -48,9 +48,11 @@ export function mainConversation(): Conversation {
   return main;
 }
 
-export function paneDensity(el: HTMLElement): DensityTier {
+export function paneDensity(el: HTMLElement): DensityTier | null {
   const r = el.getBoundingClientRect();
-  return densityTierFor(r.width || el.clientWidth, r.height || el.clientHeight);
+  const width = r.width || el.clientWidth;
+  const height = r.height || el.clientHeight;
+  return width > 0 && height > 0 ? densityTierFor(width, height) : null;
 }
 
 let exitCanvas: () => void = () => {};

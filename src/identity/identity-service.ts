@@ -30,16 +30,24 @@ export interface IdentityService extends IdentityProvider {
   refresh(): Promise<void>;
 }
 
-export function createIdentityService(backing?: DurableMap<DeactivationRecord>): IdentityService {
+export function createIdentityService(
+  backing?: DurableMap<DeactivationRecord>,
+  opts: { directorySyncProtected?: readonly string[] } = {},
+): IdentityService {
   const store = backing ?? createMemoryMap<DeactivationRecord>();
   const deactivated = new Map<string, DeactivationRecord>();
+  const directorySyncProtected = new Set((opts.directorySyncProtected ?? []).map(personKey).filter(Boolean));
   const REFRESH_TTL_MS = 10_000;
   let refreshedAt = 0;
   let refreshP: Promise<void> | null = null;
   let hydrateP: Promise<void> | null = null;
 
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
-    const type: Principal["type"] = deactivated.has(personKey(externalId)) || isExternalGuest ? "guest" : "internal";
+    const record = deactivated.get(personKey(externalId));
+    const inactive =
+      record?.source === "manual" ||
+      (record?.source === "directory-sync" && !directorySyncProtected.has(personKey(externalId)));
+    const type: Principal["type"] = inactive || isExternalGuest ? "guest" : "internal";
     return { id: externalId, type };
   }
 
@@ -65,7 +73,7 @@ export function createIdentityService(backing?: DurableMap<DeactivationRecord>):
     async recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome> {
       const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
       for (const id of removedIds) {
-        if (deactivated.has(personKey(id))) continue;
+        if (directorySyncProtected.has(personKey(id)) || deactivated.has(personKey(id))) continue;
         await deactivate(id, "directory-sync");
         outcome.deactivated.push(id);
       }

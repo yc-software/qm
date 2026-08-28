@@ -59,6 +59,17 @@ async function plan(configDir: string, opts: { sandboxDir?: string } = {}): Prom
   return lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+test("local sandbox dry-run derives a deployment-scoped runnable image", async () => {
+  const dir = makeDeployment({ sandbox: { backend: "local" } });
+  try {
+    const out = await plan(dir);
+    assert.match(out, /sandbox: local image qm-wiretest-sandbox-local:latest/);
+    assert.match(out, /LOCAL_SANDBOX_IMAGE/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the deployment's sandbox/ skills + tools wire into the core via DEPLOYMENT_LAYER", async () => {
   const dir = makeDeployment({}, sandboxLayer);
   try {

@@ -756,9 +756,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
-    const busy = ctx.chat.state.resolvingApprovals.size > 0;
     const decide = (decision: ApprovalDecision): void => {
-      if (!busy) ctx.chat.resolveCommandApproval(decision);
+      if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) ctx.chat.resolveCommandApproval(decision);
     };
     return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
       ${approvals.map(
@@ -769,7 +768,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               <button
                 class="approval-btn deny"
                 type="button"
-                ?disabled=${busy}
+                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
                 @click=${() => decide({ requestId: a.requestId, approved: false })}
               >
                 Deny
@@ -777,7 +776,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               <button
                 class="approval-btn"
                 type="button"
-                ?disabled=${busy}
+                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
                 @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
               >
                 Allow once
@@ -788,7 +787,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   : html`<button
                       class="approval-btn primary"
                       type="button"
-                      ?disabled=${busy}
+                      ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
                       @click=${() => decide({ requestId: a.requestId, approved: true, scope: "session" })}
                     >
                       Allow for session
@@ -800,7 +799,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   : html`<button
                       class="approval-btn"
                       type="button"
-                      ?disabled=${busy}
+                      ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
                       @click=${() => decide({ requestId: a.requestId, approved: true, scope: "always" })}
                     >
                       Allow always
@@ -979,6 +978,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                             @input=${(e: InputEvent) => {
                               composerState.menuQuery = (e.currentTarget as HTMLInputElement).value;
                               ctx.chat.drawActiveChat();
+                              requestAnimationFrame(() => placeComposerMenu(args.kind));
                             }}
                           />
                         </label>`
@@ -1017,16 +1017,37 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     `;
   }
 
+  function placeComposerMenu(kind: ComposerMenu): void {
+    const popover = ctx.chat.state.host?.querySelector<HTMLElement>(`#composer-${kind}-menu`);
+    const anchor = popover?.parentElement;
+    if (!popover || !anchor) return;
+    const viewport = window.visualViewport;
+    const viewportTop = viewport?.offsetTop ?? 0;
+    const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
+    const anchorRect = anchor.getBoundingClientRect();
+    const margin = 12;
+    const gap = 8;
+    const availableAbove = Math.max(0, anchorRect.top - viewportTop - margin - gap);
+    const availableBelow = Math.max(0, viewportBottom - anchorRect.bottom - margin - gap);
+    const placeBelow = availableBelow > availableAbove;
+    const availableHeight = placeBelow ? availableBelow : availableAbove;
+    popover.classList.toggle("drop-down", placeBelow);
+    popover.style.setProperty("--menu-available-height", `${Math.floor(availableHeight)}px`);
+  }
+
   function toggleComposerMenu(e: Event, kind: ComposerMenu): void {
     e.stopPropagation();
     const opening = composerState.openMenu !== kind;
     composerState.openMenu = opening ? kind : null;
     composerState.menuQuery = "";
     ctx.chat.drawActiveChat();
-    if (opening && kind === "model") {
-      requestAnimationFrame(() =>
-        ctx.chat.state.host?.querySelector<HTMLInputElement>(".model-control .menu-search input")?.focus(),
-      );
+    if (opening) {
+      requestAnimationFrame(() => {
+        placeComposerMenu(kind);
+        if (kind !== "model") return;
+        ctx.chat.state.host?.querySelector<HTMLInputElement>(".model-control .menu-search input")?.focus();
+        requestAnimationFrame(() => placeComposerMenu(kind));
+      });
     }
   }
 

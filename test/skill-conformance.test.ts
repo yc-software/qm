@@ -21,3 +21,13 @@ test("every seed SKILL.md parses with a name, description, and body", () => {
     assert.ok(m.name && m.description && m.body.trim(), `${path} is missing a required field`);
   }
 });
+
+test("miniapp skill teaches the miniapp tool and the reply directive", () => {
+  const skill = readFileSync(join(SEED_DIR, "miniapp", "SKILL.md"), "utf8");
+  assert.match(skill, /`miniapp` tool/);
+  assert.match(skill, /\[\[miniapp:/);
+  assert.match(skill, /publish/);
+  assert.match(skill, /Do not build a playground just because/);
+  assert.doesNotMatch(skill, /Prefer this over a long prose explanation/);
+  assert.doesNotMatch(skill, /PORT env/);
+});

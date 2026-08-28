@@ -6,6 +6,7 @@ import {
   type PersistedBaseModel,
 } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
+import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const ORG = "org:default-org" as const;
@@ -107,4 +108,49 @@ test("a listener that throws cannot break the write that notified it", async () 
   config.setApprovedHarnesses(["pi"]);
   await config.setRuntimeSelectionLatest(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
   assert.equal((await config.getRuntimeSelectionDurable(ORG))?.modelId, "claude-opus-4-8");
+});
+
+test("durable runtime resolution hydrates the model catalog before rejecting an unknown dynamic model", async () => {
+  const config = createMemoryConfigStore("default-org");
+  config.setApprovedHarnesses(["pi"]);
+  await config.setRuntimeSelectionLatest(PERSONAL, { harnessId: "pi", modelId: "testvendor/cold-router-model" });
+  await config.flushScope(PERSONAL);
+  const fallback = { harnessId: "pi" as const, modelId: "claude-opus-4-8" };
+
+  assert.deepEqual(await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback), fallback);
+
+  let hydrations = 0;
+  const hydrate = async () => {
+    hydrations += 1;
+    registerOpenRouterCatalogModel({
+      id: "testvendor/cold-router-model",
+      name: "Cold Router Model",
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      input: ["text"],
+      reasoning: true,
+      cost: { input: 0, output: 0 },
+    });
+  };
+  assert.deepEqual(await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback, undefined, hydrate), {
+    harnessId: "pi",
+    modelId: "testvendor/cold-router-model",
+  });
+  assert.equal(hydrations, 1);
+
+  assert.deepEqual(
+    await resolveRuntimeChoiceDurable(
+      config,
+      ORG,
+      PERSONAL,
+      fallback,
+      { modelId: "testvendor/cold-router-model" },
+      hydrate,
+    ),
+    { harnessId: "pi", modelId: "testvendor/cold-router-model" },
+  );
+
+  const before = hydrations;
+  await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback, undefined, hydrate);
+  assert.equal(hydrations, before);
 });

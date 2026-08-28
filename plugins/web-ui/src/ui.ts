@@ -82,7 +82,6 @@ const RENDERABLE_IMAGE_TYPES = new Set([
   "image/gif",
   "image/webp",
   "image/avif",
-  "image/svg+xml",
   "image/bmp",
   "image/apng",
   "image/x-icon",

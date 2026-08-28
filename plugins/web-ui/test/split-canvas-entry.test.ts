@@ -6,7 +6,6 @@ const read = (f: string): string => readFileSync(new URL(`../src/${f}`, import.m
 const split = read("split.ts");
 const sessions = read("sessions.ts");
 const shell = read("shell.ts");
-const chat = read("chat.ts");
 const layout = read("split-layout.ts");
 const css = read("shell.css");
 
@@ -18,25 +17,19 @@ const fn = (src: string, name: string): string => {
   return body;
 };
 
-test("no new-chat affordance can cost the user their canvas", () => {
-  assert.match(split, /export function addBlankPane\(scopeId\?: string\): boolean \{/);
-  const add = fn(split, "addBlankPane");
-  assert.match(add, /if \(!splitState\.active \|\| !dockApi\) return false;/, "no canvas ⇒ the caller must fall back");
-  assert.match(add, /return true;\n\}$/, "having split, the canvas owns the click");
-  assert.doesNotMatch(add.slice(add.indexOf("splitPane(")), /return false/, "a full canvas must not fall through");
+test("the canvas owns ordinary new-chat actions even with one pane", () => {
+  const replace = fn(split, "openBlankInFocusedPane");
+  assert.match(replace, /replaceFocusedPane/);
+  assert.match(shell, /openBlankInFocusedPane\(\);/);
+  assert.doesNotMatch(shell, /if \(!addBlankPane\(\)\) mainConversation/);
 
-  assert.match(shell, /if \(!addBlankPane\(\)\) mainConversation\(\)\.newChat\(\);/);
-  const plus = fn(sessions, "startProjectChat");
-  const claimed = plus.indexOf("addBlankPane(scopeId)");
-  assert.ok(claimed > 0, "the project + must offer the click to the canvas");
-  assert.match(plus.slice(claimed), /^addBlankPane\(scopeId\)\) return;/m, "and bail out when the canvas takes it");
-  assert.ok(
-    plus.indexOf("addPendingSession(mainConversation().newChat(") > claimed,
-    "only then may it mount a single chat",
-  );
+  const project = fn(sessions, "startProjectChat");
+  assert.match(project, /openBlankInFocusedPane\(scopeId\)/);
+  assert.doesNotMatch(project, /mainConversation\(\)\.newChat/);
 
-  assert.match(fn(split, "exitSplitIfActive"), /splitState\.active = false;/);
-  assert.doesNotMatch(fn(split, "exitSplitIfActive"), /removeItem|lastLayout = null/);
+  const close = fn(split, "reconcileAfterClose");
+  assert.match(close, /if \(dockApi\.panels\.length === 0\) addPane\(\{\}\)/);
+  assert.doesNotMatch(close, /exitSplitIfActive|maximizePane|mainConversation/);
 });
 
 test("a pane opened from a project's + starts its chat in that project", () => {
@@ -67,36 +60,22 @@ test("a pane is an element in this document — never a second copy of the app",
 });
 
 test("a conversation dropped on a pane's tab strip joins that pane — and only there", () => {
-  const accept = split.match(/api\.onUnhandledDragOver\(\(e\) => \{[\s\S]*?\n {2}\}\);/)?.[0] ?? "";
-  assert.ok(accept, "onUnhandledDragOver not wired");
-  assert.match(accept, /sessionDrag && \(e\.target === "tab" \|\| e\.target === "header_space"\)/);
-  assert.doesNotMatch(accept, /"content"|"edge"/);
-
-  const drop = split.match(/api\.onDidDrop\(\(e\) => \{[\s\S]*?\n {2}\}\);/)?.[0] ?? "";
-  assert.ok(drop, "onDidDrop not wired");
-  assert.match(drop, /tabIntoPane\(anchor\.id, \{ sessionId: drag\.sessionId, threadRef: drag\.threadRef \}/);
-  assert.match(drop, /focusExistingPane\(drag\.sessionId\)/, "a conversation already on screen is focused, not cloned");
-  assert.match(drop, /endSessionDrag\(\);/, "the zone overlays must come down with the drag");
-
-  assert.match(accept, /if \(sessionDrag/, "only a live session drag may be accepted");
-});
-
-test("a strip drop lands where a dragged pane header would, not merely at the end", () => {
-  const drop = fn(split, "buildDock");
-  assert.match(drop, /e\.panel \? e\.group\?\.panels\.indexOf\(e\.panel\) : undefined/);
-  assert.match(drop, /tabIntoPane\([\s\S]{0,120}at === -1 \? undefined : at\)/);
-
-  const into = fn(split, "tabIntoPane");
-  assert.match(into, /index\?: number/, "tabIntoPane must accept an insertion index");
-  assert.match(into, /direction: "within"/);
-  assert.match(into, /index === undefined \? \{\} : \{ index \}/, "and forward it to addPane");
-  const add = fn(split, "addPane");
-  assert.match(add, /index\?: number/, "addPane must pass dockview its own position.index");
+  const strip = split.match(/^class StripDrop[\s\S]*?\n\}/m)?.[0] ?? "";
+  assert.ok(strip, "StripDrop not wired");
+  assert.match(split, /createPrefixHeaderActionComponent: \(\) => new StripDrop\(\)/);
+  assert.match(strip, /tabIntoPane\(anchor\.id, \{ sessionId: drag\.sessionId, threadRef: drag\.threadRef \}\)/);
+  assert.match(
+    strip,
+    /focusExistingPane\(drag\.sessionId\)/,
+    "a conversation already on screen is focused, not cloned",
+  );
+  assert.match(strip, /endSessionDrag\(\);/, "the zone overlays must come down with the drag");
+  assert.match(strip, /stripJoinable\(\)/, "only a live session drag that would really add a tab");
 });
 
 test("the pane body no longer offers a tab zone", () => {
   assert.doesNotMatch(layout, /"tab"/, "DropEdge must drop the zone that no longer exists");
-  const zones = fn(split, "zonesTpl") + fn(split, "splitZonesTpl");
+  const zones = fn(split, "paneZonesTpl") + fn(split, "splitZonesTpl");
   assert.doesNotMatch(zones, /"tab"/);
   assert.match(zones, /zoneTpl\("center", "Open here"/);
   for (const edge of ["left", "right", "top", "bottom"]) assert.match(zones, new RegExp(`zoneTpl\\("${edge}"`));
@@ -115,45 +94,24 @@ test("the tile cap only judges dockview's own panel drags", () => {
   assert.ok(bail < hold.indexOf("dropAddsTile"), "before the tile arithmetic, not after");
 });
 
-test("boot mounts a restored canvas before it awaits the session list", () => {
+test("boot mounts a one-pane canvas before it awaits the session list", () => {
   const boot = shell.match(/export async function boot\(\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.ok(boot, "boot not found");
   const early = boot.indexOf("if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();");
   const listAwait = boot.indexOf("await refreshSessions({ showLoading: true });");
-  assert.ok(early > 0, "boot must offer the canvas its head start");
-  assert.ok(listAwait > 0, "boot still loads the session list");
-  assert.ok(early < listAwait, "the mount must come BEFORE the list fetch the panes never read");
+  assert.ok(early > 0 && early < listAwait, "the baseline canvas mounts before session refresh when it can");
+  assert.match(boot.slice(listAwait), /\} else \{\s*mountRestoredCanvas\(\);\s*\}/);
 
-  assert.match(boot, /const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;/);
-
-  assert.match(
-    boot.slice(listAwait),
-    /\} else if \(!mountRestoredCanvas\(\) && !mainConversation\(\)\.state\.threadRef\) \{/,
-  );
   const mount = fn(split, "mountRestoredCanvas");
-  assert.match(mount, /^ {2}if \(splitState\.active && \(dockApi\?\.panels\.length \?\? 0\) > 0\) return true;/m);
+  assert.match(mount, /splitState\.active = true;/);
+  assert.match(mount, /if \(dockApi\.panels\.length === 0\) addPane\(\{\}\)/);
 });
 
-test("boot's fallback never replaces a chat the user mounted during the wait", () => {
-  const boot = shell.match(/export async function boot\(\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
-  const listAwait = boot.indexOf("await refreshSessions({ showLoading: true });");
-  const tail = boot.slice(listAwait);
-  assert.match(tail, /\} else if \(!mountRestoredCanvas\(\) && !mainConversation\(\)\.state\.threadRef\) \{/);
-  const guard = tail.indexOf("!mainConversation().state.threadRef");
-  const mint = tail.indexOf("newChat();", guard);
-  assert.ok(guard > 0 && mint > guard, "the guard must gate the mint, not follow it");
-
-  assert.match(chat, /^ {2}function mountContinuable\(/m);
-  assert.match(fn(chat, "mountContinuable"), /chatState\.threadRef = threadRef;/);
-
-  const reconcile = fn(split, "reconcileAfterClose");
-  assert.match(
-    reconcile,
-    /exitSplitIfActive\(\);\s*\n\s*mainConversation\(\)\.newChat\(\);/,
-    "a blank lone survivor mounts a new chat",
-  );
-  assert.match(reconcile, /void maximizePane\(params\);/, "a lone survivor with a session is maximized");
-  assert.match(fn(split, "exitSplitIfActive"), /splitState\.active = false;/);
+test("one-pane layouts persist and restore as first-class canvas layouts", () => {
+  const adopt = fn(split, "adoptPersisted");
+  assert.match(adopt, /if \(n < 1 \|\| n > MAX_PANES/);
+  assert.doesNotMatch(adopt, /o\.active !== true|n < 2/);
+  assert.match(fn(split, "loadPersistedSplit"), /splitState\.active = true;/);
 });
 
 test("a pane gives the conversation the same height chain the full-screen .main does", () => {

@@ -38,6 +38,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       testConfig({
         dataDir: mkdtempSync(join(tmpdir(), "offboarding-")),
         signingSecret: SECRET,
+        emailAuthPrincipals: ["allowed@example.com"],
       }),
     );
     await built.identity.hydrate();
@@ -65,6 +66,24 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.equal(built.identity.classify("U-leave").type, "internal");
     assert.ok(
       (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-leave"),
+    );
+  });
+
+  it("a Slack roster omission does not deactivate or hide a configured email-auth principal", async () => {
+    await built.app.upsertDirectory([member("U-stay"), member("allowed@example.com")]);
+    await built.app.upsertDirectory([member("U-stay")]);
+
+    assert.equal(built.identity.classify("allowed@example.com").type, "internal");
+    const resolved = await built.app.resolveRecipient("allowed@example.com");
+    assert.equal(resolved.kind, "one");
+    if (resolved.kind === "one") {
+      assert.equal(resolved.member.principalId, "allowed@example.com");
+      assert.equal(resolved.member.displayName, "allowed@example.com");
+    }
+    assert.ok(
+      !(await built.auditLog.events()).some(
+        (e) => e.action === "principal.deactivate" && e.principalId === "allowed@example.com",
+      ),
     );
   });
 

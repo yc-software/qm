@@ -62,6 +62,7 @@ test(
       botName: "straylight",
       orgName: "Straylight Industries",
       env: { core: { HARNESS: "mock" } },
+      sandbox: { backend: "local", image: "qm-sandbox-local:latest" },
     });
     standInPlugin(dep, "widget");
 
@@ -80,6 +81,36 @@ test(
         for (const svc of [...SERVICES, "widget", "pg"]) {
           assert.ok(suffix(names, svc), `expected a running container for ${svc}; got ${names.join(", ")}`);
         }
+      });
+
+      await t.test("local sandbox mode gives only core the host Docker socket", () => {
+        const names = deploymentContainers(org);
+        const core = suffix(names, "core")!;
+        const portal = suffix(names, "portal")!;
+        const inspect = (container: string) =>
+          JSON.parse(execFileSync("docker", ["inspect", container], { encoding: "utf8" }))[0] as {
+            Config: { Env: string[] };
+            Mounts: Array<{ Source: string; Destination: string }>;
+          };
+        const coreInfo = inspect(core);
+        assert.ok(coreInfo.Config.Env.includes("DOCKER_HOST=unix:///var/run/docker.sock"));
+        assert.ok(coreInfo.Config.Env.includes(`QM_CORE_CONTAINER=${core}`));
+        assert.ok(coreInfo.Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
+        assert.ok(!inspect(portal).Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
+      });
+
+      await t.test("services receive their private-network aliases", () => {
+        const portal = suffix(deploymentContainers(org), "portal")!;
+        const aliases = JSON.parse(
+          execFileSync(
+            "docker",
+            ["inspect", "-f", `{{json (index .NetworkSettings.Networks "qm-${org}").Aliases}}`, portal],
+            {
+              encoding: "utf8",
+            },
+          ),
+        ) as string[];
+        assert.ok(aliases.includes(`qm-${org}-portal.internal`), aliases.join(", "));
       });
 
       await t.test("computed secrets from the deployment ./.env reach the core container", () => {

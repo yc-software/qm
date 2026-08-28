@@ -41,8 +41,8 @@ test("v1PaneSeeds normalizes non-string ids to null", () => {
 
 test("a conversation can be dropped onto a pane's tab strip to become a tab", () => {
   const splitTs = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
-  assert.match(splitTs, /e\.target === "tab" \|\| e\.target === "header_space"/, "no strip drop target");
-  assert.match(splitTs, /api\.onDidDrop\(\(e\) => \{[\s\S]*?tabIntoPane\(/, "the strip drop must join the pane");
+  assert.match(splitTs, /class StripDrop implements IHeaderActionsRenderer/, "no strip drop target");
+  assert.match(splitTs, /^class StripDrop[\s\S]*?tabIntoPane\(/m, "the strip drop must join the pane");
   const edges = new Set([...splitTs.matchAll(/zoneTpl\("([a-z]+)"/g)].map((m) => m[1]));
   assert.deepEqual(
     edges,

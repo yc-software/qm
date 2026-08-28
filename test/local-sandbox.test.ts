@@ -83,6 +83,14 @@ test("a stopped Docker daemon fails provision with the actionable message", asyn
   );
 });
 
+test("a label-inspection error does not misreport an existing image as missing", async () => {
+  const fake = installFakeDocker(daemonPort);
+  fake.labelInspectFails = true;
+  const sb = makeSandbox(fake);
+  const handle = await sb.provision(rw(scopeId("personal", "attested-image")));
+  await sb.teardown(handle, { destroy: true });
+});
+
 test("a missing sandbox image fails provision with the build hint", async () => {
   const fake = installFakeDocker(daemonPort);
   fake.imageMissing = true;
@@ -266,4 +274,43 @@ test("concurrent teardown and provision for one scope serialize (no stop of a fr
   assert.equal(r.stdout.trim(), "alive");
   await sb.teardown(h2);
   assert.equal(fake.containers.get(h2.id)!.running, false);
+});
+
+test("a replacement core reattaches to an already-running sandbox", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const layers = rw(scopeId("personal", "U39"));
+  const first = await sb.provision(layers);
+  const connection = `${localNetworkName(first.id)}|qm-test-core`;
+  assert.equal(fake.connections.has(connection), true);
+  fake.connections.delete(connection);
+  const second = await sb.provision(layers);
+  assert.equal(second.id, first.id);
+  assert.equal(fake.connections.has(connection), true);
+  await sb.teardown(first);
+  await sb.teardown(second, { destroy: true });
+});
+
+test("containerized core joins each sandbox network and reaches the daemon by container name", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const seen: string[] = [];
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    seen.push(url);
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const h = await sb.provision(rw(scopeId("personal", "U40")));
+  const args = fake.containers.get(h.id)!.args;
+  assert.equal(args.includes("-p"), false);
+  assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), true);
+  assert.ok(seen.includes(`http://${h.id}:8080/health`));
+  await sb.teardown(h, { destroy: true });
+  assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
 });

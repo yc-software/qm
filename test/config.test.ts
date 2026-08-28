@@ -27,6 +27,14 @@ test("ORG_BRAND_* parses into a validated branding default", () => {
   assert.deepEqual(loadConfig({ ORG_BRAND_SELF_LABEL: "{{straylight}}" }).brandingDefault, { selfLabel: "straylight" });
 });
 
+test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => {
+  assert.equal(loadConfig({}).emailAuthPrincipals, undefined);
+  assert.deepEqual(
+    loadConfig({ AUTH_ALLOWED_EMAILS: " New@Example.com,other@example.com,new@example.com " }).emailAuthPrincipals,
+    ["new@example.com", "other@example.com"],
+  );
+});
+
 test("store kinds default to memory and accept postgres", () => {
   const def = loadConfig({});
   assert.equal(def.sessionStore, "memory");

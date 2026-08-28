@@ -4,6 +4,7 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import {
   Archive,
+  Ban,
   Binoculars,
   ArchiveRestore,
   ChevronDown,
@@ -15,6 +16,7 @@ import {
   Hash,
   Link,
   Lock,
+  Palette,
   Pencil,
   Pin,
   PinOff,
@@ -73,21 +75,31 @@ import {
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
-import { appState, closeSidebarOnNarrowView, renderSidebarTop, showMainEmpty, syncUrlFromState } from "./shell";
+import {
+  appState,
+  closeSidebarOnNarrowView,
+  renderSidebarTop,
+  showMainEmpty,
+  syncDocumentTitle,
+  syncUrlFromState,
+} from "./shell";
 import { allConversations, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
-  addBlankPane,
   beginSessionDrag,
   endSessionDrag,
   notifySessionsChanged,
   closeSessionSurfaces,
+  openBackgroundInCanvas,
+  openBlankInFocusedPane,
+  mountRestoredCanvas,
   drawCanvas,
   sessionInCanvas,
   splitInterceptsOpen,
   splitState,
 } from "./split";
 import { liveTurnThreadRef } from "./working-dot";
+import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
 
 export const sessionsState = {
   list: [] as CoreSession[],
@@ -98,6 +110,41 @@ export const sessionsState = {
   webOnly: true,
   collapsedProjectScopes: new Set<string>(),
 };
+
+let selection: SessionSelection = emptySelection();
+type SessionPatch = { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null };
+const sessionPatchTails = new Map<string, Promise<void>>();
+const sessionPatchVersions = new Map<string, number>();
+let sessionPatchGeneration = 0;
+let sessionPatchEpoch = 0;
+
+export function clearSessionSelection(): boolean {
+  if (!selection.ids.size && !selection.anchor) return false;
+  selection = emptySelection();
+  selectColorOpen = false;
+  redrawSelection();
+  return true;
+}
+
+export function hasSessionSelection(): boolean {
+  return selection.ids.size > 0;
+}
+
+let selectColorOpen = false;
+
+function redrawSelection(): void {
+  renderList();
+  renderSidebarTop();
+}
+
+function visibleRowOrder(): string[] {
+  const el = appState.listEl;
+  if (!el) return [];
+  return [...el.querySelectorAll<HTMLElement>("[data-session-id]")]
+    .filter((row) => !row.closest("[hidden]"))
+    .map((n) => n.dataset.sessionId ?? "")
+    .filter(Boolean);
+}
 
 const WEB_ONLY_KEY = "web-ui:web-only";
 sessionsState.webOnly = ((): boolean => {
@@ -124,6 +171,12 @@ let chatsPageSurface: "all" | "web" | "slack" = "all";
 let chatsPageHost: HTMLElement | null = null;
 
 export function resetSessionsState(): void {
+  selection = emptySelection();
+  selectColorOpen = false;
+  sessionPatchGeneration++;
+  sessionPatchEpoch++;
+  sessionPatchTails.clear();
+  sessionPatchVersions.clear();
   sessionsState.list = [];
   sessionsState.loaded = false;
   sessionsState.openMenuId = null;
@@ -258,6 +311,7 @@ function visibleSessions(): CoreSession[] {
 }
 
 export function renderList(): void {
+  syncDocumentTitle();
   if (!appState.listEl) return;
   const visible = visibleSessions();
   const active = visible.filter((s) => !s.archived);
@@ -305,6 +359,9 @@ export function renderList(): void {
     `,
     appState.listEl,
   );
+  const beforePrune = selection.ids.size;
+  selection = pruneSelection(selection, new Set(visibleRowOrder()));
+  if (selection.ids.size !== beforePrune) renderSidebarTop();
   if (sessionsState.openMenuId) {
     requestAnimationFrame(() => placeSessionMenu(appState.listEl?.querySelector(".session-menu-popover") ?? undefined));
   }
@@ -385,12 +442,12 @@ function toggleRecentProject(scopeId: string): void {
   renderList();
 }
 
-function startProjectChat(event: Event, scopeId: string, name: string | null): void {
+function startProjectChat(event: Event, scopeId: string, _name: string | null): void {
   event.stopPropagation();
   closeSidebarOnNarrowView();
   sessionsState.collapsedProjectScopes.delete(scopeId);
-  if (addBlankPane(scopeId)) return;
-  addPendingSession(mainConversation().newChat({ scopeId, name }), scopeId, name);
+  openBlankInFocusedPane(scopeId);
+  renderList();
 }
 
 function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
@@ -603,8 +660,7 @@ function statusMarks(s: CoreSession): TemplateResult {
 function openBackgroundInspector(e: Event, s: CoreSession): void {
   e.stopPropagation();
   e.preventDefault();
-  mainConversation().requestBackgroundPanel(s.id || null, s.threadRef);
-  void openSession(s);
+  if (!openBackgroundInCanvas(s)) void openSession(s);
 }
 
 function isActiveRow(s: CoreSession): boolean {
@@ -786,13 +842,15 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
     s.awaitingInput ? "waiting for your reply" : null,
     readOnly ? "read-only" : null,
     s.pinned ? "pinned" : null,
+    selection.ids.has(s.id) ? "selected" : null,
     relTime(activityOf(s)),
   ]
     .filter(Boolean)
     .join(", ");
   return html`
     <div
-      class="session-row ${active ? "active" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${projectChild ? "project-child" : ""} ${s.color ? "colored" : ""}"
+      data-session-id=${saved ? s.id : nothing}
+      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${projectChild ? "project-child" : ""} ${s.color ? "colored" : ""}"
       style=${s.color ? `--session-color:${s.color}` : nothing}
     >
       <a
@@ -800,13 +858,40 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         href=${saved ? deepLinkPath(UI_BASE, "chats", s.id) : nothing}
         aria-busy=${refreshingTitle ? "true" : "false"}
         aria-label=${ariaLabel}
+        aria-keyshortcuts="Space Shift+Space Control+Space Meta+Space"
+        title="Press Space to select"
         draggable=${saved ? "true" : "false"}
         @dragstart=${(e: DragEvent) => onSessionDragStart(e, s)}
         @dragend=${() => endSessionDrag()}
+        @mousedown=${(e: MouseEvent) => {
+          if (saved && e.shiftKey) e.preventDefault();
+        }}
         @click=${(e: MouseEvent) => {
+          if (saved && e.button === 0 && (e.shiftKey || e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            selection = selectionClick(selection, visibleRowOrder(), s.id, {
+              shift: e.shiftKey,
+              toggle: e.metaKey || e.ctrlKey,
+            });
+            redrawSelection();
+            return;
+          }
           if (saved && !isPlainLeftClick(e)) return;
           e.preventDefault();
+          const hadSelection = selection.ids.size > 0;
+          selection = { ids: new Set(), anchor: saved ? s.id : null, shiftRange: new Set() };
+          selectColorOpen = false;
+          if (hadSelection) redrawSelection();
           void openSession(s);
+        }}
+        @keydown=${(e: KeyboardEvent) => {
+          if (!saved || e.key !== " ") return;
+          e.preventDefault();
+          selection = selectionClick(selection, visibleRowOrder(), s.id, {
+            shift: e.shiftKey,
+            toggle: !e.shiftKey || e.metaKey || e.ctrlKey,
+          });
+          redrawSelection();
         }}
         @dblclick=${(e: Event) => {
           if (!saved) return;
@@ -1070,6 +1155,139 @@ async function commitRename(s: CoreSession): Promise<void> {
   await persistSessionPatch(s.id, { title: desired });
 }
 
+/** Archive a session by id — closes any surface showing it and updates the Recents list immediately. */
+export function archiveSessionById(sessionId: string): void {
+  const s = sessionsState.list.find((x) => x.id === sessionId);
+  if (s && !s.archived) {
+    setArchived(s, true);
+    return;
+  }
+  closeSessionSurfaces(sessionId);
+  if (!s) void persistSessionPatch(sessionId, { archived: true });
+}
+
+export function sessionSelectionBar(): TemplateResult | null {
+  const n = selection.ids.size;
+  if (!n) return null;
+  const rows = sessionsState.list.filter((s) => selection.ids.has(s.id));
+  const allArchived = rows.length > 0 && rows.every((s) => s.archived);
+  const allPinned = rows.length > 0 && rows.every((s) => s.pinned);
+  return html`
+    <div
+      class="section-label recents-label multi-select-bar"
+      role="toolbar"
+      aria-label=${`${n} conversations selected`}
+    >
+      <span class="multi-select-summary">
+        <button
+          class="icon-btn"
+          type="button"
+          title="Clear selection (Esc)"
+          aria-label="Clear selection"
+          @click=${() => clearSessionSelection()}
+        >
+          ${icon(X, 14)}
+        </button>
+        <span class="multi-select-count">${n} selected</span>
+      </span>
+      <span class="multi-select-actions">
+        <button
+          class="icon-btn"
+          type="button"
+          title=${allPinned ? "Unpin selected" : "Pin selected"}
+          aria-label=${allPinned ? "Unpin selected conversations" : "Pin selected conversations"}
+          @click=${() => void bulkPatch({ pinned: !allPinned })}
+        >
+          ${allPinned ? icon(PinOff, 14) : icon(Pin, 14)}
+        </button>
+        <span class="multi-select-color">
+          <button
+            class="icon-btn"
+            type="button"
+            title="Color selected"
+            aria-label="Color selected conversations"
+            aria-haspopup="true"
+            aria-expanded=${selectColorOpen ? "true" : "false"}
+            @click=${(e: Event) => {
+              e.stopPropagation();
+              selectColorOpen = !selectColorOpen;
+              renderSidebarTop();
+            }}
+          >
+            ${icon(Palette, 14)}
+          </button>
+        </span>
+        <button
+          class="icon-btn"
+          type="button"
+          title=${allArchived ? "Unarchive selected" : "Archive selected"}
+          aria-label=${allArchived ? "Unarchive selected conversations" : "Archive selected conversations"}
+          @click=${() => void bulkPatch({ archived: !allArchived })}
+        >
+          ${allArchived ? icon(ArchiveRestore, 14) : icon(Archive, 14)}
+        </button>
+      </span>
+      ${selectColorOpen ? colorPopover() : nothing}
+    </div>
+  `;
+}
+
+export function closeSessionSelectionColor(): boolean {
+  if (!selectColorOpen) return false;
+  selectColorOpen = false;
+  renderSidebarTop();
+  return true;
+}
+
+function colorPopover(): TemplateResult {
+  return html`
+    <div
+      class="session-menu-popover multi-select-color-popover"
+      role="menu"
+      @click=${(e: Event) => e.stopPropagation()}
+    >
+      <div class="session-menu-colors" role="group" aria-label="Color selected conversations">
+        ${SESSION_COLORS.map(
+          (c) => html`
+            <button
+              class="color-swatch"
+              type="button"
+              style=${`--swatch:${c}`}
+              title=${`Color selected ${c}`}
+              aria-label=${`Color selected conversations ${c}`}
+              @click=${() => void bulkPatch({ color: c })}
+            ></button>
+          `,
+        )}
+        <button
+          class="color-swatch clear"
+          type="button"
+          title="Clear color"
+          aria-label="Clear color on selected conversations"
+          @click=${() => void bulkPatch({ color: null })}
+        >
+          ${icon(Ban, 10)}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+async function bulkPatch(patch: SessionPatch): Promise<void> {
+  const generation = sessionPatchGeneration;
+  const ids = [...selection.ids];
+  selectColorOpen = false;
+  if (patch.archived !== undefined) selection = emptySelection();
+  if (patch.archived) for (const id of ids) closeSessionSurfaces(id);
+  sessionsState.list = sessionsState.list.map((s) => (ids.includes(s.id) ? { ...s, ...patch } : s));
+  redrawSelection();
+  const patches = ids.map((id) => queueSessionPatch(id, patch));
+  const results = await Promise.allSettled(patches);
+  if (sessionPatchGeneration === generation && results.some((r) => r.status === "rejected"))
+    await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch });
+  redrawSelection();
+}
+
 function setArchived(s: CoreSession, archived: boolean): void {
   sessionsState.openMenuId = null;
   if (archived && s.id) closeSessionSurfaces(s.id);
@@ -1130,19 +1348,49 @@ async function refreshSessionTitle(s: CoreSession): Promise<void> {
   }
 }
 
-async function persistSessionPatch(
-  id: string,
-  patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null },
-): Promise<void> {
+async function persistSessionPatch(id: string, patch: SessionPatch): Promise<void> {
+  const generation = sessionPatchGeneration;
   sessionsState.list = sessionsState.list.map((s) => (s.id === id ? { ...s, ...patch } : s));
   renderList();
+  const request = queueSessionPatch(id, patch);
   try {
-    const { session } = await updateSession(id, patch);
-    applyResolvedSession(session);
+    await request;
     renderList();
   } catch {
-    await refreshSessions({ silent: true });
+    if (sessionPatchGeneration === generation) await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch });
   }
+}
+
+function queueSessionPatch(id: string, patch: SessionPatch): Promise<CoreSession> {
+  sessionPatchEpoch++;
+  const version = (sessionPatchVersions.get(id) ?? 0) + 1;
+  const generation = sessionPatchGeneration;
+  sessionPatchVersions.set(id, version);
+  const prior = sessionPatchTails.get(id) ?? Promise.resolve();
+  const request = prior
+    .catch(() => undefined)
+    .then(async () => {
+      const { session } = await updateSession(id, patch);
+      if (sessionPatchGeneration === generation && sessionPatchVersions.get(id) === version)
+        applyResolvedSession(session);
+      return session;
+    });
+  sessionPatchTails.set(
+    id,
+    request.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  void request.then(
+    () => {
+      if (sessionPatchGeneration === generation) sessionPatchEpoch++;
+    },
+    () => {
+      if (sessionPatchGeneration === generation) sessionPatchEpoch++;
+    },
+  );
+  return request;
 }
 
 let listSettled: (() => void) | null = null;
@@ -1152,11 +1400,25 @@ export function sessionsReady(): Promise<void> {
   return sessionsState.loaded ? Promise.resolve() : listReady;
 }
 
-export async function refreshSessions(
-  opts: { showLoading?: boolean; silent?: boolean; refreshContexts?: boolean } = {},
+let latestSessionsRefresh: Promise<boolean> | null = null;
+
+export function refreshSessions(
+  opts: { showLoading?: boolean; silent?: boolean; refreshContexts?: boolean; patchEpoch?: number } = {},
+): Promise<boolean> {
+  const run: Promise<boolean> = runSessionsRefresh(opts, () =>
+    latestSessionsRefresh === run ? null : latestSessionsRefresh,
+  );
+  latestSessionsRefresh = run;
+  return run;
+}
+
+async function runSessionsRefresh(
+  opts: { showLoading?: boolean; silent?: boolean; refreshContexts?: boolean; patchEpoch?: number },
+  newerRun: () => Promise<boolean> | null,
 ): Promise<boolean> {
   loadRecentContexts(opts.refreshContexts === true);
   const seq = ++sessionRefreshSeq;
+  const patchEpoch = opts.patchEpoch ?? sessionPatchEpoch;
   if (opts.showLoading) {
     sessionsLoading = true;
     sessionsNotice = "";
@@ -1164,19 +1426,20 @@ export async function refreshSessions(
   }
   try {
     const r = await api<{ sessions: CoreSession[] }>("/api/sessions");
-    if (seq !== sessionRefreshSeq) return false;
+    if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
+    if (patchEpoch !== sessionPatchEpoch) return false;
     sessionsState.list = reconcileSessions(r.sessions ?? [], sessionsState.list);
     sessionsState.loaded = true;
     sessionsNotice = "";
     return true;
   } catch (e) {
-    if (seq !== sessionRefreshSeq) return false;
+    if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
     if (!opts.silent) sessionsNotice = errMessage(e, "Failed to load conversations.");
     return false;
   } finally {
-    listSettled?.();
-    listSettled = null;
     if (seq === sessionRefreshSeq) {
+      listSettled?.();
+      listSettled = null;
       sessionsLoading = false;
       renderList();
     }
@@ -1192,6 +1455,7 @@ export async function openSession(s: CoreSession, entriesPrefetch?: Promise<Tran
     if (splitState.active) drawCanvas();
     syncUrlFromState(s.id || null);
   }
+  mountRestoredCanvas();
   if (splitInterceptsOpen(s)) return;
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();

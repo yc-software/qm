@@ -858,8 +858,14 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
     { sandbox: { env: { "1BAD": "x" } }, rx: /"sandbox.env" key .* is not a valid env var name/ },
     { sandbox: { secretEnv: "X" }, rx: /"sandbox.secretEnv" must be an array of strings/ },
     { sandbox: { secretEnv: ["1BAD"] }, rx: /not a valid env var name/ },
-    { sandbox: { backend: "k8s", app: "acme-sandboxes" }, rx: /"sandbox.backend" must be "sprites".*or "aws"/ },
-    { sandbox: { backend: "fly", app: "acme-sandboxes" }, rx: /"sandbox.backend" must be "sprites".*or "aws"/ },
+    {
+      sandbox: { backend: "k8s", app: "acme-sandboxes" },
+      rx: /"sandbox.backend" must be "local".*"sprites".*or "aws"/,
+    },
+    {
+      sandbox: { backend: "fly", app: "acme-sandboxes" },
+      rx: /"sandbox.backend" must be "local".*"sprites".*or "aws"/,
+    },
     { sandbox: { backend: "sprites" }, rx: /"sandbox.backend": "sprites" requires "sandbox.app"/ },
     {
       sandbox: { backend: "aws", app: "acme-sandboxes" },
@@ -871,6 +877,27 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
       assert.throws(() => loadConfigAt(path), rx, `expected ${JSON.stringify(sandbox)} rejected`),
     );
   }
+});
+
+test("docker accepts an explicit local sandbox image without Fly coordinates", () => {
+  withConfig({ sandbox: { backend: "local", image: "qm-sandbox-local:latest" } }, ({ path }) => {
+    const { config } = loadConfigAt(path);
+    assert.deepEqual(sandboxCoreEnv(config), {
+      env: { SANDBOX_BACKEND: "local", LOCAL_SANDBOX_IMAGE: "qm-sandbox-local:latest" },
+      missingSecrets: [],
+    });
+    assert.equal(sandboxPinPending(config), false);
+    assert.deepEqual(sandboxImagePinErrors(config), []);
+  });
+});
+
+test("local sandbox config is docker-only and rejects unused Fly settings", () => {
+  withConfig({ target: "fly", sandbox: { backend: "local" } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "local" requires target "docker"/);
+  });
+  withConfig({ sandbox: { backend: "local", app: "acme-sandboxes" } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "local" ignores "sandbox.app"/);
+  });
 });
 
 test("aws target makes the sandbox substrate explicit: backend required with a sandbox block, sprites needs app, aws forbids fly-image settings", () => {

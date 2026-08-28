@@ -41,6 +41,7 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import { mimeFromName } from "../core/attachments.ts";
 import { swallow } from "../util/errors.ts";
 import { fileArtifactId, isArtifactPath, type FileArtifactStore } from "../files/file-artifact-store.ts";
+import { putMiniapp, type MiniappInput, type MiniappResult, type MiniappStore } from "../miniapps/miniapp.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
 import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
@@ -173,6 +174,7 @@ export interface ToolContext extends SurfaceToolDeps {
   read(path: string): Promise<ReadResult>;
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
   publish(input: PublishInput): Promise<PublishResult>;
+  miniapp(input: MiniappInput): Promise<MiniappResult>;
   memorySearch(q: string, limit?: number): Promise<string[] | null>;
   memoryRead(): Promise<string | null>;
   memoryRemember(facts: string[]): Promise<number | null>;
@@ -394,6 +396,7 @@ export interface ToolContextDeps {
   deploy: DeployService;
   acl: AclStore;
   files?: FileArtifactStore;
+  miniapps?: MiniappStore;
   auditLog?: AuditLog;
   createdBy: string;
   publicWebUrl?: string;
@@ -750,6 +753,27 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           return { shared };
         }),
       );
+    },
+
+    async miniapp(input: MiniappInput): Promise<MiniappResult> {
+      if (!deps.miniapps) throw new Error("miniapps are not available");
+      if (!writableScopeId) throw new Error("miniapp needs a writable scope to own the playground");
+      let html = input.html;
+      if ((html === undefined || !html.trim()) && input.file) {
+        if (hasParentPathSegment(input.file)) throw new Error("miniapp file must stay inside the workspace");
+        const handle = await deps.provision();
+        const bytes = await deps.sandbox.readFileBytes(handle, input.file);
+        if (bytes === null) throw new Error(`miniapp: no such file ${input.file}`);
+        html = Buffer.from(bytes).toString("utf8");
+      }
+      if (!html?.trim()) throw new Error("miniapp needs `html` or a `file` with HTML in it");
+      return putMiniapp(deps.miniapps, {
+        title: input.title,
+        html,
+        ownerScopeId: writableScopeId,
+        createdBy: deps.createdBy,
+        publicBase: deps.publicWebUrl ?? deps.webhookPublicUrl,
+      });
     },
 
     async publish(input: PublishInput): Promise<PublishResult> {

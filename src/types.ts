@@ -459,6 +459,7 @@ export interface PendingApproval {
   matched?: string;
   purpose?: string;
   summary?: string;
+  summaryDetail?: string;
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   blocksInput?: boolean;
@@ -473,6 +474,7 @@ export interface PendingApprovalRecord {
   matched?: string;
   purpose?: string;
   summary?: string;
+  summaryDetail?: string;
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;

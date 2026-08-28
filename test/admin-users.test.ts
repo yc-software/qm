@@ -238,7 +238,12 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
 });
 
 test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty query → []; non-admin denied", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-dir-")) }));
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "admin-dir-")),
+      emailAuthPrincipals: ["new@example.com"],
+    }),
+  );
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
@@ -264,6 +269,14 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
       "name prefix resolves the member",
     );
     assert.ok(!d.members.some((m: any) => m.principalId === "jane@example.com"), "non-matching member excluded");
+
+    const onboarded = await fetch(`${base}/v1/admin/directory?q=${encodeURIComponent("new@example.com")}`, {
+      headers: { "x-admin-actor": "admin-alice@default-org" },
+    });
+    assert.equal(onboarded.status, 200);
+    assert.deepEqual(((await onboarded.json()) as any).members, [
+      { principalId: "new@example.com", displayName: "new@example.com" },
+    ]);
 
     const empty = await fetch(`${base}/v1/admin/directory`, {
       headers: { "x-admin-actor": "admin-alice@default-org" },

@@ -29,12 +29,12 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
 }
 
 export async function searchDirectory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
+  const { res, deps, app, url } = ctx;
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q || !deps.directory) return sendJson(res, 200, { members: [] });
-  const r = await deps.directory.resolve(q);
+  const r = await app.resolveRecipient(q);
   let members: DirectoryMember[] = [];
   if (r.kind === "one") members = [r.member];
   else if (r.kind === "ambiguous") members = r.candidates;
