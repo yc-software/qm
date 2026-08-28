@@ -1,0 +1,1 @@
+boxd offers composable computers for devs and agents. we focus on the dx; we're the fastest in the market (4ms creation time and native feel inside the machine), fully persistent, and fully composable. I think a boxd integration is suitable for qm and I hope we can get it merged soon. if any changes are required, let me know. best, michiel - co-founder boxd.sh
