@@ -5111,6 +5111,181 @@
         "Create Slack app from manifest ↗": "从清单创建 Slack 应用 ↗",
         "Bot User OAuth Token": "机器人用户 OAuth Token",
         "App-Level Token": "应用级 Token",
+        "Sign in through the portal to continue.": "请通过门户登录后继续。",
+        "How much autonomy the harness gets in this scope. The org setting is a minimum; narrower scopes may tighten it but cannot weaken it. Identity, tenant isolation, credential scope, revocation, and audit always remain enforced.":
+          "设置当前范围内运行框架的自主程度。组织设置是最低限制；更小的范围可以收紧但不能放宽。身份、租户隔离、凭据范围、撤销和审计始终强制执行。",
+        "Dangerous — no content scans; nothing pauses between tool calls": "危险 — 不扫描内容，工具调用之间不会暂停",
+        "Auto — screen external content with proxy or model": "自动 — 使用代理或模型检查外部内容",
+        "Strict — approve tool actions; direct mutations blocked": "严格 — 工具操作需要审批，阻止直接修改",
+        'Which standing options an approval card offers besides "Allow once". Composes tighten-only with the org value; disabling a mode also suspends existing grants of that mode until it is re-enabled. Predeclared command approvals and strict-posture tool approvals both honor this.':
+          "设置审批卡片除“仅允许一次”外提供的长期授权选项。该设置只会在组织值基础上收紧；停用某种模式也会暂停该模式下已有的授权，重新启用后恢复。预声明命令审批和严格模式工具审批均遵循此设置。",
+        'Offer "Allow session" (grant lasts for the conversation)': "提供“允许本次会话”（授权持续到会话结束）",
+        'Offer "Allow always" (standing grant across turns)': "提供“始终允许”（跨轮次长期授权）",
+        "denylist — gate dangerous commands": "拒绝列表 — 拦截危险命令",
+        "allowlist — only listed commands run": "允许列表 — 仅运行列出的命令",
+        "Write the standing instructions composed into every system prompt for this scope. Saving creates a durable revision; restoring an older revision creates a new one.":
+          "编写加入当前范围每个系统提示词的长期指令。保存会创建持久版本；恢复旧版本时也会创建新版本。",
+        "Saved revision": "已保存版本",
+        "Current draft": "当前草稿",
+        "Ambient policy": "环境消息策略",
+        "What the agent proactively acts on in this channel. The standing order is plain prose the ambient judge weighs each batch of new messages against — empty means it stays silent unless addressed. The bot ledger says how each automated poster is treated:":
+          "设置助手在此频道中主动响应的内容。长期规则采用自然语言，环境判断器会据此评估每批新消息；留空表示除非被点名，否则保持静默。机器人账本用于设置各自动发帖账号的处理方式：",
+        ignore: "忽略",
+        "never wakes the judge,": "从不唤醒判断器；",
+        rollup: "汇总",
+        "batches its posts (judged at most once per the given hours),": "批量汇总其帖子（在指定小时内最多判断一次）；",
+        action: "触发",
+        "marks its posts as triggers to act on,": "将其帖子标记为行动触发器；",
+        user: "用户",
+        "reads it like a person.": "按普通用户消息处理。",
+        "Ambient behavior": "环境消息行为",
+        "When off, the agent never wakes on overheard messages in this channel — it only responds to direct @mentions. Default: on for channels with 8 or fewer members, off for larger ones.":
+          "关闭后，助手不会因频道中旁听到的消息而唤醒，只响应直接 @提及。默认情况下，成员不超过 8 人的频道开启，更大的频道关闭。",
+        "Default (by channel size)": "默认（按频道规模）",
+        On: "开启",
+        Off: "关闭",
+        "Standing order": "长期规则",
+        "Bot (author name)": "机器人（作者名称）",
+        Handling: "处理方式",
+        "Rollup hours": "汇总间隔（小时）",
+        "+ Add bot": "+ 添加机器人",
+        "What can leave a scope, which audiences can see it, and how deployment authority is carried.":
+          "设置哪些内容可以离开当前范围、哪些受众可以看到，以及如何传递部署权限。",
+        "Outbound host controls for this scope. Enforcement depends on the active sandbox backend; this page reports that capability instead of implying every saved rule is live.":
+          "设置当前范围的出站主机控制。是否强制执行取决于活动的沙箱后端；本页面会如实显示执行能力，不会假定每条已保存规则都已生效。",
+        "Policy is draft only": "策略仅为草稿",
+        "The current sandbox backend does not enforce outbound host policy. Agents still have open outbound access.":
+          "当前沙箱后端不会强制执行出站主机策略，助手仍可开放访问外部网络。",
+        Backend: "后端",
+        Enforcement: "执行状态",
+        "Effective policy": "生效策略",
+        Denylist: "拒绝列表",
+        "hosts the agent may never reach — exact host or any subdomain, one per line.":
+          "助手禁止访问的主机，匹配指定主机及其所有子域，每行一个。",
+        Allowlist: "允许列表",
+        "when present, only these outbound hosts may be reached. Empty = otherwise open.":
+          "设置后仅允许访问这些出站主机；留空表示不作限制。",
+        "Save draft": "保存草稿",
+        "External Slack participants": "Slack 外部参与者",
+        "Org-wide, default off. When on, internal members may chat with the agent in Slack rooms whose audience includes an external user (Connect member or guest) — its replies, and anything it reads there, are visible to those externals. Externals themselves still can't interact.":
+          "组织级设置，默认关闭。开启后，内部成员可在包含外部用户（Connect 成员或访客）的 Slack 房间中与助手交流；助手的回复及其读取的内容对这些外部用户可见，但外部用户本身仍不能直接交互。",
+        "Allow mixed Slack rooms": "允许混合成员 Slack 房间",
+        "Internal members can use the agent where guests or Connect members are present.":
+          "内部成员可以在有访客或 Connect 成员的房间中使用助手。",
+        "Org-wide, default on. When off, the agent never acts on overheard messages in any channel, regardless of per-channel settings — it only responds to direct @mentions.":
+          "组织级设置，默认开启。关闭后，无论各频道如何配置，助手都不会处理旁听到的消息，只响应直接 @提及。",
+        "Allow ambient behavior": "允许环境消息行为",
+        "Channels choose per-channel; without a choice, ambient defaults off in channels with more than 8 members.":
+          "各频道可单独选择；未设置时，成员超过 8 人的频道默认关闭环境消息行为。",
+        "Channel pinned header": "频道置顶说明",
+        "Org-wide, default off. When on, the agent posts and pins a small header message (naming the model in use) in every Slack channel it's in. Channels can still override it either way from their project page.":
+          "组织级设置，默认关闭。开启后，助手会在加入的每个 Slack 频道发布并置顶一条简短说明（包含正在使用的模型）；频道仍可在项目页面单独覆盖此设置。",
+        "Pin the header by default": "默认置顶说明",
+        "Applies to channels without an explicit choice; flipping this updates existing channels within a moment.":
+          "适用于未明确选择的频道；切换后会很快更新现有频道。",
+        "The models, browser runtime, and organization context available on future turns.":
+          "设置后续轮次可用的模型、浏览器运行环境和组织上下文。",
+        "Fast mode for interactive turns": "交互轮次快速模式",
+        "Org-wide, default off. When on, human turns run in fast mode on fast-capable models unless the turn asks otherwise. Requires fast-mode quota with the provider.":
+          "组织级设置，默认关闭。开启后，在支持快速模式的模型上，人类发起的轮次默认使用快速模式，除非该轮次另有要求；需要服务商提供快速模式额度。",
+        "Default interactive turns to fast mode": "交互轮次默认使用快速模式",
+        "A turn that picks its own fast-mode setting (for example the web UI toggle) still wins.":
+          "轮次自行选择的快速模式设置（例如 Web UI 开关）仍具有更高优先级。",
+        "Default harness and model": "默认运行框架和模型",
+        "The runtime inherited by scopes without an override. Takes effect from the next turn.":
+          "未单独覆盖设置的范围会继承此运行环境，从下一轮开始生效。",
+        Harness: "运行框架",
+        "Approved harnesses": "已批准的运行框架",
+        "Harnesses people may choose in the web UI or ask the agent to use.":
+          "用户可在 Web UI 中选择或要求助手使用的运行框架。",
+        "Allowed models": "允许的模型",
+        "Restrict which models the web UI offers and accepts, org-wide. Add the models to allow and pick which is pre-selected by default. Remove every chip to allow the deployment's full model set.":
+          "在组织范围内限制 Web UI 提供和接受的模型。添加允许的模型并选择默认预选项；移除所有标签则允许部署中的全部模型。",
+        Default: "默认",
+        Branding: "品牌设置",
+        "How this org's surfaces look. Accent is the highlight color across the web UI, admin, and portal; mark is the 1–2 character badge in the web UI; label is the assistant's name everywhere it introduces itself; organization name is how the assistant refers to this org. Leave a field blank to use the deployment default.":
+          "设置组织各界面的外观。强调色用于 Web UI、管理端和门户；标记是 Web UI 中 1–2 个字符的徽标；助手名称用于其自我介绍；组织名称是助手对本组织的称呼。字段留空则使用部署默认值。",
+        "Accent color": "强调色",
+        "Brand mark (1–2 chars)": "品牌标记（1–2 个字符）",
+        "Assistant label": "助手名称",
+        "Organization name": "组织名称",
+        "People directory": "人员目录",
+        "Public page or URL where the agent can look up a person's current role or title (e.g. https://www.example.com/people). Used when getting to know someone. Leave blank to disable.":
+          "供助手查询人员当前角色或职位的公开页面或 URL（例如 https://www.example.com/people），用于了解联系人。留空则停用。",
+        "Directory URL": "目录 URL",
+        "Slack ack emoji": "Slack 确认表情",
+        "The emoji the bot may react with to acknowledge a Slack message, org-wide. Add names from the workspace's emoji (custom and standard). Remove every chip to restore the built-in rotation.":
+          "设置机器人可用于确认 Slack 消息的表情，组织级生效。可添加工作区中的自定义或标准表情名称；移除所有标签则恢复内置轮换。",
+        "Browse model": "浏览模型",
+        "The model driving the browser agent in the browse skill, org-wide. Leave on the default to follow the deployment's base model. Fast mode applies only on Opus models; other models run at standard speed.":
+          "设置组织范围内驱动浏览技能中浏览器助手的模型。保持默认可跟随部署基础模型；快速模式仅适用于 Opus 模型，其他模型以标准速度运行。",
+        "Browse step limit": "浏览步骤上限",
+        "Max browser steps a single browse task may take, org-wide. Each step is one action (click, type, navigate) by the browser agent. Leave blank for the default of 50.":
+          "设置单个浏览任务可执行的最大浏览步骤，组织级生效。每一步是浏览器助手的一次操作（点击、输入或导航）；留空则默认为 50。",
+        "Max steps": "最大步骤数",
+        "Turn time limit": "轮次时间上限",
+        "Maximum wall-clock time for a turn, org-wide. Use 60–86400 seconds, 0 for no limit, or leave blank to use the deployment default.":
+          "设置单轮最大实际运行时间，组织级生效。可填写 60–86400 秒，0 表示不限时，留空则使用部署默认值。",
+        Seconds: "秒",
+        "Shared server-side authority available to agents in this organization.":
+          "设置本组织助手可使用的共享服务端权限。",
+        "Shared service credentials": "共享服务凭据",
+        "Server-side credentials vended through the broker. Review the complete effective capability—destination, authentication, methods, paths, and principals—before saving. Secrets never reach a sandbox.":
+          "通过代理提供服务端凭据。保存前请检查完整的生效能力，包括目标、认证、方法、路径和主体；密钥不会进入沙箱。",
+        "Add a credential": "添加凭据",
+        "Blank secret": "空密钥",
+        "New credentials require a secret.": "新凭据必须提供密钥。",
+        "Blank method": "空方法",
+        "Uses the broker default: GET only.": "使用代理默认值：仅 GET。",
+        "Blank paths": "空路径",
+        "Allows every path on the selected host.": "允许所选主机上的所有路径。",
+        Slug: "标识符",
+        "lowercase identifier": "小写标识符",
+        Delivery: "交付方式",
+        "how the secret is used": "密钥的使用方式",
+        "Broker — core stamps it onto proxied HTTP calls; the secret never leaves core":
+          "代理 — Core 将密钥附加到代理的 HTTP 调用，密钥不会离开 Core",
+        "Sandbox env — injected into all-internal conversations under an env var (e.g. a browser-provider key for the browse skill)":
+          "沙箱环境变量 — 以环境变量注入所有纯内部会话（例如浏览技能的浏览器服务商密钥）",
+        "Env var": "环境变量",
+        "UPPER_SNAKE_CASE; the skill reads this": "使用 UPPER_SNAKE_CASE；技能从此变量读取",
+        "Destination host": "目标主机",
+        "bare hostname only": "仅填写主机名",
+        Secret: "密钥",
+        "The secret is write-only. It cannot be viewed after saving.": "密钥为只写，保存后无法查看。",
+        "Authentication header": "认证请求头",
+        "blank = Authorization": "留空 = Authorization",
+        "Value prefix": "值前缀",
+        "blank = Bearer": "留空 = Bearer",
+        "Allowed HTTP methods": "允许的 HTTP 方法",
+        "comma-separated; blank = GET": "逗号分隔；留空 = GET",
+        "Allowed path prefixes": "允许的路径前缀",
+        "one per line; blank = any path": "每行一个；留空 = 任意路径",
+        "Credential is enabled": "启用此凭据",
+        "Principals with access": "可访问主体",
+        "Access: every all-internal conversation. Env delivery is not gated by grants — rooms with externals get nothing, everyone else gets the env var.":
+          "访问范围：所有纯内部会话。环境变量交付不受授权控制；含外部人员的房间不会获得变量，其他会话均可获得。",
+        "Everyone in this organization": "组织中的所有人",
+        "Only selected people or teams": "仅选定人员或团队",
+        "Effective capability": "生效能力",
+        State: "状态",
+        Host: "主机",
+        "Not set": "未设置",
+        Auth: "认证",
+        "Authorization header · no prefix": "Authorization 请求头 · 无前缀",
+        Methods: "方法",
+        Paths: "路径",
+        "Any path": "任意路径",
+        Access: "访问范围",
+        "Required before first save": "首次保存前必须填写",
+        "Save credential": "保存凭据",
+        "Each connector needs its own OAuth app's client ID and secret before anyone can link it. A connector stays hidden in everyone's web UI until you set its client here. The secret is write-only and never displayed. Applies org-wide.":
+          "每个连接器都需要配置对应 OAuth 应用的客户端 ID 和密钥后才能关联。在此配置前，该连接器会在所有人的 Web UI 中隐藏。密钥为只写且不会再次显示，组织级生效。",
+        "Add Slack after the web deployment is working. Tokens are validated with Slack, encrypted in durable storage, and never displayed again.":
+          "Web 部署正常后再添加 Slack。Token 会通过 Slack 验证、加密持久保存，并且不会再次显示。",
+        "Use an app-level token with": "使用具备以下权限的应用级 Token：",
+        ". Saving activates or reloads the Slack surface within a few seconds.":
+          "。保存后会在几秒内启用或重新加载 Slack 界面。",
         "Coming back soon": "即将恢复",
         "Temporary setup guide": "临时设置指南",
         "Get this deployment ready for real conversations. Secrets are validated, encrypted in durable storage, and never displayed again.":

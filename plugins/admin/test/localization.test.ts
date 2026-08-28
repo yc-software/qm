@@ -33,6 +33,24 @@ test("Admin translates primary navigation and custom-provider setup", () => {
   ]);
 });
 
+test("Admin translates governance, credentials, and judgment views", () => {
+  const start = html.indexOf('const LOCALE_STORAGE_KEY = "qm:locale"');
+  const end = html.indexOf("const $ =", start);
+  const context: Record<string, unknown> = {
+    localStorage: { getItem: () => "zh-CN" },
+    navigator: { language: "en-US" },
+  };
+  runInNewContext(
+    `${html.slice(start, end)}; globalThis.translations = [translateUiText("Security posture"), translateUiText("Shared service credentials"), translateUiText("No judgments recorded for this filter yet.")];`,
+    context,
+  );
+  assert.deepEqual(Array.from(context.translations as string[]), [
+    "安全级别",
+    "共享服务凭据",
+    "当前筛选条件下还没有判断记录。",
+  ]);
+});
+
 test("Admin localization excludes transcripts and raw content", () => {
   const start = html.indexOf('const LOCALE_STORAGE_KEY = "qm:locale"');
   const end = html.indexOf("const $ =", start);
