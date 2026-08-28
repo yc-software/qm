@@ -126,18 +126,24 @@ test("one dispatchable workflow drives the whole release, main-only and in order
     workflow,
     /^ {2}images:\n[\s\S]*?needs: preflight\n[\s\S]*?uses: \.\/\.github\/workflows\/release-package\.yml$/m,
   );
-  assert.match(workflow, /^ {2}cli:\n[\s\S]*?needs: images\n[\s\S]*?uses: \.\/\.github\/workflows\/publish-cli\.yml$/m);
+  assert.match(
+    workflow,
+    /^ {2}cli:\n[\s\S]*?needs:\n {6}- preflight\n {6}- images\n[\s\S]*?uses: \.\/\.github\/workflows\/publish-cli\.yml\n {4}with:\n {6}version: \$\{\{ needs\.preflight\.outputs\.version \}\}$/m,
+  );
   assert.match(workflow, /^ {2}release:\n[\s\S]*?needs:\n {6}- preflight\n {6}- cli$/m);
   assert.match(workflow, /concurrency:\n {2}group: release\n {2}cancel-in-progress: false/);
 });
 
-test("the release refuses a tag it already published and writes the tag last", () => {
+test("the release bumps its own version past everything already released", () => {
   const workflow = readFileSync(".github/workflows/release.yml", "utf8");
 
-  assert.match(workflow, /version=\$\(jq -r \.version cli\/package\.json\)/);
+  assert.match(workflow, /pkg=\$\(jq -r \.version cli\/package\.json\)/);
   assert.match(workflow, /cli\/package\.json version must be semver/);
+  assert.match(workflow, /matching-refs\/tags\/v/);
+  assert.match(workflow, /npm view @yc-software\/qm version/);
+  assert.match(workflow, /version="\$major\.\$minor\.\$\(\(patch \+ 1\)\)"/);
   assert.match(workflow, /tag="v\$version"/);
-  assert.match(workflow, /is already released; bump cli\/package\.json before releasing again/);
+  assert.match(workflow, /already exists; refusing to move it/);
   assert.ok(
     workflow.indexOf("already released") < workflow.indexOf("gh release create"),
     "the tag gate runs before anything is published",

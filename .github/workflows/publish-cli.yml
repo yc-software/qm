@@ -7,6 +7,10 @@ on:
         description: Commit SHA whose published images the package should pin
         required: false
         type: string
+      version:
+        description: Version to publish, overriding cli/package.json
+        required: false
+        type: string
     outputs:
       manifest:
         description: The image manifest the published package pins
@@ -15,6 +19,9 @@ on:
     inputs:
       images_ref:
         description: Commit SHA whose published images the package should pin
+        required: false
+      version:
+        description: Version to publish, overriding cli/package.json
         required: false
 
 permissions:
@@ -77,8 +84,14 @@ jobs:
           printf 'manifest=%s\n' "$(jq -c . cli/manifest.json)" >> "$GITHUB_OUTPUT"
       - name: Publish
         working-directory: cli
+        env:
+          VERSION: ${{ inputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version > /dev/null
+          fi
           version=$(jq -r .version package.json)
           if npm view "@yc-software/qm@$version" version > /dev/null 2>&1; then
             published=$(mktemp -d)
@@ -95,5 +108,3 @@ jobs:
           if [ "$version" = 0.1.5 ]; then
             npm deprecate @yc-software/qm@1.0.5 "Published with an incorrect version number; use 0.1.5."
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

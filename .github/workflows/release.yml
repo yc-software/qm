@@ -15,6 +15,7 @@ jobs:
       contents: read
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -29,17 +30,27 @@ jobs:
             echo "releases are cut from main; this run is on $GITHUB_REF" >&2
             exit 1
           fi
-          version=$(jq -r .version cli/package.json)
-          case "$version" in
+          pkg=$(jq -r .version cli/package.json)
+          case "$pkg" in
             [0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "cli/package.json version must be semver, got $version" >&2; exit 1 ;;
+            *) echo "cli/package.json version must be semver, got $pkg" >&2; exit 1 ;;
           esac
+          tagged=$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" -q '.[].ref' \
+            | sed 's|^refs/tags/||' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1 || true)
+          published=$(npm view @yc-software/qm version 2>/dev/null || true)
+          base=$(printf '%s\n%s\n' "${tagged:-0.0.0}" "${published:-0.0.0}" | sort -V | tail -1)
+          if [ "$(printf '%s\n%s\n' "$base" "$pkg" | sort -V | tail -1)" = "$pkg" ] && [ "$pkg" != "$base" ]; then
+            version=$pkg
+          else
+            IFS=. read -r major minor patch <<< "$base"
+            version="$major.$minor.$((patch + 1))"
+          fi
           tag="v$version"
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > /dev/null 2>&1; then
-            echo "$tag is already released; bump cli/package.json before releasing again" >&2
+            echo "$tag already exists; refusing to move it" >&2
             exit 1
           fi
-          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
 
   images:
     name: Images
@@ -52,12 +63,16 @@ jobs:
 
   cli:
     name: CLI
-    needs: images
+    needs:
+      - preflight
+      - images
     permissions:
       contents: read
       id-token: write
     secrets: inherit
     uses: ./.github/workflows/publish-cli.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
 
   release:
     name: Tag and publish the release
