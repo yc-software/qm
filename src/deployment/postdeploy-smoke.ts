@@ -1,4 +1,4 @@
-import { resolvePgCaTrust } from "../persistence/pg-pool.ts";
+import { pgConnectionConfig, resolvePgCaTrust } from "../persistence/pg-pool.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
@@ -263,13 +263,15 @@ async function checkDatabase(config: PostdeployConfig): Promise<void> {
   const { databaseUrl } = config;
   if (!databaseUrl) throw new Error("postdeploy smoke requires DATABASE_URL");
   const pg = (await import("pg")).default;
-  const client = new pg.Client({
-    connectionString: databaseUrl,
-    ...resolvePgCaTrust({
-      ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
-      ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
-    }),
-  });
+  const client = new pg.Client(
+    pgConnectionConfig(
+      databaseUrl,
+      resolvePgCaTrust({
+        ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
+        ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
+      }),
+    ),
+  );
   await client.connect();
   try {
     const unsafe = await client.query(PARALLEL_EXCEPTION_QUERY);

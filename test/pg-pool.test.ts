@@ -2,7 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createPgPool, assertOneStatement, concurrentIndexName } from "../src/persistence/pg-pool.ts";
+import {
+  createPgPool,
+  assertOneStatement,
+  concurrentIndexName,
+  pgConnectionConfig,
+  resolvePgCaTrust,
+} from "../src/persistence/pg-pool.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
   const pg = createPgPool("postgres://does-not-exist:0/none", ["SELECT 1"]);
@@ -73,6 +79,22 @@ test("concurrentIndexName recognizes retryable concurrent index creation", () =>
     "session_search",
   );
   assert.equal(concurrentIndexName("CREATE INDEX IF NOT EXISTS session_search ON sessions(id)"), undefined);
+});
+
+test("explicit CA trust overrides connection-string SSL controls without weakening verification", () => {
+  const config = pgConnectionConfig(
+    "postgresql://user:pass@db.example/qm?sslmode=verify-full&application_name=qm",
+    resolvePgCaTrust({ cert: "PEM" }),
+  );
+  const url = new URL(config.connectionString);
+  assert.equal(url.searchParams.has("sslmode"), false);
+  assert.equal(url.searchParams.get("application_name"), "qm");
+  assert.deepEqual(config.ssl, { ca: "PEM", rejectUnauthorized: true });
+});
+
+test("connection-string SSL controls remain unchanged without explicit CA trust", () => {
+  const connectionString = "postgresql://user:pass@db.example/qm?sslmode=require";
+  assert.deepEqual(pgConnectionConfig(connectionString, {}), { connectionString });
 });
 
 function pathToUrl(p: string): string {

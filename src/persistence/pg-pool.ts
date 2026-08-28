@@ -79,11 +79,13 @@ async function applyDdl(pool: Pool, statements: string[]): Promise<void> {
  * applied to every pg pool and client this process opens — database CA trust
  * is inherently process-global, like NODE_EXTRA_CA_CERTS.
  */
-export function resolvePgCaTrust(opts: { cert?: string; certFile?: string }): { ssl?: { ca: string } } {
-  if (opts.cert?.trim()) return { ssl: { ca: opts.cert } };
+type PgCaTrust = { ssl?: { ca: string; rejectUnauthorized: true } };
+
+export function resolvePgCaTrust(opts: { cert?: string; certFile?: string }): PgCaTrust {
+  if (opts.cert?.trim()) return { ssl: { ca: opts.cert, rejectUnauthorized: true } };
   if (opts.certFile?.trim()) {
     try {
-      return { ssl: { ca: readFileSync(opts.certFile, "utf8") } };
+      return { ssl: { ca: readFileSync(opts.certFile, "utf8"), rejectUnauthorized: true } };
     } catch (e) {
       throw new Error(`DATABASE_CA_CERT_FILE is set but unreadable (${opts.certFile}): ${errMessage(e)}`, {
         cause: e,
@@ -93,14 +95,27 @@ export function resolvePgCaTrust(opts: { cert?: string; certFile?: string }): { 
   return {};
 }
 
-let installedCaTrust: { ssl?: { ca: string } } = {};
+let installedCaTrust: PgCaTrust = {};
 
 export function configurePgCaTrust(opts: { cert?: string; certFile?: string }): void {
   installedCaTrust = resolvePgCaTrust(opts);
 }
 
-export function pgCaOptions(): { ssl?: { ca: string } } {
+export function pgCaOptions(): PgCaTrust {
   return installedCaTrust;
+}
+
+export function pgConnectionConfig(
+  connectionString: string,
+  trust: PgCaTrust = pgCaOptions(),
+): {
+  connectionString: string;
+  ssl?: { ca: string; rejectUnauthorized: true };
+} {
+  if (!trust.ssl) return { connectionString };
+  const url = new URL(connectionString);
+  for (const name of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) url.searchParams.delete(name);
+  return { connectionString: url.toString(), ssl: trust.ssl };
 }
 
 export function createPgPool(connectionString: string, statements: string[]): PgPool {
@@ -111,7 +126,7 @@ export function createPgPool(connectionString: string, statements: string[]): Pg
     if (!poolP) {
       poolP = (async () => {
         const pg = (await import("pg")).default;
-        const p = new pg.Pool({ connectionString, ...pgCaOptions() });
+        const p = new pg.Pool(pgConnectionConfig(connectionString));
         p.on("error", (err) => console.error("[pg] idle client error:", errMessage(err)));
         try {
           await applyDdl(p, schema);
