@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   createDeploymentLayerStore,
   DeploymentLayerPersistedError,
@@ -86,6 +87,78 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
   );
   assert.equal(hydratedRuntime.advertisedTools[0], "acme v2");
   assert.equal((await hydrated.hydrate())?.version, 2);
+});
+
+test("the durable deployment layer hydrates personal defaults without publishing them to the org", async () => {
+  const backing = createMemoryMap<StoredDeploymentLayer>();
+  const skills = createSkillStore({ signingSecret: "layer-test" });
+  const org = scopeId("org", "default-org");
+  const runtime = emptyDeploymentLayer();
+  const store = createDeploymentLayerStore({ backing, runtime, skills, scopeId: org });
+  const bundle: DeploymentLayerBundle = {
+    contract: 1,
+    tools: [],
+    skills: [],
+    personalSkills: [
+      {
+        path: "personal/skills/starter/SKILL.md",
+        content: "---\nname: starter\ndescription: Starter skill.\n---\nStarter workflow.\n",
+      },
+    ],
+    personalWorkspace: [{ path: "personal/workspace/AGENTS.md", content: "personal defaults\n" }],
+  };
+
+  await store.put(bundle, "test");
+  assert.equal(runtime.personalSkillManifests[0]?.name, "starter");
+  assert.deepEqual(runtime.personalWorkspaceFiles, [{ path: "AGENTS.md", content: "personal defaults\n" }]);
+  assert.equal((await skills.resolve("starter", [org])).skill, null);
+
+  const hydratedRuntime = emptyDeploymentLayer();
+  const hydrated = createDeploymentLayerStore({ backing, runtime: hydratedRuntime, skills, scopeId: org });
+  await hydrated.hydrate();
+  assert.equal(hydratedRuntime.personalSkillManifests[0]?.name, "starter");
+  assert.deepEqual(hydratedRuntime.personalWorkspaceFiles, [{ path: "AGENTS.md", content: "personal defaults\n" }]);
+});
+
+test("legacy deployment bundles retain their recorded content hash", async () => {
+  const backing = createMemoryMap<StoredDeploymentLayer>();
+  const bundle: DeploymentLayerBundle = { contract: 1, tools: [], skills: [] };
+  const store = createDeploymentLayerStore({
+    backing,
+    runtime: emptyDeploymentLayer(),
+    skills: createSkillStore({ signingSecret: "layer-test" }),
+    scopeId: scopeId("org", "default-org"),
+  });
+
+  const record = await store.put(bundle, "test");
+  assert.equal(record.contentHash, createHash("sha256").update(JSON.stringify(bundle)).digest("hex"));
+  assert.equal(record.bundle.personalSkills, undefined);
+  assert.equal(record.bundle.personalWorkspace, undefined);
+});
+
+test("personal workspace defaults reject file and descendant path conflicts", async () => {
+  const store = createDeploymentLayerStore({
+    backing: createMemoryMap<StoredDeploymentLayer>(),
+    runtime: emptyDeploymentLayer(),
+    skills: createSkillStore({ signingSecret: "layer-test" }),
+    scopeId: scopeId("org", "default-org"),
+  });
+
+  await assert.rejects(
+    store.put(
+      {
+        contract: 1,
+        tools: [],
+        skills: [],
+        personalWorkspace: [
+          { path: "personal/workspace/config", content: "file\n" },
+          { path: "personal/workspace/config/default.yaml", content: "enabled: false\n" },
+        ],
+      },
+      "test",
+    ),
+    /personal workspace defaults conflict/,
+  );
 });
 
 test("invalid descriptors never replace the durable current layer", async () => {

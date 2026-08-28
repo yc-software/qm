@@ -255,7 +255,9 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
         let handle = handles.get(rec.scopeId);
         if (!handle) {
           try {
-            handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }]);
+            handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+              personalDefaults: false,
+            });
           } catch (e) {
             await deps.monitors.recordError(m.id, errMessage(e));
             continue;

@@ -53,6 +53,10 @@ the scaffolded \`.gitignore\`.
 
 - A skill is \`sandbox/skills/<id>/SKILL.md\`: markdown with \`name\` and
   \`description\` frontmatter that teaches the agent a workflow and when to use it.
+- A personal starter skill is \`sandbox/personal/skills/<id>/SKILL.md\`. Each user
+  receives an editable copy; later layer updates never overwrite or restore it.
+- A personal workspace default is any text file under \`sandbox/personal/workspace/\`.
+  Missing files are created on the user's next computer provision and existing files stay unchanged.
 - A tool is \`sandbox/tools/<id>/tool.json\`: a descriptor whose minimal form is
   \`{ "id": ..., "advertise": ..., "install": { "binary": ... } }\`, with the
   executable next to it when the binary is not already in the base image.

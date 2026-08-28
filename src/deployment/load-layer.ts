@@ -10,6 +10,14 @@ import {
 import { credentialServiceForPath } from "../credentials/resident-paths.ts";
 import type { ResidentAuthConnector } from "../credentials/resident-auth.ts";
 import type { CommandRule } from "../types.ts";
+import {
+  assertNoPersonalWorkspaceConflicts,
+  parseDefaultSkillTrees,
+  safePersonalWorkspacePath,
+  type PersonalDefaultFile,
+} from "../personal-defaults.ts";
+import { isProbablyBinary } from "../skills/seed.ts";
+import { safeSkillFilePath, type SkillManifest } from "../skills/skill-store.ts";
 
 export interface DeploymentLayerRuntime {
   dir: string;
@@ -21,6 +29,8 @@ export interface DeploymentLayerRuntime {
   splitEnvTemplates: Record<string, string>[];
   commandRules: CommandRule[];
   brokeredTools: BrokeredLayerTool[];
+  personalSkillManifests: SkillManifest[];
+  personalWorkspaceFiles: PersonalDefaultFile[];
 }
 
 export interface BrokeredLayerTool {
@@ -41,6 +51,8 @@ export function emptyDeploymentLayer(): DeploymentLayerRuntime {
     splitEnvTemplates: [],
     commandRules: [],
     brokeredTools: [],
+    personalSkillManifests: [],
+    personalWorkspaceFiles: [],
   };
 }
 
@@ -73,7 +85,12 @@ function toolService(tool: ToolDescriptor, why: string): string {
   );
 }
 
-export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): DeploymentLayerRuntime {
+export function resolvedDeploymentLayer(
+  dir: string,
+  tools: ToolDescriptor[],
+  personalSkillManifests: SkillManifest[] = [],
+  personalWorkspaceFiles: PersonalDefaultFile[] = [],
+): DeploymentLayerRuntime {
   assertDisjointCredentialLinks(tools);
   const withAuth = tools.filter((t) => t.auth);
   const brokered = withAuth.filter((t) => t.auth!.broker);
@@ -114,6 +131,8 @@ export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): D
         broker: t.auth!.broker!,
       };
     }),
+    personalSkillManifests,
+    personalWorkspaceFiles,
   };
 }
 
@@ -128,12 +147,43 @@ export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: D
     "splitEnvTemplates",
     "commandRules",
     "brokeredTools",
+    "personalSkillManifests",
+    "personalWorkspaceFiles",
   ] as const) {
     target[key].splice(0, target[key].length, ...(source[key] as never[]));
   }
 }
 
 const JUNK_FILE = /^(?:\.DS_Store|Thumbs\.db|\._.*)$/;
+
+function readTextTree(root: string, pathOf: (path: string) => string): PersonalDefaultFile[] {
+  if (!existsSync(root)) return [];
+  const files: PersonalDefaultFile[] = [];
+  const walk = (dir: string, prefix: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (JUNK_FILE.test(entry.name)) continue;
+      const path = join(dir, entry.name);
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(path, rel);
+        continue;
+      }
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${path} must be a regular file`);
+      const bytes = readFileSync(path);
+      if (isProbablyBinary(bytes)) {
+        throw new Error(`${path} must be a text file`);
+      }
+      files.push({
+        path: pathOf(rel),
+        content: bytes.toString("utf8"),
+        ...((stat.mode & 0o111) !== 0 ? { executable: true } : {}),
+      });
+    }
+  };
+  walk(root, "");
+  return files.sort((a, b) => a.path.localeCompare(b.path));
+}
 
 export function loadDeploymentLayer(dir: string): DeploymentLayerRuntime {
   if (!existsSync(dir)) {
@@ -166,5 +216,13 @@ export function loadDeploymentLayer(dir: string): DeploymentLayerRuntime {
       tools.push(desc);
     }
   }
-  return resolvedDeploymentLayer(dir, tools);
+  const personalSkills = readTextTree(join(dir, "personal", "skills"), safeSkillFilePath);
+  const personalWorkspaceFiles = readTextTree(join(dir, "personal", "workspace"), safePersonalWorkspacePath);
+  assertNoPersonalWorkspaceConflicts(personalWorkspaceFiles);
+  return resolvedDeploymentLayer(
+    dir,
+    tools,
+    parseDefaultSkillTrees(personalSkills, "personal default skill"),
+    personalWorkspaceFiles,
+  );
 }

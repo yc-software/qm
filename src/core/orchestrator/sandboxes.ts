@@ -1,4 +1,4 @@
-import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
+import { personalScope, type Principal, type Resolution, type ScopeId, type Session } from "../../types.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions } from "../../sandbox/sandbox.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
@@ -189,6 +189,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const handle = await deps.sandbox.provision(resolution.layers, {
       env: connectorEnv,
       egress: resolution.egress,
+      personalDefaults: scopeId === personalScope(actor.id),
       ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
       ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
     });
@@ -450,6 +451,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ],
       {
         egress: resolution.egress,
+        personalDefaults: target.startsWith("personal:"),
         ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
         ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
       },

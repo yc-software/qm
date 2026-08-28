@@ -149,6 +149,27 @@ test("loadDeploymentLayer: a dir with no tools/ is a valid, empty layer", () => 
   assert.deepEqual(layer.advertisedTools, []);
 });
 
+test("loadDeploymentLayer resolves personal skill and workspace defaults", () => {
+  const dir = mkdtempSync(join(tmpdir(), "layer-personal-"));
+  mkdirSync(join(dir, "personal", "skills", "starter"), { recursive: true });
+  writeFileSync(
+    join(dir, "personal", "skills", "starter", "SKILL.md"),
+    "---\nname: starter\ndescription: Starter skill.\n---\nStarter workflow.\n",
+  );
+  writeFileSync(join(dir, "personal", "skills", "starter", "reference.md"), "reference\n");
+  mkdirSync(join(dir, "personal", "workspace", "config"), { recursive: true });
+  writeFileSync(join(dir, "personal", "workspace", "AGENTS.md"), "personal defaults\n");
+  writeFileSync(join(dir, "personal", "workspace", "config", "personal.yaml"), "enabled: false\n");
+
+  const layer = loadDeploymentLayer(dir);
+  assert.equal(layer.personalSkillManifests[0]?.name, "starter");
+  assert.equal(layer.personalSkillManifests[0]?.files?.[0]?.path, "reference.md");
+  assert.deepEqual(layer.personalWorkspaceFiles, [
+    { path: "AGENTS.md", content: "personal defaults\n" },
+    { path: "config/personal.yaml", content: "enabled: false\n" },
+  ]);
+});
+
 test("loadDeploymentLayer throws when the configured dir itself is missing", () => {
   assert.throws(() => loadDeploymentLayer("/definitely/does/not/exist"), /does not exist/);
 });

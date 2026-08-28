@@ -30,6 +30,14 @@ function writeLayer(dir: string): void {
   );
   writeFileSync(join(dir, "sandbox", "tools", "t", "t"), "#!/usr/bin/env bash\necho hi\n");
   chmodSync(join(dir, "sandbox", "tools", "t", "t"), 0o755);
+  mkdirSync(join(dir, "sandbox", "personal", "skills", "starter"), { recursive: true });
+  writeFileSync(
+    join(dir, "sandbox", "personal", "skills", "starter", "SKILL.md"),
+    "---\nname: starter\ndescription: starter skill\n---\nstarter\n",
+  );
+  mkdirSync(join(dir, "sandbox", "personal", "workspace", "config"), { recursive: true });
+  writeFileSync(join(dir, "sandbox", "personal", "workspace", "AGENTS.md"), "personal defaults\n");
+  writeFileSync(join(dir, "sandbox", "personal", "workspace", "config", "personal.yaml"), "enabled: false\n");
 }
 
 function coreNormalizedHash(dir: string): string {
@@ -41,7 +49,29 @@ function coreNormalizedHash(dir: string): string {
     { path: "tools/t/tool.json", content: readFileSync(join(dir, "sandbox", "tools", "t", "tool.json"), "utf8") },
   ];
   const order = (a: { path: string }, b: { path: string }): number => a.path.localeCompare(b.path);
-  const bundle = { contract: 1, tools: tools.sort(order), skills: skillFiles.sort(order) };
+  const personalSkills = [
+    {
+      path: "personal/skills/starter/SKILL.md",
+      content: readFileSync(join(dir, "sandbox", "personal", "skills", "starter", "SKILL.md"), "utf8"),
+    },
+  ];
+  const personalWorkspace = [
+    {
+      path: "personal/workspace/AGENTS.md",
+      content: readFileSync(join(dir, "sandbox", "personal", "workspace", "AGENTS.md"), "utf8"),
+    },
+    {
+      path: "personal/workspace/config/personal.yaml",
+      content: readFileSync(join(dir, "sandbox", "personal", "workspace", "config", "personal.yaml"), "utf8"),
+    },
+  ];
+  const bundle = {
+    contract: 1,
+    tools: tools.sort(order),
+    skills: skillFiles.sort(order),
+    personalSkills: personalSkills.sort(order),
+    personalWorkspace: personalWorkspace.sort(order),
+  };
   return createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
 }
 
@@ -54,6 +84,14 @@ test("the CLI bundle hashes byte-identically to the core's full-path normalizati
       bundle.skills.map((file) => file.path),
       ["skills/a-b/SKILL.md", "skills/a/SKILL.md"],
       "full-path order, not per-directory walk order",
+    );
+    assert.deepEqual(
+      bundle.personalSkills?.map((file) => file.path),
+      ["personal/skills/starter/SKILL.md"],
+    );
+    assert.deepEqual(
+      bundle.personalWorkspace?.map((file) => file.path),
+      ["personal/workspace/AGENTS.md", "personal/workspace/config/personal.yaml"],
     );
     const cliHash = createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
     assert.equal(cliHash, coreNormalizedHash(dir));

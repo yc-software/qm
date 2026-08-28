@@ -28,7 +28,7 @@ deploy/layers/<org>/
   .gitignore               scaffolded; keeps .env and tfstate out of Git
   .env.example             computed secret names, never values
   .env                     local secret values; never committed
-  sandbox/                 org tools and skills for agent computers
+  sandbox/                 org tools, shared skills, and personal defaults for agent computers
   plugins/<name>/          org-specific service images
   infra/                   provider infrastructure and tfvars, on AWS targets
   slack-app-manifest.yml   generated bot manifest

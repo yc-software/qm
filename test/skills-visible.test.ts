@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
@@ -45,6 +45,28 @@ test("listVisibleSkills returns a principal's personal + org skills with scope l
   const byName = new Map(visible.map((r) => [r.skill!.manifest.name, r]));
   assert.equal(byName.get("make-digest")!.skill!.scopeId, scopeId("personal", "U1"));
   assert.equal(byName.get("deploy-bot")!.skill!.scopeId, scopeId("org", "default-org"));
+});
+
+test("listVisibleSkills initializes deployment personal skill defaults", async () => {
+  const layer = mkdtempSync(join(tmpdir(), "ap-skvis-layer-"));
+  mkdirSync(join(layer, "personal", "skills", "starter"), { recursive: true });
+  writeFileSync(
+    join(layer, "personal", "skills", "starter", "SKILL.md"),
+    "---\nname: starter\ndescription: Starter skill.\n---\nStarter workflow.\n",
+  );
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "ap-skvis-")),
+      orgId: "acme",
+      seedSkills: false,
+      deploymentLayerDir: layer,
+    }),
+  );
+
+  const visible = await built.app.listVisibleSkills("U1");
+  const starter = visible.find((entry) => entry.skill?.manifest.name === "starter")?.skill;
+  assert.equal(starter?.scopeId, scopeId("personal", "U1"));
+  assert.equal(starter?.createdBy, "system:personal-default");
 });
 
 test("a personal skill shadows a same-named org skill (most-specific wins, shadow surfaced)", async () => {

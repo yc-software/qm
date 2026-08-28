@@ -5,7 +5,7 @@ import { shq } from "../util/shell.ts";
 import { copyHome, type CopyHomeResult } from "./sandbox-migrate.ts";
 import type { SandboxBackendName, SandboxRoute } from "./sandbox-routing.ts";
 import { capabilitiesLostMovingTo, type ProvisionOptions, type Sandbox, type SandboxHandle } from "./sandbox.ts";
-import type { WorkspaceLayer } from "../types.ts";
+import { parseScopeId, type ScopeId, type WorkspaceLayer } from "../types.ts";
 
 export interface SandboxMigrationOptions {
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
@@ -74,6 +74,8 @@ export function createSandboxMigrationRunner(opts: SandboxMigrationOptions): San
       );
     }
     const provOpts = (await opts.provisionOptions?.(scopeId)) ?? {};
+    provOpts.personalDefaults ??= parseScopeId(scopeId as ScopeId).kind === "personal";
+    provOpts.personalDefaults ??= parseScopeId(scopeId as ScopeId).kind === "personal";
     const fromHandle = await fromSandbox.provision(scopeLayers(scopeId), provOpts);
     const toHandle = await toSandbox.provision(scopeLayers(scopeId), provOpts);
     const fromHome = fromHandle.homeDir ?? fromSandbox.profile.spec?.homeDir ?? "/root";

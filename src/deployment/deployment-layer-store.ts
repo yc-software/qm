@@ -2,14 +2,8 @@ import { createHash } from "node:crypto";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ScopeId } from "../types.ts";
-import {
-  safeSkillFilePath,
-  type Skill,
-  type SkillFile,
-  type SkillManifest,
-  type SkillStore,
-} from "../skills/skill-store.ts";
-import { foreignSkillCollision, parseSeedSkill, sameManifest, upsertSeedSkill } from "../skills/seed.ts";
+import { safeSkillFilePath, type Skill, type SkillManifest, type SkillStore } from "../skills/skill-store.ts";
+import { foreignSkillCollision, sameManifest, upsertSeedSkill } from "../skills/seed.ts";
 import {
   bundleFilePaths,
   detectPathCollisions,
@@ -22,6 +16,12 @@ import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
 import { replaceDeploymentLayer, resolvedDeploymentLayer, type DeploymentLayerRuntime } from "./load-layer.ts";
+import {
+  assertNoPersonalWorkspaceConflicts,
+  parseDefaultSkillTrees,
+  safePersonalWorkspacePath,
+  type PersonalDefaultFile,
+} from "../personal-defaults.ts";
 
 interface DeploymentLayerFile {
   path: string;
@@ -33,6 +33,8 @@ export interface DeploymentLayerBundle {
   contract: 1;
   tools: DeploymentLayerFile[];
   skills: DeploymentLayerFile[];
+  personalSkills?: DeploymentLayerFile[];
+  personalWorkspace?: DeploymentLayerFile[];
 }
 
 export interface StoredDeploymentLayer {
@@ -103,7 +105,17 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
   if (input.contract !== 1 || !Array.isArray(input.tools) || !Array.isArray(input.skills)) {
     throw new Error("deployment layer requires contract: 1, tools[], and skills[]");
   }
-  const normalize = (kind: "tools" | "skills", files: DeploymentLayerFile[]): DeploymentLayerFile[] => {
+  if (input.personalSkills !== undefined && !Array.isArray(input.personalSkills)) {
+    throw new Error("deployment layer personalSkills must be an array");
+  }
+  if (input.personalWorkspace !== undefined && !Array.isArray(input.personalWorkspace)) {
+    throw new Error("deployment layer personalWorkspace must be an array");
+  }
+  const normalize = (
+    kind: "tools" | "skills" | "personalSkills" | "personalWorkspace",
+    files: DeploymentLayerFile[],
+    prefix: string,
+  ): DeploymentLayerFile[] => {
     const seen = new Set<string>();
     return files
       .map((file) => {
@@ -120,16 +132,33 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
             `deployment layer ${kind} entry contains an unpaired Unicode surrogate, which the store cannot persist: ${file.path}`,
           );
         }
-        const path = safeSkillFilePath(file.path);
-        if (!path.startsWith(`${kind}/`))
-          throw new Error(`deployment layer ${kind} path must start with ${kind}/: ${path}`);
+        const path = kind === "personalWorkspace" ? safePersonalWorkspacePath(file.path) : safeSkillFilePath(file.path);
+        if (!path.startsWith(`${prefix}/`))
+          throw new Error(`deployment layer ${kind} path must start with ${prefix}/: ${path}`);
         if (seen.has(path)) throw new Error(`duplicate deployment layer path: ${path}`);
         seen.add(path);
         return { path, content: file.content, ...(file.executable === true ? { executable: true } : {}) };
       })
       .sort(pathOrder);
   };
-  return { contract: 1, tools: normalize("tools", input.tools), skills: normalize("skills", input.skills) };
+  const personalSkills =
+    input.personalSkills === undefined
+      ? undefined
+      : normalize("personalSkills", input.personalSkills, "personal/skills");
+  const personalWorkspace =
+    input.personalWorkspace === undefined
+      ? undefined
+      : normalize("personalWorkspace", input.personalWorkspace, "personal/workspace");
+  assertNoPersonalWorkspaceConflicts(
+    (personalWorkspace ?? []).map((file) => ({ ...file, path: file.path.slice("personal/workspace/".length) })),
+  );
+  return {
+    contract: 1,
+    tools: normalize("tools", input.tools, "tools"),
+    skills: normalize("skills", input.skills, "skills"),
+    ...(personalSkills ? { personalSkills } : {}),
+    ...(personalWorkspace ? { personalWorkspace } : {}),
+  };
 }
 
 function toolDescriptors(files: DeploymentLayerFile[]): ToolDescriptor[] {
@@ -145,52 +174,6 @@ function toolDescriptors(files: DeploymentLayerFile[]): ToolDescriptor[] {
     ids.add(tool.id);
   }
   return tools;
-}
-
-function skillManifests(files: DeploymentLayerFile[]): SkillManifest[] {
-  const byDir = new Map<string, DeploymentLayerFile[]>();
-  for (const file of files) {
-    const match = file.path.match(/^skills\/([^/]+)\/(.+)$/);
-    if (!match) throw new Error(`deployment layer skill path must be skills/<id>/<file>: ${file.path}`);
-    const dir = match[1]!;
-    const list = byDir.get(dir) ?? [];
-    list.push(file);
-    byDir.set(dir, list);
-  }
-  const manifests: SkillManifest[] = [];
-  const names = new Set<string>();
-  for (const [dir, entries] of [...byDir].sort(([a], [b]) => {
-    if (a < b) return -1;
-    if (a > b) return 1;
-    return 0;
-  })) {
-    const root = entries.find((file) => file.path === `skills/${dir}/SKILL.md`);
-    if (!root) throw new Error(`deployment layer skill ${dir} has no SKILL.md`);
-    const manifest = parseSeedSkill(root.content);
-    if (names.has(manifest.name)) throw new Error(`duplicate deployment skill name: ${manifest.name}`);
-    names.add(manifest.name);
-    const assets: SkillFile[] = entries
-      .filter((file) => file !== root)
-      .map((file) => ({
-        path: safeSkillFilePath(file.path.slice(`skills/${dir}/`.length)),
-        content: file.content,
-        ...(file.executable === true ? { executable: true } : {}),
-      }));
-    manifest.files = assets;
-    manifests.push(manifest);
-  }
-  const claimed = new Map<string, string>();
-  for (const manifest of manifests) {
-    const paths = skillRecordPaths(manifest.name, manifest.files);
-    const collisions = detectPathCollisions(paths, claimed);
-    if (collisions.length) {
-      throw new Error(
-        `deployment skill "${manifest.name}" materializes over ${collisions[0]!.path}, already claimed by ${collisions[0]!.owner}`,
-      );
-    }
-    for (const path of paths) claimed.set(path, `deployment skill "${manifest.name}"`);
-  }
-  return manifests;
 }
 
 function contentHash(bundle: DeploymentLayerBundle): string {
@@ -225,8 +208,26 @@ function validateBundle(
 } {
   const bundle = normalizedBundle(input);
   const tools = toolDescriptors(bundle.tools);
-  const manifests = skillManifests(bundle.skills);
-  return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools) };
+  const manifests = parseDefaultSkillTrees(
+    bundle.skills.map((file) => ({ ...file, path: file.path.slice("skills/".length) })),
+    "deployment skill",
+  );
+  const personalSkillManifests = parseDefaultSkillTrees(
+    (bundle.personalSkills ?? []).map((file) => ({
+      ...file,
+      path: file.path.slice("personal/skills/".length),
+    })),
+    "personal default skill",
+  );
+  const personalWorkspaceFiles: PersonalDefaultFile[] = (bundle.personalWorkspace ?? []).map((file) => ({
+    ...file,
+    path: safePersonalWorkspacePath(file.path.slice("personal/workspace/".length)),
+  }));
+  return {
+    bundle,
+    manifests,
+    runtime: resolvedDeploymentLayer(dir, tools, personalSkillManifests, personalWorkspaceFiles),
+  };
 }
 
 export function createDeploymentLayerStore(opts: {

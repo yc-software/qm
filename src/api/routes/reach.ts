@@ -163,7 +163,9 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
             }),
         }
       : undefined;
-    const handle = await sandbox.provision([{ scopeId: envScope, mountPath: "", mode: "rw" }]);
+    const handle = await sandbox.provision([{ scopeId: envScope, mountPath: "", mode: "rw" }], {
+      personalDefaults: false,
+    });
     try {
       const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register);
       const bad = [

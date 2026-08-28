@@ -66,6 +66,7 @@ export interface ProvisionOptions {
   egressToken?: string;
   scratch?: { key: string };
   routeScopeId?: string;
+  personalDefaults?: boolean;
   onStatus?: (text: string) => void;
 }
 

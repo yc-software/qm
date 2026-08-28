@@ -896,6 +896,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : "";
 
       await deps.skillsReady;
+      if (scopeId === personalScope(actor.id)) await deps.personalDefaults?.ensure(skillScopes[0]);
       const configuredProviders = deps.resolveConnectorClient
         ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
             swallowAs("orchestrator: configured connector providers", []),

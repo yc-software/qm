@@ -65,6 +65,7 @@ import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { createDirectoryStore, type DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
+import { createPersonalDefaultsService, withPersonalWorkspaceDefaults } from "./personal-defaults.ts";
 import {
   createMemoryEnvironmentStore,
   createPostgresEnvironmentStore,
@@ -564,6 +565,11 @@ export function buildApp(
   const resolution = createResolutionService(config.orgId, configStore, acl);
 
   const workspace = createLocalWorkspaceStore(config.dataDir);
+  const personalDefaults = createPersonalDefaultsService({
+    skills,
+    manifests: () => deploymentLayer.personalSkillManifests,
+    advisoryLock,
+  });
   const blobTransfer: BlobTransferStore =
     config.transferStore === "s3" && config.s3Bucket
       ? createS3BlobTransferStore({
@@ -598,44 +604,54 @@ export function buildApp(
       message: e.message,
       scopeLabel: (e.scopeLabel ?? "unknown") as ScopeId,
     });
+  const withPersonalDefaults = (backend: Sandbox): Sandbox =>
+    withPersonalWorkspaceDefaults(backend, () => deploymentLayer.personalWorkspaceFiles);
   const buildLocal = (): Sandbox =>
-    createLocalSandbox(workspace, {
-      ...config.localSandbox,
-      onError: sandboxOnError,
-    });
+    withPersonalDefaults(
+      createLocalSandbox(workspace, {
+        ...config.localSandbox,
+        onError: sandboxOnError,
+      }),
+    );
   const buildSprites = (): Sandbox =>
-    createSpritesSandbox(workspace, {
-      ...config.spritesSandbox,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
-    });
+    withPersonalDefaults(
+      createSpritesSandbox(workspace, {
+        ...config.spritesSandbox,
+        blobTransfer,
+        extraTools: deploymentLayer.advertisedTools,
+        credentialPaths: deploymentLayer.credentialPaths,
+        ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+        ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+        ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+        onError: sandboxOnError,
+      }),
+    );
   const buildSmolmachines = (): Sandbox =>
-    createSmolmachinesSandbox(workspace, {
-      ...config.smolmachinesSandbox,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
-    });
+    withPersonalDefaults(
+      createSmolmachinesSandbox(workspace, {
+        ...config.smolmachinesSandbox,
+        blobTransfer,
+        extraTools: deploymentLayer.advertisedTools,
+        credentialPaths: deploymentLayer.credentialPaths,
+        ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+        ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+        ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+        onError: sandboxOnError,
+      }),
+    );
   const buildAws = (): Sandbox => {
     if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
-    return createAwsSandbox(workspace, {
-      ...config.awsSandbox,
-      s3Bucket: config.awsSandbox.s3Bucket,
-      advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      store: artifactMap<StoredMicrovm>("aws_sandbox_bodies"),
-      onError: sandboxOnError,
-    });
+    return withPersonalDefaults(
+      createAwsSandbox(workspace, {
+        ...config.awsSandbox,
+        s3Bucket: config.awsSandbox.s3Bucket,
+        advisoryLock,
+        extraTools: deploymentLayer.advertisedTools,
+        credentialPaths: deploymentLayer.credentialPaths,
+        store: artifactMap<StoredMicrovm>("aws_sandbox_bodies"),
+        onError: sandboxOnError,
+      }),
+    );
   };
   const buildBackend: Record<Config["sandboxBackend"], () => Sandbox> = {
     local: buildLocal,
@@ -1082,6 +1098,7 @@ export function buildApp(
     layerBrokerFor,
     brokeredTools,
     deploymentLayer,
+    personalDefaults,
   };
   const orchestrator = createOrchestrator(orchestratorDeps);
 
@@ -1209,6 +1226,7 @@ export function buildApp(
     environments,
     deploy: deployService,
     deploymentLayer,
+    personalDefaults,
     ...(processes ? { processes } : {}),
     monitors,
     sandbox,

@@ -15,9 +15,12 @@ sandbox/
   tools/<id>/<binary>
   skills/<id>/SKILL.md
   skills/<id>/<text assets>
+  personal/skills/<id>/SKILL.md
+  personal/skills/<id>/<text assets>
+  personal/workspace/<path>
 ```
 
-The Dockerfile is optional when every declared binary is present in its tool directory. Skill assets delivered through the deployment-layer API are text in v1; binaries belong in the sandbox image.
+The Dockerfile is optional when every declared binary is present in its tool directory. Skill assets and personal workspace defaults delivered through the deployment-layer API are text in v1; binaries belong in the sandbox image. `skills/` publishes centrally managed organization skills. `personal/skills/` creates an editable copy in each personal scope when that user first lists skills or starts a turn. `personal/workspace/` creates missing files relative to that user's workspace when its persistent computer is next provisioned. Existing files, edited skills, and archived skills are never replaced or restored. Adding a new default reaches existing personal environments lazily without creating computers ahead of use. Scratch, channel, group, team, organization, and attached shared environments do not receive personal defaults.
 
 ## Configuration
 
@@ -96,7 +99,7 @@ Deployment-specific safety belongs here too. For example, an ambiently authentic
 
 ## Delivery and pins
 
-When `sandbox/` exists, every `up` sends its descriptors and complete text skill trees to source-authenticated `PUT /v1/deployment-layer`. Without `sandbox/`, `up` skips layer sync and leaves the deployed layer unchanged. Core validates submitted bundles again, stores them in Postgres table `deployment_layer`, versions them by a canonical SHA-256 content hash, records an audit event, hydrates them before serving, and returns the restorable bundle with its metadata and resolved runtime state from source-authenticated `GET /v1/deployment-layer`. Removed layer-owned skills are archived. Filesystem `DEPLOYMENT_LAYER` remains a bootstrap input for local and recovery use.
+When `sandbox/` exists, every `up` sends its descriptors, complete organization and personal skill trees, and personal workspace defaults to source-authenticated `PUT /v1/deployment-layer`. Without `sandbox/`, `up` skips layer sync and leaves the deployed layer unchanged. Core validates submitted bundles again, stores them in Postgres table `deployment_layer`, versions them by a canonical SHA-256 content hash, records an audit event, hydrates them before serving, and returns the restorable bundle with its metadata and resolved runtime state from source-authenticated `GET /v1/deployment-layer`. Removed layer-owned organization skills are archived. Personal defaults are initial values rather than managed projections, so changing or removing one does not rewrite user-owned copies. Filesystem `DEPLOYMENT_LAYER` remains a bootstrap input for local and recovery use.
 
 The sandbox handoff is a substrate image pin plus a layer content hash. Docker and Fly use `sandbox publish` to push an OCI image, resolve its immutable digest, and record it in the config. AWS with `sandbox.backend: "aws"` (or no sandbox block) uses `infra build-image` to package the guest agent as a Lambda MicroVM image and records its immutable image version and execution role; with `sandbox.backend: "sprites"`, `sandbox publish` pushes the layer image and records its digest pin in the durable deployment manifest, which `up`, `check --live`, and `rollback` resolve. Service task definitions and sandbox root filesystems use immutable pins, not mutable tags.
 

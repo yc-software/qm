@@ -15,6 +15,8 @@ export interface DeploymentLayerBundle {
   contract: 1;
   tools: DeploymentLayerFile[];
   skills: DeploymentLayerFile[];
+  personalSkills?: DeploymentLayerFile[];
+  personalWorkspace?: DeploymentLayerFile[];
 }
 
 export interface DeploymentLayerState {
@@ -88,7 +90,13 @@ export function deploymentLayerBundle(sandboxDir: string): DeploymentLayerBundle
         })
         .sort(pathOrder)
     : [];
-  return { contract: 1, tools, skills: walkText(join(sandboxDir, "skills"), "skills") };
+  return {
+    contract: 1,
+    tools,
+    skills: walkText(join(sandboxDir, "skills"), "skills"),
+    personalSkills: walkText(join(sandboxDir, "personal", "skills"), "personal/skills"),
+    personalWorkspace: walkText(join(sandboxDir, "personal", "workspace"), "personal/workspace"),
+  };
 }
 
 function normalizedLayerBody(value: unknown): string {
@@ -98,7 +106,16 @@ function normalizedLayerBody(value: unknown): string {
   if (bundle.contract !== 1 || !Array.isArray(bundle.tools) || !Array.isArray(bundle.skills)) {
     throw new CliError("deployment layer bundle requires contract: 1, tools[], and skills[]");
   }
-  const files = (kind: "tools" | "skills", entries: unknown[]): DeploymentLayerFile[] =>
+  if (bundle.personalSkills !== undefined && !Array.isArray(bundle.personalSkills)) {
+    throw new CliError("deployment layer personalSkills must be an array");
+  }
+  if (bundle.personalWorkspace !== undefined && !Array.isArray(bundle.personalWorkspace)) {
+    throw new CliError("deployment layer personalWorkspace must be an array");
+  }
+  const files = (
+    kind: "tools" | "skills" | "personalSkills" | "personalWorkspace",
+    entries: unknown[],
+  ): DeploymentLayerFile[] =>
     entries
       .map((entry) => {
         if (!entry || typeof entry !== "object" || Array.isArray(entry))
@@ -110,13 +127,19 @@ function normalizedLayerBody(value: unknown): string {
         return { path: file.path, content: file.content, ...(file.executable === true ? { executable: true } : {}) };
       })
       .sort(pathOrder);
-  return JSON.stringify({ contract: 1, tools: files("tools", bundle.tools), skills: files("skills", bundle.skills) });
+  return JSON.stringify({
+    contract: 1,
+    tools: files("tools", bundle.tools),
+    skills: files("skills", bundle.skills),
+    ...(bundle.personalSkills ? { personalSkills: files("personalSkills", bundle.personalSkills) } : {}),
+    ...(bundle.personalWorkspace ? { personalWorkspace: files("personalWorkspace", bundle.personalWorkspace) } : {}),
+  });
 }
 
 export function deploymentLayerBody(sandboxDir: string): string {
   const bundle = existsSync(sandboxDir)
     ? deploymentLayerBundle(sandboxDir)
-    : { contract: 1 as const, tools: [], skills: [] };
+    : { contract: 1 as const, tools: [], skills: [], personalSkills: [], personalWorkspace: [] };
   const body = normalizedLayerBody(bundle);
   if (Buffer.byteLength(body) > 1_000_000)
     throw new CliError("deployment layer exceeds the core API's 1 MB request limit");

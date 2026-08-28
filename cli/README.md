@@ -48,6 +48,8 @@ sandbox/
   tools/<id>/tool.json
   tools/<id>/<binary>
   skills/<id>/SKILL.md
+  personal/skills/<id>/SKILL.md
+  personal/workspace/<path>
   Dockerfile
 plugins/<name>/Dockerfile
 infra/

@@ -55,6 +55,7 @@ import type { SkillStore } from "../../skills/skill-store.ts";
 import type { OAuthClientResolver } from "../../connectors/oauth.ts";
 import type { SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { BrokeredLayerTool, DeploymentLayerRuntime } from "../../deployment/load-layer.ts";
+import type { PersonalDefaultsService } from "../../personal-defaults.ts";
 import type { FileArtifactStore } from "../../files/file-artifact-store.ts";
 import type { MiniappStore } from "../../miniapps/miniapp.ts";
 import type { DeployService } from "../../deploy/deploy-service.ts";
@@ -171,6 +172,7 @@ export interface OrchestratorDeps {
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
   brokeredTools?: readonly BrokeredLayerTool[];
   deploymentLayer?: DeploymentLayerRuntime;
+  personalDefaults?: PersonalDefaultsService;
   surfaceContext?: SurfaceContextPuller;
   surfaceSearch?: SurfaceSearchStore;
   surfaceCache?: SurfaceCache;

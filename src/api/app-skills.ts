@@ -221,6 +221,7 @@ export function createSkillMethods(
       return deps.skills.archive(id);
     },
     async listVisibleSkills(principalId) {
+      await deps.personalDefaults?.ensure(scopeId("personal", principalId));
       const actor = deps.identity.classify(principalId);
       const sharedHomes = [
         ...new Set(
@@ -379,37 +380,39 @@ export function createSkillMethods(
       });
     },
     async createOwnedSkill(input) {
-      const name = input.name.trim();
-      const description = input.description.trim();
-      const body = input.body.trim();
-      if (!name || !description || !body) throw new Error("skill requires a non-empty name, description, and body");
-      const homeScope = input.homeScope ?? scopeId("personal", input.principalId);
-      const homeKind = parseScopeId(homeScope).kind;
-      if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group") {
-        throw new Error(
-          "a skill cannot be created directly in an org or team scope — promote a published skill instead",
-        );
-      }
-      const existing = (await deps.skills.list()).find((s) => s.scopeId === homeScope && s.manifest.name === name);
-      if (existing && existing.status !== "archived") return null;
-      if (existing) await deps.skills.delete(existing.id);
-      const manifest: SkillManifest = {
-        name,
-        description,
-        requiredCapabilities: input.requiredCapabilities ?? [],
-        body,
-      };
-      const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
-      await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
-      const published = await deps.skills.publish(skill.id);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: input.principalId,
-        action: "skill_create",
-        resource: skill.id,
-        scopeLabel: homeScope,
+      return withSkillMutationLock(deps, async () => {
+        const name = input.name.trim();
+        const description = input.description.trim();
+        const body = input.body.trim();
+        if (!name || !description || !body) throw new Error("skill requires a non-empty name, description, and body");
+        const homeScope = input.homeScope ?? scopeId("personal", input.principalId);
+        const homeKind = parseScopeId(homeScope).kind;
+        if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group") {
+          throw new Error(
+            "a skill cannot be created directly in an org or team scope — promote a published skill instead",
+          );
+        }
+        const existing = (await deps.skills.list()).find((s) => s.scopeId === homeScope && s.manifest.name === name);
+        if (existing && existing.status !== "archived") return null;
+        if (existing) await deps.skills.delete(existing.id);
+        const manifest: SkillManifest = {
+          name,
+          description,
+          requiredCapabilities: input.requiredCapabilities ?? [],
+          body,
+        };
+        const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
+        await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
+        const published = await deps.skills.publish(skill.id);
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: input.principalId,
+          action: "skill_create",
+          resource: skill.id,
+          scopeLabel: homeScope,
+        });
+        return published;
       });
-      return published;
     },
     async deleteOwnedSkill({ principalId, id, liveActor }) {
       const skill = await deps.skills.get(id);
