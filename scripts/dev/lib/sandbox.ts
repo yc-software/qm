@@ -6,8 +6,46 @@ import { run } from "./proc.ts";
 import { ensureDockerDaemon } from "./postgres.ts";
 import { bestEffortValue, sleep } from "./util.ts";
 
+type RemoteBackend = "sprites" | "smolmachines" | "boxd";
+
+interface RemoteBackendEnv {
+  token: string;
+  mint: string;
+  prefix: string;
+  egressProxyUrl: string;
+  passthrough: string[];
+  detail: string;
+}
+
+const REMOTE_BACKENDS: Record<RemoteBackend, RemoteBackendEnv> = {
+  sprites: {
+    token: "SPRITES_TOKEN",
+    mint: "mint one with `sprite login`",
+    prefix: "SPRITES_NAME_PREFIX",
+    egressProxyUrl: "SPRITES_EGRESS_PROXY_URL",
+    passthrough: [],
+    detail: "Fly Sprites (api.sprites.dev)",
+  },
+  smolmachines: {
+    token: "SMOLMACHINES_TOKEN",
+    mint: "create an API key in the smolmachines console",
+    prefix: "SMOLMACHINES_NAME_PREFIX",
+    egressProxyUrl: "SMOLMACHINES_EGRESS_PROXY_URL",
+    passthrough: ["SMOLMACHINES_IMAGE"],
+    detail: "smolmachines (api.smolmachines.com)",
+  },
+  boxd: {
+    token: "BOXD_API_KEY",
+    mint: "mint one with `boxd auth keys create`",
+    prefix: "BOXD_NAME_PREFIX",
+    egressProxyUrl: "BOXD_EGRESS_PROXY_URL",
+    passthrough: ["BOXD_BASE_URL", "BOXD_ORG"],
+    detail: "boxd (boxd.sh)",
+  },
+};
+
 export interface SandboxResolution {
-  backend: "local" | "sprites" | "smolmachines";
+  backend: "local" | RemoteBackend;
   env: Record<string, string>;
   detail: string;
   publicApiUrl: string | null;
@@ -24,7 +62,7 @@ async function localImagePresent(image: string): Promise<boolean> {
 
 export async function resolveSandbox(opts: {
   worktree: string;
-  requested: "local" | "sprites" | "smolmachines" | "auto";
+  requested: "local" | RemoteBackend | "auto";
   corePort: number;
   lock: string;
   baseEnv: Record<string, string>;
@@ -63,45 +101,11 @@ export async function resolveSandbox(opts: {
     };
   }
 
-  if (backend === "smolmachines") {
-    const smolToken = opts.baseEnv.SMOLMACHINES_TOKEN;
-    if (!smolToken)
-      throw new Error(
-        "--sandbox smolmachines requires SMOLMACHINES_TOKEN in the environment (create an API key in the smolmachines console)",
-      );
-    let smolApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
-    if (!smolApiUrl) {
-      smolApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
-      if (!smolApiUrl)
-        warnings.push(
-          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
-        );
-    }
-    const smolEnv: Record<string, string> = {
-      SANDBOX_BACKEND: "smolmachines",
-      SMOLMACHINES_TOKEN: smolToken,
-      SMOLMACHINES_NAME_PREFIX: opts.baseEnv.SMOLMACHINES_NAME_PREFIX || "qmdev",
-    };
-    if (opts.baseEnv.SMOLMACHINES_IMAGE) smolEnv.SMOLMACHINES_IMAGE = opts.baseEnv.SMOLMACHINES_IMAGE;
-    if (opts.baseEnv.SMOLMACHINES_EGRESS_PROXY_URL)
-      smolEnv.SMOLMACHINES_EGRESS_PROXY_URL = opts.baseEnv.SMOLMACHINES_EGRESS_PROXY_URL;
-    else
-      warnings.push(
-        "SMOLMACHINES_EGRESS_PROXY_URL unset -- smolmachines sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
-      );
-    if (smolApiUrl) smolEnv.PUBLIC_API_URL = smolApiUrl;
-    return {
-      backend: "smolmachines",
-      env: smolEnv,
-      detail: "smolmachines (api.smolmachines.com)",
-      publicApiUrl: smolApiUrl,
-      warnings,
-    };
+  const remote = REMOTE_BACKENDS[backend];
+  const token = opts.baseEnv[remote.token];
+  if (!token) {
+    throw new Error(`--sandbox ${backend} requires ${remote.token} in the environment (${remote.mint})`);
   }
-
-  const token = opts.baseEnv.SPRITES_TOKEN;
-  if (!token)
-    throw new Error("--sandbox sprites requires SPRITES_TOKEN in the environment (mint one with `sprite login`)");
   let publicApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
   if (!publicApiUrl) {
     publicApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
@@ -111,19 +115,22 @@ export async function resolveSandbox(opts: {
       );
   }
   const env: Record<string, string> = {
-    SANDBOX_BACKEND: "sprites",
-    SPRITES_TOKEN: token,
-    SPRITES_NAME_PREFIX: opts.baseEnv.SPRITES_NAME_PREFIX || "qmdev",
+    SANDBOX_BACKEND: backend,
+    [remote.token]: token,
+    [remote.prefix]: opts.baseEnv[remote.prefix] || "qmdev",
   };
-  // Force-through egress is opt-in in dev: set it only if the caller supplied a proxy URL.
-  // Without it the sandbox has open egress — warn so a "proxy ON" QA run isn't silently toothless.
-  if (opts.baseEnv.SPRITES_EGRESS_PROXY_URL) env.SPRITES_EGRESS_PROXY_URL = opts.baseEnv.SPRITES_EGRESS_PROXY_URL;
+  for (const name of remote.passthrough) {
+    const value = opts.baseEnv[name];
+    if (value) env[name] = value;
+  }
+  const egressProxyUrl = opts.baseEnv[remote.egressProxyUrl];
+  if (egressProxyUrl) env[remote.egressProxyUrl] = egressProxyUrl;
   else
     warnings.push(
-      "SPRITES_EGRESS_PROXY_URL unset -- sprites sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
+      `${remote.egressProxyUrl} unset -- ${backend} sandbox runs with NO egress enforcement; set it to QA the forced-proxy path`,
     );
   if (publicApiUrl) env.PUBLIC_API_URL = publicApiUrl;
-  return { backend: "sprites", env, detail: "Fly Sprites (api.sprites.dev)", publicApiUrl, warnings };
+  return { backend, env, detail: remote.detail, publicApiUrl, warnings };
 }
 
 async function startQuickTunnel(corePort: number, lock: string, log: (msg: string) => void): Promise<string | null> {

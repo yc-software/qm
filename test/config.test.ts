@@ -356,6 +356,13 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the secondary must be
     "sprites",
   );
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "sprites" }), /SPRITES_TOKEN/);
+  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "boxd" }), /BOXD_API_KEY/);
+  assert.equal(loadConfig({ SANDBOX_BACKEND: "boxd", BOXD_API_KEY: "bxd_x" }).sandboxBackend, "boxd");
+  assert.deepEqual(
+    loadConfig({ SANDBOX_BACKEND: "boxd", BOXD_API_KEY: "bxd_x", BOXD_ORG: "acme", BOXD_VCPU: "2", BOXD_DISK_GB: "50" })
+      .boxdSandbox,
+    { apiKey: "bxd_x", org: "acme", vcpu: 2, diskGb: 50 },
+  );
   assert.throws(
     () => loadConfig({ SANDBOX_SECONDARY_BACKEND: "fly" }),
     /SANDBOX_SECONDARY_BACKEND="fly" is not recognized/,

@@ -35,8 +35,8 @@ export interface Config {
   databaseCaCertFile?: string;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
-  sandboxBackend: "aws" | "local" | "sprites" | "smolmachines";
-  sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines";
+  sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "boxd";
+  sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "boxd";
   deployProvider: "docker" | "aws" | "fly";
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
@@ -148,6 +148,7 @@ export interface Config {
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
+  boxdSandbox: BoxdSandboxEnv;
   awsDeploy: AwsDeployEnv;
   flyDeploy: FlyDeployEnv;
 }
@@ -320,6 +321,36 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
       ? { diskGb: numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) }
       : {}),
     ...(env.SMOLMACHINES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SMOLMACHINES_EGRESS_PROXY_URL } : {}),
+    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
+      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
+      : {}),
+  };
+}
+
+interface BoxdSandboxEnv {
+  apiKey?: string;
+  baseUrl?: string;
+  org?: string;
+  namePrefix?: string;
+  vcpu?: number;
+  diskGb?: number;
+  egressProxyUrl?: string;
+  defaultTimeoutSec?: number;
+}
+
+function boxdSandboxEnv(env: NodeJS.ProcessEnv): BoxdSandboxEnv {
+  return {
+    ...(env.BOXD_API_KEY ? { apiKey: env.BOXD_API_KEY } : {}),
+    ...(env.BOXD_BASE_URL ? { baseUrl: env.BOXD_BASE_URL } : {}),
+    ...(env.BOXD_ORG ? { org: env.BOXD_ORG } : {}),
+    ...(env.BOXD_NAME_PREFIX ? { namePrefix: env.BOXD_NAME_PREFIX } : {}),
+    ...(numEnvStrict("BOXD_VCPU", env.BOXD_VCPU) !== undefined
+      ? { vcpu: numEnvStrict("BOXD_VCPU", env.BOXD_VCPU) }
+      : {}),
+    ...(numEnvStrict("BOXD_DISK_GB", env.BOXD_DISK_GB) !== undefined
+      ? { diskGb: numEnvStrict("BOXD_DISK_GB", env.BOXD_DISK_GB) }
+      : {}),
+    ...(env.BOXD_EGRESS_PROXY_URL ? { egressProxyUrl: env.BOXD_EGRESS_PROXY_URL } : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
@@ -532,9 +563,17 @@ function harnessEnvStrict(value: string | undefined): Config["harness"] {
 function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): Config["sandboxBackend"] {
   if (value === undefined || value.trim() === "") return "local";
   const backend = value.trim();
-  if (backend === "aws" || backend === "local" || backend === "sprites" || backend === "smolmachines") return backend;
+  if (
+    backend === "aws" ||
+    backend === "local" ||
+    backend === "sprites" ||
+    backend === "smolmachines" ||
+    backend === "boxd"
+  ) {
+    return backend;
+  }
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, or smolmachines, or unset it.`,
+    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, or boxd, or unset it.`,
   );
 }
 
@@ -637,7 +676,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const dataDir = resolve(env.DATA_DIR ?? "./data");
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
-    throw new Error("SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, aws, or local.");
+    throw new Error(
+      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, boxd, aws, or local.",
+    );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
   const secondaryRaw = env.SANDBOX_SECONDARY_BACKEND?.trim();
@@ -931,6 +972,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
+    boxdSandbox: boxdSandboxEnv(env),
     awsDeploy: awsDeployEnv(env),
     flyDeploy: flyDeployEnv(env),
   };

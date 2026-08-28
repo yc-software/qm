@@ -113,6 +113,7 @@ import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
+import { createBoxdSandbox } from "./sandbox/boxd-sandbox.ts";
 import {
   createSandboxRouter,
   ROUTE_CACHE_TTL_MS,
@@ -600,28 +601,20 @@ export function buildApp(
       ...config.localSandbox,
       onError: sandboxOnError,
     });
+  const remoteSandboxOptions = {
+    blobTransfer,
+    extraTools: deploymentLayer.advertisedTools,
+    credentialPaths: deploymentLayer.credentialPaths,
+    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+    onError: sandboxOnError,
+  };
   const buildSprites = (): Sandbox =>
-    createSpritesSandbox(workspace, {
-      ...config.spritesSandbox,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
-    });
+    createSpritesSandbox(workspace, { ...config.spritesSandbox, ...remoteSandboxOptions });
   const buildSmolmachines = (): Sandbox =>
-    createSmolmachinesSandbox(workspace, {
-      ...config.smolmachinesSandbox,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
-    });
+    createSmolmachinesSandbox(workspace, { ...config.smolmachinesSandbox, ...remoteSandboxOptions });
+  const buildBoxd = (): Sandbox => createBoxdSandbox(workspace, { ...config.boxdSandbox, ...remoteSandboxOptions });
   const buildAws = (): Sandbox => {
     if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
     return createAwsSandbox(workspace, {
@@ -638,6 +631,7 @@ export function buildApp(
     local: buildLocal,
     sprites: buildSprites,
     smolmachines: buildSmolmachines,
+    boxd: buildBoxd,
     aws: buildAws,
   };
   const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {

@@ -140,6 +140,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: "create an API key in the smolmachines console (https://smolmachines.com/console)",
   },
   {
+    name: "BOXD_API_KEY",
+    service: "core",
+    required: { when: { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "boxd" } },
+    description: "boxd API key for the agent-computer substrate; fenced to the org that owns the agent computers.",
+    generate: "boxd auth keys create qm --org <org>",
+  },
+  {
     name: "DATABASE_URL",
     service: "core",
     required: { when: { kind: "target", target: "aws" } },
