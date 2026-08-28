@@ -78,6 +78,18 @@ async function createSurfaceContextRequest(ctx: ApiCtx): Promise<void> {
   const before = typeof b.before === "string" && b.before.trim() ? b.before.trim() : undefined;
   const match = typeof b.match === "string" && b.match.trim() ? b.match.trim().slice(0, 200) : undefined;
   const threadTs = typeof b.threadTs === "string" && b.threadTs.trim() ? b.threadTs.trim() : undefined;
+  if (threadTs && !/^\d+\.\d+$/.test(threadTs)) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "threadTs must be a message ts like 1712345678.123456 (the thread parent's ts)",
+    });
+  }
+  if (threadTs && !(typeof b.channel === "string" && b.channel.trim())) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "threadTs goes with a named channel — a plain read already follows the current conversation's thread",
+    });
+  }
 
   const resolved = await resolveSurfaceTarget(ctx, b);
   if (!resolved) return;

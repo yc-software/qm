@@ -18,6 +18,19 @@ function compareSlackTimestamps(a: { ts: string }, b: { ts: string }): number {
   return 0;
 }
 
+function keepRecentWithParents(
+  all: readonly RecentMessage[],
+  matched: readonly RecentMessage[],
+  window: number,
+): RecentMessage[] {
+  const byTs = new Map(all.map((m) => [m.ts, m] as const));
+  const chosen = new Map<string, RecentMessage>(matched.slice(-window).map((m) => [m.ts, m] as const));
+  for (const m of Array.from(chosen.values())) {
+    if (m.parentTs && !chosen.has(m.parentTs) && byTs.has(m.parentTs)) chosen.set(m.parentTs, byTs.get(m.parentTs)!);
+  }
+  return [...chosen.values()].sort(compareSlackTimestamps);
+}
+
 export function buildContextWindow(
   scanned: readonly RecentMessage[],
   opts: { count: number; match?: string; scanHasMore?: boolean; nameById?: ReadonlyMap<string, string> },
@@ -26,7 +39,7 @@ export function buildContextWindow(
   const needle = opts.match?.trim().toLowerCase();
   const matched = needle ? asc.filter((m) => (m.text ?? "").toLowerCase().includes(needle)) : asc;
   const count = Math.max(1, Math.floor(opts.count));
-  const kept = matched.slice(-count);
+  const kept = keepRecentWithParents(asc, matched, count);
   const messages = kept.map((m) => {
     const time = formatSlackTs(m.ts);
     return {
@@ -38,7 +51,7 @@ export function buildContextWindow(
       ...(m.files?.length ? { files: m.files } : {}),
     };
   });
-  const droppedMatches = matched.length > kept.length;
+  const droppedMatches = matched.length > count;
   let nextBefore = opts.scanHasMore ? asc[0]?.ts : undefined;
   if (droppedMatches) nextBefore = kept[0]?.ts;
   return {
@@ -84,12 +97,7 @@ export function recentWindow(
   if (!usable.length) return [];
   const window = Math.max(1, Math.floor(limit));
   const sorted = [...usable].sort(compareSlackTimestamps);
-  const byTs = new Map(sorted.map((m) => [m.ts, m] as const));
-  const chosen = new Map<string, RecentMessage>(sorted.slice(-window).map((m) => [m.ts, m] as const));
-  for (const m of Array.from(chosen.values())) {
-    if (m.parentTs && !chosen.has(m.parentTs) && byTs.has(m.parentTs)) chosen.set(m.parentTs, byTs.get(m.parentTs)!);
-  }
-  return [...chosen.values()].sort(compareSlackTimestamps);
+  return keepRecentWithParents(sorted, sorted, window);
 }
 
 function arrangeForDisplay(messages: readonly RecentMessage[]): Array<{ message: RecentMessage; isReply: boolean }> {

@@ -19,6 +19,7 @@ import { messageWithForwardedContent } from "./forwards.ts";
 export const RECENT_HISTORY_LIMIT = 200;
 export const RECENT_THREAD_LIMIT = 200;
 const MAX_EXPANDED_THREADS = 5;
+export const CONTEXT_EXPANDED_THREADS = 10;
 const EXPANDED_THREAD_REPLY_LIMIT = RECENT_THREAD_LIMIT;
 export const MAX_NAME_LOOKUPS = 10;
 const RECENT_KEEP_SUBTYPES = new Set(["file_share", "bot_message", "thread_broadcast"]);
@@ -30,23 +31,17 @@ export async function expandThreadReplies(
   client: any,
   channel: string,
   history: any[],
-  opts: { maxThreads: number; page?: Record<string, unknown> },
+  maxThreads: number,
 ): Promise<any[]> {
-  const threadParents = history.filter((m: any) => m.ts && Number(m.reply_count) > 0).slice(-opts.maxThreads);
+  const threadParents = history.filter((m: any) => m.ts && Number(m.reply_count) > 0).slice(-maxThreads);
   const expanded = await Promise.all(
     threadParents.map(async (p: any) => {
       try {
         return (
-          (
-            await client.conversations.replies({
-              channel,
-              ts: p.ts,
-              limit: EXPANDED_THREAD_REPLY_LIMIT,
-              ...(opts.page ?? {}),
-            })
-          ).messages ?? []
+          (await client.conversations.replies({ channel, ts: p.ts, limit: EXPANDED_THREAD_REPLY_LIMIT })).messages ?? []
         );
-      } catch {
+      } catch (e) {
+        swallow("slack: thread expansion", e);
         return [];
       }
     }),
@@ -150,7 +145,7 @@ export function createConversationSerializer(deps: {
       const history = ((await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT })).messages ?? [])
         .slice()
         .reverse();
-      return expandThreadReplies(client, channel, history, { maxThreads: MAX_EXPANDED_THREADS });
+      return expandThreadReplies(client, channel, history, MAX_EXPANDED_THREADS);
     } catch {
       return [];
     }

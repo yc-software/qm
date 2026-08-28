@@ -146,6 +146,27 @@ describe("surface-context pulls", async () => {
     assert.equal((await asking).status, 200);
   });
 
+  it("rejects a malformed threadTs and a threadTs without a channel, before parking anything", async () => {
+    const malformed = await post(
+      "/v1/surface-context",
+      { channel: "#eng", threadTs: "not-a-ts" },
+      { "x-agent-capability": await cap() },
+    );
+    assert.equal(malformed.status, 400);
+    assert.match(((await malformed.json()) as any).message, /threadTs/);
+
+    const channelless = await post(
+      "/v1/surface-context",
+      { threadTs: "1700.5" },
+      { "x-agent-capability": await cap() },
+    );
+    assert.equal(channelless.status, 400);
+    assert.match(((await channelless.json()) as any).message, /named channel/);
+
+    const pending = await (await signedGet(pendingPath())).json();
+    assert.deepEqual((pending as any).requests, [], "nothing was parked");
+  });
+
   it("passes a raw channel id straight to the plugin (a public channel the actor can see), skipping the (possibly stale) directory", async () => {
     const asking = post("/v1/surface-context", { channel: "CPUBLIC01" }, { "x-agent-capability": await cap() });
     const query = await fulfillNext(() => ({ messages: [] }));

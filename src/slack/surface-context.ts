@@ -16,13 +16,12 @@ import type { CoreBridge } from "./core-bridge.ts";
 import type { Directory } from "./directory.ts";
 import {
   type ConversationSerializer,
+  CONTEXT_EXPANDED_THREADS,
   RECENT_HISTORY_LIMIT,
   RECENT_THREAD_LIMIT,
   expandThreadReplies,
   slackFileName,
 } from "./conversation-view.ts";
-
-const CONTEXT_EXPANDED_THREADS = 10;
 
 export function createSurfaceContextFulfiller(deps: {
   core: SlackCoreClient;
@@ -83,7 +82,7 @@ export function createSurfaceContextFulfiller(deps: {
     }
     const res = await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT, ...page });
     const history = ((res.messages ?? []) as any[]).slice().reverse();
-    const raw = await expandThreadReplies(client, channel, history, { maxThreads: CONTEXT_EXPANDED_THREADS, page });
+    const raw = before ? history : await expandThreadReplies(client, channel, history, CONTEXT_EXPANDED_THREADS);
     return { raw, hasMore: Boolean(res.has_more) };
   }
 
@@ -210,10 +209,15 @@ export function createSurfaceContextFulfiller(deps: {
       }
       let channel: string;
       let threadTs: string | undefined;
+      let requestedThread: string | undefined;
       if (typeof q.conversationTarget === "string" && q.conversationTarget) {
         ({ channel, threadTs } = parseDeliveryTarget(q.conversationTarget));
       } else if (typeof q.channelId === "string" && q.channelId) {
         channel = q.channelId;
+        if (typeof q.threadTs === "string" && q.threadTs) {
+          requestedThread = q.threadTs;
+          threadTs = q.threadTs;
+        }
         const info = await directory.getChannelInfo(client, channel);
         if (!info) return post({ error: "I can't see that channel" });
         if (isExternallyShared(info)) return post({ error: "that channel is externally shared, so I won't read it" });
@@ -222,22 +226,35 @@ export function createSurfaceContextFulfiller(deps: {
       } else {
         return post({ error: "malformed context request" });
       }
-      if (typeof q.threadTs === "string" && q.threadTs) threadTs = q.threadTs;
       if (q.file && typeof q.file.ts === "string" && q.file.ts) {
         return await post(await fetchSurfaceFile(client, channel, threadTs, q.file));
       }
       const count = Math.max(1, Math.min(RECENT_THREAD_LIMIT, Number(q.count) || 100));
       const before = typeof q.before === "string" && q.before ? q.before : undefined;
-      const [chanPage, threadPage] = await Promise.all([
-        fetchContextHistory(client, channel, undefined, before),
-        threadTs
-          ? fetchContextHistory(client, channel, threadTs, before)
-          : Promise.resolve({ raw: [] as any[], hasMore: false }),
-      ]);
-      const byTs = new Map<string, any>();
-      for (const m of [...chanPage.raw, ...threadPage.raw]) if (m?.ts) byTs.set(m.ts, m);
-      const raw = [...byTs.values()];
-      const hasMore = chanPage.hasMore || threadPage.hasMore;
+      let raw: any[];
+      let hasMore: boolean;
+      if (requestedThread) {
+        try {
+          ({ raw, hasMore } = await fetchContextHistory(client, channel, requestedThread, before));
+        } catch (err) {
+          if ((err as any)?.data?.error === "thread_not_found")
+            return post({
+              error: `I can't find a thread whose parent message is ts ${requestedThread} in that channel — threadTs must be the parent's ts`,
+            });
+          throw err;
+        }
+      } else {
+        const [chanPage, threadPage] = await Promise.all([
+          fetchContextHistory(client, channel, undefined, before),
+          threadTs
+            ? fetchContextHistory(client, channel, threadTs, before)
+            : Promise.resolve({ raw: [] as any[], hasMore: false }),
+        ]);
+        const byTs = new Map<string, any>();
+        for (const m of [...chanPage.raw, ...threadPage.raw]) if (m?.ts) byTs.set(m.ts, m);
+        raw = [...byTs.values()];
+        hasMore = chanPage.hasMore || threadPage.hasMore;
+      }
       const nameById = new Map<string, string>();
       const shaped = await serializer.shapeRecentMessages(client, raw, "", nameById);
       await post(
