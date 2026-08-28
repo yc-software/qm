@@ -1,7 +1,15 @@
 import { LRUCache } from "lru-cache";
 
-export function mentionsBot(text: string, botUserId: string): boolean {
-  return botUserId ? text.includes(`<@${botUserId}>`) : false;
+export function mentionsBot(text: string, botUserId: string, ownBotId = ""): boolean {
+  // Both id forms mention the bot: the bot USER id (`<@U…>`, the form
+  // Slack's autocomplete inserts) and the BOT id (`<@B…>`, which
+  // hand-typed mentions and some clients encode). A B-form mention is a
+  // legitimate mention of this bot — `bots.info` maps it to the same
+  // single-bot app — but Slack fires no `app_mention` for it, so without
+  // recognizing it here the message is dropped at top level and
+  // misdispatched as ambient in threads (#630).
+  if (botUserId && text.includes(`<@${botUserId}>`)) return true;
+  return Boolean(ownBotId) && text.includes(`<@${ownBotId}>`);
 }
 
 export function threadHasBotStake(
@@ -17,7 +25,7 @@ export function threadHasBotStake(
     return Boolean(
       (botUserId && user === botUserId) ||
       (ownBotId && bot === ownBotId) ||
-      (botUserId && mentionsBot(text, botUserId)),
+      mentionsBot(text, botUserId, ownBotId),
     );
   });
 }
