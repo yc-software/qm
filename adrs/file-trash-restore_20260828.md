@@ -1,2 +1,2 @@
-希望补充删除按钮，后台和个人都需要。
-需要有误删恢复。
+Please add a delete button to both the personal files page and the admin files page.
+There also needs to be a way to recover a file after an accidental deletion.
