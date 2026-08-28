@@ -575,6 +575,18 @@
         gap: 12px;
         align-items: end;
       }
+      .custom-provider-models-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 5px;
+      }
+      .custom-provider-models-heading button {
+        flex: 0 0 auto;
+        padding: 4px 9px;
+        font-size: 12px;
+      }
       @media (max-width: 900px) {
         .setup-grid {
           grid-template-columns: 1fr;
@@ -3979,7 +3991,10 @@
                     placeholder="Write-only; blank on edit keeps the stored key"
                 /></label>
                 <label
-                  >Models (one per line: id | name | context | maxTokens)
+                  ><span class="custom-provider-models-heading"
+                    ><span>Models (one per line: id | name | context | maxTokens)</span
+                    ><button type="button" id="custom-provider-fetch-models">Fetch models</button></span
+                  >
                   <textarea
                     id="custom-provider-models"
                     rows="3"
@@ -7353,6 +7368,36 @@
             return model;
           });
       }
+      function formatCustomModels(models) {
+        return models
+          .map((model) => {
+            const parts = [model.id, model.name || "", model.contextWindow ?? "", model.maxTokens ?? ""];
+            while (parts.at(-1) === "") parts.pop();
+            return parts.join(" | ");
+          })
+          .join("\n");
+      }
+      function mergeCustomModels(current, discovered) {
+        const merged = new Map();
+        current.forEach((model) => {
+          if (model.id && !merged.has(model.id)) merged.set(model.id, model);
+        });
+        discovered.forEach((model) => {
+          const existing = merged.get(model.id);
+          merged.set(model.id, existing ? { ...existing, name: model.name || existing.name } : model);
+        });
+        return { models: [...merged.values()].slice(0, 200), omitted: Math.max(0, merged.size - 200) };
+      }
+      function customProviderFormFingerprint() {
+        return JSON.stringify([
+          $("custom-provider-id").value,
+          $("custom-provider-name").value,
+          $("custom-provider-protocol").value,
+          $("custom-provider-url").value,
+          $("custom-provider-key").value,
+          $("custom-provider-models").value,
+        ]);
+      }
       async function loadCustomProviders() {
         const res = await api("GET", "/api/custom-providers");
         if (!res.ok) return;
@@ -7383,11 +7428,7 @@
             $("custom-provider-protocol").value = provider.protocol;
             $("custom-provider-url").value = provider.baseUrl;
             $("custom-provider-key").value = "";
-            $("custom-provider-models").value = provider.models
-              .map((model) =>
-                [model.id, model.name, model.contextWindow, model.maxTokens].filter((part) => part != null).join(" | "),
-              )
-              .join("\n");
+            $("custom-provider-models").value = formatCustomModels(provider.models);
           };
           const remove = document.createElement("button");
           remove.className = "danger";
@@ -7408,6 +7449,52 @@
           rows.appendChild(tr);
         });
       }
+      $("custom-provider-fetch-models").onclick = async () => {
+        const baseUrl = $("custom-provider-url").value.trim();
+        if (!baseUrl) {
+          setStatus("st-custom-provider", "Enter a base URL before fetching models.", "err");
+          return;
+        }
+        const button = $("custom-provider-fetch-models");
+        const apiKey = $("custom-provider-key").value.trim();
+        const formFingerprint = customProviderFormFingerprint();
+        button.disabled = true;
+        setStatus("st-custom-provider", "Fetching models...", "saving", true);
+        let result;
+        try {
+          result = await api("POST", "/api/custom-providers/models", {
+            providerId: $("custom-provider-id").value.trim(),
+            protocol: $("custom-provider-protocol").value,
+            baseUrl,
+            ...(apiKey ? { apiKey } : {}),
+          });
+        } catch {
+          setStatus("st-custom-provider", "Could not reach the QM admin API.", "err", true);
+          return;
+        } finally {
+          button.disabled = false;
+        }
+        if (!result.ok) {
+          setStatus("st-custom-provider", result.data?.message || "Could not fetch models.", "err", true);
+          return;
+        }
+        if (formFingerprint !== customProviderFormFingerprint()) {
+          setStatus("st-custom-provider", "The provider form changed; fetched models were not applied.", "err", true);
+          return;
+        }
+        const current = parseCustomModels($("custom-provider-models").value);
+        const merged = mergeCustomModels(current, result.data?.models || []);
+        $("custom-provider-models").value = formatCustomModels(merged.models);
+        setStatus(
+          "st-custom-provider",
+          merged.omitted
+            ? `Fetched ${result.data.models.length} models. Kept 200 and omitted ${merged.omitted}; review and save.`
+            : result.data?.truncated
+              ? `Fetched ${result.data.models.length} models; more are available upstream. Review and save.`
+              : `Fetched ${result.data.models.length} models. Review and save.`,
+          "ok",
+        );
+      };
       $("custom-provider-save").onclick = async () => {
         const id = $("custom-provider-id").value.trim();
         const name = $("custom-provider-name").value.trim();

@@ -104,6 +104,12 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
   assert.equal(raw!.apiKeyEnc!.includes("sk-secret-123"), false);
 
   assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
+  assert.equal(
+    await store.resolveMatchingKey("acme-gateway", "openai", "https://llm.acme.internal/v1"),
+    "sk-secret-123",
+  );
+  assert.equal(await store.resolveMatchingKey("acme-gateway", "anthropic", "https://llm.acme.internal/v1"), null);
+  assert.equal(await store.resolveMatchingKey("acme-gateway", "openai", "https://other.test/v1"), null);
   assert.deepEqual(await store.enabled(), [GATEWAY]);
 
   // Upsert without a key keeps the existing one.

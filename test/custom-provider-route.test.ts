@@ -119,6 +119,214 @@ test("a rejected key blocks registration unless validate:false", async () => {
   }
 });
 
+test("model discovery reads compatible listings with protocol credentials", async () => {
+  const requests: Array<{ url: string; authorization: string | null }> = [];
+  const srv = start(async (input, init) => {
+    requests.push({
+      url: String(input),
+      authorization: new Headers(init?.headers).get("authorization"),
+    });
+    return Response.json({
+      data: [
+        { id: "acme-large", name: "Acme Large" },
+        { id: "acme-small", display_name: "Acme Small" },
+        { id: "acme-large", name: "Duplicate" },
+        { id: "unsafe|model", name: "Unsafe ID" },
+        { id: "safe-model", name: "Unsafe\nName" },
+        { object: "model" },
+      ],
+    });
+  });
+  try {
+    const response = await fetch(`${srv.base}/v1/admin/custom-providers/models`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({
+        protocol: "openai",
+        baseUrl: "https://llm.acme.internal/v1/",
+        apiKey: "sk-discovery",
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      models: [
+        { id: "acme-large", name: "Acme Large" },
+        { id: "acme-small", name: "Acme Small" },
+        { id: "safe-model" },
+      ],
+      total: 3,
+      truncated: false,
+    });
+    assert.deepEqual(requests, [{ url: "https://llm.acme.internal/v1/models", authorization: "Bearer sk-discovery" }]);
+    const denied = await fetch(`${srv.base}/v1/admin/custom-providers/models`, {
+      method: "POST",
+      headers: USER,
+      body: JSON.stringify({ protocol: "openai", baseUrl: "https://llm.acme.internal/v1", apiKey: "secret" }),
+    });
+    assert.notEqual(denied.status, 200);
+    assert.equal(requests.length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("Anthropic model discovery requests the full local limit and reports more pages", async () => {
+  let request: { url: string; key: string | null; version: string | null } | undefined;
+  const srv = start(async (input, init) => {
+    const headers = new Headers(init?.headers);
+    request = {
+      url: String(input),
+      key: headers.get("x-api-key"),
+      version: headers.get("anthropic-version"),
+    };
+    return Response.json({
+      data: [{ id: "claude-acme", display_name: "Claude Acme" }],
+      has_more: true,
+      last_id: "claude-acme",
+    });
+  });
+  try {
+    const response = await fetch(`${srv.base}/v1/admin/custom-providers/models`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({
+        protocol: "anthropic",
+        baseUrl: "https://llm.acme.internal",
+        apiKey: "sk-ant-discovery",
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(request, {
+      url: "https://llm.acme.internal/v1/models?limit=200",
+      key: "sk-ant-discovery",
+      version: "2023-06-01",
+    });
+    assert.deepEqual(await response.json(), {
+      models: [{ id: "claude-acme", name: "Claude Acme" }],
+      total: 1,
+      truncated: true,
+    });
+  } finally {
+    await srv.close();
+  }
+});
+
+test("model discovery reuses a saved write-only key", async () => {
+  let authorization = "";
+  const srv = start(async (_input, init) => {
+    authorization = new Headers(init?.headers).get("authorization") ?? "";
+    return Response.json({ models: [{ id: "saved-model", displayName: "Saved Model" }] });
+  });
+  try {
+    const saved = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ ...BODY, validate: false }),
+    });
+    assert.equal(saved.status, 200);
+    const response = await fetch(`${srv.base}/v1/admin/custom-providers/models`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({
+        providerId: "acme-gateway",
+        protocol: "openai",
+        baseUrl: BODY.baseUrl,
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(authorization, "Bearer sk-acme-secret");
+    assert.deepEqual(((await response.json()) as { models: unknown }).models, [
+      { id: "saved-model", name: "Saved Model" },
+    ]);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("model discovery does not send a saved key to a changed endpoint", async () => {
+  let requests = 0;
+  const srv = start(async () => {
+    requests += 1;
+    return Response.json({ data: [{ id: "model" }] });
+  });
+  try {
+    const saved = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ ...BODY, validate: false }),
+    });
+    assert.equal(saved.status, 200);
+    const response = await fetch(`${srv.base}/v1/admin/custom-providers/models`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({
+        providerId: "acme-gateway",
+        protocol: "openai",
+        baseUrl: "https://different.acme.internal/v1",
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal(((await response.json()) as { error: string }).error, "missing_api_key");
+    assert.equal(requests, 0);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("model discovery reports missing keys and invalid listings", async () => {
+  const srv = start(async () => Response.json({ data: [{ object: "model" }] }));
+  try {
+    const missing = await fetch(`${srv.base}/v1/admin/custom-providers/models`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ protocol: "openai", baseUrl: BODY.baseUrl }),
+    });
+    assert.equal(missing.status, 400);
+    assert.equal(((await missing.json()) as { error: string }).error, "missing_api_key");
+    const invalid = await fetch(`${srv.base}/v1/admin/custom-providers/models`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ protocol: "openai", baseUrl: BODY.baseUrl, apiKey: "sk-invalid-list" }),
+    });
+    assert.equal(invalid.status, 502);
+    assert.equal(((await invalid.json()) as { error: string }).error, "invalid_models_response");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("model discovery rejects declared and streamed oversized responses", async () => {
+  const oversized = 2 * 1024 * 1024 + 1;
+  let mode: "declared" | "streamed" = "declared";
+  const srv = start(async () => {
+    if (mode === "declared") {
+      return new Response("{}", { headers: { "content-length": String(oversized) } });
+    }
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(oversized));
+          controller.close();
+        },
+      }),
+    );
+  });
+  try {
+    for (const nextMode of ["declared", "streamed"] as const) {
+      mode = nextMode;
+      const response = await fetch(`${srv.base}/v1/admin/custom-providers/models`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ protocol: "openai", baseUrl: BODY.baseUrl, apiKey: "sk-oversized" }),
+      });
+      assert.equal(response.status, 502);
+      assert.equal(((await response.json()) as { error: string }).error, "invalid_models_response");
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
 test("bad specs are refused with a reason", async () => {
   const srv = start();
   try {
