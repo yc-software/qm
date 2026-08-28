@@ -30,6 +30,31 @@ test("Chinese translations preserve whitespace and dynamic counts", () => {
   assert.equal(translateUiText("New chat", "en"), "New chat");
 });
 
+test("Chinese translations cover every primary workspace module", () => {
+  const cases = [
+    ["Agent behavior", "助手行为"],
+    ["No readable messages in this conversation.", "此会话中没有可读取的消息。"],
+    ["Ask anything", "输入任何问题"],
+    ["No projects match your search.", "没有匹配搜索条件的项目。"],
+    ["Search file names and types…", "搜索文件名和类型…"],
+    ["The agent hasn’t noted any facts yet.", "助手尚未记录任何事实。"],
+    ["Loading your keychain…", "正在加载密钥链…"],
+    ["No skills match these filters.", "没有符合筛选条件的技能。"],
+    ["No active crons.", "没有启用的定时任务。"],
+    ["No apps in this context.", "此上下文中没有应用。"],
+    ["No webhooks yet.", "尚无 Webhook。"],
+  ] as const;
+  for (const [source, expected] of cases) assert.equal(translateUiText(source, "zh-CN"), expected);
+});
+
+test("Chinese translations cover interpolated labels without changing their data", () => {
+  assert.equal(translateUiText("20 skills", "zh-CN"), "20 个技能");
+  assert.equal(translateUiText("Options for Research", "zh-CN"), "Research 的选项");
+  assert.equal(translateUiText("New chat in Research", "zh-CN"), "在 Research 中新建聊天");
+  assert.equal(translateUiText("Org default (Claude Opus 5)", "zh-CN"), "组织默认值（Claude Opus 5）");
+  assert.equal(translateUiText("No messages match “alpha”", "zh-CN"), "没有消息匹配“alpha”");
+});
+
 test("localization does not translate user content or code", async () => {
   const dom = new JSDOM(
     `<!doctype html><html><body>

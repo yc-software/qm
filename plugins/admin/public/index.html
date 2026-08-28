@@ -5376,6 +5376,768 @@
         Close: "关闭",
         Details: "详情",
       };
+      Object.assign(ZH_CN_TRANSLATIONS, {
+        Today: "今天",
+        Yesterday: "昨天",
+        "Unsaved changes": "有未保存的更改",
+        "Search all skills…": "搜索全部技能…",
+        "Search skills…": "搜索技能…",
+        "Search all skills...": "搜索全部技能...",
+        "Search skills...": "搜索技能...",
+        "No skills yet.": "尚无技能。",
+        "No skills in this scope.": "当前范围内没有技能。",
+        "No skills match.": "没有匹配的技能。",
+        Skill: "技能",
+        "Created by": "创建者",
+        "Last used": "最近使用",
+        "You don't administer this skill's scope.": "你没有当前技能范围的管理权限。",
+        "Couldn't load this skill.": "无法加载此技能。",
+        Scopes: "范围",
+        "Every scope this skill is installed in. Remove takes it out of that scope only.":
+          "此技能安装到的全部范围。“移除”只会将其从对应范围中移除。",
+        Version: "版本",
+        "not granted": "未授权",
+        Capabilities: "能力",
+        "What the skill is allowed to reach. Granted at review time.": "技能获准访问的内容，在审查时授予。",
+        Capability: "能力",
+        "Requires no capabilities.": "无需额外能力。",
+        Approvals: "审批记录",
+        "Reviewers who signed off on this skill.": "批准此技能的审查者。",
+        Reviewer: "审查者",
+        Instructions: "指令",
+        "The SKILL.md the agent reads when this skill is in play.": "启用此技能时助手读取的 SKILL.md。",
+        "Register a pack — paste a git repo URL of SKILL.md files, then Browse it into scopes":
+          "注册技能包 — 粘贴包含 SKILL.md 文件的 Git 仓库 URL，再浏览并导入到范围",
+        "ref (branch or SHA)": "引用（分支或 SHA）",
+        "Pin to a branch or full 40-hex commit SHA. Blank = the repo's default branch.":
+          "固定到分支或完整的 40 位提交 SHA。留空则使用仓库默认分支。",
+        "exclude globs, comma-separated": "排除规则（glob），逗号分隔",
+        "e.g. trusted/*": "例如 trusted/*",
+        "deploy-token slug": "部署 Token 标识符",
+        "Private-repo deploy-token credential slug. Blank = your connected GitHub account.":
+          "私有仓库部署 Token 的凭据标识符。留空则使用已连接的 GitHub 账户。",
+        "Trust tier": "信任级别",
+        Advanced: "高级设置",
+        Register: "注册",
+        "A repo URL is required.": "必须填写仓库 URL。",
+        "last sync:": "最近同步：",
+        "update available": "有可用更新",
+        "Upstream advanced past the imported commit — Sync now (or turn on Auto-sync) to apply.":
+          "上游已有新提交，请立即同步（或开启自动同步）以应用更新。",
+        "up to date": "已是最新",
+        "not imported": "尚未导入",
+        "Browse skills…": "浏览技能…",
+        "Sync now": "立即同步",
+        "Pull the pack's latest commit and refresh already-imported skills (update changed, archive removed). Does NOT add new skills — use Browse for that.":
+          "拉取技能包最新提交并刷新已导入技能（更新变更项、归档已删除项）。不会添加新技能；添加新技能请使用“浏览”。",
+        "✓ up to date": "✓ 已是最新",
+        "Turn off auto-sync": "关闭自动同步",
+        "Turn on auto-sync": "开启自动同步",
+        "Auto-sync is ON — re-imports when the upstream advances.": "自动同步已开启 — 上游更新时会重新导入。",
+        "Auto-sync is OFF — manual Sync only.": "自动同步已关闭 — 仅支持手动同步。",
+        "Remove pack": "移除技能包",
+        "Remove this pack and archive its imported skills?": "移除此技能包并归档其已导入技能？",
+        Pack: "技能包",
+        Trust: "信任级别",
+        "No packs yet — register one above.": "尚无技能包，请在上方注册。",
+        "no scopes selected": "尚未选择范围",
+        "+ Add scope ▾": "+ 添加范围 ▾",
+        "Filter scopes…": "筛选范围…",
+        "Select all": "全选",
+        "No scopes match.": "没有匹配的范围。",
+        Fetching: "正在获取",
+        "Select / deselect all importable skills": "选择或取消选择全部可导入技能",
+        "Show every skill.": "显示全部技能。",
+        "Eligible and not yet in the selected scope(s) — importing adds it there.":
+          "符合条件且尚未加入所选范围，导入后会添加到这些范围。",
+        "Already imported into the selected scope(s) — Sync refreshes them; un-index to remove.":
+          "已导入所选范围；“同步”会刷新内容，取消索引可将其移除。",
+        "Held back: declares a personal/owner scope, so it isn't imported as a shared pack skill.":
+          "未导入：声明为个人或所有者范围，不能作为共享技能包技能导入。",
+        "Held back: marked owner-only / agent-only.": "未导入：标记为仅所有者或仅助手可用。",
+        "Held back: the name matches an existing platform or seed skill.": "未导入：名称与现有平台或内置技能冲突。",
+        "binary files": "二进制文件",
+        "Held back: contains binary files (import is text-only).": "未导入：包含二进制文件（仅支持文本导入）。",
+        "Held back: missing or unreadable SKILL.md frontmatter.": "未导入：SKILL.md frontmatter 缺失或无法读取。",
+        "Already imported into the selected scope(s):": "已导入所选范围：",
+        "Pick at least one scope to add skills to.": "请至少选择一个要添加技能的范围。",
+        "Select at least one skill.": "请至少选择一个技能。",
+        "Import selected": "导入所选技能",
+        "Click to show only these.": "点击后仅显示这些项目。",
+        "No skills found in this pack.": "此技能包中没有找到技能。",
+        "Add to scopes:": "添加到范围：",
+        "shared pack file": "共享技能包文件",
+        "(contained under a pack-owned directory)": "（位于技能包所属目录中）",
+        "Browse —": "浏览 —",
+        "Choose target scopes, then import. Eligible skills are added to every selected scope; excluded skills show why. They appear on the Skills page once imported.":
+          "选择目标范围后导入。符合条件的技能会添加到每个所选范围；被排除的技能会显示原因。导入后可在“技能”页面查看。",
+        "Close browse": "关闭浏览",
+        "Org-wide": "组织范围",
+      });
+      Object.assign(ZH_CN_TRANSLATIONS, {
+        "Open web UI as this person ↗": "以此用户身份打开 Web UI ↗",
+        "View the assistant web UI as": "以此身份查看助手 Web UI",
+        "Upload failed.": "上传失败。",
+        "Governance save in progress": "正在保存治理设置",
+        "Wait for the current save to finish before leaving.": "请等待当前保存完成后再离开。",
+        "The change may already be committing and cannot be safely discarded.": "更改可能正在提交，无法安全放弃。",
+        "Discard unsaved governance changes?": "放弃未保存的治理更改？",
+        "This page has a draft that has not been applied.": "此页面有尚未应用的草稿。",
+        "Leaving now discards every unsaved setting on this Governance page.":
+          "现在离开将放弃治理页面中的全部未保存设置。",
+        "Discard and leave": "放弃并离开",
+        "Loading scopes…": "正在加载范围…",
+        "Only an org admin can list scopes.": "只有组织管理员可以查看范围列表。",
+        "Failed to load scopes.": "范围加载失败。",
+        Show: "显示",
+        "tool results": "工具结果",
+        Enter: "回车",
+        "No saved instructions": "没有已保存的指令",
+        "No draft changes": "草稿没有更改",
+        "Instructions will be cleared": "指令将被清空",
+        "Maximum length reached": "已达到最大长度",
+        "Draft valid": "草稿有效",
+        "Version history": "版本历史",
+        "History begins with the next saved revision.": "历史记录将从下一个保存版本开始。",
+        "Author unavailable": "作者不可用",
+        "Time unavailable": "时间不可用",
+        Current: "当前",
+        Restore: "恢复",
+        "The saved instructions from this revision will replace the current SOUL.":
+          "此版本中保存的指令将替换当前 SOUL。",
+        "This does not erase history. A new revision will be created, and future turns will use it immediately.":
+          "此操作不会删除历史记录，而会创建新版本，后续轮次将立即使用它。",
+        "Restore version": "恢复版本",
+        "SOUL changed; latest revision loaded and your draft was preserved.":
+          "SOUL 已发生变化；已加载最新版本并保留你的草稿。",
+        "Restore failed.": "恢复失败。",
+        "Effective security posture": "生效安全级别",
+        "Backend supports policy; control plane inactive": "后端支持策略，但控制平面未启用",
+        "Backend cannot enforce host policy": "后端无法强制执行主机策略",
+        "effective rule": "生效规则",
+        "Policy enforced by": "策略执行方",
+        "draft rule": "草稿规则",
+        "Open egress": "开放外联访问",
+        "Policy is enforced": "策略已强制执行",
+        "Enforcement is not activated": "强制执行尚未启用",
+        "Save policy": "保存策略",
+        "External enabled": "允许外部参与者",
+        "Internal only": "仅限内部",
+        "Guests may see agent output": "访客可能看到助手输出",
+        "Organization boundary": "组织边界",
+        Inherited: "已继承",
+        "Resolved at organization scope": "在组织范围解析",
+        "Deployment default": "部署默认值",
+        "Local override": "本地覆盖",
+        "Effective default": "生效默认值",
+        "Uses named environment": "使用命名环境",
+        "Computer files and working memory resolve to this environment. Governance and conversation history remain scoped here.":
+          "计算机文件和工作记忆使用此环境；治理设置和会话历史仍保留在当前范围。",
+        "You don't administer this scope.": "你没有当前范围的管理权限。",
+        "Failed to load.": "加载失败。",
+        "No saved revision": "没有已保存版本",
+        "None — rules are drafts": "无 — 规则仅为草稿",
+        "Domain-aware firewall": "域名感知防火墙",
+        "IP and port firewall": "IP 与端口防火墙",
+        "Open outbound access": "开放出站访问",
+        "allowed host": "允许的主机",
+        "explicitly denied host": "明确拒绝的主机",
+        "denied host": "拒绝的主机",
+        "· deny rules first · all other hosts denied": "· 拒绝规则优先 · 其他主机全部拒绝",
+        "· all other hosts allowed": "· 其他主机全部允许",
+        "Default — the deployment's base model": "默认 — 使用部署基础模型",
+        "Organization-wide": "组织范围",
+        "in retained broker history": "在保留的代理历史中",
+        "successful use": "次成功使用",
+        Env: "环境变量",
+        Broker: "代理",
+        "Secret set": "已设置密钥",
+        "Secret missing": "缺少密钥",
+        "Delete credential": "删除凭据",
+        Editing: "正在编辑",
+        "Cancel edit": "取消编辑",
+        "Stored secret retained when blank": "留空则保留已存密钥",
+        "Write-only secret": "只写密钥",
+        "Stored secret is set. Leave blank to keep it; enter a new value to replace it.":
+          "已保存密钥。留空可保留，输入新值则替换。",
+        "No stored secret yet. Enter one to make this credential usable.": "尚未保存密钥，请输入后启用此凭据。",
+        "Keeps the stored secret unchanged.": "保持已保存密钥不变。",
+        "A secret is required before saving.": "保存前必须填写密钥。",
+        "Organization-wide access selected": "已选择组织范围访问",
+        "Principal IDs, comma-separated": "主体 ID，逗号分隔",
+        "Disabled — never injected": "已停用 — 不会注入",
+        "Disabled — broker requests refused": "已停用 — 代理请求将被拒绝",
+        "Env var not set": "未设置环境变量",
+        "Injected into all-internal conversations; rooms with externals get nothing":
+          "注入全部纯内部会话；包含外部人员的房间不会获得",
+        "Never served by the credential broker": "不会通过凭据代理提供",
+        "and its subdomains": "及其子域",
+        "Any path on this host": "此主机上的任意路径",
+        "Every all-internal conversation — grants don't gate env delivery": "全部纯内部会话 — 授权不限制环境变量交付",
+        "No principal selected": "尚未选择主体",
+        "Will replace the stored secret": "将替换已保存密钥",
+        "Stored secret retained": "保留已保存密钥",
+        "unsupported · remove before saving": "不支持 · 保存前请移除",
+        "Slug is required.": "必须填写标识符。",
+        "Name is required.": "必须填写名称。",
+        "Env delivery needs an env var name.": "环境变量交付需要变量名称。",
+        "Env var must be UPPER_SNAKE_CASE.": "环境变量必须使用 UPPER_SNAKE_CASE。",
+        "AGENT_* env vars are reserved for the platform.": "AGENT_* 环境变量由平台保留。",
+        "Host is required.": "必须填写主机。",
+        "Add at least one person or choose org-wide access.": "请至少添加一个人员，或选择组织范围访问。",
+        "everyone in the organization": "组织中的所有人",
+        "Recent users in the retained window:": "保留窗口内的最近用户：",
+        "No successful use appears in the retained window.": "保留窗口内没有成功使用记录。",
+        Credential: "凭据",
+        Deleted: "已删除",
+        "Delete failed.": "删除失败。",
+        "Credential changed; the latest state is shown. Review it before deleting.":
+          "凭据已变化，当前显示最新状态；删除前请检查。",
+        "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.":
+          "凭据已变化，但无法加载最新状态；删除前请刷新页面。",
+        "Save failed because the admin service could not be reached. Your draft is preserved; try again.":
+          "无法连接管理服务，保存失败；草稿已保留，请重试。",
+        Saved: "已保存",
+        "Save failed.": "保存失败。",
+        "Not authorized for this scope.": "没有当前范围的权限。",
+        "Credential changed; latest revision loaded and your draft was preserved.":
+          "凭据已变化；已加载最新版本并保留你的草稿。",
+        "OpenRouter — hosted open models": "OpenRouter — 托管开放模型",
+        "•••• set — enter a replacement": "•••• 已设置 — 输入新值可替换",
+        "admin-managed key": "管理员管理的密钥",
+        "deployment key": "部署密钥",
+        "a Slack workspace": "Slack 工作区",
+        "Could not disable this provider.": "无法停用此服务商。",
+        "set (write-only)": "已设置（只写）",
+        "Could not remove this provider.": "无法移除此服务商。",
+        "Provider removed.": "服务商已移除。",
+        "Provider id, name, base URL, and at least one model are required.":
+          "必须填写服务商 ID、名称、基础 URL，并至少添加一个模型。",
+        "Could not save this provider.": "无法保存此服务商。",
+        "Failed to load connector setup.": "连接器设置加载失败。",
+        "Only an org admin can manage connectors.": "只有组织管理员可以管理连接器。",
+        "No connectors configured. Add one below to make it linkable in the web UI.":
+          "尚未配置连接器，请在下方添加后供 Web UI 关联。",
+        "Configured by deployment secrets": "由部署密钥配置",
+        "Override here": "在此覆盖",
+        "Delete connector": "删除连接器",
+        "Callback URL:": "回调 URL：",
+        "Scopes are selected in the provider.": "范围在服务商侧选择。",
+        "•••• set (re-enter to replace)": "•••• 已设置（重新输入可替换）",
+        "Saving requires the client secret — re-enter it to keep this connector working.":
+          "保存时需要客户端密钥，请重新输入以保持连接器可用。",
+        "Failed to load Slack status.": "Slack 状态加载失败。",
+        "Connected using deployment environment secrets. Saving here replaces them with admin-managed encrypted tokens.":
+          "当前使用部署环境密钥连接；在此保存会替换为管理员管理的加密 Token。",
+        "The deployment contains only one Slack token. Save a matching pair here to repair it.":
+          "部署中只有一个 Slack Token，请在此保存匹配的一对 Token 进行修复。",
+        "Disabled by an administrator.": "已被管理员停用。",
+        "Both Slack tokens are required.": "必须填写两个 Slack Token。",
+        "Validating with Slack…": "正在通过 Slack 验证…",
+        "Slack validation failed.": "Slack 验证失败。",
+        "Saved. Slack is activating.": "已保存，正在启用 Slack。",
+        "Remove failed.": "移除失败。",
+        Removed: "已移除",
+        "Choose a connector.": "请选择连接器。",
+        "Client ID is required.": "必须填写客户端 ID。",
+        "Client secret is required.": "必须填写客户端密钥。",
+        "Invalid regular expression.": "正则表达式无效。",
+        "Command pattern": "命令匹配模式",
+        "Move rule up": "上移规则",
+        "Move rule down": "下移规则",
+        "Remove this command policy rule": "移除此命令策略规则",
+        "Remove command policy rule": "移除命令策略规则",
+        "ignore — never wakes the judge": "忽略 — 从不唤醒判断器",
+        "rollup — batch, judge periodically": "汇总 — 批量收集并定期判断",
+        "action — posts are triggers": "触发 — 帖子会触发行动",
+        "user — read like a person": "用户 — 按普通人员处理",
+        "Remove this bot from the ledger": "从账本中移除此机器人",
+        "Remove bot ledger entry": "移除机器人账本条目",
+      });
+      Object.assign(ZH_CN_TRANSLATIONS, {
+        "Every bot ledger row needs a bot name.": "每条机器人账本记录都必须填写机器人名称。",
+        "Enter a sample command first.": "请先输入示例命令。",
+        "Policy is invalid.": "策略无效。",
+        "Evaluating with the server’s command scanner…": "正在使用服务器命令扫描器评估…",
+        "Simulation failed.": "模拟失败。",
+        "Organization rule": "组织规则",
+        "This scope’s rule": "当前范围规则",
+        "· A deployment’s rules may still restrict this command.": "· 部署规则仍可能限制此命令。",
+        "Fix the highlighted regular expression before saving:": "保存前请修复高亮的正则表达式：",
+        "Invalid egress policy.": "外联访问策略无效。",
+        "Enable Dangerous autonomy?": "启用危险自主模式？",
+        "Change security posture?": "更改安全级别？",
+        "Review the immutable change below before it is applied.": "应用前请检查以下不可变更记录。",
+        Proposed: "拟议值",
+        "Dangerous removes content screening; nothing pauses between tool calls. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced.":
+          "危险模式会取消内容检查，工具调用之间不会暂停；预声明命令审批、强制拒绝、身份、授权、凭据范围、撤销和审计仍会执行。",
+        "This changes the effective tools and approval behavior for future turns in this scope.":
+          "此操作会更改当前范围后续轮次的生效工具和审批行为。",
+        "Enable Dangerous": "启用危险模式",
+        "Apply posture": "应用安全级别",
+        "Allow external Slack audiences?": "允许 Slack 外部受众？",
+        "Return Slack to internal-only?": "将 Slack 恢复为仅内部？",
+        "This organization-wide audience boundary applies to future Slack turns.":
+          "此组织级受众边界适用于后续 Slack 轮次。",
+        "External audiences enabled": "已允许外部受众",
+        "Agent replies and anything read in a mixed Slack room can be visible to guests or Slack Connect participants. External users still cannot drive the agent.":
+          "助手在混合成员 Slack 房间中的回复及读取内容可能对访客或 Slack Connect 参与者可见；外部用户仍不能驱动助手。",
+        "Mixed-audience Slack rooms will stop receiving agent replies after this change.":
+          "更改后，混合受众 Slack 房间将不再收到助手回复。",
+        "Allow external audiences": "允许外部受众",
+        "Require internal audiences": "要求仅内部受众",
+        "Could not save.": "无法保存。",
+        "Saved, but could not refresh the applied value.": "已保存，但无法刷新已应用值。",
+        "Total turn": "轮次总耗时",
+        "End-to-end wall time, request to reply": "从请求到回复的端到端实际耗时",
+        "First token": "首个 Token",
+        "Time until the first streamed token": "首个流式 Token 出现前的耗时",
+        "Slack pickup": "Slack 接收",
+        "Socket receive to submit — how long the message sat in the Slack plugin":
+          "从 Socket 接收到提交，即消息在 Slack 插件中的等待时间",
+        "Intake preamble": "接入准备",
+        "Surface-side work before the request left for core": "请求发送到 Core 前的界面侧处理",
+        "Queue wait": "队列等待",
+        "Waiting for a worker to claim the run": "等待工作进程领取任务",
+        Dispatch: "分发",
+        "Surface receive to core hand-off": "界面接收到交给 Core",
+        Ingress: "入口处理",
+        "Core receive to model start: parse, resolve, prepare": "Core 接收到模型启动：解析、解析依赖并准备",
+        "Reply decision": "回复决策",
+        "Deciding whether to speak in a channel": "判断是否在频道中回复",
+        "History compaction": "历史压缩",
+        "Compacting a long transcript before the model call": "模型调用前压缩较长会话记录",
+        "Machine provision": "计算机准备",
+        "Booting or resuming the sandbox machine": "启动或恢复沙箱计算机",
+        "Skills materialize": "技能物化",
+        "Copying resolved skills onto the machine": "将解析后的技能复制到计算机",
+        "Credentials restore": "凭据恢复",
+        "Restoring keychain credentials onto the machine": "将密钥链凭据恢复到计算机",
+        "Workspace layers": "工作区层",
+        "Restoring workspace layers at provision time": "准备时恢复工作区层",
+        "Prompt compile": "提示词编译",
+        "Assembling the system prompt": "组装系统提示词",
+        "Memory recall": "记忆召回",
+        "Injecting durable memory into the prompt": "将持久记忆注入提示词",
+        "Session lease": "会话租约",
+        "Loading the session and acquiring the writer lease": "加载会话并获取写入租约",
+        "Command exec": "命令执行",
+        "Commands the agent ran in the machine": "助手在计算机中运行的命令",
+        "Stream + append": "流式输出与追加",
+        "Streaming tokens out and appending the turn": "流式输出 Token 并追加轮次",
+        "Slack deliver": "Slack 交付",
+        "The final Slack post/update round-trip": "最终 Slack 发布或更新往返耗时",
+        "Memory capture": "记忆捕获",
+        "Post-turn fact extraction, off the critical path": "轮次结束后的事实提取，不在关键路径上",
+        "cold machine boot": "冷启动计算机",
+        "warm machine": "热计算机",
+        "no machine": "未使用计算机",
+        Phase: "阶段",
+        Turns: "轮次",
+        Trend: "趋势",
+        "No turn metrics in this scope yet.": "当前范围尚无轮次指标。",
+        "failure rate": "失败率",
+        "prompt-cache hit ratio": "提示词缓存命中率",
+        "stable-prefix miss rate": "稳定前缀未命中率",
+        "miss turns": "未命中轮次",
+        "turns with cache data": "有缓存数据的轮次",
+        "Turns that never touched a machine": "未使用计算机的轮次",
+        "pure conversation, no tools": "纯会话，未使用工具",
+        "Turns that used a machine": "使用计算机的轮次",
+        "All turns": "全部轮次",
+        "the blended average": "混合平均值",
+        "Turn mix": "轮次构成",
+        "How often turns provision a machine, and what each kind of turn costs.":
+          "轮次准备计算机的频率，以及各类轮次的耗时。",
+        "Kind of turn": "轮次类型",
+        Share: "占比",
+        Median: "中位数",
+        "Model calls": "模型调用",
+        "Tool calls": "工具调用",
+        "No turns sampled.": "没有轮次样本。",
+        "No samples.": "没有样本。",
+        Distribution: "分布",
+        "Where the samples land.": "样本所处区间。",
+        "By day": "按天",
+        "Daily percentiles (UTC).": "每日百分位数（UTC）。",
+        Day: "日期",
+        "No daily samples.": "没有每日样本。",
+        "Worst recent turns": "近期最慢轮次",
+        "The slowest samples — each opens the turn's transcript.": "最慢的样本；点击可打开对应轮次记录。",
+        "The slowest samples.": "最慢的样本。",
+        Machine: "计算机",
+        Time: "时间",
+        Action: "操作",
+        Resource: "资源",
+        "No admin activity yet.": "尚无管理活动。",
+        "No admin activity for this scope.": "当前范围尚无管理活动。",
+        Calls: "调用",
+        Denied: "已拒绝",
+        Hosts: "主机",
+        Firewall: "防火墙",
+        Source: "来源",
+        Principal: "主体",
+        Detail: "详情",
+        "No egress in this scope yet.": "当前范围尚无外联访问记录。",
+        Cron: "定时任务",
+        "Monitor wake": "监控唤醒",
+        "Webhook wake": "Webhook 唤醒",
+        "Background wake": "后台唤醒",
+        Background: "后台",
+        "(default timezone)": "（默认时区）",
+        "first run": "首次运行",
+        "Never fired": "从未触发",
+        "No delivery destination": "没有交付目标",
+        "on behalf of": "代表",
+        "Could not update destination.": "无法更新交付目标。",
+        "Edit destination": "编辑交付目标",
+        "Clear destination": "清除交付目标",
+        Target: "目标",
+        "Audience scope": "受众范围",
+        "On behalf of": "代表主体",
+        "principal id": "主体 ID",
+        "Slack channel/thread id": "Slack 频道或线程 ID",
+        "Save destination": "保存交付目标",
+        "Target is required.": "必须填写目标。",
+        "Edit cron destination": "编辑定时任务交付目标",
+        "never fired": "从未触发",
+        "No crons yet.": "尚无定时任务。",
+        "No crons in this scope.": "当前范围没有定时任务。",
+        "No crons match.": "没有匹配的定时任务。",
+        "Search all crons…": "搜索全部定时任务…",
+        "Search crons…": "搜索定时任务…",
+        "Show more": "显示更多",
+        "Show less": "收起",
+        Schedule: "计划",
+        Owner: "所有者",
+        "Last fired": "最近触发",
+        Id: "ID",
+        Prompt: "提示词",
+        Message: "消息",
+        "Re-run as a fresh prompt at every fire.": "每次触发时作为新提示词重新运行。",
+        "Delivered as-is at every fire.": "每次触发时按原样交付。",
+        "Loading fires...": "正在加载触发记录...",
+        "Recent fires": "近期触发",
+        "Each fire is a session — click one to read its transcript. Dimmed fires delivered nothing.":
+          "每次触发都是一个会话；点击可阅读记录。变暗的触发没有交付内容。",
+        "This cron has never fired.": "此定时任务从未触发。",
+        "No deployments yet.": "尚无部署。",
+        "No deployments in this scope.": "当前范围没有部署。",
+        "No deployments match.": "没有匹配的部署。",
+        "Search all deployments…": "搜索全部部署…",
+        "Search deployments…": "搜索部署…",
+      });
+      Object.assign(ZH_CN_TRANSLATIONS, {
+        Account: "账户",
+        Person: "用户",
+        People: "用户",
+        Admins: "管理员",
+        Role: "角色",
+        Audience: "受众",
+        Authorization: "授权",
+        Worker: "工作进程",
+        Duration: "耗时",
+        Expires: "过期时间",
+        Expiry: "有效期",
+        Lease: "租约",
+        Purpose: "用途",
+        Request: "请求",
+        Requester: "请求者",
+        Grant: "授权",
+        Grants: "授权",
+        "Granted by": "授权人",
+        "Active grants": "有效授权",
+        "Pending asks": "待处理请求",
+        Asks: "请求",
+        "Active now": "当前活跃",
+        "First seen": "首次出现",
+        "Last seen": "最近出现",
+        "Last activity": "最近活动",
+        "Last access": "最近访问",
+        "Current status:": "当前状态：",
+        Configuration: "配置",
+        "No config.": "没有配置。",
+        "Config store not available.": "配置存储不可用。",
+        "Admin is temporarily unavailable.": "管理端暂时不可用。",
+        "You don't have admin access.": "你没有管理员权限。",
+        "Everyone who has used the agent — click a row for their activity, artifacts, and config.":
+          "所有使用过助手的用户；点击一行可查看其活动、资源和配置。",
+        "Everyone known through sessions, admin grants, keychain records, grants, or asks.":
+          "通过会话、管理员授权、密钥链记录、授权或请求识别到的所有用户。",
+        "No users match.": "没有匹配的用户。",
+        "No people match.": "没有匹配的用户。",
+        "No admins match.": "没有匹配的管理员。",
+        "Who can govern this org. Revoking removes their admin rights immediately.":
+          "可管理此组织的人员。撤销后会立即移除其管理员权限。",
+        "Grant org admin": "授予组织管理员权限",
+        "Make admin": "设为管理员",
+        "Promote a principal to org admin. Org admins only.": "将主体提升为组织管理员，仅组织管理员可操作。",
+        "Only an org admin may grant.": "只有组织管理员可以授权。",
+        "Only an org admin may revoke.": "只有组织管理员可以撤销。",
+        "The last org admin cannot be revoked.": "不能撤销最后一名组织管理员。",
+        "Grant failed.": "授权失败。",
+        "Revoke failed.": "撤销失败。",
+        "Principal id": "主体 ID",
+        "Principal id or name": "主体 ID 或名称",
+        "Principal id required.": "必须填写主体 ID。",
+        "Principal id or name required.": "必须填写主体 ID 或名称。",
+        "Matches several people — pick one from the suggestions.": "匹配到多名用户，请从建议中选择。",
+        "Impersonate a user": "模拟用户身份",
+        "Impersonate ↗": "模拟身份 ↗",
+        "Open web UI as ↗": "以此身份打开 Web UI ↗",
+        "Open the assistant Web UI as any principal — for support, debugging, or onboarding tests. Time-boxed and audited.":
+          "以任意主体身份打开助手 Web UI，用于支持、调试或初始设置测试；操作有时限且会被审计。",
+        "Couldn't start impersonation:": "无法开始身份模拟：",
+        "Recent conversations": "最近会话",
+        "Every conversation this person took part in — click a row to read the transcript.":
+          "此用户参与的所有会话；点击一行可阅读完整记录。",
+        "No activity yet.": "尚无活动。",
+        "Documents in this person's personal workspace — saved by the agent or uploaded.":
+          "此用户个人工作区中的文档，包括助手保存或用户上传的文件。",
+        "No files in their personal workspace.": "其个人工作区中没有文件。",
+        "Apps this person published from their personal workspace.": "此用户从个人工作区发布的应用。",
+        "Scheduled prompts and reminders this person owns.": "此用户拥有的定时提示和提醒。",
+        "Policy and connectors for this person's personal scope.": "此用户个人范围的策略和连接器。",
+        "Connectors linked": "已关联连接器",
+        "Egress overrides": "外联覆盖规则",
+        "Personal-DM onboarding state — reset to re-trigger the flow on this person's next DM, or wipe their DMs to replay the full new-user experience.":
+          "个人私信初始设置状态；重置后会在此用户下次私信时重新触发，也可清除私信以完整重放新用户体验。",
+        "Reset (re-run on next DM)": "重置（下次私信时重新运行）",
+        "Reset to brand-new (delete this person's DMs) →": "重置为全新用户（删除此用户私信）→",
+        "Reset — onboarding will run on this person's next DM.": "已重置，初始设置会在此用户下次私信时运行。",
+        "Resetting…": "正在重置…",
+        "Delete this person's personal DM sessions — transcripts included — and clear their onboarding? This is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.":
+          "删除此用户的个人私信会话（包括记录）并清除初始设置？此操作不可恢复，但不会影响频道历史。其下次访问 Web 时会看到新用户欢迎和初始设置。",
+        "Named environments": "命名环境",
+        "Named computers and working memory that scopes can share.": "可由多个范围共享的命名计算机和工作记忆。",
+        "No named environments.": "没有命名环境。",
+        "No memory stored for this scope yet. Anything you write here, the agent will remember.":
+          "当前范围尚无记忆。你在此写入的内容会被助手记住。",
+        "No notebooks yet — the agent hasn't remembered anything.": "尚无记忆本，助手还没有记住任何内容。",
+        "Saved version": "已保存版本",
+        "Restore SOUL version": "恢复 SOUL 版本",
+        "Restoring…": "正在恢复…",
+        "restored as a new revision": "已作为新修订版本恢复",
+        "sorted by size (this backend keeps no edit history)": "按大小排序（此后端不保留编辑历史）",
+        "This scope is attached to a named environment.": "当前范围已关联命名环境。",
+        "share this environment's computer and working memory.": "共享此环境的计算机和工作记忆。",
+        "No scopes attached.": "没有关联范围。",
+        "No scopes yet — nobody has talked to the agent.": "尚无范围，还没有人与助手对话。",
+        "Attached scopes": "关联范围",
+        "No scopes attached": "没有关联范围",
+        "Search all files…": "搜索全部文件…",
+        "Search files…": "搜索文件…",
+        "No files match — only the newest 2,000 are searched.": "没有匹配文件；仅搜索最新的 2,000 个文件。",
+        "Only the newest 2,000 files are indexed — a scope with only older files won't appear.":
+          "仅索引最新的 2,000 个文件；只有更早文件的范围不会显示。",
+        "Upload to": "上传到",
+        Uploaded: "已上传",
+        Uploading: "正在上传",
+        "No crons.": "没有定时任务。",
+        "No deployments.": "没有部署。",
+        "View cron": "查看定时任务",
+        "Recent runs": "最近运行",
+        "Most recent errors": "最近错误",
+        "No expiry": "永不过期",
+        "Metadata only. Secret material and encrypted values are never returned to admin.":
+          "仅显示元数据。密钥内容和加密值不会返回管理端。",
+        "Keychain unavailable": "密钥链不可用",
+        "Keychain is not configured for this deployment.": "当前部署未配置密钥链。",
+        "Stable key material is required before the core can store keychain records.":
+          "Core 必须先获得稳定密钥材料，才能存储密钥链记录。",
+        "No keychain asks match.": "没有匹配的密钥链请求。",
+        "No keychain credentials match.": "没有匹配的密钥链凭据。",
+        "No keychain grants match.": "没有匹配的密钥链授权。",
+        "Outstanding and resolved cross-conversation consent requests.": "跨会话的待处理和已解决授权请求。",
+        "Purpose-bound keychain grants from an owner to an audience scope.":
+          "所有者向受众范围授予的、限定用途的密钥链权限。",
+        "Mark completed": "标记为已完成",
+        "Mark dismissed": "标记为已忽略",
+        "Only an org admin can read the Slack mirror.": "只有组织管理员可以查看 Slack 镜像。",
+        "Only an org admin can read ambient judgments.": "只有组织管理员可以查看环境消息判断。",
+        "Only an org admin can read ack-emoji picks.": "只有组织管理员可以查看确认表情选择。",
+        "Slack mirror": "Slack 镜像",
+        "Loading Slack mirror...": "正在加载 Slack 镜像...",
+        "Search all mirrored messages…": "搜索全部镜像消息…",
+        "Search this channel…": "搜索此频道…",
+        "Nothing mirrored yet — the surface pushes messages here as it sees them.":
+          "尚无镜像消息；界面收到消息后会将其推送到此处。",
+        "Nothing mirrored for this channel yet.": "此频道尚无镜像消息。",
+        "Nothing mirrored for this window.": "当前时间窗口内没有镜像消息。",
+        "Loading messages...": "正在加载消息...",
+        "Loading earlier messages…": "正在加载更早的消息…",
+        "Load earlier messages": "加载更早的消息",
+        "Open in Slack": "在 Slack 中打开",
+        "Open in Slack ↗": "在 Slack 中打开 ↗",
+        "View in Slack mirror ↗": "在 Slack 镜像中查看 ↗",
+        "Jump to this message in the mirrored Slack channel": "跳转到 Slack 镜像频道中的此消息",
+        "Jump to this moment in Slack to scroll up for more context": "跳转到 Slack 中的此时间点以查看更多上下文",
+        "Open the raw mirrored JSON rows for this container in a new tab": "在新标签页中打开此容器的原始镜像 JSON 行",
+        "Raw feed ↗": "原始数据流 ↗",
+        "Raw JSON": "原始 JSON",
+        "(deleted in Slack)": "（已在 Slack 中删除）",
+        "(edited)": "（已编辑）",
+        "(no messages yet)": "（尚无消息）",
+        "(no messages)": "（无消息）",
+        "(no message)": "（无消息）",
+        "(no content)": "（无内容）",
+        "Load earlier judgments": "加载更早的判断",
+        "Load earlier picks": "加载更早的选择",
+        "Judge context": "判断上下文",
+        "Candidate slate": "候选列表",
+        "(candidate slate not recorded)": "（未记录候选列表）",
+        "Recorded for observability — never sent to the human (shadow-mode rollout)":
+          "仅用于可观测性记录，不会发送给用户（影子模式发布）",
+        "Routed past the judge (formal @mention) — no prompt was rendered.":
+          "已绕过判断器（正式 @提及），未生成判断提示。",
+        "Stayed silent.": "保持静默。",
+        "Shadow delivery": "影子投递",
+        "Delivery event": "投递事件",
+        "Slack delivery": "Slack 投递",
+        "View context sent to the model": "查看发送给模型的上下文",
+        "No context was captured for this turn.": "本轮未捕获上下文。",
+        "Stored payload was truncated.": "存储的载荷已截断。",
+        "Click to expand tool text": "点击展开工具文本",
+        "Click to collapse tool text": "点击收起工具文本",
+        "Expand entry": "展开条目",
+        "Collapse entry": "收起条目",
+        "Expand model context": "展开模型上下文",
+        "Collapse model context": "收起模型上下文",
+        "Toggle full tool card": "切换完整工具卡片",
+        "Large image — click to preview full size": "大图，点击预览原始尺寸",
+        "All activity": "全部活动",
+        "Human activity": "用户活动",
+        "Per-user distribution": "用户分布",
+        "Sessions / user": "人均会话数",
+        "Turns / user": "人均轮次数",
+        "New vs returning": "新用户与回访用户",
+        Returning: "回访用户",
+        "Cohort (week of)": "同期群（起始周）",
+        "Weekly retention cohorts": "每周留存同期群",
+        "Of users first active in a week, the share active in following weeks. Channel attribution is approximate.":
+          "按用户首次活跃周分组，展示其后各周仍活跃的比例。频道归因为近似值。",
+        "No cohorts yet.": "尚无同期群数据。",
+        Stickiness: "粘性",
+        "Stickiness (DAU/MAU)": "粘性（DAU/MAU）",
+        Volume: "数量",
+        Metric: "指标",
+        Setting: "设置",
+        "Network error — try again.": "网络错误，请重试。",
+        "Copy failed": "复制失败",
+        "Governance →": "治理 →",
+        "Judgments →": "判断 →",
+        "Manage in Governance →": "在治理中管理 →",
+        "← Prev": "← 上一页",
+        "Next →": "下一页 →",
+        "← Slack": "← Slack",
+        Done: "完成",
+        Attempts: "尝试次数",
+        Kind: "类型",
+        Started: "开始时间",
+        Size: "大小",
+        Value: "值",
+        What: "内容",
+        None: "无",
+        Open: "打开",
+        Hide: "隐藏",
+        Expired: "已过期",
+        Run: "运行",
+        Revoke: "撤销",
+        "Save changes": "保存更改",
+        "Saved ✓": "已保存 ✓",
+        "Saved.": "已保存。",
+        "Saving…": "正在保存…",
+        "Importing…": "正在导入…",
+        "Registering…": "正在注册…",
+        Deployment: "部署",
+        "Custom soul": "自定义 SOUL",
+        "Slack DM": "Slack 私信",
+        "Sort:": "排序：",
+        "No scope-policy rule matches →": "没有匹配的范围策略规则 →",
+        "(audited)": "（已审计）",
+        "(empty)": "（空）",
+        "(not recorded)": "（未记录）",
+        "(prompt not recorded)": "（未记录提示）",
+        Fri: "周五",
+        Fridays: "每周五",
+        Mon: "周一",
+        Mondays: "每周一",
+        Sat: "周六",
+        Saturdays: "每周六",
+        Sun: "周日",
+        Sundays: "每周日",
+        Thu: "周四",
+        Thursdays: "每周四",
+        Tue: "周二",
+        Tuesdays: "每周二",
+        Wed: "周三",
+        Wednesdays: "每周三",
+        "Credential changed, but the latest revision could not be loaded. Your draft is preserved; refresh the page before retrying.":
+          "凭据已更改，但无法加载最新修订版本。草稿已保留，请刷新页面后重试。",
+        "This credential was deleted elsewhere. Your draft is preserved, but it remains an edit and cannot recreate the credential. Cancel the edit before creating a new credential.":
+          "此凭据已在其他位置删除。草稿已保留，但仍处于编辑状态，无法重新创建凭据；请先取消编辑。",
+        "Remove the Slack bot connection? Slack chat will stop until new tokens are saved.":
+          "移除 Slack 机器人连接？保存新的 Token 前，Slack 聊天将停止工作。",
+        "available (eligible) in this pack": "此技能包中可用（符合条件）",
+        "available in the web UI.": "可在 Web UI 中使用。",
+        "before failure.": "后失败。",
+        "cannot run until its": "在以下项目完成前无法运行：",
+        "captured context": "已捕获上下文",
+        "directory lookup failed": "目录查询失败",
+        "enforces this policy at": "在以下位置执行此策略：",
+        "fidelity.": "执行级别。",
+        "from all": "来自全部",
+        "has the same pattern.": "具有相同模式。",
+        "isn't in this scope.": "不在当前范围内。",
+        "key is configured.": "密钥已配置。",
+        "logged in this scope": "当前范围中的记录",
+        "logged in this session": "当前会话中的记录",
+        "no conversations": "没有会话",
+        "no scopes attached": "没有关联范围",
+        "no thread": "没有线程",
+        "not sent": "未发送",
+        "not started": "未开始",
+        "org default": "组织默认值",
+        "person, service, audience, purpose": "用户、服务、受众、用途",
+        "principal id (e.g. U07ABCD)": "主体 ID（例如 U07ABCD）",
+        "principal id or name (e.g. dana@example.com)": "主体 ID 或名称（例如 dana@example.com）",
+        "principal, role, or scope": "主体、角色或范围",
+        "request context": "请求上下文",
+        "scope(s) could not be removed.": "个范围无法移除。",
+        "sent to model": "已发送给模型",
+        "skills.": "个技能。",
+        "sync failed": "同步失败",
+        "sync failed —": "同步失败 —",
+        "syncing…": "正在同步…",
+        "this skill": "此技能",
+        "timed out": "已超时",
+        "unattributed context": "未归属上下文",
+        "used by": "使用者",
+        "· auto-sync": "· 自动同步",
+        "· by": "· 操作者",
+        "· created": "· 创建时间",
+        "· error": "· 错误",
+        "· first fired": "· 首次触发",
+        "· saved by": "· 保存人",
+        "— configured": "— 已配置",
+        "— importing adds it to the other selected scope(s).": "— 导入后会添加到其他所选范围。",
+        "— key configured": "— 密钥已配置",
+        "…and": "…以及",
+        "↳ thread": "↳ 线程",
+        "✓ delivered": "✓ 已投递",
+        "Reply in the thread rooted at": "回复以下消息所在的线程：",
+        "This credential currently grants broker access to": "此凭据当前授予代理访问权限给",
+        "Deletion immediately revokes every grant and removes the stored secret. Existing agent work that depends on “":
+          "删除后会立即撤销所有授权并移除已存密钥。依赖“",
+        "Delete the OAuth client for": "删除以下 OAuth 客户端：",
+        "Disable the": "停用",
+        "Its models leave every model picker.": "其模型将从所有模型选择器中移除。",
+        "This hides the connector in everyone's web UI; existing links stop working.":
+          "这会在所有人的 Web UI 中隐藏该连接器，现有连接将停止工作。",
+        "It stops being available to agents (kept for audit).": "助手将无法继续使用，但记录会保留用于审计。",
+        "It stops being available to agents in that scope (kept for audit).":
+          "当前范围内的助手将无法继续使用，但记录会保留用于审计。",
+      });
       const LOCALIZATION_SKIP_SELECTOR = "script, style, pre, code, .entry, .tool-body, .raw-json, [data-no-localize]";
       const LOCALIZATION_ATTRIBUTES = ["aria-label", "title", "placeholder"];
       let adminLocale = readAdminLocale();
@@ -5406,7 +6168,68 @@
         if (connected) return leading + "已连接到 " + connected[1] + "。" + trailing;
         const available = text.match(/^(.+) available in the web UI\.$/);
         if (available) return leading + available[1] + " 可在 Web UI 中使用。" + trailing;
+        const skillScopeCount = text.match(/^(\d+) skills? · (\d+) scopes?$/);
+        if (skillScopeCount)
+          return leading + skillScopeCount[1] + " 个技能 · " + skillScopeCount[2] + " 个范围" + trailing;
+        const count = text.match(
+          /^(\d+) (skills?|scopes?|files?|conversations?|turns?|users?|sessions?|crons?|deployments?|models?|runs?|messages?|packs?)$/,
+        );
+        if (count) {
+          const nouns = {
+            skill: "技能",
+            scope: "范围",
+            file: "文件",
+            conversation: "会话",
+            turn: "轮次",
+            user: "用户",
+            session: "会话",
+            cron: "定时任务",
+            deployment: "部署",
+            model: "模型",
+            run: "运行",
+            message: "消息",
+            pack: "技能包",
+          };
+          const noun = count[2].replace(/s$/, "");
+          return leading + count[1] + " 个" + nouns[noun] + trailing;
+        }
+        const scopeParen = text.match(/^Scopes \((\d+)\)$/);
+        if (scopeParen) return leading + "范围（" + scopeParen[1] + "）" + trailing;
+        const organization = text.match(/^Organization · (.+)$/);
+        if (organization) return leading + "组织 · " + organization[1] + trailing;
+        const scopes = text.match(/^Scopes:\s*(.+)$/);
+        if (scopes) return leading + "范围：" + scopes[1] + trailing;
+        const defaultValue = text.match(/^Default —\s*(.+)$/);
+        if (defaultValue) return leading + "默认 — " + defaultValue[1] + trailing;
+        const validating = text.match(/^Validating with (.+)$/);
+        if (validating) return leading + "正在通过 " + validating[1] + " 验证" + trailing;
+        const importFailed = text.match(/^Import failed \((.+)\)$/);
+        if (importFailed) return leading + "导入失败（" + importFailed[1] + "）" + trailing;
+        const uploadFailed = text.match(/^Upload failed \((.+)\)$/);
+        if (uploadFailed) return leading + "上传失败（" + uploadFailed[1] + "）" + trailing;
+        const failed = text.match(/^Failed \((.+)\)$/);
+        if (failed) return leading + "失败（" + failed[1] + "）" + trailing;
+        const couldNotBrowse = text.match(/^Couldn't browse \((.+)\)$/);
+        if (couldNotBrowse) return leading + "无法浏览（" + couldNotBrowse[1] + "）" + trailing;
+        const couldNotResolve = text.match(/^Couldn't resolve that \((.+)\)$/);
+        if (couldNotResolve) return leading + "无法解析（" + couldNotResolve[1] + "）" + trailing;
+        const activeScopes = text.match(/^(\d+) active scopes?$/);
+        if (activeScopes) return leading + activeScopes[1] + " 个启用范围" + trailing;
+        const chars = text.match(/^(\d+) characters · about (.+)$/);
+        if (chars) return leading + chars[1] + " 个字符 · 约 " + chars[2] + trailing;
+        const importedInto = text.match(/^Imported into (.+)$/);
+        if (importedInto) return leading + "已导入到 " + importedInto[1] + trailing;
+        const connectedNoPeriod = text.match(/^Connected to (.+)$/);
+        if (connectedNoPeriod) return leading + "已连接到 " + connectedNoPeriod[1] + trailing;
         return value;
+      }
+
+      function confirmUi(message) {
+        return confirm(translateUiText(message));
+      }
+
+      function alertUi(message) {
+        alert(translateUiText(message));
       }
 
       function localizeUiNode(node) {
@@ -5573,11 +6396,11 @@
               const j = await res.json();
               if (j && j.message) msg = j.message;
             } catch {}
-            alert("Couldn't start impersonation: " + msg);
+            alertUi("Couldn't start impersonation: " + msg);
             return;
           }
         } catch (e) {
-          alert("Couldn't start impersonation: " + (e && e.message ? e.message : e));
+          alertUi("Couldn't start impersonation: " + (e && e.message ? e.message : e));
           return;
         }
         window.open("/web-ui/", "_blank", "noopener");
@@ -5634,15 +6457,16 @@
       function setStatus(id, msg, kind, sticky = false) {
         const el = $(id);
         if (!el) return;
+        const localized = translateUiText(msg);
         if (statusTimers.has(id)) {
           clearTimeout(statusTimers.get(id));
           statusTimers.delete(id);
         }
-        el.textContent = msg;
+        el.textContent = localized;
         el.className = "status " + (kind || "");
         if (msg && !sticky) {
           const timer = setTimeout(() => {
-            if (el.textContent === msg) {
+            if (el.textContent === localized) {
               el.textContent = "";
               el.className = "status";
             }
@@ -5662,20 +6486,20 @@
       function reviewGovernanceChange({ title, subtitle, facts, warning, confirmLabel, danger = false }) {
         if (governanceReviewResolve) finishGovernanceReview(false);
         const dialog = $("governance-review");
-        $("governance-review-title").textContent = title;
-        $("governance-review-subtitle").textContent = subtitle;
+        $("governance-review-title").textContent = translateUiText(title);
+        $("governance-review-subtitle").textContent = translateUiText(subtitle);
         const list = $("governance-review-facts");
         list.textContent = "";
         facts.forEach(([key, value]) => {
           const term = document.createElement("dt");
-          term.textContent = key;
+          term.textContent = translateUiText(key);
           const detail = document.createElement("dd");
           detail.textContent = value;
           list.append(term, detail);
         });
-        $("governance-review-warning").textContent = warning;
+        $("governance-review-warning").textContent = translateUiText(warning);
         const confirm = $("governance-review-confirm");
-        confirm.textContent = confirmLabel || "";
+        confirm.textContent = translateUiText(confirmLabel || "");
         confirm.classList.toggle("hidden", !confirmLabel);
         confirm.classList.toggle("danger", danger);
         dialog.showModal();
@@ -5860,7 +6684,7 @@
         return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
       }
       function uploadStatusMessage(el, msg, kind) {
-        el.textContent = msg || "";
+        el.textContent = translateUiText(msg || "");
         el.className = "status" + (kind ? " " + kind : "");
       }
       function uploadErrorMessage(text, fallback) {
@@ -7878,7 +8702,7 @@
       $("onboarding-model-delete").onclick = async () => {
         const provider = $("onboarding-model-provider").value;
         if (
-          !confirm(
+          !confirmUi(
             "Disable the " + connectorName(provider) + " model key? Models from this provider will stop working.",
           )
         )
@@ -7947,7 +8771,7 @@
           remove.className = "danger";
           remove.textContent = translateUiText("Remove");
           remove.onclick = async () => {
-            if (!confirm("Remove " + provider.name + "? Its models leave every model picker.")) return;
+            if (!confirmUi("Remove " + provider.name + "? Its models leave every model picker.")) return;
             const removed = await api("DELETE", "/api/custom-providers/" + encodeURIComponent(provider.id));
             if (!removed.ok) {
               setStatus("st-custom-provider", removed.data?.message || "Could not remove this provider.", "err");
@@ -8237,7 +9061,7 @@
         setStatus("st-slack-installation", "Saved. Slack is activating.", "ok");
       };
       $("slack-installation-delete").onclick = async () => {
-        if (!confirm("Remove the Slack bot connection? Slack chat will stop until new tokens are saved.")) return;
+        if (!confirmUi("Remove the Slack bot connection? Slack chat will stop until new tokens are saved.")) return;
         const r = await api("DELETE", "/api/slack-installation");
         if (!r.ok) {
           setStatus("st-slack-installation", r.data?.message || "Remove failed.", "err");
@@ -8249,7 +9073,7 @@
       $("conn-reset").onclick = resetConnForm;
       async function deleteConn(provider) {
         if (
-          !confirm(
+          !confirmUi(
             "Delete the OAuth client for " +
               connectorName(provider) +
               "? This hides the connector in everyone's web UI; existing links stop working.",
@@ -9549,7 +10373,7 @@
         const path = "/api/crons/" + encodeURIComponent(id) + "/destination?scope=" + encodeURIComponent(scope);
         const r = await api("PUT", path, { destination });
         if (!r.ok) {
-          alert(r.data?.message || "Could not update destination.");
+          alertUi(r.data?.message || "Could not update destination.");
           return false;
         }
         dataCache.clear();
@@ -9634,7 +10458,7 @@
           const nextTarget = target.value.trim();
           if (!nextTarget) {
             target.focus();
-            alert("Target is required.");
+            alertUi("Target is required.");
             return;
           }
           const destination = {
@@ -10039,7 +10863,7 @@
             live.length === 1
               ? "from " + (dirLabel(live[0].ownerScopeId) || live[0].ownerScopeId)
               : "from all " + live.length + " scopes";
-          if (!confirm("Remove '" + name + "' " + where + "? It stops being available to agents (kept for audit)."))
+          if (!confirmUi("Remove '" + name + "' " + where + "? It stops being available to agents (kept for audit)."))
             return;
           rm.disabled = true;
           let failed = 0;
@@ -10052,7 +10876,7 @@
           }
           dataCache.clear();
           renderData();
-          if (failed) alert(failed + " scope(s) could not be removed.");
+          if (failed) alertUi(failed + " scope(s) could not be removed.");
         };
         return rm;
       }
@@ -10246,7 +11070,7 @@
         rm.textContent = "Remove";
         rm.onclick = async () => {
           if (
-            !confirm(
+            !confirmUi(
               "Remove '" +
                 (g.name || g.id) +
                 "' from " +
@@ -10263,7 +11087,7 @@
             dataCache.clear();
             renderData();
           } else {
-            alert(r.data?.message || "Failed (" + r.status + ").");
+            alertUi(r.data?.message || "Failed (" + r.status + ").");
           }
         };
         return rm;
@@ -10510,7 +11334,7 @@
                 });
                 busy = false;
                 if (!r.ok) {
-                  alert(r.data?.message || "Failed (" + r.status + ").");
+                  alertUi(r.data?.message || "Failed (" + r.status + ").");
                   return;
                 }
                 dataCache.clear();
@@ -10522,7 +11346,7 @@
               danger: true,
               onClick: async () => {
                 if (busy) return;
-                if (!confirm("Remove this pack and archive its imported skills?")) return;
+                if (!confirmUi("Remove this pack and archive its imported skills?")) return;
                 busy = true;
                 const r = await api("DELETE", "/api/skill-packs/" + encodeURIComponent(s.id));
                 busy = false;
@@ -11252,7 +12076,7 @@
       }
       async function revokeGrant(g) {
         if (
-          !confirm(
+          !confirmUi(
             'Revoke admin access for "' +
               g.principalId +
               '"? The core will refuse this if it would remove the last org admin.',
@@ -12739,7 +13563,7 @@
         resetHint.className = "hint";
         resetBtn.onclick = async () => {
           if (
-            !confirm(
+            !confirmUi(
               "Delete this person's personal DM sessions — transcripts included — and clear their onboarding?\n\nThis is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.",
             )
           )
@@ -12851,7 +13675,7 @@
       function emptyPara(text) {
         const p = document.createElement("p");
         p.className = "empty";
-        p.textContent = text;
+        p.textContent = translateUiText(text);
         return p;
       }
       let slackReq = 0;
@@ -15083,7 +15907,7 @@
         if (!f.openable) return;
         const check = await api("GET", "/api/files/read?id=" + encodeURIComponent(f.id));
         if (!check.ok) {
-          alert(check.data?.message || `Couldn't open file (${check.status}).`);
+          alertUi(check.data?.message || `Couldn't open file (${check.status}).`);
           return;
         }
         const href = API_BASE + "/api/files/download?id=" + encodeURIComponent(f.id);

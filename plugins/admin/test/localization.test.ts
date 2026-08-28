@@ -51,6 +51,37 @@ test("Admin translates governance, credentials, and judgment views", () => {
   ]);
 });
 
+test("Admin translates skills and deep administration views", () => {
+  const start = html.indexOf('const LOCALE_STORAGE_KEY = "qm:locale"');
+  const end = html.indexOf("const $ =", start);
+  const context: Record<string, unknown> = {
+    localStorage: { getItem: () => "zh-CN" },
+    navigator: { language: "en-US" },
+  };
+  runInNewContext(
+    `${html.slice(start, end)}; globalThis.translations = [
+      translateUiText("20 skills · 1 scope"),
+      translateUiText("Search all skills..."),
+      translateUiText("No packs yet — register one above."),
+      translateUiText("Everyone who has used the agent — click a row for their activity, artifacts, and config."),
+      translateUiText("Nothing mirrored yet — the surface pushes messages here as it sees them."),
+      translateUiText("No memory stored for this scope yet. Anything you write here, the agent will remember.")
+    ];`,
+    context,
+  );
+  assert.deepEqual(Array.from(context.translations as string[]), [
+    "20 个技能 · 1 个范围",
+    "搜索全部技能...",
+    "尚无技能包，请在上方注册。",
+    "所有使用过助手的用户；点击一行可查看其活动、资源和配置。",
+    "尚无镜像消息；界面收到消息后会将其推送到此处。",
+    "当前范围尚无记忆。你在此写入的内容会被助手记住。",
+  ]);
+  assert.match(html, /function confirmUi\(message\)/);
+  assert.match(html, /function alertUi\(message\)/);
+  assert.match(html, /const localized = translateUiText\(msg\)/);
+});
+
 test("Admin localization excludes transcripts and raw content", () => {
   const start = html.indexOf('const LOCALE_STORAGE_KEY = "qm:locale"');
   const end = html.indexOf("const $ =", start);
