@@ -134,7 +134,9 @@ test("one dispatchable workflow drives the whole release, main-only and in order
 test("the release refuses a tag it already published and writes the tag last", () => {
   const workflow = readFileSync(".github/workflows/release.yml", "utf8");
 
-  assert.match(workflow, /tag="v\$\(jq -r \.version cli\/package\.json\)"/);
+  assert.match(workflow, /version=\$\(jq -r \.version cli\/package\.json\)/);
+  assert.match(workflow, /cli\/package\.json version must be semver/);
+  assert.match(workflow, /tag="v\$version"/);
   assert.match(workflow, /is already released; bump cli\/package\.json before releasing again/);
   assert.ok(
     workflow.indexOf("already released") < workflow.indexOf("gh release create"),
