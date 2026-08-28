@@ -301,7 +301,13 @@ const FLY_CORE_TEMPLATES = (root: string): Array<{ label: string; path: string }
 
 function coreConditionEnvNames(condition: unknown, out: Set<string>): void {
   if (!condition || typeof condition !== "object") return;
-  const node = condition as { kind?: string; service?: string; name?: string; names?: string[]; conditions?: unknown[] };
+  const node = condition as {
+    kind?: string;
+    service?: string;
+    name?: string;
+    names?: string[];
+    conditions?: unknown[];
+  };
   if (node.kind?.startsWith("env-") && node.service === "core") {
     if (node.name) out.add(node.name);
     for (const name of node.names ?? []) out.add(name);
