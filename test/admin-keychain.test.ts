@@ -93,3 +93,39 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
     await s.close();
   }
 });
+
+test("keychain grants carry a useCount from keychain.materialize audit rows; owner-auth and unrelated grants don't count", async () => {
+  const s = start();
+  try {
+    const cred = await s.keychain.save({
+      ownerId: "U1",
+      service: "github",
+      secret: "ghp_secret",
+      envKey: "GITHUB_TOKEN",
+      accountLabel: "alice",
+    });
+    const grant = await s.keychain.createGrant({
+      credentialId: cred.id,
+      ownerId: "U1",
+      audienceScopeId: scopeId("channel", "C1"),
+      mode: "standing",
+      purpose: "use github for deploys",
+    });
+    const org = scopeId("org", "default-org");
+    const mat = (at: number, resource: string) =>
+      s.built.auditLog.record({ at, principalId: "U1", action: "keychain.materialize", resource, scopeLabel: org });
+    mat(1, `${cred.id} (grant ${grant.id})`);
+    mat(2, `${cred.id} (grant ${grant.id})`);
+    mat(3, `${cred.id} (owner-auth command)`);
+    mat(4, "othercred (grant deadbeef00001111)");
+
+    const r = await fetch(`${s.base}/v1/admin/keychain`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
+    assert.equal(r.status, 200);
+    const d: any = await r.json();
+    const g = d.grants.find((x: { id: string }) => x.id === grant.id);
+    assert.ok(g, "the grant is listed");
+    assert.equal(g.useCount, 2, "counts (grant <id>) rows only, ignoring owner-auth and unrelated grant ids");
+  } finally {
+    await s.close();
+  }
+});

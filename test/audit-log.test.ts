@@ -57,3 +57,31 @@ test("a just-recorded event is immediately visible to tail (read-your-write)", a
     ["grant"],
   );
 });
+
+function matEv(at: number, resource: string): AuditEvent {
+  return { at, principalId: "U1", action: "keychain.materialize", resource, scopeLabel: scopeId("org", "acme") };
+}
+
+test("tail resourceContains keeps only events whose resource includes the substring", async () => {
+  const log = createAuditLog();
+  log.record(matEv(1, "cred1 (grant abc123)"));
+  log.record(matEv(2, "cred1 (owner-auth command)"));
+  log.record(matEv(3, "cred2 (grant def456)"));
+  const got = await log.tail({ limit: 10, resourceContains: "grant" });
+  assert.deepEqual(
+    got.map((e) => e.resource).sort(),
+    ["cred1 (grant abc123)", "cred2 (grant def456)"],
+  );
+});
+
+test("tallyByResource counts events per resource for one action only", async () => {
+  const log = createAuditLog();
+  log.record(matEv(1, "cred1 (grant abc123)"));
+  log.record(matEv(2, "cred1 (grant abc123)"));
+  log.record(matEv(3, "cred1 (owner-auth command)"));
+  log.record(ev(4, "keychain.read"));
+  const tally = await log.tallyByResource!("keychain.materialize");
+  assert.equal(tally.get("cred1 (grant abc123)"), 2);
+  assert.equal(tally.get("cred1 (owner-auth command)"), 1);
+  assert.equal(tally.get("r-keychain.read"), undefined);
+});

@@ -33,6 +33,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     `ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS idempotency_key TEXT`,
     `CREATE INDEX IF NOT EXISTS audit_log_by_at ON audit_log(at DESC)`,
     `CREATE INDEX IF NOT EXISTS audit_log_by_scope_at ON audit_log(scope_label, at DESC)`,
+    `CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS audit_log_by_idempotency_key ON audit_log(idempotency_key) WHERE idempotency_key IS NOT NULL`,
     `DO $$
       BEGIN
@@ -78,7 +79,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       const rows = await q(`SELECT ${COLS} FROM audit_log ORDER BY at DESC, id DESC LIMIT $1`, [MAX]);
       return rows.map(rowToEvent).reverse();
     },
-    async tail({ limit, scopeLabel, action, since }) {
+    async tail({ limit, scopeLabel, action, since, resourceContains }) {
       await Promise.allSettled(pendingWrites);
       const params: unknown[] = [];
       const conds: string[] = [];
@@ -94,6 +95,10 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         params.push(since);
         conds.push(`at >= $${params.length}`);
       }
+      if (resourceContains !== undefined) {
+        params.push(`%${resourceContains}%`);
+        conds.push(`resource LIKE $${params.length}`);
+      }
       const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
       params.push(limit);
       const rows = await q(
@@ -101,6 +106,14 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         params,
       );
       return rows.map(rowToEvent);
+    },
+    async tallyByResource(action) {
+      await Promise.allSettled(pendingWrites);
+      const rows = await q(
+        `SELECT resource, count(*)::bigint AS n FROM audit_log WHERE action = $1 GROUP BY resource`,
+        [action],
+      );
+      return new Map(rows.map((r) => [String(r.resource), Number(r.n)]));
     },
   };
 }

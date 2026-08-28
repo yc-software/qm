@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
-import type { TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
@@ -1374,5 +1374,33 @@ test("admin governance: browse model round-trips, validates, and is org-scoped",
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("the audit view filters by action, resource substring, and limit", async () => {
+  const s = start();
+  try {
+    const scope = scopeId("org", "default-org");
+    const mat = (at: number, resource: string) =>
+      s.built.auditLog.record({ at, principalId: "U1", action: "keychain.materialize", resource, scopeLabel: scope });
+    mat(1, "cred1 (grant aaa111)");
+    mat(2, "cred1 (grant aaa111)");
+    mat(3, "cred2 (grant bbb222)");
+    mat(4, "cred1 (owner-auth command)");
+
+    const byAction = await getJson(s.base, "/v1/admin/audit?scope=org:default-org&action=keychain.materialize");
+    assert.equal(byAction.events.length, 4);
+    assert.ok(byAction.events.every((e: { action: string }) => e.action === "keychain.materialize"));
+
+    const byResource = await getJson(s.base, "/v1/admin/audit?scope=org:default-org&resource=grant");
+    assert.deepEqual(
+      byResource.events.map((e: { resource: string }) => e.resource).sort(),
+      ["cred1 (grant aaa111)", "cred1 (grant aaa111)", "cred2 (grant bbb222)"],
+    );
+
+    const limited = await getJson(s.base, "/v1/admin/audit?scope=org:default-org&limit=1");
+    assert.equal(limited.events.length, 1);
+  } finally {
+    await s.close();
   }
 });

@@ -4,11 +4,13 @@ import { dirname, join } from "node:path";
 import { liveEnvPath } from "./pool.ts";
 import { bestEffort, readEnvFile, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
+import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/harness/codex-auth-file.ts";
 
 export interface AssembledEnv {
   env: Record<string, string>;
   anthropicKeySource: string;
   openaiKeySource: string;
+  codexAuthSource: string;
   harness: "pi" | "mock" | "opencode" | "codex" | "claude";
   liveEnvFile: string;
   warnings: string[];
@@ -100,6 +102,7 @@ export async function assembleEnv(opts: {
   for (const [k, v] of Object.entries(readEnvFile(liveEnvFile))) {
     if (!env[k]) env[k] = v;
   }
+  const wtEnv = readEnvFile(join(opts.worktree, ".env"));
 
   let anthropicKeySource = "";
   if (opts.callerEnv.ANTHROPIC_API_KEY) anthropicKeySource = "your shell export";
@@ -112,7 +115,6 @@ export async function assembleEnv(opts: {
       anthropicKeySource = liveEnvFile;
     }
   }
-  const wtEnv = readEnvFile(join(opts.worktree, ".env"));
   if (!env.ANTHROPIC_API_KEY && wtEnv.ANTHROPIC_API_KEY) {
     env.ANTHROPIC_API_KEY = wtEnv.ANTHROPIC_API_KEY;
     anthropicKeySource = "the worktree .env";
@@ -125,13 +127,22 @@ export async function assembleEnv(opts: {
     openaiKeySource = "the worktree .env";
   }
 
+  if (!env.CODEX_AUTH_FILE && wtEnv.CODEX_AUTH_FILE) env.CODEX_AUTH_FILE = wtEnv.CODEX_AUTH_FILE;
+  let codexAuthSource = "";
+  const codexAuthCandidate = codexAuthFileForEnv({ ...env, ...opts.callerEnv }, true);
+  const codexOAuthConfigured = Boolean(codexAuthCandidate && readCodexOAuthAuthFile(codexAuthCandidate));
+  if (codexOAuthConfigured && codexAuthCandidate) {
+    env.CODEX_AUTH_FILE = codexAuthCandidate;
+    codexAuthSource = codexAuthCandidate;
+  }
+
   let harness: "pi" | "mock" | "opencode" | "codex" | "claude";
   if (opts.callerEnv.HARNESS === "codex" || opts.callerEnv.HARNESS === "claude") {
     harness = opts.callerEnv.HARNESS;
     env.HARNESS = harness;
-    if (harness === "codex" && !env.OPENAI_API_KEY) {
+    if (harness === "codex" && !env.OPENAI_API_KEY && !codexOAuthConfigured) {
       throw new Error(
-        "HARNESS=codex needs OPENAI_API_KEY (its CLI cannot do browser OAuth in a container) -- export it, or add it to the live env file or the worktree .env",
+        "HARNESS=codex needs OPENAI_API_KEY or a readable ChatGPT OAuth auth.json via CODEX_AUTH_FILE (or ~/.codex/auth.json)",
       );
     }
   } else if (env.ANTHROPIC_API_KEY) {
@@ -155,7 +166,7 @@ export async function assembleEnv(opts: {
     if (!env[k] && wtEnv[k]) env[k] = wtEnv[k];
   }
 
-  return { env, anthropicKeySource, openaiKeySource, harness, liveEnvFile, warnings };
+  return { env, anthropicKeySource, openaiKeySource, codexAuthSource, harness, liveEnvFile, warnings };
 }
 
 export function envFileGet(path: string, key: string): string {

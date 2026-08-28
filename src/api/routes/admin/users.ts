@@ -91,7 +91,15 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     pendingAskCount: asks.filter((a) => samePerson(a.ownerId, principalId) && a.status === "pending").length,
   }));
 
-  return sendJson(res, 200, { scopeId: scope, people, credentials, grants, asks, enabled: true });
+  const tally = (await deps.auditLog?.tallyByResource?.("keychain.materialize")) ?? new Map<string, number>();
+  const useCountByGrant = new Map<string, number>();
+  for (const [resource, n] of tally) {
+    const m = /\(grant ([0-9a-f]+)\)$/.exec(resource);
+    if (m) useCountByGrant.set(m[1]!, (useCountByGrant.get(m[1]!) ?? 0) + n);
+  }
+  const grantsWithUse = grants.map((g) => ({ ...g, useCount: useCountByGrant.get(g.id) ?? 0 }));
+
+  return sendJson(res, 200, { scopeId: scope, people, credentials, grants: grantsWithUse, asks, enabled: true });
 }
 
 export async function getUserDetail(ctx: ApiCtx): Promise<void> {

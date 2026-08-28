@@ -86,3 +86,33 @@ test("pg audit log: recordOnce is durable and idempotent across instances", { sk
   assert.equal(events.length, 1);
   assert.equal(events[0]?.action, "layer-updated");
 });
+
+function matEv(at: number, resource: string): AuditEvent {
+  return { at, principalId: "U1", action: "keychain.materialize", resource, scopeLabel: scopeId("org", "acme") };
+}
+
+test("pg audit log: tail resourceContains is a substring filter", { skip }, async () => {
+  await reset(true);
+  const log = createPostgresAuditLog(URL!);
+  log.record(matEv(1, "cred1 (grant abc123)"));
+  log.record(matEv(2, "cred1 (owner-auth command)"));
+  log.record(matEv(3, "cred2 (grant def456)"));
+  const got = await log.tail({ limit: 10, resourceContains: "grant" });
+  assert.deepEqual(
+    got.map((e) => e.resource).sort(),
+    ["cred1 (grant abc123)", "cred2 (grant def456)"],
+  );
+});
+
+test("pg audit log: tallyByResource groups counts per resource for one action", { skip }, async () => {
+  await reset(true);
+  const log = createPostgresAuditLog(URL!);
+  log.record(matEv(1, "cred1 (grant abc123)"));
+  log.record(matEv(2, "cred1 (grant abc123)"));
+  log.record(matEv(3, "cred1 (owner-auth command)"));
+  log.record(ev(4, "keychain.read"));
+  const tally = await log.tallyByResource!("keychain.materialize");
+  assert.equal(tally.get("cred1 (grant abc123)"), 2);
+  assert.equal(tally.get("cred1 (owner-auth command)"), 1);
+  assert.equal(tally.get("r-keychain.read"), undefined);
+});

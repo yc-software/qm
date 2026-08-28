@@ -12,6 +12,7 @@ const EGRESS_LIST_LIMIT = 1000;
 const RUNS_LIST_LIMIT = 200;
 const ERRORS_LIST_LIMIT = 200;
 const AUDIT_TAIL_LIMIT = 200;
+const AUDIT_FILTERED_LIMIT = 2000;
 
 function latencySummary(values: number[]): {
   count: number;
@@ -334,10 +335,19 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
   const { actor, scope } = authz;
   audit(deps, { principalId: actor.id, action: "audit.read", resource: "audit", scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
+  const action = ctx.url.searchParams.get("action") ?? undefined;
+  const resourceContains = ctx.url.searchParams.get("resource") ?? undefined;
+  const filtered = action !== undefined || resourceContains !== undefined;
+  const cap = filtered ? AUDIT_FILTERED_LIMIT : AUDIT_TAIL_LIMIT;
+  const requested = Number(ctx.url.searchParams.get("limit"));
+  const fallback = filtered ? cap : AUDIT_TAIL_LIMIT;
+  const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, cap) : fallback;
   const events = (
     (await deps.auditLog?.tail({
-      limit: AUDIT_TAIL_LIMIT,
+      limit,
       ...(orgWide ? {} : { scopeLabel: scope as ScopeId }),
+      ...(action === undefined ? {} : { action }),
+      ...(resourceContains === undefined ? {} : { resourceContains }),
     })) ?? []
   ).map((e) => ({
     ts: e.at,

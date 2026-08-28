@@ -18,6 +18,104 @@ type JsonRpcMessage = {
   error?: { code?: number; message?: string; data?: unknown };
 };
 
+type JsonRpcResultValidator<T> = (value: unknown) => value is T;
+const MAX_CANCELLED_REQUEST_IDS = 256;
+
+function isJsonRpcId(value: unknown): value is JsonRpcId {
+  return (typeof value === "string" && value.length > 0) || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isJsonRpcMessage(value: unknown): value is JsonRpcMessage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const message = value as Record<string, unknown>;
+  const hasId = "id" in message && message.id !== undefined;
+  const hasMethod = "method" in message;
+  const hasResult = "result" in message;
+  const hasError = "error" in message;
+  if (!hasId && !hasMethod) return false;
+  if (hasId && !isJsonRpcId(message.id)) return false;
+  if (hasMethod && typeof message.method !== "string") return false;
+  if (hasMethod && (hasResult || hasError)) return false;
+  if (!hasMethod && (!hasId || !(hasResult || hasError))) return false;
+  if (hasResult && hasError) return false;
+  if (hasError) {
+    const error = message.error;
+    if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+    const errorRecord = error as Record<string, unknown>;
+    if (typeof errorRecord.code !== "number" || typeof errorRecord.message !== "string") return false;
+  }
+  return true;
+}
+
+const CODEX_DIAGNOSTIC_SENSITIVE_KEYS = new Set([
+  "accesstoken",
+  "refreshtoken",
+  "idtoken",
+  "apikey",
+  "clientsecret",
+  "credential",
+  "credentials",
+  "password",
+  "passphrase",
+  "secret",
+  "token",
+  "authorization",
+  "proxyauthorization",
+  "cookie",
+  "setcookie",
+]);
+
+function diagnosticKeyIsSensitive(key: string): boolean {
+  return CODEX_DIAGNOSTIC_SENSITIVE_KEYS.has(key.toLowerCase().replace(/[^a-z]/g, ""));
+}
+
+function redactStructuredDiagnosticsValue(value: unknown, sensitive = false): unknown {
+  if (sensitive) return "[redacted]";
+  if (Array.isArray(value)) return value.map((item) => redactStructuredDiagnosticsValue(item));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      redactStructuredDiagnosticsValue(item, diagnosticKeyIsSensitive(key)),
+    ]),
+  );
+}
+
+function redactStructuredDiagnostics(value: string): string {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object") return value;
+    return JSON.stringify(redactStructuredDiagnosticsValue(parsed));
+  } catch {
+    return value;
+  }
+}
+
+export function redactCodexDiagnostics(value: string): string {
+  return redactStructuredDiagnostics(value)
+    .replace(
+      /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)\[[\s\S]*?(?:\]|$)/gi,
+      "$1[redacted]",
+    )
+    .replace(
+      /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)\{[\s\S]*$/gi,
+      "$1{redacted}",
+    )
+    .replace(
+      /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)(["'])(?:(?:\\[\s\S])|(?!\2)[\s\S])*(?:\2|$)/gi,
+      "$1$2[redacted]$2",
+    )
+    .replace(
+      /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)(?!(?:["']|\[))[^,\r\n}\]]+/gi,
+      "$1[redacted]",
+    )
+    .replace(/\b(?:Basic|Digest)\s+\S+/gi, "[redacted]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/\bsk-[A-Za-z0-9._-]{8,}/g, "[redacted]")
+    .replace(/\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[redacted]")
+    .replace(/\b(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{32,}\b/g, "[redacted]");
+}
+
 export interface CodexAppServerOptions {
   binaryPath: string;
   cwd: string;
@@ -30,7 +128,11 @@ export class CodexAppServer {
   readonly process: ChildProcess;
   private readonly options: CodexAppServerOptions;
   private nextId = 1;
-  private readonly pending = new Map<JsonRpcId, { resolve(value: unknown): void; reject(error: Error): void }>();
+  private readonly pending = new Map<
+    JsonRpcId,
+    { resolve(value: unknown): void; reject(error: Error): void; validate?: JsonRpcResultValidator<unknown> }
+  >();
+  private readonly cancelledRequestIds = new Set<JsonRpcId>();
   private writeTail = Promise.resolve();
   private eventTail = Promise.resolve();
   private stderr = "";
@@ -69,8 +171,9 @@ export class CodexAppServer {
     });
     this.process.once("close", (code, signal) => {
       this.closed = true;
+      const stderr = redactCodexDiagnostics(this.stderr.trim());
       this.closeError = new Error(
-        `Codex app-server exited (${code ?? signal ?? "unknown"})${this.stderr.trim() ? `: ${this.stderr.trim()}` : ""}`,
+        `Codex app-server exited (${code ?? signal ?? "unknown"})${stderr ? `: ${stderr}` : ""}`,
       );
       this.failAll(this.closeError);
       resolveProcessClosed();
@@ -89,12 +192,47 @@ export class CodexAppServer {
     await this.notify("initialized");
   }
 
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
+  request(method: string, params?: unknown, signal?: AbortSignal): Promise<unknown>;
+  request<T>(method: string, params: unknown, validate: JsonRpcResultValidator<T>, signal?: AbortSignal): Promise<T>;
+  request<T>(
+    method: string,
+    params?: unknown,
+    validateOrSignal?: JsonRpcResultValidator<T> | AbortSignal,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error("Codex app-server is closed"));
+    const validate = typeof validateOrSignal === "function" ? validateOrSignal : undefined;
+    let requestSignal: AbortSignal | undefined;
+    if (validate) requestSignal = signal;
+    else if (typeof validateOrSignal !== "function") requestSignal = validateOrSignal;
+    if (requestSignal?.aborted) return Promise.reject(new Error("Codex app-server request cancelled"));
     const id = this.nextId++;
-    const result = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: (value) => resolve(value as T), reject });
+    let rejectResult!: (error: Error) => void;
+    const result = new Promise<unknown>((resolve, reject) => {
+      rejectResult = reject;
+      this.pending.set(id, {
+        resolve,
+        reject,
+        ...(validate ? { validate: validate as JsonRpcResultValidator<unknown> } : {}),
+      });
     });
+    if (requestSignal) {
+      const onAbort = () => {
+        if (!this.pending.delete(id)) return;
+        if (this.cancelledRequestIds.size >= MAX_CANCELLED_REQUEST_IDS) {
+          this.failAll(new CodexRpcError("Codex app-server exceeded its cancelled request limit"));
+          this.process.kill("SIGTERM");
+        } else {
+          this.cancelledRequestIds.add(id);
+        }
+        rejectResult(new Error("Codex app-server request cancelled"));
+      };
+      requestSignal.addEventListener("abort", onAbort, { once: true });
+      void result.then(
+        () => requestSignal.removeEventListener("abort", onAbort),
+        () => requestSignal.removeEventListener("abort", onAbort),
+      );
+    }
     void this.send({ id, method, ...(params === undefined ? {} : { params }) }).catch((error) => {
       const waiter = this.pending.get(id);
       this.pending.delete(id);
@@ -120,21 +258,38 @@ export class CodexAppServer {
     if (!line.trim()) return;
     let message: JsonRpcMessage;
     try {
-      message = JSON.parse(line) as JsonRpcMessage;
+      const parsed: unknown = JSON.parse(line);
+      if (!isJsonRpcMessage(parsed)) throw new Error("Codex app-server emitted an invalid JSON-RPC message");
+      message = parsed;
     } catch {
-      throw new Error(`Codex app-server emitted invalid JSON: ${line.slice(0, 500)}`);
+      throw new Error(redactCodexDiagnostics(`Codex app-server emitted invalid JSON: ${line.slice(0, 500)}`));
     }
     if (message.id !== undefined && !message.method) {
       const waiter = this.pending.get(message.id);
-      if (!waiter) return;
+      if (!waiter) {
+        if (this.cancelledRequestIds.delete(message.id)) return;
+        throw new CodexRpcError(`Codex app-server sent an unknown response id ${String(message.id)}`);
+      }
       this.pending.delete(message.id);
-      if (message.error)
+      if ("error" in message) {
+        if (!message.error || typeof message.error !== "object") {
+          waiter.reject(new CodexRpcError("Codex app-server response has an invalid error"));
+          return;
+        }
         waiter.reject(
           new CodexRpcError(
-            `Codex ${message.error.code ?? "error"}: ${message.error.message ?? JSON.stringify(message.error.data)}`,
+            redactCodexDiagnostics(
+              `Codex ${message.error.code ?? "error"}: ${message.error.message ?? JSON.stringify(message.error.data)}`,
+            ),
           ),
         );
-      else waiter.resolve(message.result);
+      } else if ("result" in message) {
+        if (waiter.validate && !waiter.validate(message.result)) {
+          waiter.reject(new CodexRpcError("Codex app-server response has an invalid result"));
+          return;
+        }
+        waiter.resolve(message.result);
+      } else waiter.reject(new CodexRpcError("Codex app-server response is missing result or error"));
       return;
     }
     if (!message.method) return;
@@ -165,5 +320,6 @@ export class CodexAppServer {
   private failAll(error: Error): void {
     for (const waiter of this.pending.values()) waiter.reject(error);
     this.pending.clear();
+    this.cancelledRequestIds.clear();
   }
 }

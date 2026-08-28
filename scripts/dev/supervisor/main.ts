@@ -318,7 +318,9 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   let harnessDetail = `live ${assembled.harness} turns (anthropic key from ${assembled.anthropicKeySource})`;
   if (assembled.harness === "mock") harnessDetail = "mock turns";
   else if (assembled.harness === "codex") {
-    harnessDetail = `live codex turns (openai key from ${assembled.openaiKeySource || "the environment"})`;
+    harnessDetail = assembled.codexAuthSource
+      ? "live codex turns (ChatGPT OAuth auth.json)"
+      : `live codex turns (openai key from ${assembled.openaiKeySource || "the environment"})`;
   } else if (assembled.harness === "claude") harnessDetail = "live claude turns (native CLI authentication)";
   phase("env", "ok", harnessDetail);
 
