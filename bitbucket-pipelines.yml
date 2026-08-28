@@ -1,0 +1,78 @@
+image: node:24-bookworm
+
+definitions:
+  caches:
+    npm: ~/.npm
+  services:
+    docker:
+      memory: 4096
+  steps:
+    - step: &validate
+        name: Validate QM and First Touch layer
+        runs-on:
+          - self.hosted
+          - linux.arm64
+        caches:
+          - npm
+        script:
+          - set -euo pipefail
+          - apt-get update
+          - apt-get install -y --no-install-recommends curl unzip
+          - curl -fsSL https://releases.hashicorp.com/terraform/1.13.0/terraform_1.13.0_linux_arm64.zip -o /tmp/terraform.zip
+          - unzip -q /tmp/terraform.zip -d /usr/local/bin
+          - npm ci
+          - npm run typecheck
+          - npm --prefix cli run typecheck
+          - npm --prefix cli run build
+          - test -n "$QM_DEPLOYMENT_DIR"
+          - npm --prefix "$QM_DEPLOYMENT_DIR" ci
+          - npm --prefix "$QM_DEPLOYMENT_DIR" run validate
+          - terraform -chdir="$QM_DEPLOYMENT_DIR/infra" fmt -check
+          - terraform -chdir="$QM_DEPLOYMENT_DIR/infra" init -backend=false
+          - terraform -chdir="$QM_DEPLOYMENT_DIR/infra" validate
+
+    - step: &deploy-production
+        name: Deploy First Touch QM to production
+        runs-on:
+          - self.hosted
+          - linux.arm64
+        oidc: true
+        deployment: production
+        services:
+          - docker
+        caches:
+          - npm
+        script:
+          - set -euo pipefail
+          - apt-get update
+          - test "$BITBUCKET_BRANCH" = "main"
+          - apt-get install -y --no-install-recommends curl unzip docker.io
+          - curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o /tmp/awscliv2.zip
+          - unzip -q /tmp/awscliv2.zip -d /tmp
+          - /tmp/aws/install --update
+          - test -n "$QM_DEPLOYMENT_DIR"
+          - test -n "$AWS_ROLE_ARN"
+          - test -n "$AWS_REGION"
+          - export AWS_ROLE_SESSION_NAME="qm-${BITBUCKET_BUILD_NUMBER}"
+          - export AWS_WEB_IDENTITY_TOKEN_FILE=/tmp/bitbucket-oidc-token
+          - export AWS_DEFAULT_REGION="$AWS_REGION"
+          - install -m 600 /dev/null "$AWS_WEB_IDENTITY_TOKEN_FILE"
+          - printf '%s' "$BITBUCKET_STEP_OIDC_TOKEN" > "$AWS_WEB_IDENTITY_TOKEN_FILE"
+          - rm -f /tmp/awscliv2.zip
+          - aws sts get-caller-identity --query Arn --output text | grep -F ":assumed-role/$(basename "$AWS_ROLE_ARN")/"
+          - npm ci
+          - npm --prefix cli run build
+          - node cli/bin/qm.ts up --config "$QM_DEPLOYMENT_DIR/qm.config.jsonc" --build-from=. --yes
+          - export QM_PUBLIC_URL=$(node cli/bin/qm.ts config get publicUrl --config "$QM_DEPLOYMENT_DIR/qm.config.jsonc")
+          - curl --fail --silent --show-error --retry 20 --retry-delay 15 --retry-all-errors "$QM_PUBLIC_URL/healthz"
+
+pipelines:
+  pull-requests:
+    "**":
+      - step: *validate
+  branches:
+    main:
+      - step: *validate
+      - step:
+          <<: *deploy-production
+          trigger: manual

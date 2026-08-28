@@ -6,7 +6,7 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { scopeStorageKey } from "../util/scope-storage-key.ts";
-import { swallow, swallowAs, errMessage } from "../util/errors.ts";
+import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
@@ -195,8 +195,8 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       const status =
         (e as { $metadata?: { httpStatusCode?: number }; status?: number })?.$metadata?.httpStatusCode ??
         (e as { status?: number })?.status;
-      if (!/NoSuchKey|NotFound/.test(code) && status !== 404) swallow("aws-sandbox: hydrate", e);
-      return false;
+      if (/NoSuchKey|NotFound/.test(code) || status === 404) return false;
+      throw e;
     }
     if (!bytes || !bytes.length) return false;
     await writeAbsBytes(id, HOME_TAR, bytes);
@@ -262,15 +262,21 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
           if (alive && stale) {
             endpointById.set(stored.microvmId, stored.endpoint);
             await ensureRunning(stored.microvmId).catch(() => {});
-            await snapshotHome(scope, stored.microvmId).catch((e) =>
-              reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope),
-            );
+            await snapshotHome(scope, stored.microvmId);
             await api.terminate(stored.microvmId).catch(() => {});
           }
         }
         const body = await launchBody(scope);
         scopeByMicrovm.set(body.id, scope);
-        const hydrated = await hydrateHome(scope, body.id);
+        let hydrated: boolean;
+        try {
+          hydrated = await hydrateHome(scope, body.id);
+        } catch (error) {
+          scopeByMicrovm.delete(body.id);
+          endpointById.delete(body.id);
+          await api.terminate(body.id).catch(() => {});
+          throw error;
+        }
         await store.put(scope, {
           microvmId: body.id,
           endpoint: body.endpoint,

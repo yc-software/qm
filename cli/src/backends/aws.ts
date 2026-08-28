@@ -2639,20 +2639,12 @@ function assertAwsPublicRouting(
   }
   if (targetGroups.length !== ingress.length) throw new Error("ALB has target groups for private or unknown services");
   const defaults = listener.DefaultActions ?? [];
-  if (hasPortal) {
-    if (
-      defaults.length !== 1 ||
-      defaults[0]?.Type !== "forward" ||
-      defaults[0].TargetGroupArn !== targets.get("portal")
-    ) {
-      throw new Error("portal listener default does not route only to portal");
-    }
-  } else if (
+  if (!hasPortal && (
     defaults.length !== 1 ||
     defaults[0]?.Type !== "fixed-response" ||
     defaults[0].FixedResponseConfig?.StatusCode !== "404" ||
     defaults[0].TargetGroupArn
-  ) {
+  )) {
     throw new Error("non-portal listener default must return a fixed 404 response");
   }
   const rules =
@@ -2665,15 +2657,42 @@ function assertAwsPublicRouting(
           Values?: string[];
           PathPatternConfig?: { Values?: string[] };
           HostHeaderConfig?: { Values?: string[] };
+          HttpHeaderConfig?: { HttpHeaderName?: string; Values?: string[] };
         }>;
       }>;
-    }>(aws, ["elbv2", "describe-rules", "--listener-arn", listener.ListenerArn!]).Rules ?? [];
+  }>(aws, ["elbv2", "describe-rules", "--listener-arn", listener.ListenerArn!]).Rules ?? [];
   const nonDefault = rules.filter((rule) => !rule.IsDefault);
-  if (hasPortal && !coreHosts.length && nonDefault.length)
+  const defaultPortalForward =
+    defaults.length === 1 &&
+    defaults[0]?.Type === "forward" &&
+    defaults[0].TargetGroupArn === targets.get("portal");
+  const originGate = nonDefault.find((rule) => {
+    const action = rule.Actions?.length === 1 ? rule.Actions[0] : undefined;
+    const condition = rule.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
+    return (
+      action?.Type === "forward" &&
+      action.TargetGroupArn === targets.get("portal") &&
+      condition?.Field === "http-header" &&
+      !!condition.HttpHeaderConfig?.HttpHeaderName?.trim() &&
+      !!condition.HttpHeaderConfig.Values?.length
+    );
+  });
+  const headerGatedPortal =
+    !coreHosts.length &&
+    defaults.length === 1 &&
+    defaults[0]?.Type === "fixed-response" &&
+    defaults[0].FixedResponseConfig?.StatusCode === "403" &&
+    !defaults[0].TargetGroupArn &&
+    originGate !== undefined;
+  if (hasPortal && !defaultPortalForward && !headerGatedPortal) {
+    throw new Error("portal listener must default to portal or require a single header-gated portal rule");
+  }
+  const routingRules = originGate ? nonDefault.filter((rule) => rule !== originGate) : nonDefault;
+  if (hasPortal && !coreHosts.length && routingRules.length)
     throw new Error("portal mode must not expose non-default ALB rules");
   if (hasPortal && coreHosts.length) {
     const found: string[] = [];
-    for (const rule of nonDefault) {
+    for (const rule of routingRules) {
       const action = rule.Actions?.length === 1 ? rule.Actions[0] : undefined;
       const condition = rule.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
       const values =
@@ -2692,7 +2711,7 @@ function assertAwsPublicRouting(
     }
   }
   if (!hasPortal) {
-    const coreRule = nonDefault.filter(
+    const coreRule = routingRules.filter(
       (rule) =>
         rule.Actions?.length === 1 &&
         rule.Actions[0]?.Type === "forward" &&
@@ -2705,7 +2724,7 @@ function assertAwsPublicRouting(
     if (coreRule.length !== 1) {
       throw new Error("non-portal ALB must route only /v1/* directly to core");
     }
-    if (nonDefault.length !== 1) throw new Error("non-portal ALB has unexpected non-default rules");
+    if (routingRules.length !== 1) throw new Error("non-portal ALB has unexpected non-default rules");
   }
   return targets;
 }

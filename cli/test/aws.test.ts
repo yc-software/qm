@@ -96,7 +96,7 @@ else if (a.includes("lambda-microvms list-microvm-image-versions")) console.log(
 else if (a.includes("elbv2 describe-load-balancers")) console.log(JSON.stringify({ LoadBalancers: [{ LoadBalancerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/test/1", DNSName: process.env.AWS_FAKE_ALB_DNS || "agent.acme.example", State: { Code: "active" } }] }));
 else if (a.includes("elbv2 describe-listeners")) {
   const protocol = process.env.AWS_FAKE_LISTENER_PROTOCOL || "HTTPS";
-  const defaults = process.env.AWS_FAKE_DEFAULT_FORWARD === "1" ? [{ Type: "forward", TargetGroupArn: ${JSON.stringify(targetArn)} }] : ${frontService === "portal" ? JSON.stringify([{ Type: "forward", TargetGroupArn: targetArn }]) : JSON.stringify([{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "404" } }])};
+  const defaults = process.env.AWS_FAKE_ORIGIN_GATE === "1" ? [{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "403" } }] : process.env.AWS_FAKE_DEFAULT_FORWARD === "1" ? [{ Type: "forward", TargetGroupArn: ${JSON.stringify(targetArn)} }] : ${frontService === "portal" ? JSON.stringify([{ Type: "forward", TargetGroupArn: targetArn }]) : JSON.stringify([{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "404" } }])};
   const listeners = [{ ListenerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:listener/app/test/1/2", Protocol: protocol, Port: protocol === "HTTPS" ? 443 : 80, Certificates: protocol === "HTTPS" ? [{ CertificateArn: "arn:aws:acm:us-west-2:123456789012:certificate/test" }] : [], DefaultActions: defaults }];
   if (process.env.AWS_FAKE_EXTRA_HTTP_LISTENER === "redirect") listeners.push({ ListenerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:listener/app/test/1/3", Protocol: "HTTP", Port: 80, Certificates: [], DefaultActions: [{ Type: "redirect", RedirectConfig: { Protocol: "HTTPS", Port: "443", StatusCode: "HTTP_301" } }] });
   if (process.env.AWS_FAKE_EXTRA_HTTP_LISTENER === "forward") listeners.push({ ListenerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:listener/app/test/1/3", Protocol: "HTTP", Port: 80, Certificates: [], DefaultActions: [{ Type: "forward", TargetGroupArn: ${JSON.stringify(targetArn)} }] });
@@ -110,6 +110,7 @@ else if (a.includes("elbv2 describe-rules")) {
   if (rules[0] && process.env.AWS_FAKE_EXTRA_ACTION === "1") rules[0].Actions.push({ Type: "authenticate-oidc" });
   if (rules[0] && process.env.AWS_FAKE_EXTRA_CONDITION === "1") rules[0].Conditions.push({ Field: "host-header", HostHeaderConfig: { Values: ["other.example"] } });
   if (process.env.AWS_FAKE_EXTRA_RULE === "1") rules.push({ IsDefault: false, Actions: [{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "503" } }], Conditions: [{ Field: "path-pattern", PathPatternConfig: { Values: ["/v1/*"] } }] });
+  if (process.env.AWS_FAKE_ORIGIN_GATE === "1") rules.push({ IsDefault: false, Actions: [{ Type: "forward", TargetGroupArn: ${JSON.stringify(targetArn)} }], Conditions: [{ Field: "http-header", HttpHeaderConfig: { HttpHeaderName: "X-Origin-Verify", Values: ["secret"] } }] });
   console.log(JSON.stringify({ Rules: rules }));
 }
 else if (a.includes("elbv2 describe-target-health")) console.log(JSON.stringify({ TargetHealthDescriptions: [{ TargetHealth: { State: process.env.AWS_FAKE_UNHEALTHY_TARGET === "1" ? "unhealthy" : "healthy" } }] }));
@@ -921,6 +922,22 @@ test("AWS deploy requires the live core-only ALB to default 404 and expose exact
       portal.restore();
     }
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS deploy accepts a header-gated portal origin with a fixed 403 default", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-origin-gate-"));
+  const fake = statefulAws(dir, config);
+  const prior = process.env.AWS_FAKE_ORIGIN_GATE;
+  process.env.AWS_FAKE_ORIGIN_GATE = "1";
+  try {
+    await awsUp(config, dir, { dryRun: true });
+    assert.match(readFileSync(fake.log, "utf8"), /elbv2 describe-rules/);
+  } finally {
+    if (prior === undefined) delete process.env.AWS_FAKE_ORIGIN_GATE;
+    else process.env.AWS_FAKE_ORIGIN_GATE = prior;
+    fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });

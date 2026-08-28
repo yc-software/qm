@@ -98,6 +98,22 @@ test("durable $HOME: state survives the body dying via the S3 snapshot", async (
   assert.equal(await sb.readFile(h2, "notes/todo.txt"), "buy milk");
 });
 
+test("snapshot read failures abort provisioning instead of starting with an empty home", async () => {
+  const fake = installFakeMicrovm();
+  const send = fake.s3.send;
+  fake.s3.send = async (command) => {
+    if ((command as { constructor: { name: string } }).constructor.name === "GetObjectCommand") {
+      throw new Error("S3 unavailable");
+    }
+    return send(command);
+  };
+  const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
+
+  await assert.rejects(sb.provision(rw(scopeId("personal", "U-fail-closed"))), /S3 unavailable/);
+  assert.equal(fake.s3store.size, 0);
+  assert.equal([...fake.bodies.values()][0]?.state, "TERMINATED");
+});
+
 test("a body nearing the 8h cap is rotated: snapshot, terminate, relaunch, rehydrate", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake, { rotateAfterSeconds: 0, snapshotIntervalMs: 0 });
@@ -111,6 +127,26 @@ test("a body nearing the 8h cap is rotated: snapshot, terminate, relaunch, rehyd
   assert.notEqual(h2.id, h1.id);
   assert.equal(fake.bodies.get(h1.id)!.state, "TERMINATED", "old body terminated");
   assert.equal(await sb.readFile(h2, "keep.txt"), "v1", "state carried across the rotation");
+});
+
+test("rotation keeps the old body when its final snapshot fails", async () => {
+  const fake = installFakeMicrovm();
+  const sb = makeSandbox(fake, { rotateAfterSeconds: 0, snapshotIntervalMs: 0 });
+  const layers = rw(scopeId("personal", "U-rotate-fail"));
+  const h1 = await sb.provision(layers);
+  await sb.writeFile(h1, "keep.txt", "v1");
+  await sb.teardown(h1);
+  const send = fake.s3.send;
+  fake.s3.send = async (command) => {
+    if ((command as { constructor: { name: string } }).constructor.name === "PutObjectCommand") {
+      throw new Error("S3 unavailable");
+    }
+    return send(command);
+  };
+  await sleep(3);
+
+  await assert.rejects(sb.provision(layers), /S3 unavailable/);
+  assert.notEqual(fake.bodies.get(h1.id)?.state, "TERMINATED");
 });
 
 test("reapDeepIdle terminates a parked body but keeps its durable S3 state", async () => {
