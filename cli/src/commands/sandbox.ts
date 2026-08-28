@@ -443,7 +443,15 @@ export function recordSandboxPin(configPath: string, image: string | undefined, 
   writeFileSync(configPath, updateConfigSandbox(readFileSync(configPath, "utf8"), updates));
 }
 
+export function assertPublishableSandbox(config: QmConfig): void {
+  if (config.sandbox?.backend !== "boxd") return;
+  throw new CliError(
+    'this deployment runs boxd microVMs ("sandbox.backend": "boxd"), so there is nothing to publish — agent computers boot the cluster\'s template and receive the skill layer from every `qm up`; binaries under sandbox/ do not reach them',
+  );
+}
+
 export function runSandboxPublish(opts: SandboxPublishOpts): { image: string } | undefined {
+  assertPublishableSandbox(opts.config);
   let prepared = prepare(opts);
   assertPublishPlatform(prepared.dockerfileBody);
   const repository = publishedRepository(opts);

@@ -860,11 +860,11 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
     { sandbox: { secretEnv: ["1BAD"] }, rx: /not a valid env var name/ },
     {
       sandbox: { backend: "k8s", app: "acme-sandboxes" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*or "aws"/,
+      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*or "boxd"/,
     },
     {
       sandbox: { backend: "fly", app: "acme-sandboxes" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*or "aws"/,
+      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*or "boxd"/,
     },
     { sandbox: { backend: "sprites" }, rx: /"sandbox.backend": "sprites" requires "sandbox.app"/ },
     {
@@ -1268,4 +1268,38 @@ test("a mock deployment is named as one, and a real harness draws no warning", (
   withConfig({ target: "fly", appPrefix: "acme", env: { core: {} } }, ({ path }) => {
     assert.equal(mockHarnessWarning(loadConfigAt(path).config), undefined, "the fly template renders HARNESS=pi");
   });
+});
+
+test("boxd is a first-class sandbox substrate on every target and takes no Fly layer-image settings", () => {
+  const aws = {
+    accountId: "123456789012",
+    region: "us-west-2",
+    cluster: "acme",
+    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+    secretsPrefix: "acme/",
+    imageLabel: "release",
+    networking: { cloudMapNamespace: "acme.internal" },
+    services: { core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 } },
+  };
+  for (const extra of [{}, { target: "fly", region: "sjc", flyOrg: "acme" }, { target: "aws", aws }]) {
+    withConfig({ ...extra, sandbox: { backend: "boxd" } }, ({ path }) => {
+      const { config } = loadConfigAt(path);
+      assert.equal(config.sandbox?.backend, "boxd");
+      assert.deepEqual(sandboxCoreEnv(config), { env: { SANDBOX_BACKEND: "boxd" }, missingSecrets: [] });
+    });
+  }
+  for (const [key, value] of [
+    ["app", "acme-sandboxes"],
+    ["image", `registry.fly.io/acme-sandboxes@sha256:${"a".repeat(64)}`],
+    ["baseImage", `registry.fly.io/base@sha256:${"b".repeat(64)}`],
+    ["env", { TZ: "UTC" }],
+    ["secretEnv", ["COMPANY_TOKEN"]],
+  ] as const) {
+    withConfig({ sandbox: { backend: "boxd", [key]: value } }, ({ path }) => {
+      assert.throws(
+        () => loadConfigAt(path),
+        new RegExp(`"sandbox.backend": "boxd" runs boxd microVMs, which ignore "sandbox.${key}"`),
+      );
+    });
+  }
 });

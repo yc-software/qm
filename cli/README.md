@@ -69,6 +69,10 @@ pinned sandbox base, mounts the host Docker socket into trusted core, and connec
 core to each sandbox's private network. An explicit `sandbox.image` uses that
 runnable local image instead.
 
+On any target, `sandbox.backend: "boxd"` runs each agent computer as a boxd microVM
+(needs `BOXD_API_KEY`; no `sandbox.app`, no layer image to publish — skills arrive through
+the deployment-layer sync on every `up`).
+
 On AWS, `up` snapshots the RDS instance under the deploy lease before its first
 mutation, names the snapshot after the deployment manifest it precedes, and
 records it in that manifest. `rollback` restores code and configuration only,

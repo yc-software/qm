@@ -380,3 +380,49 @@ test("the .env.example catalog names every secret exactly once", () => {
     assert.deepEqual(duplicated, [], `services=${services.join("+")} lists a secret twice`);
   }
 });
+
+test("the boxd API key is a catalog secret exactly when the sandbox backend is boxd, on every target", () => {
+  const aws = {
+    accountId: "123456789012",
+    region: "us-west-2",
+    cluster: "acme",
+    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+    secretsPrefix: "acme/",
+    imageLabel: "release",
+    networking: { cloudMapNamespace: "acme.internal" },
+    services: { core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 } },
+  } as const;
+  for (const extra of [{}, { target: "fly" as const }, { target: "aws" as const, aws }]) {
+    assert.ok(secretByName(makeConfig({ ...extra, sandbox: { backend: "boxd" } }), "BOXD_API_KEY").required);
+    assert.ok(!computedSecrets(makeConfig(extra)).some((secret) => secret.name === "BOXD_API_KEY"));
+  }
+  assert.ok(
+    !computedSecrets(makeConfig({ sandbox: { backend: "boxd" } })).some((secret) => secret.name === "SPRITES_TOKEN"),
+  );
+});
+
+test("an explicit sandbox.backend drives the substrate secret on docker and fly too", () => {
+  assert.ok(secretByName(makeConfig({ sandbox: { backend: "sprites", app: "acme-sb" } }), "SPRITES_TOKEN").required);
+  assert.ok(
+    secretByName(makeConfig({ target: "fly", sandbox: { backend: "sprites", app: "acme-sb" } }), "SPRITES_TOKEN")
+      .required,
+  );
+  assert.ok(
+    !computedSecrets(makeConfig({ sandbox: { app: "acme-sb" } })).some((secret) => secret.name === "SPRITES_TOKEN"),
+  );
+});
+
+test("the Fly sandbox token is not demanded when a Fly deployment runs its agent computers on boxd", () => {
+  assert.ok(secretByName(makeConfig({ target: "fly" }), "FLY_SANDBOX_API_TOKEN").required);
+  assert.ok(
+    secretByName(
+      makeConfig({ target: "fly", sandbox: { backend: "sprites", app: "acme-sb" } }),
+      "FLY_SANDBOX_API_TOKEN",
+    ).required,
+  );
+  assert.ok(
+    !computedSecrets(makeConfig({ target: "fly", sandbox: { backend: "boxd" } })).some(
+      (secret) => secret.name === "FLY_SANDBOX_API_TOKEN",
+    ),
+  );
+});

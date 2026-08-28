@@ -267,6 +267,10 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         SANDBOX_BACKEND: config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "sprites",
         ...stores,
       });
+    } else if (config.sandbox?.backend === "boxd") {
+      delete env.FLY_BASE_IMAGE;
+      delete env.FLY_SANDBOX_APP_NAME;
+      Object.assign(env, { SANDBOX_BACKEND: "boxd", ...stores });
     } else {
       delete env.FLY_BASE_IMAGE;
       delete env.FLY_SANDBOX_APP_NAME;

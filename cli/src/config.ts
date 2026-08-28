@@ -45,7 +45,7 @@ export interface PluginEntry {
 }
 
 export interface SandboxConfig {
-  backend?: "local" | "sprites" | "aws";
+  backend?: "local" | "sprites" | "aws" | "boxd";
   app?: string;
   image?: string;
   baseImage?: string;
@@ -208,6 +208,9 @@ const SANDBOX_PIN_PENDING = `"sandbox.app" is set but no sandbox layer image is 
 export const localSandboxActive = (config: QmConfig): boolean =>
   config.target === "docker" && config.sandbox?.backend === "local";
 
+export const flySandboxAppExpected = (config: QmConfig): boolean =>
+  !localSandboxActive(config) && config.sandbox?.backend !== "boxd";
+
 export const sandboxPinPending = (config: QmConfig): boolean =>
   config.target !== "aws" && !localSandboxActive(config) && Boolean(config.sandbox?.app && !config.sandbox.image);
 
@@ -236,6 +239,7 @@ export function sandboxCoreEnv(
     if (sb.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
     return { env, missingSecrets };
   }
+  if (sb.backend === "boxd") env.SANDBOX_BACKEND = "boxd";
   if (sb.app) {
     if (!sb.image) throw new CliError(SANDBOX_PIN_PENDING, { clause: "config.v1" });
     const violation = sandboxImagePinErrors(config)[0];
@@ -1335,9 +1339,9 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   };
   const out: SandboxConfig = {};
   if (o["backend"] !== undefined) {
-    if (o["backend"] !== "local" && o["backend"] !== "sprites" && o["backend"] !== "aws") {
+    if (o["backend"] !== "local" && o["backend"] !== "sprites" && o["backend"] !== "aws" && o["backend"] !== "boxd") {
       throw new CliError(
-        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), or "aws" (Lambda MicroVM sandboxes)`,
+        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), "aws" (Lambda MicroVM sandboxes), or "boxd" (boxd microVMs)`,
       );
     }
     out.backend = o["backend"];
@@ -1395,6 +1399,14 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       );
     }
   }
+  if (out.backend === "boxd") {
+    const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
+    if (stray.length) {
+      throw new CliError(
+        `${path}: "sandbox.backend": "boxd" runs boxd microVMs, which ignore ${stray.map((key) => `"sandbox.${key}"`).join(", ")} (Fly layer-image settings) — remove them or set "sandbox.backend": "sprites"`,
+      );
+    }
+  }
   if (out.image && !out.app && out.backend !== "local") {
     throw new CliError(`${path}: "sandbox.image" requires "sandbox.app" unless "sandbox.backend" is "local"`);
   }
@@ -1405,7 +1417,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   }
   if (SANDBOX_BACKEND_POLICY[target].requireExplicit && out.backend === undefined) {
     throw new CliError(
-      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" boots the operator-published layer image in "sandbox.app"; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default)`,
+      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" boots the operator-published layer image in "sandbox.app"; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default); "boxd" runs boxd microVMs`,
     );
   }
   return out;

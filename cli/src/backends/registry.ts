@@ -5,7 +5,7 @@ import { syncDeploymentLayer, type DeploymentLayerTransport } from "../deploymen
 import { TARGET_ENV_DEFAULTS, type TargetEnvDefaults } from "../target-env-defaults.ts";
 import { renderTerraformVars } from "../terraform.ts";
 import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "../commands/infra.ts";
-import { runSandboxPublish, type SandboxPublishOpts } from "../commands/sandbox.ts";
+import { runSandboxPublish, type SandboxPublishOpts, assertPublishableSandbox } from "../commands/sandbox.ts";
 import { awsScaffold, dockerScaffold, flyScaffold, type ProviderScaffold } from "../provider-scaffold.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
 import { runnableServices } from "../services.ts";
@@ -321,6 +321,7 @@ const aws: HostingProvider = {
     config.aws ? { accountOrOrganization: config.aws.accountId, region: config.aws.region } : {},
   requiresSandboxApp: false,
   publishSandbox: async (ctx, opts) => {
+    assertPublishableSandbox(ctx.config);
     if (ctx.config.sandbox?.backend !== "sprites") {
       throw new CliError(
         `this AWS deployment runs Lambda MicroVM sandboxes (sandbox.backend is not "sprites"); use \`qm sandbox build\` to validate the layer and \`qm infra build-image\` to publish the runtime — or set "sandbox.backend": "sprites" with "sandbox.app" to host sandboxes in an operator-published layer image`,

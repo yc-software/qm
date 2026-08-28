@@ -15,13 +15,13 @@ const AWS_RENDER_ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, s
   core: { SANDBOX_BACKEND: "aws" },
 };
 
+const declaredSandboxBackend: TargetEnvDefaults = (config, service, name) =>
+  service === "core" && name === "SANDBOX_BACKEND" ? config.sandbox?.backend : undefined;
+
 export const TARGET_ENV_DEFAULTS: Record<Target, TargetEnvDefaults> = {
-  docker: () => undefined,
-  fly: (_config, service, name) => FLY_TEMPLATE_ENV_DEFAULTS[service]?.[name],
-  aws: (config, service, name) => {
-    const rendered = AWS_RENDER_ENV_DEFAULTS[service]?.[name];
-    if (rendered === undefined) return undefined;
-    if (name === "SANDBOX_BACKEND") return config.sandbox?.backend ?? rendered;
-    return rendered;
-  },
+  docker: declaredSandboxBackend,
+  fly: (config, service, name) =>
+    declaredSandboxBackend(config, service, name) ?? FLY_TEMPLATE_ENV_DEFAULTS[service]?.[name],
+  aws: (config, service, name) =>
+    declaredSandboxBackend(config, service, name) ?? AWS_RENDER_ENV_DEFAULTS[service]?.[name],
 };

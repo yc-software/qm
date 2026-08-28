@@ -114,7 +114,21 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     name: "FLY_SANDBOX_API_TOKEN",
     service: "core",
     envName: "FLY_API_TOKEN",
-    required: { when: { kind: "target", target: "fly" } },
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "target", target: "fly" },
+          {
+            kind: "any",
+            conditions: [
+              { kind: "env-absent", service: "core", name: "SANDBOX_BACKEND" },
+              { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "sprites" },
+            ],
+          },
+        ],
+      },
+    },
     description: "Fly deploy token scoped to the agent-computer app.",
     generate: "fly tokens create deploy -a <sandbox-app> -x 8760h",
   },

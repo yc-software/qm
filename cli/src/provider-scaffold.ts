@@ -165,7 +165,8 @@ export const dockerScaffold: ProviderScaffold = {
       sandbox: `,
 
   // The Fly app agents execute in. The core boots the immutable sandbox image
-  // recorded by \`qm sandbox publish\`.
+  // recorded by \`qm sandbox publish\`. To run agent computers as boxd microVMs
+  // instead (no Fly app, needs BOXD_API_KEY): "sandbox": { "backend": "boxd" }
   "sandbox": { "app": ${JSON.stringify(`${orgId}-sandboxes`)} }`,
     }),
   ignores: [".env", "node_modules/", ".generated/"],
@@ -199,7 +200,8 @@ export const flyScaffold: ProviderScaffold = {
       sandbox: `
 
   // The Fly app agents execute in. The core boots the immutable sandbox image
-  // recorded by \`qm sandbox publish\`.
+  // recorded by \`qm sandbox publish\`. To run agent computers as boxd microVMs
+  // instead (no Fly app, needs BOXD_API_KEY): "sandbox": { "backend": "boxd" }
   "sandbox": { "app": ${JSON.stringify(`${orgId}-sandboxes`)} }`,
     }),
   ignores: [".env", "node_modules/", ".generated/"],
@@ -259,7 +261,9 @@ export const awsScaffold: ProviderScaffold = {
   // Where agent sandboxes execute. Omitting "sandbox" entirely runs AWS Lambda MicroVMs
   // (published by \`qm infra build-image\`). To boot an operator-published sandbox layer
   // image in a Fly app instead (published by \`qm sandbox publish\`), declare it explicitly:
-  //   "sandbox": { "backend": "sprites", "app": ${JSON.stringify(`${orgId}-sandboxes`)} }`,
+  //   "sandbox": { "backend": "sprites", "app": ${JSON.stringify(`${orgId}-sandboxes`)} }
+  // To run them as boxd microVMs instead (needs BOXD_API_KEY):
+  //   "sandbox": { "backend": "boxd" }`,
     });
   },
   ignores: [

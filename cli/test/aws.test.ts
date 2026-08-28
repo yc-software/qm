@@ -4311,3 +4311,13 @@ test("AWS doctor still fails a pushed secret store holding a placeholder value",
   assert.equal(probe.failures.length, 1);
   assert.match(probe.failures[0]!, /CORE_SIGNING_SECRET: missing, placeholder, or insecure value/);
 });
+
+test("an AWS deployment on boxd renders the boxd substrate and none of the Fly or MicroVM coordinates", () => {
+  const core = serviceEnvironment({ ...config, sandbox: { backend: "boxd" } }, "core");
+  assert.equal(core.SANDBOX_BACKEND, "boxd");
+  assert.equal(core.FLY_SANDBOX_APP_NAME, undefined);
+  assert.equal(core.FLY_BASE_IMAGE, undefined);
+  assert.equal(core.AWS_SANDBOX_IMAGE, undefined);
+  assert.equal(core.AWS_SANDBOX_REGION, undefined);
+  assert.equal(core.SESSION_STORE, "postgres");
+});

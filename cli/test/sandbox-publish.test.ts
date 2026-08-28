@@ -855,3 +855,46 @@ process.exit(1);
     rmSync(emptyPath, { recursive: true, force: true });
   }
 });
+
+test("sandbox publish refuses a boxd deployment before touching docker, on every provider", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-publish-boxd-"));
+  const priorPath = process.env.PATH;
+  try {
+    const configPath = join(dir, CONFIG_FILENAME);
+    const configBody = JSON.stringify({
+      contract: 1,
+      orgId: "acme",
+      publicUrl: "https://agent.acme.example",
+      target: "docker",
+      services: ["core"],
+      sandbox: { backend: "boxd" },
+    });
+    writeFileSync(configPath, configBody);
+    const dockerLog = fakeDocker(dir);
+    process.env.PATH = `${dir}:${priorPath}`;
+    const { config } = loadConfigAt(configPath);
+    for (const [target, extra] of [
+      ["docker", {}],
+      ["fly", { region: "sjc", flyOrg: "acme" }],
+      ["aws", { aws: AWS_BLOCK }],
+    ] as const) {
+      const ctx: DeployContext = {
+        config: { ...config, ...extra, target },
+        configPath,
+        configDir: dir,
+        sandboxDir: join(dir, "sandbox"),
+        target,
+      };
+      await assert.rejects(
+        () =>
+          hostingProvider(target).publishSandbox(ctx, { sandboxDir: ctx.sandboxDir, config: ctx.config, configPath }),
+        /runs boxd microVMs.*nothing to publish/,
+      );
+    }
+    assert.equal(readFileSync(dockerLog, "utf8"), "", "no docker side effect");
+    assert.equal(readFileSync(configPath, "utf8"), configBody);
+  } finally {
+    process.env.PATH = priorPath;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

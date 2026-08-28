@@ -137,3 +137,9 @@ test("a vms override rewrites the core [[vm]] size/memory without touching other
   if (adminVm) assert.ok(adminToml.includes(adminVm[0]), "admin [[vm]] block changed despite no vms override");
   assert.doesNotMatch(adminToml, /shared-cpu-2x|memory = "4gb"/);
 });
+
+test("a Fly deployment on boxd derives SANDBOX_BACKEND = boxd for core and no Fly sandbox app", () => {
+  const core = derivedTomlFor({ ...exampleFlyConfig(), sandbox: { backend: "boxd" } }, "core", repoRoot);
+  assert.match(core, /^\s*SANDBOX_BACKEND = "boxd"$/m);
+  assert.doesNotMatch(core, /FLY_SANDBOX_APP_NAME|FLY_BASE_IMAGE/);
+});

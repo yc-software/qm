@@ -477,3 +477,23 @@ test("a delivered secret name shadowing renderer-derived env fails config.secret
     rmSync(dockerTarget.dir, { recursive: true, force: true });
   }
 });
+
+test("docker and fly with sandbox.backend boxd pass without a Fly sandbox app", () => {
+  for (const config of [
+    { sandbox: { backend: "boxd" as const } },
+    {
+      target: "fly" as const,
+      region: "sjc",
+      flyOrg: "acme",
+      env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+      sandbox: { backend: "boxd" as const },
+    },
+  ]) {
+    const d = deployment(() => {}, config);
+    try {
+      assert.doesNotThrow(() => check(d));
+    } finally {
+      rmSync(d.dir, { recursive: true, force: true });
+    }
+  }
+});
