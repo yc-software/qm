@@ -12,10 +12,12 @@ RUN dnf install -y \
   && setsid --version \
   && seq 1 1
 
-RUN curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo \
-       -o /etc/yum.repos.d/gh-cli.repo \
-  && dnf install -y gh-2.97.0-1 \
-  && dnf clean all \
+RUN GH_VERSION=2.97.0 \
+  && GH_SHA256=73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5 \
+  && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_arm64.tar.gz" -o /tmp/gh.tgz \
+  && echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c - \
+  && tar -xzf /tmp/gh.tgz -C /usr/local/bin --strip-components=2 "gh_${GH_VERSION}_linux_arm64/bin/gh" \
+  && rm /tmp/gh.tgz \
   && gh --version
 
 RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64-2.36.5.zip" -o /tmp/awscliv2.zip \
