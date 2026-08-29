@@ -49,9 +49,10 @@ import type {
   PendingApprovalRecord,
   ScopeId,
   SurfaceContextRequest,
+  TurnRequest,
   Webhook,
 } from "./types.ts";
-import { scopeId } from "./types.ts";
+import { scopeId, scopeKind } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createRateLimiter, type RateLimiter } from "./ratelimit/rate-limiter.ts";
@@ -208,6 +209,7 @@ import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper, type Sweeper } from "./util/sweeper.ts";
 import { createReachDeniedNotifier, type ReachDeniedCursor } from "./insights/reach-denied-notifier.ts";
+import { createTelemetry, type PersistedTelemetryInstance } from "./insights/telemetry.ts";
 import {
   createMemoryProcessRegistry,
   createPostgresProcessRegistry,
@@ -455,6 +457,7 @@ export function buildApp(
     approvedHarnesses: artifactMap<PersistedApprovedHarnesses>("approved_harness_configs"),
     orgAmbient: artifactMap<PersistedScopedFlag>("org_ambient_flag"),
     interactiveFastMode: artifactMap<PersistedScopedFlag>("interactive_fast_mode_flag"),
+    telemetry: artifactMap<PersistedScopedFlag>("telemetry_flag"),
     webuiModels: artifactMap<PersistedWebuiModels>("webui_model_configs"),
     peopleDirectoryUrls: artifactMap<PersistedPeopleDirectoryUrl>("people_directory_urls"),
     ackEmoji: artifactMap<PersistedAckEmoji>("ack_emoji"),
@@ -489,7 +492,17 @@ export function buildApp(
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
-  const auditLog = config.databaseUrl ? createPostgresAuditLog(config.databaseUrl) : createAuditLog();
+  const telemetry = createTelemetry({
+    ...(config.posthogApiKey ? { apiKey: config.posthogApiKey } : {}),
+    host: config.posthogHost,
+    enabled: () => !config.telemetryDisabled && configStore.getTelemetryEnabled(),
+    confirmEnabled: async () => !config.telemetryDisabled && (await configStore.getTelemetryEnabledDurable()),
+    instances: artifactMap<PersistedTelemetryInstance>("telemetry_instance"),
+    ...(config.buildSha ? { version: config.buildSha } : {}),
+  });
+  const auditLog = telemetry.tapAudit(
+    config.databaseUrl ? createPostgresAuditLog(config.databaseUrl) : createAuditLog(),
+  );
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
@@ -587,7 +600,9 @@ export function buildApp(
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const mcpToolService = createMcpToolService({ servers: mcpServers, audit: auditLog });
   const mcpTools = () => mcpToolService.toolDefs();
-  const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
+  const errors = telemetry.tapErrors(
+    config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog(),
+  );
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
     errors.record({
       category: e.category,
@@ -827,8 +842,8 @@ export function buildApp(
     if (!(await modelCredentials.availability()).openrouter) return undefined;
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
-  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) =>
-    resolveRuntimeChoiceDurable(
+  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input) => {
+    const choice = await resolveRuntimeChoiceDurable(
       configStore,
       runtimeOrgScope,
       input.scopeLabel,
@@ -838,8 +853,14 @@ export function buildApp(
         ...(input.model ? { modelId: input.model } : {}),
       },
       hydrateModelCatalog,
-    ),
-  );
+    );
+    telemetry.track("harness_invoked", {
+      harness: choice.harnessId,
+      model: choice.modelId,
+      scope_kind: scopeKind(input.scopeLabel),
+    });
+    return choice;
+  });
 
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
@@ -856,7 +877,9 @@ export function buildApp(
   }
 
   const replayDedupe = config.databaseUrl ? createPostgresReplayDedupe(config.databaseUrl) : createMemoryReplayDedupe();
-  const metrics = config.databaseUrl ? createPostgresMetricsSink(config.databaseUrl) : createMetricsSink();
+  const metrics = telemetry.tapMetrics(
+    config.databaseUrl ? createPostgresMetricsSink(config.databaseUrl) : createMetricsSink(),
+  );
   const credentialUsage = config.databaseUrl
     ? createPostgresCredentialUsageSink(config.databaseUrl)
     : createCredentialUsageSink();
@@ -1316,6 +1339,10 @@ export function buildApp(
   );
   orchestratorDeps.channelPolicy = channelPolicy;
   orchestratorDeps.surfaceCache = surfaceCache;
+  const triggerRun = (req: TurnRequest): ReturnType<typeof app.turn> => {
+    telemetry.track("trigger_fired", { surface: req.surface });
+    return app.turn(req);
+  };
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
         fireAskResolution(
@@ -1323,7 +1350,7 @@ export function buildApp(
             deliveries,
             idempotency,
             identity,
-            run: (req) => app.turn(req),
+            run: triggerRun,
             directory,
             getAsk: (id) => keychain.getAsk(id),
             getGrant: (id) => keychain.getGrant(id),
@@ -1334,14 +1361,14 @@ export function buildApp(
     : undefined;
   const dropResolution = keychain
     ? (drop: DropResolution) =>
-        fireDropResolution({ deliveries, idempotency, identity, run: (req) => app.turn(req), directory }, drop)
+        fireDropResolution({ deliveries, idempotency, identity, run: triggerRun, directory }, drop)
     : undefined;
   const scheduler = createScheduler({
     crons,
     deliveries,
     idempotency,
     identity,
-    run: (req) => app.turn(req),
+    run: triggerRun,
     leaderLease,
     directory,
     currentScopeMembers,
@@ -1364,7 +1391,7 @@ export function buildApp(
           deliveries,
           idempotency,
           identity,
-          run: (req) => app.turn(req),
+          run: triggerRun,
           directory,
           currentScopeMembers,
           sessions,
@@ -1383,7 +1410,7 @@ export function buildApp(
     deliveries,
     idempotency,
     identity,
-    run: (req) => app.turn(req),
+    run: triggerRun,
     directory,
     currentScopeMembers,
   });
@@ -1470,6 +1497,8 @@ export function buildApp(
     : null;
   const runtime: Runtime = {
     start() {
+      telemetry.start();
+      telemetry.track("instance_started", { background_work: config.backgroundWorkEnabled });
       if (!config.backgroundWorkEnabled) return;
       for (const w of workers) w.start();
       reaper.start();
@@ -1509,6 +1538,7 @@ export function buildApp(
       void runActivity.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
+      await telemetry.stop();
     },
   };
 

@@ -4340,6 +4340,32 @@
                     ><span class="status" id="st-org-ambient"></span>
                   </div>
                 </section>
+                <section class="card setting-row hidden" id="card-telemetry">
+                  <div class="head">
+                    <h2>Usage telemetry</h2>
+                    <p>
+                      Org-wide, default off. When on, this instance shares anonymous feature-usage events with the qm
+                      project — counts, timings, and enums tied to a random instance id. Never message content, file or
+                      skill names, user identifiers, or your org name. Full event list: docs/telemetry.md.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <label class="setting-toggle">
+                      <input type="checkbox" id="telemetry" />
+                      <span class="setting-switch" aria-hidden="true"></span>
+                      <span class="setting-copy"
+                        ><strong>Share anonymous usage telemetry</strong
+                        ><small
+                          >Helps the qm maintainers see which features matter; easy to turn off anytime.</small
+                        ></span
+                      >
+                    </label>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="telemetry">Apply</button
+                    ><span class="status" id="st-telemetry"></span>
+                  </div>
+                </section>
                 <section class="card setting-row hidden" id="card-channel-header-pin-default">
                   <div class="head">
                     <h2>Channel pinned header</h2>
@@ -6427,6 +6453,9 @@
         const showInteractiveFastMode = scope.startsWith("org:") && "interactiveFastMode" in r.data;
         $("card-interactive-fast-mode").classList.toggle("hidden", !showInteractiveFastMode);
         if (showInteractiveFastMode) $("interactive-fast-mode").checked = r.data.interactiveFastMode === true;
+        const showTelemetry = scope.startsWith("org:") && "telemetry" in r.data;
+        $("card-telemetry").classList.toggle("hidden", !showTelemetry);
+        if (showTelemetry) $("telemetry").checked = r.data.telemetry === true;
         const showHeaderPinDefault = scope.startsWith("org:") && "channelHeaderPinDefault" in r.data;
         $("card-channel-header-pin-default").classList.toggle("hidden", !showHeaderPinDefault);
         if (showHeaderPinDefault) $("channel-header-pin-default").checked = !!r.data.channelHeaderPinDefault;
@@ -8140,6 +8169,7 @@
         "external-slack-participants": () => ({ on: $("external-slack-participants").checked }),
         "org-ambient": () => ({ on: $("org-ambient").checked }),
         "interactive-fast-mode": () => ({ on: $("interactive-fast-mode").checked }),
+        telemetry: () => ({ on: $("telemetry").checked }),
         "channel-header-pin-default": () => ({ on: $("channel-header-pin-default").checked }),
         runtime: () => ({ harnessId: $("base-harness").value, modelId: $("base-model").value }),
         "approved-harnesses": () => ({
@@ -8175,6 +8205,7 @@
         "external-slack-participants": "st-external-slack-participants",
         "org-ambient": "st-org-ambient",
         "interactive-fast-mode": "st-interactive-fast-mode",
+        telemetry: "st-telemetry",
         "channel-header-pin-default": "st-channel-header-pin-default",
         runtime: "st-runtime",
         "approved-harnesses": "st-approved-harnesses",

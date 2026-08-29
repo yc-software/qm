@@ -362,6 +362,23 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
+    id: "telemetry",
+    kind: "boolean",
+    target: "org",
+    label:
+      "Share anonymous usage telemetry with the qm project: feature-usage counts and timings tied to a random instance id — never message content, file or skill names, user identifiers, or your org name. The full event list is in docs/telemetry.md.",
+    readKey: "telemetry",
+    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getTelemetryEnabled() : undefined),
+    apply: generic<boolean>(
+      (body, { scope }) => {
+        const bad = orgOnly(scope, "the telemetry switch is org-wide");
+        if (bad) return bad;
+        return boolBody(body);
+      },
+      (deps, _scope, on) => deps.config!.setTelemetryEnabled(on),
+    ),
+  },
+  {
     id: "base-model",
     kind: "enum",
     target: "any",

@@ -189,6 +189,9 @@ export interface ScopedConfigStore {
   getInteractiveFastMode(): boolean;
   setInteractiveFastMode(on: boolean): void;
   getInteractiveFastModeDurable(): Promise<boolean>;
+  getTelemetryEnabled(): boolean;
+  setTelemetryEnabled(on: boolean): void;
+  getTelemetryEnabledDurable(): Promise<boolean>;
   getBaseModelOwnDurable(id: ScopeId): Promise<string | null>;
   getWebuiModels(id: ScopeId): string[] | null;
   setWebuiModels(id: ScopeId, ids: string[] | null): void;
@@ -235,6 +238,7 @@ export function createMemoryConfigStore(
     approvedHarnesses?: DurableMap<PersistedApprovedHarnesses>;
     orgAmbient?: DurableMap<PersistedScopedFlag>;
     interactiveFastMode?: DurableMap<PersistedScopedFlag>;
+    telemetry?: DurableMap<PersistedScopedFlag>;
     webuiModels?: DurableMap<PersistedWebuiModels>;
     peopleDirectoryUrls?: DurableMap<PersistedPeopleDirectoryUrl>;
     ackEmoji?: DurableMap<PersistedAckEmoji>;
@@ -261,6 +265,7 @@ export function createMemoryConfigStore(
   let approvedHarnesses: string[] | null = null;
   let orgAmbient = true;
   let interactiveFastMode = false;
+  let telemetryEnabled = false;
   const webuiModels = new Map<ScopeId, string[]>();
   const peopleDirectoryUrls = new Map<ScopeId, string>();
   const ackEmoji = new Map<ScopeId, string[]>();
@@ -281,6 +286,7 @@ export function createMemoryConfigStore(
   const approvedHarnessStore = opts.approvedHarnesses ?? createMemoryMap<PersistedApprovedHarnesses>();
   const orgAmbientStore = opts.orgAmbient ?? createMemoryMap<PersistedScopedFlag>();
   const interactiveFastModeStore = opts.interactiveFastMode ?? createMemoryMap<PersistedScopedFlag>();
+  const telemetryStore = opts.telemetry ?? createMemoryMap<PersistedScopedFlag>();
   const webuiModelStore = opts.webuiModels ?? createMemoryMap<PersistedWebuiModels>();
   const peopleDirectoryUrlStore = opts.peopleDirectoryUrls ?? createMemoryMap<PersistedPeopleDirectoryUrl>();
   const ackEmojiStore = opts.ackEmoji ?? createMemoryMap<PersistedAckEmoji>();
@@ -433,6 +439,7 @@ export function createMemoryConfigStore(
           approvedHarnesses = (await approvedHarnessStore.get(org))?.ids ?? null;
           orgAmbient = (await orgAmbientStore.get(org))?.on ?? true;
           interactiveFastMode = (await interactiveFastModeStore.get(org))?.on ?? false;
+          telemetryEnabled = (await telemetryStore.get(org))?.on ?? false;
           for (const r of await webuiModelStore.all()) webuiModels.set(r.scopeId, r.ids);
           for (const r of await peopleDirectoryUrlStore.all()) peopleDirectoryUrls.set(r.scopeId, r.url);
           for (const r of await ackEmojiStore.all()) ackEmoji.set(r.scopeId, r.names);
@@ -806,6 +813,12 @@ export function createMemoryConfigStore(
       );
     },
     getInteractiveFastModeDurable: async () => (await interactiveFastModeStore.get(org))?.on ?? false,
+    getTelemetryEnabled: () => telemetryEnabled,
+    setTelemetryEnabled(on) {
+      telemetryEnabled = on;
+      persist(`telemetry:${org}`, "telemetry switch", () => telemetryStore.put(org, { scopeId: org, on }));
+    },
+    getTelemetryEnabledDurable: async () => (await telemetryStore.get(org))?.on ?? false,
     getBaseModelOwnDurable: async (id) => (await baseModelStore.get(id))?.modelId ?? null,
     getBaseModelDurable: async (id) =>
       (await baseModelStore.get(id))?.modelId ??
@@ -969,6 +982,7 @@ export function createMemoryConfigStore(
         brandingRow,
         orgAmbientRow,
         interactiveFastModeRow,
+        telemetryRow,
         channelHeaderPinRow,
       ] = await Promise.all([
         soulStore.get(id),
@@ -983,6 +997,7 @@ export function createMemoryConfigStore(
         brandingStore.get(id),
         id === org ? orgAmbientStore.get(org) : null,
         id === org ? interactiveFastModeStore.get(org) : null,
+        id === org ? telemetryStore.get(org) : null,
         channelHeaderPinStore.get(id),
       ]);
       let refreshedSoul = soul;
@@ -1022,6 +1037,7 @@ export function createMemoryConfigStore(
       if (id === org) approvedHarnesses = approved?.ids ?? null;
       if (id === org) orgAmbient = orgAmbientRow?.on ?? true;
       if (id === org) interactiveFastMode = interactiveFastModeRow?.on ?? false;
+      if (id === org) telemetryEnabled = telemetryRow?.on ?? false;
       if (brandingRow) branding.set(id, brandingRow.branding);
       else branding.delete(id);
       if (channelHeaderPinRow) channelHeaderPin.set(id, channelHeaderPinRow.on);
@@ -1038,10 +1054,11 @@ export function createMemoryConfigStore(
         `model:${id}`,
         `turnWallClock:${id}`,
         `branding:${id}`,
-        ...(id === org ? [`approvedHarnesses:${org}`, `orgAmbient:${org}`, `interactiveFastMode:${org}`] : []),
+        ...(id === org
+          ? [`approvedHarnesses:${org}`, `orgAmbient:${org}`, `interactiveFastMode:${org}`, `telemetry:${org}`]
+          : []),
         `channelHeaderPin:${id}`,
         `ackEmoji:${id}`,
-        ...(id === org ? [`approvedHarnesses:${org}`, `orgAmbient:${org}`] : []),
       ];
       await Promise.all(
         keys.map(async (key) => {

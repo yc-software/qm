@@ -77,6 +77,9 @@ export interface Config {
   backgroundJobTtlMaxMs: number;
   backgroundWorkEnabled: boolean;
   buildSha?: string;
+  posthogApiKey?: string;
+  posthogHost: string;
+  telemetryDisabled: boolean;
   ecsTaskProtection: boolean;
   ecsAgentUri?: string;
   monitorPollMs: number;
@@ -466,6 +469,7 @@ export const CONFIG_DEFAULTS = {
   approvalSummaryTimeoutMs: 6_000,
   securityScreenTimeoutMs: 15_000,
   insightsIntervalMs: 5 * 60_000,
+  posthogHost: "https://us.i.posthog.com",
   workers: 16,
   leaseTtlMs: 120_000,
   heartbeatIntervalMs: 10_000,
@@ -846,6 +850,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     backgroundWorkEnabled:
       boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ?? CONFIG_DEFAULTS.backgroundWorkEnabled,
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
+    ...(env.POSTHOG_API_KEY?.trim() ? { posthogApiKey: env.POSTHOG_API_KEY.trim() } : {}),
+    posthogHost: (env.POSTHOG_HOST?.trim() || CONFIG_DEFAULTS.posthogHost).replace(/\/+$/, ""),
+    telemetryDisabled: boolEnvStrict("TELEMETRY_DISABLED", env.TELEMETRY_DISABLED) ?? false,
     ecsTaskProtection: boolEnvStrict("ECS_TASK_PROTECTION", env.ECS_TASK_PROTECTION) ?? true,
     ...(env.ECS_AGENT_URI ? { ecsAgentUri: env.ECS_AGENT_URI } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,

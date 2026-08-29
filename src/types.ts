@@ -26,6 +26,10 @@ export function personalScope(principalId: string): ScopeId {
   return scopeId("personal", principalId);
 }
 
+export function scopeKind(id: ScopeId): ScopeKind | "unknown" {
+  return parseScopeId(id).kind ?? "unknown";
+}
+
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
   const sep = id.indexOf(":");
   if (sep < 0) return { kind: null, ref: "" };
