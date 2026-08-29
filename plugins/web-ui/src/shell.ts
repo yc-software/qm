@@ -88,6 +88,10 @@ setSigninRequiredHandler((detail) => {
 
 onExitCanvas(() => exitSplitIfActive());
 
+if (typeof window !== "undefined" && !localStorage.getItem("theme")) {
+  localStorage.setItem("theme", window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+}
+
 export const ADMIN_BASE = (() => {
   const base = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
   return base ? base.replace(/\/[^/]+$/, "/admin") : "/admin";
@@ -455,7 +459,7 @@ export function mountShell(): void {
               <span class="avatar">${initials(appState.me?.user ?? "?")}</span>
               <span class="user-name">${appState.me?.user ?? ""}</span>
             </div>
-            <theme-toggle .includeSystem=${true} title="Color scheme: light / dark / system"></theme-toggle>
+            <theme-toggle .includeSystem=${false} title="Color scheme: light / dark"></theme-toggle>
             <button class="icon-btn subtle" title="Sign out" aria-label="Sign out" @click=${signOut}>
               ${icon(LogOut, 17)}
             </button>
