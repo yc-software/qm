@@ -137,6 +137,7 @@ import { resolveModel, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts
 import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { CodexTurnAuth } from "../harness/harness.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
+import { mentionsOtherMember } from "./orchestrator/human-mention.ts";
 import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
   approvalGrantId,
@@ -844,6 +845,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
       const orgName = branding.orgName ?? "this organization";
+      const humanText =
+        typeof input.displayText === "string" && input.displayText ? input.displayText : input.text;
+      const humanDirected =
+        isWeb &&
+        conversation.kind === "group" &&
+        input.origin.kind === "human" &&
+        !input.approval &&
+        !input.attachments?.length &&
+        mentionsOtherMember(humanText, conversation.audience, actor.id, botName);
       const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
       const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
       let modeName = "mode-fallback";
@@ -1415,6 +1425,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
+        if (humanDirected) {
+          await withManagedRosterVersion(async () => {
+            await deps.sessions.append(lease, {
+              type: "user",
+              payload: {
+                text: humanText,
+                ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
+              },
+              scopeLabel: scopeId,
+            });
+            return true;
+          });
+          return { status: "silent", sessionId: session.id };
+        }
         if (input.approval) {
           const p = await pending.get(input.approval.requestId);
           if (!input.approval.approved) {
