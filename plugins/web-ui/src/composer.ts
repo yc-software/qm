@@ -54,6 +54,8 @@ import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions"
 import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
+import { contextsState } from "./contexts";
+import { mentionQuery, replaceMentionToken } from "./mention";
 
 export type ComposerMenu = "effort" | "harness" | "model" | "settings";
 
@@ -272,6 +274,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   let dragDepth = 0;
   let skillsLoading = false;
   let slashActiveIndex = 0;
+  let mentionActiveIndex = 0;
+  let mentionDismissed = false;
   let fastModeCharging = false;
   let orgFastModeDefault = false;
   let fastModeChargeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -411,7 +415,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
     return html`
       <form class="composer-wrap" @submit=${(e: Event) => submitComposer(e, agent)}>
-        ${slashMenu(agent)}
+        ${slashMenu(agent)} ${mentionMenu(agent)}
         ${
           activeRuntimeConfig?.upgradeAvailable
             ? html`<div class="runtime-upgrade">
@@ -483,6 +487,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   ?disabled=${inputBlocked}
                   .value=${live(composerState.draft)}
                   @input=${(e: InputEvent) => onDraftInput(e, agent)}
+                  @compositionend=${(e: CompositionEvent) => onDraftCompositionEnd(e, agent)}
                   @keydown=${(e: KeyboardEvent) => onComposerKeydown(e, agent)}
                   @paste=${(e: ClipboardEvent) => void onComposerPaste(e, agent)}
                 ></textarea>
@@ -1098,6 +1103,70 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     focusComposerEnd();
   }
 
+  interface DirectoryPick {
+    principalId: string;
+    displayName: string;
+  }
+
+  function clampedMention(count: number): number {
+    return Math.max(0, Math.min(mentionActiveIndex, count - 1));
+  }
+
+  function scopeMembers(): DirectoryPick[] {
+    const context = contextsState.list.find((c) => c.scopeId === ctx.chat.state.scopeId);
+    return (context?.project?.members ?? [])
+      .filter((m) => m.principalId !== appState.me?.user && m.displayName)
+      .map((m) => ({ principalId: m.principalId, displayName: m.displayName }));
+  }
+
+  function currentMentionMenu(): { open: boolean; matches: DirectoryPick[] } {
+    const query = mentionQuery(composerState.draft);
+    if (query === null || mentionDismissed) return { open: false, matches: [] };
+    if (!ctx.chat.state.scopeId || ctx.chat.state.scopeId.startsWith("personal:")) {
+      return { open: false, matches: [] };
+    }
+    const members = scopeMembers();
+    if (!members.length) return { open: false, matches: [] };
+    const q = query.toLowerCase();
+    const matches = q ? members.filter((m) => m.displayName.toLowerCase().includes(q)) : members;
+    return { open: matches.length > 0, matches };
+  }
+
+  function acceptMention(match: DirectoryPick, agent: Agent): void {
+    composerState.draft = replaceMentionToken(composerState.draft, `@${match.displayName} `);
+    persistDraft();
+    mentionActiveIndex = 0;
+    mentionDismissed = false;
+    ctx.chat.drawActiveChat(agent);
+    focusComposerEnd();
+  }
+
+  function mentionMenu(agent: Agent): TemplateResult | typeof nothing {
+    const menu = currentMentionMenu();
+    if (!menu.open) return nothing;
+    const active = clampedMention(menu.matches.length);
+    return html`
+      <div class="slash-popover mention-popover" role="listbox" aria-label="Mention members">
+        <div class="menu-title">Mention members</div>
+        ${menu.matches.map((m, i) => {
+          return html`
+            <button
+              type="button"
+              role="option"
+              aria-selected=${i === active ? "true" : "false"}
+              class="slash-option ${i === active ? "active" : ""}"
+              @mousedown=${(e: Event) => e.preventDefault()}
+              @click=${() => acceptMention(m, agent)}
+            >
+              <span class="slash-name">${m.displayName}</span>
+              <span class="slash-desc">${m.principalId}</span>
+            </button>
+          `;
+        })}
+      </div>
+    `;
+  }
+
   let pendingComposerFocus = false;
 
   function focusComposerEnd(): void {
@@ -1171,22 +1240,48 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     void sendPrompt(agent);
   }
 
-  function onDraftInput(e: InputEvent, agent: Agent): void {
-    composerState.draft = (e.currentTarget as HTMLTextAreaElement).value;
-    persistDraft();
-    const hadError = Boolean(composerState.error);
-    composerState.error = "";
-    composerState.slashDismissed = false;
-    slashActiveIndex = 0;
+  function refreshComposerMenus(agent: Agent): void {
     const armed = slashQuery(composerState.draft) !== null;
     if (armed && skillsCache === null && !skillsLoading) void loadSkills(agent);
-    const popoverShown = Boolean(ctx.chat.state.host?.querySelector(".slash-popover"));
-    if (armed || popoverShown || hadError) {
+    const mentionArmed = mentionQuery(composerState.draft) !== null;
+    const popoverShown = Boolean(
+      ctx.chat.state.host?.querySelector(".slash-popover, .mention-popover"),
+    );
+    if (armed || mentionArmed || popoverShown) {
       ctx.chat.drawActiveChat(agent);
       return;
     }
     syncComposerControls(agent);
     resizeComposer();
+  }
+
+  function onDraftInput(e: InputEvent, agent: Agent): void {
+    composerState.draft = (e.currentTarget as HTMLTextAreaElement).value;
+    persistDraft();
+    if (e.isComposing) {
+      syncComposerControls(agent);
+      resizeComposer();
+      return;
+    }
+    const hadError = Boolean(composerState.error);
+    composerState.error = "";
+    composerState.slashDismissed = false;
+    slashActiveIndex = 0;
+    mentionDismissed = false;
+    mentionActiveIndex = 0;
+    if (hadError) {
+      ctx.chat.drawActiveChat(agent);
+      return;
+    }
+    refreshComposerMenus(agent);
+  }
+
+  function onDraftCompositionEnd(e: CompositionEvent, agent: Agent): void {
+    composerState.draft = (e.currentTarget as HTMLTextAreaElement).value;
+    persistDraft();
+    mentionDismissed = false;
+    mentionActiveIndex = 0;
+    refreshComposerMenus(agent);
   }
 
   function composerCanSend(): boolean {
@@ -1248,6 +1343,31 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       } else if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         return;
+      }
+    }
+    const mention = currentMentionMenu();
+    if (mention.open) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        mentionDismissed = true;
+        return ctx.chat.drawActiveChat(agent);
+      }
+      const count = mention.matches.length;
+      if (count) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          mentionActiveIndex = (clampedMention(count) + 1) % count;
+          return ctx.chat.drawActiveChat(agent);
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          mentionActiveIndex = (clampedMention(count) - 1 + count) % count;
+          return ctx.chat.drawActiveChat(agent);
+        }
+        if (!e.shiftKey && (e.key === "Enter" || e.key === "Tab")) {
+          e.preventDefault();
+          return acceptMention(mention.matches[clampedMention(count)]!, agent);
+        }
       }
     }
     if (e.key !== "Enter" || e.shiftKey) return;
