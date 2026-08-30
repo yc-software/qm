@@ -1,13 +1,24 @@
 ---
 name: taste-skill
-description: Design taste and process for anything a person will look at in a browser — landing page, dashboard, prototype, deck. The default design driver for a browsable artifact, with an anti-slop playbook for the visual language.
+description: >-
+  Design process and anti-slop visual guidance for landing pages, portfolios, marketing or editorial pages, and
+  eligible visual redesigns. For dense product UI, including dashboards and data tables, use only when explicitly
+  asked for a visual audit. Do not use for decks, generic prototypes, or multi-step product UI builds.
 ---
 
-# Taste skill (design process for a browsable artifact)
+# Taste skill (design process for expressive web pages)
 
-Use this whenever you are about to build something a person will _look at_ — a published
-app or dashboard, a landing or status page, a prototype or deck. It carries the design
-process; the anti-slop playbook in `references/tasteskill.md` carries the visual taste.
+Use this to build or visually redesign landing pages, portfolios, and marketing or
+editorial web pages. It carries the design process; the anti-slop playbook in
+`references/tasteskill.md` carries the visual taste.
+
+Do not use this as the design driver for decks, generic prototypes, dashboards, data
+tables, or multi-step product UI. For dense product UI, admin panels, dashboards, or data
+tables, use this skill only when the user explicitly asks for a visual audit. In that
+branch, read only the relevant accessibility guidance in Section 6 and anti-tell guidance
+in Section 9, return audit findings, and do not run the landing-page workflow, build an
+artifact, default to HTML, or publish. The remaining workflow applies only to the
+full-scope page work above.
 
 ## House style comes first
 
@@ -24,13 +35,12 @@ the process.
 
 `references/tasteskill.md` is the full anti-slop playbook: read the brief before picking
 an aesthetic, set the variance/motion/density dials, pick a real design system, and run
-the pre-flight check before you call it done. Read it before you write markup for
-anything externally facing or high-fidelity. Two adjustments for this runtime:
+the pre-flight check before you call it done. For full-scope page work, read it before
+you write markup for anything externally facing or high-fidelity. One adjustment for
+this runtime:
 
 - The block library it describes (its Section 12) is a schema, not shipped files. There is
   no `blocks/` directory here — build the block and keep it in your workspace.
-- It targets landing pages, portfolios, and redesigns. For dense product UI, admin panels,
-  and data tables, take its accessibility and anti-tell sections and leave the rest.
 
 ## Runtime
 
