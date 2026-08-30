@@ -28,6 +28,7 @@ import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStore, TaskStatus } from "../tasks/task-store.ts";
 import type { ModelGateway } from "../model/model-gateway.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
+import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { CustomProviderStore } from "../model/custom-provider-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
@@ -521,6 +522,7 @@ export interface AppDeps {
   tasks?: TaskStore;
   modelGateway: ModelGateway;
   modelCredentials?: ModelCredentialStore;
+  userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;
   mcpToolService?: McpToolService;
   modelCredentialFetch?: typeof fetch;

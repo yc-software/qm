@@ -544,14 +544,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToEntry);
     },
 
-    async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
+    async recordLlmRequest(sessionId, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord> {
       const envelope = promptEnvelopeBody(rec.promptEnvelope);
       if (envelope) {
-        await q("INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING", [
-          envelope.hash,
-          envelope.body,
-          now(),
-        ]);
+        await q(
+          "INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+          [envelope.hash, envelope.body, now()],
+          { signal },
+        );
       }
       const full: LlmRequestRecord = {
         id: randomUUID(),
@@ -593,6 +593,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           full.transport ? JSON.stringify(full.transport) : null,
           full.gapPhases ? JSON.stringify(full.gapPhases) : null,
         ],
+        { signal },
       );
       return full;
     },

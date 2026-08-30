@@ -21,6 +21,10 @@ export interface SpecInputs {
 export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
   const watchArgs = i.watch ? ["--watch"] : [];
   const base = { ...i.baseEnv, ...i.sandboxEnv };
+  const siblingBase = Object.fromEntries(
+    Object.entries(base).filter(([key]) => key !== "HOME" && key !== "CODEX_HOME"),
+  );
+  siblingBase.CODEX_AUTH_FILE = "";
   const orgId = i.baseEnv.DEV_INSTANCE_ORG_ID || "acme";
   const signing: Record<string, string> = i.coreSigningSecret ? { CORE_SIGNING_SECRET: i.coreSigningSecret } : {};
   return [
@@ -58,7 +62,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
       cwd: join(i.worktree, "plugins/web-ui"),
       argv: ["node", "--env-file-if-exists=.env", "server/index.ts"],
       env: {
-        ...base,
+        ...siblingBase,
         ...signing,
         PORT: String(i.ports.web),
         CORE_API_URL: `http://localhost:${i.ports.core}`,
@@ -78,7 +82,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
       cwd: join(i.worktree, "plugins/admin"),
       argv: ["node", `--env-file-if-exists=${join(i.worktree, ".env")}`, ...watchArgs, "src/index.ts"],
       env: {
-        ...base,
+        ...siblingBase,
         ...signing,
         PORT: String(i.ports.admin),
         CORE_API_URL: `http://localhost:${i.ports.core}`,
@@ -95,7 +99,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
       cwd: join(i.worktree, "plugins/portal"),
       argv: ["node", ...watchArgs, "src/index.ts"],
       env: {
-        ...base,
+        ...siblingBase,
         ...signing,
         PORT: String(i.ports.portal),
         PORTAL_PUBLIC_URL: `http://localhost:${i.ports.portal}`,

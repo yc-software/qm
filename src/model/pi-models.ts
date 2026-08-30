@@ -7,6 +7,18 @@ const getModel = getBuiltinModel as unknown as (provider: string, id: string) =>
 
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-5.6-sol";
+/**
+ * pi-ai's ChatGPT-subscription provider: the same model ids as "openai",
+ * served from the Codex backend and authenticated with a ChatGPT OAuth
+ * access token instead of an API key. Model ids are namespaced "codex/<id>"
+ * so an id can never silently flip between metered and subscription serving.
+ */
+export const CODEX_SUBSCRIPTION_PROVIDER = "openai-codex";
+const CODEX_SUBSCRIPTION_PREFIX = "codex/";
+
+export function codexSubscriptionModelId(id: string): string {
+  return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id : CODEX_SUBSCRIPTION_PREFIX + id;
+}
 export const THINKING_LEVELS = ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"] as const;
 export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
@@ -163,6 +175,12 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
 }
 
 export function resolveModel(id: string): PiModel | undefined {
+  if (id.startsWith(CODEX_SUBSCRIPTION_PREFIX)) {
+    const m = getModel(CODEX_SUBSCRIPTION_PROVIDER, id.slice(CODEX_SUBSCRIPTION_PREFIX.length));
+    // Keep the namespaced id: pi resolves the turn's model by this string,
+    // and the un-prefixed id belongs to the metered "openai" provider.
+    return m ? { ...m, id } : undefined;
+  }
   const entry = REGISTRY_BY_ID.get(id);
   if (entry?.clone) {
     const template = builtinModel(entry.clone.template);
@@ -234,6 +252,11 @@ export interface ModelProviderAvailability {
   anthropic: boolean;
   openai: boolean;
   openrouter: boolean;
+  codexOAuth?: boolean;
+}
+
+function providerFlags(value: ModelProviderAvailability): ModelProviderAvailability {
+  return { anthropic: value.anthropic, openai: value.openai, openrouter: value.openrouter };
 }
 
 export function modelServiceable(id: string, providers: ModelProviderAvailability): boolean {
@@ -257,9 +280,10 @@ export function modelProviderAvailabilityFor(
   configKeys: ModelProviderAvailability,
   managedKeys: ModelProviderAvailability = configKeys,
 ): ModelProviderAvailability {
-  if (harness === "pi") return managedKeys;
-  if (harness === "opencode") return { ...configKeys, openrouter: false };
-  if (harness === "codex") return configKeys;
+  if (harness === "pi") return providerFlags(managedKeys);
+  if (harness === "opencode") return { ...providerFlags(configKeys), openrouter: false };
+  if (harness === "codex")
+    return { ...providerFlags(configKeys), openai: configKeys.openai || Boolean(configKeys.codexOAuth) };
   return ALL_PROVIDERS_AVAILABLE;
 }
 

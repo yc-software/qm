@@ -1291,6 +1291,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     tapeFold?: unknown[],
     tape?: HarnessTurnInput["tape"],
     continuationInstruction?: HarnessTurnInput["continuationInstruction"],
+    turnProviderKeys?: ProviderKeys,
   ): Promise<{ entry: TurnSession; compileMs: number; tapeWriteFailed: boolean }> {
     const compileStart = Date.now();
     const cacheBoundary =
@@ -1330,7 +1331,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
     const model = getRequiredModel(resolveModelId(turnScope));
-    const modelRuntime = await buildModelRuntime(await resolveProviderKeys());
+    const modelRuntime = await buildModelRuntime(turnProviderKeys ?? (await resolveProviderKeys()));
     const ref: ToolContextRef = { current: null };
     const { resourceLoader, cwd, agentDir } = await createIsolatedResources(tempDirPrefix, composedPrompt);
     const compileMs = Date.now() - compileStart;
@@ -1517,6 +1518,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.tapeFold,
           turn.tape,
           turn.continuationInstruction,
+          turn.providerKeys,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;

@@ -123,6 +123,7 @@ export function createTurnMethods(
         return (await deps.projects.withVersion(conversationRef, projectVersion, fn)) ?? null;
       }
 
+      const individualAuth = !!deps.userModelCredentials && (await deps.config.getIndividualModelAuthDurable());
       if (req.surface === "web") {
         const threadRef = req.conversation.threadRef;
         const existing = await deps.sessions.getByThread(threadRef);
@@ -147,62 +148,64 @@ export function createTurnMethods(
           harnessId: fallbackHarness,
           modelId: defaultModelForHarness(fallbackHarness),
         };
-        const configuredKeys = deps.providerKeys ??
-          deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
-        const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-        let orgRuntime;
-        let configuredRuntime;
-        let runtime;
-        try {
-          orgRuntime = await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
-          configuredRuntime =
-            targetScope === org
-              ? orgRuntime
-              : await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback);
-          runtime =
-            req.harness || req.model
-              ? await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback, {
-                  ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
-                  ...(req.model ? { modelId: req.model } : {}),
-                })
-              : configuredRuntime;
-        } catch (error) {
-          return { status: "refused", reason: errMessage(error) };
+        if (!individualAuth) {
+          const configuredKeys = deps.providerKeys ??
+            deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
+          const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
+          let orgRuntime;
+          let configuredRuntime;
+          let runtime;
+          try {
+            orgRuntime = await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
+            configuredRuntime =
+              targetScope === org
+                ? orgRuntime
+                : await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback);
+            runtime =
+              req.harness || req.model
+                ? await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback, {
+                    ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
+                    ...(req.model ? { modelId: req.model } : {}),
+                  })
+                : configuredRuntime;
+          } catch (error) {
+            return { status: "refused", reason: errMessage(error) };
+          }
+          if (req.harness && !isHarnessId(req.harness)) {
+            return { status: "refused", reason: `runtime ${req.harness} is not approved` };
+          }
+          let providers = deps.modelProviders;
+          if (deps.modelCredentials) {
+            providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys, managedKeys);
+          } else if (deps.providerKeys) {
+            providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys);
+          }
+          if (providers && !modelServiceable(runtime.modelId, providers)) {
+            return {
+              status: "refused",
+              reason: "that model isn't available on this deployment (its provider isn't configured)",
+            };
+          }
+          const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
+          let enabledWebuiModels: string[] | null = null;
+          if (configuredWebuiModels?.length) {
+            enabledWebuiModels = [...new Set([...configuredWebuiModels, orgRuntime.modelId])];
+          } else if (providers?.openrouter) {
+            enabledWebuiModels = [
+              ...new Set([
+                ...selectableCatalogForHarness(
+                  await selectableModelCatalog(deps.modelCredentialFetch),
+                  runtime.harnessId,
+                ).map((model) => model.id),
+                ...(orgRuntime.harnessId === runtime.harnessId ? [orgRuntime.modelId] : []),
+              ]),
+            ];
+          }
+          const invalidModelOption =
+            validateWebTurnModelOptions(req, enabledWebuiModels, providers) ??
+            webTurnRuntimeModelRefusal(runtime.modelId, orgRuntime.modelId, configuredWebuiModels);
+          if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
         }
-        if (req.harness && !isHarnessId(req.harness)) {
-          return { status: "refused", reason: `runtime ${req.harness} is not approved` };
-        }
-        let providers = deps.modelProviders;
-        if (deps.modelCredentials) {
-          providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys, managedKeys);
-        } else if (deps.providerKeys) {
-          providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys);
-        }
-        if (providers && !modelServiceable(runtime.modelId, providers)) {
-          return {
-            status: "refused",
-            reason: "that model isn't available on this deployment (its provider isn't configured)",
-          };
-        }
-        const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
-        let enabledWebuiModels: string[] | null = null;
-        if (configuredWebuiModels?.length) {
-          enabledWebuiModels = [...new Set([...configuredWebuiModels, orgRuntime.modelId])];
-        } else if (providers?.openrouter) {
-          enabledWebuiModels = [
-            ...new Set([
-              ...selectableCatalogForHarness(
-                await selectableModelCatalog(deps.modelCredentialFetch),
-                runtime.harnessId,
-              ).map((model) => model.id),
-              ...(orgRuntime.harnessId === runtime.harnessId ? [orgRuntime.modelId] : []),
-            ]),
-          ];
-        }
-        const invalidModelOption =
-          validateWebTurnModelOptions(req, enabledWebuiModels, providers) ??
-          webTurnRuntimeModelRefusal(runtime.modelId, orgRuntime.modelId, configuredWebuiModels);
-        if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
       }
 
       const rawAudience = req.conversation.audience ?? [req.actor];
@@ -251,8 +254,8 @@ export function createTurnMethods(
         ...(req.detectOpener ? { detectOpener: req.detectOpener } : {}),
         ...(req.attachments?.length ? { attachments: req.attachments } : {}),
         ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
-        ...(req.harness ? { harness: req.harness } : {}),
-        ...(req.model ? { model: req.model } : {}),
+        ...(!individualAuth && req.harness ? { harness: req.harness } : {}),
+        ...(!individualAuth && req.model ? { model: req.model } : {}),
         ...turnModelOptions(req),
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),

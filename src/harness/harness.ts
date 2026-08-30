@@ -10,6 +10,7 @@ import type {
 } from "../sessions/session-store.ts";
 export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
+import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import {
@@ -60,7 +61,18 @@ interface HarnessSecurityScreenInput {
   payload: string;
   signal: AbortSignal;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: HarnessLlmRequestRecord): void | Promise<void>;
+  recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+}
+
+/**
+ * Derived per-turn Codex auth: access + id token only. The refresh token
+ * stays in the keychain; the harness (and its jail) never see it.
+ */
+export interface CodexTurnAuth {
+  accessToken: string;
+  idToken: string;
+  accountId?: string;
+  expiresAt?: number;
 }
 
 export interface HarnessTurnInput {
@@ -104,8 +116,12 @@ export interface HarnessTurnInput {
   tapeFold?: unknown[];
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;
+  providerKeys?: ProviderKeys;
+  runtimePinned?: boolean;
+  claudeOauthToken?: string;
+  codexAuth?: CodexTurnAuth;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: HarnessLlmRequestRecord): void | Promise<void>;
+  recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;

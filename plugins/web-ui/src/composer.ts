@@ -409,6 +409,68 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     } else if (composerState.error) {
       composerNotice = html`<div class="composer-error">${composerState.error}</div>`;
     }
+    let runtimeControls: TemplateResult | typeof nothing = nothing;
+    if (!appState.me?.individualModelAuth) {
+      runtimeControls = ctx.pane
+        ? settingsControl(agent, selectedModel, inputBlocked)
+        : html`
+            ${
+              runtimeToggled
+                ? html`<button
+                    class="runtime-default-btn"
+                    type="button"
+                    aria-label="Make default"
+                    data-mobile-label="Default"
+                    title="Use this harness, model, effort, and fast setting as the default for this scope"
+                    ?disabled=${inputBlocked}
+                    @click=${() => changeScopeRuntime({ harnessId: selectedModel.harnessId, modelId: selectedModel.model.id, effortLevel: composerState.effortLevel, fastMode: fastOn }, agent)}
+                  >
+                    Make default
+                  </button>`
+                : nothing
+            }
+            ${
+              runtimeToggled && activeRuntimeConfig?.scopeOverride
+                ? html`<button
+                    class="runtime-default-btn"
+                    type="button"
+                    aria-label="Use org default"
+                    data-mobile-label="Org default"
+                    ?disabled=${inputBlocked}
+                    @click=${() => changeScopeRuntime({ inherit: true }, agent)}
+                  >
+                    Use org default
+                  </button>`
+                : nothing
+            }
+            ${menuControl({
+              kind: "model",
+              label: selectedModel.buttonLabel,
+              suffix: `· ${effortLabel(composerState.effortLevel)}`,
+              title: "Model",
+              selected: selectedModel.value,
+              align: "right",
+              searchable: true,
+              options: getModelOptionsForHarness(selectedModel.harnessId, scopeKey()).map((option) => ({
+                value: option.value,
+                label: option.label,
+                groupLabel: option.groupLabel,
+              })),
+              disabled: inputBlocked,
+              onSelect: (value: string) => selectModel(value, agent),
+            })}
+            ${menuControl({
+              kind: "harness",
+              label: selectedModel.harnessLabel,
+              title: "Harness",
+              selected: selectedModel.harnessId,
+              align: "right",
+              options: getHarnessOptions(scopeKey()),
+              disabled: inputBlocked,
+              onSelect: (value: string) => selectHarness(value, agent),
+            })}
+          `;
+    }
     return html`
       <form class="composer-wrap" @submit=${(e: Event) => submitComposer(e, agent)}>
         ${slashMenu(agent)}
@@ -545,70 +607,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   `
             }
           </div>
-          <div class="composer-right">
-            ${
-              ctx.pane
-                ? settingsControl(agent, selectedModel, inputBlocked)
-                : html`
-                    ${
-                      runtimeToggled
-                        ? html`<button
-                            class="runtime-default-btn"
-                            type="button"
-                            aria-label="Make default"
-                            data-mobile-label="Default"
-                            title="Use this harness, model, effort, and fast setting as the default for this scope"
-                            ?disabled=${inputBlocked}
-                            @click=${() => changeScopeRuntime({ harnessId: selectedModel.harnessId, modelId: selectedModel.model.id, effortLevel: composerState.effortLevel, fastMode: fastOn }, agent)}
-                          >
-                            Make default
-                          </button>`
-                        : nothing
-                    }
-                    ${
-                      runtimeToggled && activeRuntimeConfig?.scopeOverride
-                        ? html`<button
-                            class="runtime-default-btn"
-                            type="button"
-                            aria-label="Use org default"
-                            data-mobile-label="Org default"
-                            ?disabled=${inputBlocked}
-                            @click=${() => changeScopeRuntime({ inherit: true }, agent)}
-                          >
-                            Use org default
-                          </button>`
-                        : nothing
-                    }
-                    ${menuControl({
-                      kind: "model",
-                      label: selectedModel.buttonLabel,
-                      suffix: `· ${effortLabel(composerState.effortLevel)}`,
-                      title: "Model",
-                      selected: selectedModel.value,
-                      align: "right",
-                      searchable: true,
-                      options: getModelOptionsForHarness(selectedModel.harnessId, scopeKey()).map((option) => ({
-                        value: option.value,
-                        label: option.label,
-                        groupLabel: option.groupLabel,
-                      })),
-                      disabled: inputBlocked,
-                      onSelect: (value: string) => selectModel(value, agent),
-                    })}
-                    ${menuControl({
-                      kind: "harness",
-                      label: selectedModel.harnessLabel,
-                      title: "Harness",
-                      selected: selectedModel.harnessId,
-                      align: "right",
-                      options: getHarnessOptions(scopeKey()),
-                      disabled: inputBlocked,
-                      onSelect: (value: string) => selectHarness(value, agent),
-                    })}
-                  `
-            }
-            ${sendControls(agent)}
-          </div>
+          <div class="composer-right">${runtimeControls} ${sendControls(agent)}</div>
         </div>
         ${composerNotice}
       </form>

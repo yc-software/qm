@@ -457,7 +457,7 @@ export interface SessionStore {
   getTape(sessionId: string, opts?: GetTapeOptions): Promise<TapeRecord[]>;
   tapeCoverage(sessionId: string): Promise<number>;
 
-  recordLlmRequest(sessionId: string, rec: NewLlmRequest): Promise<LlmRequestRecord>;
+  recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
 
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;

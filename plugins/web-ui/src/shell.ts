@@ -15,6 +15,7 @@ import {
   Rocket,
   Search,
   ShieldCheck,
+  Sparkles,
   Webhook,
   type IconNode,
 } from "lucide";
@@ -70,6 +71,7 @@ import { openChatSearch, SEARCH_HOTKEY_LABEL } from "./search";
 import { hideTooltip, showTooltip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { renderDeploys } from "./deploys";
+import { openModelConnectManager, renderModelConnectGate } from "./model-connect";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderSkills } from "./skills";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
@@ -455,6 +457,18 @@ export function mountShell(): void {
               <span class="avatar">${initials(appState.me?.user ?? "?")}</span>
               <span class="user-name">${appState.me?.user ?? ""}</span>
             </div>
+            ${
+              appState.me?.individualModelAuth
+                ? html`<button
+                    class="icon-btn subtle"
+                    title="Manage AI account"
+                    aria-label="Manage AI account"
+                    @click=${openModelConnectManager}
+                  >
+                    ${icon(Sparkles, 17)}
+                  </button>`
+                : nothing
+            }
             <theme-toggle .includeSystem=${true} title="Color scheme: light / dark / system"></theme-toggle>
             <button class="icon-btn subtle" title="Sign out" aria-label="Sign out" @click=${signOut}>
               ${icon(LogOut, 17)}
@@ -876,6 +890,11 @@ export async function boot(): Promise<void> {
   appState.me = (await r.json()) as Me;
   authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();
+  if (appState.me.individualModelAuth && !appState.me.modelAuthConnected) {
+    shellMounted = false;
+    renderModelConnectGate();
+    return;
+  }
   const personalScope = `personal:${appState.me.user}`;
   const runtimeConfig = await fetchRuntimeConfig(personalScope);
   if (runtimeConfig) {

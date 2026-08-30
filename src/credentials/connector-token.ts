@@ -22,6 +22,8 @@ export function withOperatorTokenFallback(
       store.deleteConnectorToken(host, principalId, accountType),
     connectorTokenStatus: (host, principalId, accountType) =>
       store.connectorTokenStatus(host, principalId, accountType),
+    connectorDerivedAuth: (host, principalId, accountType) =>
+      store.connectorDerivedAuth(host, principalId, accountType),
     async connectorAccessToken(host, principalId, accountType) {
       const token = await store.connectorAccessToken(host, principalId, accountType);
       if (token !== null) return token;

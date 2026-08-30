@@ -805,14 +805,32 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       res.setHeader("set-cookie", sessionCookie(user));
-      const permissions = await userPermissions();
+      const [permissions, workspaceUrl, authStatus] = await Promise.all([
+        userPermissions(),
+        slackWorkspaceUrl(),
+        coreFetch("GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(user)}`, "", 5_000).catch(
+          () => null,
+        ),
+      ]);
+      if (authStatus === null || authStatus.status !== 200) {
+        return json(res, 503, {
+          error: "unavailable",
+          message: "the assistant is briefly unavailable — retry shortly",
+        });
+      }
+      const parsed = JSON.parse(authStatus.text) as {
+        individualModelAuth?: boolean;
+        connections?: { provider: string }[];
+      };
       return json(res, 200, {
         user,
         org: ORG,
         mode: AUTH_MODE,
-        slackWorkspaceUrl: await slackWorkspaceUrl(),
+        slackWorkspaceUrl: workspaceUrl,
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         permissions,
+        individualModelAuth: parsed.individualModelAuth === true,
+        modelAuthConnected: (parsed.connections?.length ?? 0) > 0,
       });
     },
   },
@@ -1453,6 +1471,64 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, user } = c;
       return relayCore(res, "GET", `/v1/connectors/oauth/status?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/user-model-auth/status",
+    handle: async (c) =>
+      relayCore(c.res, "GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(c.user)}`),
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/api-key",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown; apiKey?: unknown };
+      const body = JSON.stringify({ principalId: c.user, provider: p.provider, apiKey: p.apiKey });
+      return relayCore(c.res, "POST", "/v1/user-model-auth/api-key", body);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/disconnect",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown };
+      return relayCore(
+        c.res,
+        "POST",
+        "/v1/user-model-auth/disconnect",
+        JSON.stringify({ principalId: c.user, provider: p.provider }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/chatgpt/start",
+    handle: async (c) =>
+      relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/start", JSON.stringify({ principalId: c.user })),
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/chatgpt/poll",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { deviceAuthId?: unknown; userCode?: unknown };
+      const body = JSON.stringify({ principalId: c.user, deviceAuthId: p.deviceAuthId, userCode: p.userCode });
+      return relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/poll", body);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/claude/start",
+    handle: async (c) =>
+      relayCore(c.res, "POST", "/v1/user-model-auth/claude/start", JSON.stringify({ principalId: c.user })),
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/claude/complete",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { code?: unknown; verifier?: unknown };
+      const body = JSON.stringify({ principalId: c.user, code: p.code, verifier: p.verifier });
+      return relayCore(c.res, "POST", "/v1/user-model-auth/claude/complete", body);
     },
   },
   {

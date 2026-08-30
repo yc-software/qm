@@ -362,6 +362,23 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
+    id: "individual-model-auth",
+    kind: "boolean",
+    target: "org",
+    label:
+      "Individual authorization for AI usage org-wide: on means each user must connect their own Claude or Codex account (API key or subscription login) before using the assistant; the org's shared model credentials are not used for their turns.",
+    readKey: "individualModelAuth",
+    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getIndividualModelAuth() : undefined),
+    apply: generic<boolean>(
+      (body, { scope }) => {
+        const bad = orgOnly(scope, "the individual-authorization switch is org-wide");
+        if (bad) return bad;
+        return boolBody(body);
+      },
+      (deps, _scope, on) => deps.config!.setIndividualModelAuth(on),
+    ),
+  },
+  {
     id: "base-model",
     kind: "enum",
     target: "any",

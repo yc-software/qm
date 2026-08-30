@@ -13,6 +13,7 @@ import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
 import type { OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
+import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
 import type { ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
 import type { DirectoryStore } from "../../directory/directory-store.ts";
 import type { EnvironmentStore } from "../../environments/environment-store.ts";
@@ -100,6 +101,9 @@ export interface OrchestratorDeps {
   identity: IdentityService;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
+  /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
+  defaultHarness?: string;
+  userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
   sessionTapeMode?: "shadow" | "serve";

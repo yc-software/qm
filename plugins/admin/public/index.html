@@ -4397,6 +4397,30 @@
                     ><span class="status" id="st-interactive-fast-mode"></span>
                   </div>
                 </section>
+                <section class="card setting-row hidden" id="card-individual-model-auth">
+                  <div class="head">
+                    <h2>Individual authorization for AI usage</h2>
+                    <p>
+                      Org-wide, default off. When on, each user must connect their own Claude or Codex account (API key
+                      or subscription login) before using the assistant. The org's shared model credentials are not used
+                      for their turns.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <label class="setting-toggle">
+                      <input type="checkbox" id="individual-model-auth" />
+                      <span class="setting-switch" aria-hidden="true"></span>
+                      <span class="setting-copy"
+                        ><strong>Require each user to connect their own model account</strong
+                        ><small>New users are prompted to sign in with Claude or Codex on first use.</small></span
+                      >
+                    </label>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="individual-model-auth">Apply</button
+                    ><span class="status" id="st-individual-model-auth"></span>
+                  </div>
+                </section>
                 <section class="card setting-row hidden" id="card-base-model">
                   <div class="head">
                     <h2>Default harness and model</h2>
@@ -6427,6 +6451,9 @@
         const showInteractiveFastMode = scope.startsWith("org:") && "interactiveFastMode" in r.data;
         $("card-interactive-fast-mode").classList.toggle("hidden", !showInteractiveFastMode);
         if (showInteractiveFastMode) $("interactive-fast-mode").checked = r.data.interactiveFastMode === true;
+        const showIndividualModelAuth = scope.startsWith("org:") && "individualModelAuth" in r.data;
+        $("card-individual-model-auth").classList.toggle("hidden", !showIndividualModelAuth);
+        if (showIndividualModelAuth) $("individual-model-auth").checked = r.data.individualModelAuth === true;
         const showHeaderPinDefault = scope.startsWith("org:") && "channelHeaderPinDefault" in r.data;
         $("card-channel-header-pin-default").classList.toggle("hidden", !showHeaderPinDefault);
         if (showHeaderPinDefault) $("channel-header-pin-default").checked = !!r.data.channelHeaderPinDefault;
@@ -7253,19 +7280,20 @@
         const baseModel = config.data.baseModel || config.data.baseModelDefault || "";
         const baseProvider = onboardingProviderForModel(baseModel);
         const baseStatus = onboardingModelStatuses.find((item) => item.provider === baseProvider);
-        onboardingBadge(
-          "onboarding-model-badge",
-          baseStatus?.configured ? "Ready" : "Needs a key",
-          Boolean(baseStatus?.configured),
-        );
+        const harnessAuth = models.data.harnessAuth;
+        const baseHarnessAuth = Boolean(harnessAuth && harnessAuth.provider === baseProvider);
+        const baseReady = Boolean(baseModel) && (Boolean(baseStatus?.configured) || baseHarnessAuth);
+        onboardingBadge("onboarding-model-badge", baseReady ? "Ready" : "Needs a key", baseReady);
         $("onboarding-model-summary").textContent = !baseModel
           ? "No base model is configured yet — pick a provider and model below."
           : baseStatus?.configured
             ? baseModel + " · " + (baseStatus.source === "admin" ? "admin-managed key" : "deployment key")
-            : baseModel +
-              " cannot run until its " +
-              (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
-              " key is configured.";
+            : baseHarnessAuth
+              ? baseModel + " · authenticated by the " + harnessAuth.harnessId + " harness — no API key needed."
+              : baseModel +
+                " cannot run until its " +
+                (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
+                " key is configured.";
         renderOnboardingProviderOptions(baseProvider);
         renderOnboardingModelOptions(baseModel);
 
@@ -8140,6 +8168,7 @@
         "external-slack-participants": () => ({ on: $("external-slack-participants").checked }),
         "org-ambient": () => ({ on: $("org-ambient").checked }),
         "interactive-fast-mode": () => ({ on: $("interactive-fast-mode").checked }),
+        "individual-model-auth": () => ({ on: $("individual-model-auth").checked }),
         "channel-header-pin-default": () => ({ on: $("channel-header-pin-default").checked }),
         runtime: () => ({ harnessId: $("base-harness").value, modelId: $("base-model").value }),
         "approved-harnesses": () => ({
@@ -8175,6 +8204,7 @@
         "external-slack-participants": "st-external-slack-participants",
         "org-ambient": "st-org-ambient",
         "interactive-fast-mode": "st-interactive-fast-mode",
+        "individual-model-auth": "st-individual-model-auth",
         "channel-header-pin-default": "st-channel-header-pin-default",
         runtime: "st-runtime",
         "approved-harnesses": "st-approved-harnesses",

@@ -76,6 +76,12 @@ export interface ClaudeHarnessOptions {
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
+  /**
+   * Custodian of subscription auth (e.g. a keychain-held CLAUDE_CODE_OAUTH_TOKEN).
+   * Resolved fresh per session start; merged over static env so the secret
+   * never lives in process env or on the core host's disk.
+   */
+  authEnv?: () => Promise<NodeJS.ProcessEnv>;
   signals?: RunSignalStore;
   tasks?: TaskStore;
 }
@@ -146,6 +152,15 @@ export function claudeChildEnv(source: NodeJS.ProcessEnv, jail: string): NodeJS.
     if (source[name] !== undefined) env[name] = source[name];
   }
   return env;
+}
+
+function perUserClaudeEnv(env: NodeJS.ProcessEnv, oauthToken: string | undefined): NodeJS.ProcessEnv {
+  if (!oauthToken) return env;
+  const scoped = { ...env };
+  delete scoped.ANTHROPIC_API_KEY;
+  delete scoped.ANTHROPIC_AUTH_TOKEN;
+  scoped.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+  return scoped;
 }
 
 export function claudeProcessIdentity(uid = process.getuid?.()): { uid: number; gid: number } | undefined {
@@ -461,12 +476,16 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const flushGeneratedTape = async () => {
       for (const payload of pendingGeneratedTape.splice(0)) await writeTape(payload);
     };
+    const authEnv = opts.authEnv ? await opts.authEnv() : undefined;
     const sdkQuery = query({
       prompt: queue,
       options: {
         abortController: controller,
         cwd: jail,
-        env: claudeChildEnv(opts.env ?? {}, jail),
+        env: perUserClaudeEnv(
+          claudeChildEnv(authEnv ? { ...opts.env, ...authEnv } : (opts.env ?? {}), jail),
+          turn.claudeOauthToken,
+        ),
         tools: allowSubagents ? ["Agent"] : [],
         skills: [],
         settingSources: [],
