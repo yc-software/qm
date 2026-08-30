@@ -55,7 +55,12 @@ import {
   isValidCapabilityTimezone,
   type CapabilityClaims,
 } from "../auth/capability-token.ts";
-import type { GapWork, HarnessLlmRequestRecord, HarnessTurnResult } from "../harness/harness.ts";
+import {
+  harnessPersistedProviderRecord,
+  type GapWork,
+  type HarnessLlmRequestRecord,
+  type HarnessTurnResult,
+} from "../harness/harness.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
 import {
   renderSecurityPolicyPrompt,
@@ -125,7 +130,12 @@ import {
 } from "../harness/replay.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { jsonbSafeStringify } from "../util/text.ts";
-import { NonRetryableTurnError, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
+import {
+  MESSAGE_APPROVAL_STAGE_FAILURE,
+  NonRetryableTurnError,
+  turnFailureMessage,
+  type TurnFailurePayload,
+} from "./turn-error.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -162,6 +172,11 @@ import { createCompaction } from "./orchestrator/compaction.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
+import {
+  messageApprovalDurableTurnResult,
+  type MessageApprovalContinuation,
+  type MessageApprovalToolInvocation,
+} from "./message-approval.ts";
 
 export {
   egressClaimAllowingControlPlane,
@@ -408,6 +423,60 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let compactMs: number | undefined;
       const turnTimezone = isValidCapabilityTimezone(input.timezone) ? input.timezone : undefined;
 
+      let continuationAdmission:
+        { sessionId: string; destination: Destination; input: MessageApprovalContinuation } | null | undefined;
+      const continuationClaim =
+        input.messageApprovalContinuation && input.runId && input.runLeaseToken && input.attempt
+          ? { runId: input.runId, leaseToken: input.runLeaseToken, attempt: input.attempt }
+          : undefined;
+      const beforeToolInvocation = async (invocation: MessageApprovalToolInvocation) => {
+        input.cancel?.throwIfAborted();
+        if (
+          continuationClaim &&
+          (!deps.runs ||
+            !(await deps.runs.ownsLease(
+              continuationClaim.runId,
+              continuationClaim.leaseToken,
+              continuationClaim.attempt,
+            )))
+        ) {
+          throw new NonRetryableTurnError(`run ${continuationClaim.runId} lost its lease before tool execution`);
+        }
+        input.cancel?.throwIfAborted();
+        if (continuationClaim && input.messageApprovalContinuation && deps.messageApprovals) {
+          return deps.messageApprovals.beginToolInvocation(
+            input.messageApprovalContinuation,
+            continuationClaim,
+            invocation,
+          );
+        }
+        return undefined;
+      };
+      if (input.messageApprovalContinuation) {
+        continuationAdmission =
+          continuationClaim && deps.messageApprovals
+            ? await deps.messageApprovals.admitContinuation(
+                input.messageApprovalContinuation,
+                continuationClaim,
+                input.approval?.requestId,
+              )
+            : null;
+      }
+      if (input.messageApprovalContinuation && !continuationAdmission) {
+        return { status: "refused", reason: "message approval continuation is no longer valid" };
+      }
+      const continuationInstruction = continuationAdmission
+        ? ({ kind: "message_approval", value: continuationAdmission.input, hidden: true } as const)
+        : undefined;
+      const continuationPersistedText = (value: string): string => {
+        if (!continuationInstruction) return value;
+        const persisted = harnessPersistedProviderRecord({ continuationInstruction }, { text: value }).payload;
+        if (!persisted || typeof persisted !== "object" || Array.isArray(persisted))
+          return "[message approval draft omitted]";
+        const text = (persisted as { text?: unknown }).text;
+        return typeof text === "string" ? text : "[message approval draft omitted]";
+      };
+
       if (!deps.identity.isInternal(actor)) {
         return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
       }
@@ -517,6 +586,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
         (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
       const screenInbound =
+        !input.messageApprovalContinuation &&
         securityPolicy.inboundScreening === "external" &&
         !(
           approvalSession &&
@@ -801,7 +871,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
       }
       const strictReadOnly = input.readOnly === true;
-      const useMemory = input.skipMemory !== true;
+      const useMemory = input.skipMemory !== true && !input.messageApprovalContinuation;
       const environmentId = await resolveEnvironmentId(deps.environments, scopeId);
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
       if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
@@ -881,7 +951,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const delivery = deliveryCandidatesFor(input.surface, input.deliveryTarget, input.deliveryCandidates, scopeId);
       const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
       let defaultDestination: Destination | undefined;
-      if (defaultCandidate) {
+      if (input.messageApprovalContinuation) {
+        defaultDestination = structuredClone(continuationAdmission!.destination);
+      } else if (defaultCandidate) {
         defaultDestination = {
           type: defaultCandidate.type,
           target: defaultCandidate.target,
@@ -964,13 +1036,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let leaseMs = 0;
       const perf = { credsMs: 0 };
       const sessionStart = Date.now();
-      const session = await deps.sessions.getOrCreateByThread(
-        conversation.threadRef,
-        type,
-        scopeId,
-        conversation.channelName,
-        input.surface,
-      );
+      const session = input.messageApprovalContinuation
+        ? await deps.sessions.get(continuationAdmission!.sessionId)
+        : await deps.sessions.getOrCreateByThread(
+            conversation.threadRef,
+            type,
+            scopeId,
+            conversation.channelName,
+            input.surface,
+          );
+      if (
+        !session ||
+        (input.messageApprovalContinuation &&
+          (session.threadRef !== conversation.threadRef || session.scopeId !== scopeId))
+      ) {
+        return { status: "refused", reason: "message approval session no longer exists" };
+      }
       screenSession.id = session.id;
       leaseMs += Date.now() - sessionStart;
       if (!input.sessionParticipantIds?.length && !automatedTurn)
@@ -2239,7 +2320,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .filter((s) => s && s.trim())
             .join("\n\n"),
         );
-        const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
+        let baseText = input.text;
+        if (input.proactiveOpener && !input.text.trim()) {
+          baseText = PROACTIVE_OPENER_PROMPT;
+        }
         const pausedTurnUserEntry = input.approval
           ? [...visibleHistory].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
           : undefined;
@@ -2289,7 +2373,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let lastChunkAt: number | undefined;
         const emittedEntries: SessionEntry[] = [];
         const syntheticPrompt =
-          (input.proactiveOpener && !input.text.trim()) || automatedTurn || partial || approvalReplay;
+          !!input.messageApprovalContinuation ||
+          (input.proactiveOpener && !input.text.trim()) ||
+          automatedTurn ||
+          partial ||
+          approvalReplay;
         failureUserPayload =
           !syntheticPrompt && input.text.trim()
             ? {
@@ -2347,6 +2435,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.runId ? { runId: input.runId } : {}),
             ...(input.cancel ? { cancel: input.cancel } : {}),
             input: harnessInput,
+            ...(continuationInstruction ? { continuationInstruction } : {}),
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
             ...(extras.environment ? { environment: extras.environment } : {}),
@@ -2366,6 +2455,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     input.origin.kind === "automation" && input.origin.destination
                       ? "slack"
                       : (input.surface ?? "slack"),
+                  ...(surfaceToolDeps.stageMessageApproval ? { messageApprovals: true } : {}),
                 }
               : {}),
             ...(isPollFire ? { pollFire: true } : {}),
@@ -2450,6 +2540,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               : {}),
             ...(securityPolicy.toolApprovals === "all" ? { toolApprovalGate: authorizeToolCall } : {}),
+            beforeToolInvocation,
             systemPrompt,
             systemCacheBoundary: stableSystemBytes,
             history: continuation?.history ?? history,
@@ -2488,7 +2579,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               const persistStart = Date.now();
               try {
                 const stored = (() => {
-                  const tainted = entry;
+                  const persisted = continuationInstruction
+                    ? harnessPersistedProviderRecord({ continuationInstruction }, entry.payload)
+                    : { payload: entry.payload, hidden: false };
+                  const tainted = { ...entry, payload: persisted.payload };
+                  if (persisted.hidden) {
+                    const payload =
+                      typeof tainted.payload === "object" && tainted.payload !== null
+                        ? { ...(tainted.payload as Record<string, unknown>), hidden: true }
+                        : { hidden: true };
+                    return { ...tainted, payload };
+                  }
                   if (tainted.type !== "user") return tainted;
                   const payload =
                     typeof tainted.payload === "object" && tainted.payload !== null
@@ -2516,7 +2617,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       const payload = appended.payload as { tool?: unknown; action?: unknown };
                       const deliberatePost = payload?.tool === (input.surface ?? "slack") && payload?.action === "post";
                       const ack = spineFirstBlock.trim();
-                      if (!deliberatePost && ack && defaultDestination && deps.deliveries) {
+                      if (
+                        !input.messageApprovalContinuation &&
+                        !deliberatePost &&
+                        ack &&
+                        defaultDestination &&
+                        deps.deliveries
+                      ) {
                         spineAckText = ack;
                         const runId = input.runId;
                         const ackKey = `ack:${session.id}:${randomUUID()}`;
@@ -2602,6 +2709,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const primarySubturnEndSeq = emittedEntries.at(-1)?.seq;
         if (
+          !input.messageApprovalContinuation &&
           input.addressed &&
           !strictReadOnly &&
           input.surfaceTools &&
@@ -2629,10 +2737,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               spine.surfaceOutboundCount += 1;
               if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
             } catch (e) {
+              if (result.messageApprovalAttempted) throw new NonRetryableTurnError(MESSAGE_APPROVAL_STAGE_FAILURE);
               console.error(`[orchestrator] direct reply delivery failed session=${session.id}:`, errMessage(e));
             }
           }
-          if (spine.surfaceOutboundCount === 0) {
+          if (spine.surfaceOutboundCount === 0 && !result.messageApprovalAttempted) {
             const nudgeHistory = filterHistory(
               forModelContext(await deps.sessions.getEntries(session.id), { includeSecurityTainted: false }),
             );
@@ -2714,7 +2823,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const totalMs = Date.now() - turnStart;
 
         const noOutbound = { attachments: [], oversized: [], empty: [], dropped: 0 };
-        const harvestOutbox = conversation.kind === "dm";
+        const harvestOutbox =
+          conversation.kind === "dm" && !input.messageApprovalContinuation && !result.messageApprovalAttempted;
         const outboundScoped =
           harvestOutbox && box.used && box.handle
             ? await collectOutbound(deps.sandbox, box.handle, blobTransfer, fileRegistration, turnOutboxDir)
@@ -2945,7 +3055,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           try {
             const writable = resolution.layers.find((l) => l.mode === "rw");
             const writtenHandle = box.used ? box.handle : null;
-            if (writable && writtenHandle) {
+            if (!input.messageApprovalContinuation && writable && writtenHandle) {
               if (deps.keychain) {
                 try {
                   await captureDeviceFlowLogins({
@@ -2977,7 +3087,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               }
             }
-            if (!pausing && turnCompleted && !session.title && !(earlyTitleGen && (await earlyTitleGen))) {
+            if (
+              !input.messageApprovalContinuation &&
+              !pausing &&
+              turnCompleted &&
+              !session.title &&
+              !(earlyTitleGen && (await earlyTitleGen))
+            ) {
               await generateAndStoreTitle(session.id, scopeId, `User:\n${input.text}\n\nAssistant:\n${result.reply}`);
             }
           } finally {
@@ -3009,34 +3125,39 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const blocks = approvalBlocksInput(pa.kind, outcome);
             const command = pa.command;
             const requestId = commandApprovalId(session.id, command);
-            const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
+            const approvalReason = input.messageApprovalContinuation
+              ? "Continuation tool authorization is required."
+              : pa.reason;
+            const summary = input.messageApprovalContinuation
+              ? "Continuation tool authorization"
+              : (pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose)));
             prepared.push({
               requestId,
               record: {
                 sessionId: session.id,
                 command,
                 createdAt: Date.now(),
-                reason: pa.reason,
+                reason: approvalReason,
                 request,
                 blocksInput: blocks,
                 ...(pa.grantModes ? { grantModes: pa.grantModes } : grantModesField),
-                ...(pa.matched ? { matched: pa.matched } : {}),
-                ...(pa.purpose ? { purpose: pa.purpose } : {}),
+                ...(!input.messageApprovalContinuation && pa.matched ? { matched: pa.matched } : {}),
+                ...(!input.messageApprovalContinuation && pa.purpose ? { purpose: pa.purpose } : {}),
                 ...(summary ? { summary } : {}),
-                ...(pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
+                ...(!input.messageApprovalContinuation && pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
                 ...(pa.approvalKey ? { approvalKey: pa.approvalKey } : {}),
                 ...(pa.kind ? { kind: pa.kind } : {}),
               },
               approval: {
                 requestId,
                 command,
-                reason: pa.reason,
+                reason: approvalReason,
                 blocksInput: blocks,
                 ...(pa.grantModes ? { grantModes: pa.grantModes } : grantModesField),
-                ...(pa.matched ? { matched: pa.matched } : {}),
-                ...(pa.purpose ? { purpose: pa.purpose } : {}),
+                ...(!input.messageApprovalContinuation && pa.matched ? { matched: pa.matched } : {}),
+                ...(!input.messageApprovalContinuation && pa.purpose ? { purpose: pa.purpose } : {}),
                 ...(summary ? { summary } : {}),
-                ...(pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
+                ...(!input.messageApprovalContinuation && pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
                 ...(pa.approvalKey ? { approvalKey: pa.approvalKey } : {}),
                 ...(pa.kind ? { kind: pa.kind } : {}),
               },
@@ -3086,14 +3207,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           tailOwnsCleanup = true;
         }
         await deps.errors?.flush();
-        return finalResult;
+        return input.messageApprovalContinuation ? messageApprovalDurableTurnResult(finalResult) : finalResult;
       } catch (err) {
         if (err instanceof ProjectRosterChanged) {
-          return {
+          const result: TurnResult = {
             status: "refused",
             sessionId: session.id,
             reason: "project membership changed; retry from the current project",
           };
+          return result;
         }
         if (err instanceof NeedsApproval) {
           const requestId = commandApprovalId(session.id, err.command);
@@ -3140,22 +3262,30 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(err.kind ? { kind: err.kind } : {}),
             blocksInput: true,
           };
-          return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
+          const result: TurnResult = {
+            status: "pending_approval",
+            sessionId: session.id,
+            pendingApprovals: [approval],
+          };
+          return result;
         }
         if (err instanceof CommandDenied) {
+          const reason = err.message;
           deps.errors?.record({
             category: "command_policy",
             code: "denied",
-            message: err.message,
+            message: continuationPersistedText(reason),
             scopeLabel: scopeId,
             sessionId: session.id,
           });
-          return { status: "refused", sessionId: session.id, reason: err.message };
+          const result: TurnResult = { status: "refused", sessionId: session.id, reason };
+          return result;
         }
+        const persistedErrorMessage = continuationPersistedText(errMessage(err));
         deps.errors?.record({
           category: "turn",
           code: "error",
-          message: errMessage(err),
+          message: persistedErrorMessage,
           scopeLabel: scopeId,
           sessionId: session.id,
         });
@@ -3165,13 +3295,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .append(lease, { type: "user", payload: failureUserPayload, scopeLabel: scopeId as ScopeId })
               .catch(swallowAs("orchestrator: turn failure user back-fill", undefined));
           }
-          const payload: TurnFailurePayload = { kind: "turn_failure", message: turnFailureMessage(err) };
+          const payload: TurnFailurePayload = {
+            kind: "turn_failure",
+            message: turnFailureMessage(input.messageApprovalContinuation ? persistedErrorMessage : err),
+          };
           await deps.sessions
             .append(lease, { type: "system", payload, scopeLabel: scopeId as ScopeId })
             .catch(swallowAs("orchestrator: terminal turn failure record", undefined));
         }
         throw err;
       } finally {
+        if (input.messageApprovalContinuation) {
+          await Promise.resolve(deps.harness.turns.resetSession?.(session.id)).catch(
+            swallowAs("orchestrator: message approval harness reset", undefined),
+          );
+        }
         if (input.runId) deps.turnStream?.end(input.runId);
         if (!tailOwnsCleanup) await reclaimBox();
         if (!leaseReleased) await deps.sessions.releaseLease(lease);

@@ -267,6 +267,9 @@ export function createTurnMethods(
         ...(typeof req.intakePreambleMs === "number" ? { intakePreambleMs: req.intakePreambleMs } : {}),
         ...(typeof req.clientSentAt === "number" ? { clientSentAt: req.clientSentAt } : {}),
         ...(req.approval ? { approval: req.approval } : {}),
+        ...(req.messageApprovalContinuation
+          ? { messageApprovalContinuation: structuredClone(req.messageApprovalContinuation) }
+          : {}),
         ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
         ...(projectVersion ? { scopeVersion: projectVersion } : {}),
       };
@@ -434,7 +437,7 @@ export function createTurnMethods(
         deps.runs.enqueue({
           sessionId: conversation.threadRef,
           request,
-          maxAttempts: deps.maxAttempts,
+          maxAttempts: request.messageApprovalContinuation ? 1 : deps.maxAttempts,
           ...(dedupKey ? { dedupKey } : {}),
         });
       const enqueued = await withCurrentProjectRoster(enqueue);

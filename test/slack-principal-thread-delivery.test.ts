@@ -34,6 +34,7 @@ test("a threaded principal delivery posts and records the DM thread", async () =
       },
       ackDelivery: async (id: string, body: unknown) => void acks.push({ id, body }),
     } as any,
+    messageApprovals: {} as never,
     bridge: {
       inFlightRuns: new Set(),
       fetchBlobFromCore: async () => new Uint8Array(),

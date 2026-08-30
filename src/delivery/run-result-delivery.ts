@@ -5,6 +5,7 @@ import type { Task, TaskStore } from "../tasks/task-store.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errMessage } from "../util/errors.ts";
+import { MESSAGE_APPROVAL_STAGE_FAILURE } from "../core/turn-error.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -14,6 +15,7 @@ export interface RunResultDelivery {
 }
 
 export function runResultDelivery(run: Run, taskList: Task[] = []): RunResultDelivery | null {
+  if (run.request.messageApprovalContinuation) return null;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
   if (!target || !surface) return null;
@@ -37,6 +39,7 @@ export function runResultDelivery(run: Run, taskList: Task[] = []): RunResultDel
   if (run.status === "failed") {
     if (resolveTurnOrigin(run.request).kind === "ambient") return null;
     const reason = run.result?.reason ?? "unknown error";
+    if (reason === MESSAGE_APPROVAL_STAGE_FAILURE) return { destination, text: reason, idempotencyKey };
     return { destination, text: `⚠️ I couldn't finish that turn: ${reason}`, idempotencyKey };
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {

@@ -49,6 +49,17 @@ test("runResultDelivery maps ok-with-reply to a recovery delivery keyed by run",
   });
 });
 
+test("runResultDelivery never persists continuation model text or errors", () => {
+  const continuation = run({
+    request: {
+      ...turn("", "C9:171.001"),
+      messageApprovalContinuation: { approvalId: "draft-1", approvalVersion: 2, bindingId: "binding-1" },
+    },
+    result: { status: "failed", reply: "Ready to launch", reason: "Ready to launch" },
+  });
+  assert.equal(runResultDelivery(continuation), null);
+});
+
 test("runResultDelivery carries the reply's attachments so recovery can replay the files", () => {
   const atts = [{ name: "report.csv", mimetype: "text/csv", sizeBytes: 42, blobId: "blob-1" }];
   const d = runResultDelivery(run({ result: { status: "ok", reply: "here's the file", attachments: atts } }));
@@ -91,6 +102,15 @@ test("runResultDelivery still posts a surface-spine turn's FAILURE note", () => 
   const spine = run({ status: "failed", result: { status: "failed", reason: "boom" } });
   spine.request = { ...spine.request, surfaceTools: true };
   assert.equal(runResultDelivery(spine)?.text, "⚠️ I couldn't finish that turn: boom");
+});
+
+test("runResultDelivery keeps failed staging recovery generic", () => {
+  const spine = run({
+    status: "failed",
+    result: { status: "failed", reason: "Draft approval could not be staged." },
+  });
+  spine.request = { ...spine.request, surfaceTools: true };
+  assert.equal(runResultDelivery(spine)?.text, "Draft approval could not be staged.");
 });
 
 test("runResultDelivery recovers a security quarantine without exposing its internal reason", () => {

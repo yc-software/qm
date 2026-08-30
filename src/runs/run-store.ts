@@ -58,6 +58,8 @@ export interface RunStore {
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
+  ownsLease(runId: string, leaseToken: string, attempt: number): Promise<boolean>;
+
   releaseLease(runId: string, leaseToken: string): Promise<boolean>;
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;

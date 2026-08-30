@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
-import type { TurnResult } from "../src/types.ts";
+import type { MessageApprovalCardView, MessageApprovalService } from "../src/core/message-approval.ts";
+import type { Delivery, TurnResult } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -16,6 +17,8 @@ class FakeSlackClient {
   readonly ephemerals: any[] = [];
   readonly updates: any[] = [];
   readonly deletes: any[] = [];
+  readonly openedViews: any[] = [];
+  readonly missingMessages = new Set<string>();
   readonly reactionsAdded: any[] = [];
   readonly reactionsRemoved: any[] = [];
   readonly usersById = new Map<string, any>();
@@ -29,6 +32,7 @@ class FakeSlackClient {
   activeMembershipListings = 0;
   maxActiveMembershipListings = 0;
   firstMembershipListingStartedAt: number | undefined;
+  onUpdate: (() => void) | undefined;
   groupListings = 0;
   failGroupListing = false;
   private postSequence = 0;
@@ -100,10 +104,22 @@ class FakeSlackClient {
     },
     update: async (body: any) => {
       this.updates.push(body);
+      if (this.missingMessages.has(body.ts)) {
+        const error = new Error("message_not_found") as Error & { data: { error: string } };
+        error.data = { error: "message_not_found" };
+        throw error;
+      }
+      this.onUpdate?.();
       return { ok: true, ts: body.ts };
     },
     delete: async (body: any) => {
       this.deletes.push(body);
+      return { ok: true };
+    },
+  };
+  readonly views = {
+    open: async (body: any) => {
+      this.openedViews.push(body);
       return { ok: true };
     },
   };
@@ -170,6 +186,7 @@ class FakeApp {
   readonly messageHandlers: Handler[] = [];
   readonly eventHandlers = new Map<string, Handler[]>();
   readonly actionHandlers: Array<{ pattern: RegExp | string; handler: Handler }> = [];
+  readonly viewHandlers = new Map<string, Handler>();
   started = false;
 
   constructor(opts: any) {
@@ -187,6 +204,10 @@ class FakeApp {
 
   action(pattern: RegExp | string, handler: Handler): void {
     this.actionHandlers.push({ pattern, handler });
+  }
+
+  view(callbackId: string, handler: Handler): void {
+    this.viewHandlers.set(callbackId, handler);
   }
 
   async start(): Promise<void> {
@@ -207,6 +228,35 @@ class FakeApp {
     for (const handler of this.eventHandlers.get(name) ?? []) {
       await handler({ event, body: { event_id: eventId }, client: this.client, context: {} });
     }
+  }
+
+  async emitAction(action: any, body: any): Promise<any[]> {
+    const acknowledgements: any[] = [];
+    for (const registered of this.actionHandlers) {
+      const matches =
+        typeof registered.pattern === "string"
+          ? registered.pattern === action.action_id
+          : registered.pattern.test(action.action_id);
+      if (!matches) continue;
+      await registered.handler({
+        action,
+        body,
+        client: this.client,
+        ack: async (value?: any) => acknowledgements.push(value),
+      });
+    }
+    return acknowledgements;
+  }
+
+  async emitView(callbackId: string, view: any, body: any): Promise<any[]> {
+    const acknowledgements: any[] = [];
+    await this.viewHandlers.get(callbackId)?.({
+      view,
+      body,
+      client: this.client,
+      ack: async (value?: any) => acknowledgements.push(value),
+    });
+    return acknowledgements;
   }
 }
 
@@ -234,6 +284,15 @@ class FakeCore implements SlackCoreClient {
   readonly modelChangeListeners: Array<(scope: any) => void> = [];
   readonly headerPinChangeListeners: Array<(scope: any) => void> = [];
   readonly headerPinScopes = new Set<string>();
+  readonly messageApprovals = new Map<string, MessageApprovalCardView>();
+  readonly commandApprovals = new Map<string, any>();
+  readonly messageApprovalDecisions: any[] = [];
+  readonly messageApprovalEdits: any[] = [];
+  readonly messageApprovalAcks: any[] = [];
+  messageApprovalMutationGate: Promise<void> | undefined;
+  releaseMessageApprovalMutations: (() => void) | undefined;
+  readonly deliveries: Delivery[] = [];
+  readonly deliveryListeners = new Set<() => void>();
 
   async externalSlackParticipants(): Promise<boolean> {
     return this.externalParticipants;
@@ -307,18 +366,25 @@ class FakeCore implements SlackCoreClient {
   async ackRunDelivery(): Promise<void> {}
   async reportTurnMetrics(): Promise<void> {}
   async reportRunEditRef(): Promise<void> {}
-  async getApproval(): Promise<null> {
-    return null;
+  async getApproval(requestId: string): Promise<any> {
+    return this.commandApprovals.get(requestId) ?? null;
   }
   async pushDirectory(body: any): Promise<void> {
     this.directories.push(body);
   }
-  async claimDeliveries(): Promise<[]> {
-    return [];
+  async claimDeliveries(type: string): Promise<Delivery[]> {
+    const claimed = this.deliveries.filter((delivery) => delivery.destination.type === type);
+    for (const delivery of claimed) this.deliveries.splice(this.deliveries.indexOf(delivery), 1);
+    return claimed;
   }
   async ackDelivery(): Promise<void> {}
-  onDeliveryEnqueued(): () => void {
-    return () => {};
+  onDeliveryEnqueued(listener: () => void): () => void {
+    this.deliveryListeners.add(listener);
+    return () => this.deliveryListeners.delete(listener);
+  }
+  enqueueDelivery(delivery: Delivery): void {
+    this.deliveries.push(delivery);
+    for (const listener of this.deliveryListeners) listener();
   }
   async pendingContextRequests(): Promise<[]> {
     return [];
@@ -327,6 +393,11 @@ class FakeCore implements SlackCoreClient {
     return () => {};
   }
   async fulfillContextRequest(): Promise<void> {}
+  holdMessageApprovalMutations(): void {
+    this.messageApprovalMutationGate = new Promise((resolve) => {
+      this.releaseMessageApprovalMutations = resolve;
+    });
+  }
 }
 
 const internalUser = (id: string, name: string) => ({
@@ -336,6 +407,77 @@ const internalUser = (id: string, name: string) => ({
   real_name: name,
   profile: { display_name: name, real_name: name, email: `${name.toLowerCase()}@example.com` },
 });
+
+function messageApprovalRecord(patch: Partial<MessageApprovalCardView> = {}): MessageApprovalCardView {
+  return {
+    id: "approval-1",
+    title: "Send launch note",
+    recipient: "alex@example.com",
+    subject: "Launch",
+    body: "Ready to launch",
+    version: 1,
+    state: "pending",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    ...patch,
+  };
+}
+
+function fakeMessageApprovals(core: FakeCore): MessageApprovalService {
+  return {
+    async stage() {
+      throw new Error("not implemented");
+    },
+    async get(id, actorId) {
+      const record = core.messageApprovals.get(id) ?? null;
+      return record && actorId !== undefined && actorId !== "alice@example.com" ? null : record;
+    },
+    async decide(input) {
+      core.messageApprovalDecisions.push(input);
+      await core.messageApprovalMutationGate;
+      const record = core.messageApprovals.get(input.id);
+      return record ? { ok: true, record } : { ok: false, code: "not_found", message: "not found" };
+    },
+    async edit(input) {
+      core.messageApprovalEdits.push(input);
+      await core.messageApprovalMutationGate;
+      const record = core.messageApprovals.get(input.id);
+      return record ? { ok: true, record } : { ok: false, code: "not_found", message: "not found" };
+    },
+    async acknowledgeSlackMessage(approvalId, version, channel, ts) {
+      core.messageApprovalAcks.push({ approvalId, version, slackMessage: { channel, ts } });
+      const record = core.messageApprovals.get(approvalId);
+      if (!record) return { winner: false };
+      if ((record.cardVersion ?? 0) > version || (record.cardVersion === version && record.slackMessage)) {
+        const winner = record.slackMessage?.channel === channel && record.slackMessage.ts === ts;
+        return { winner, ...(record.slackMessage ? { current: record.slackMessage } : {}) };
+      }
+      const displaced = record.slackMessage;
+      const current = { channel, ts };
+      core.messageApprovals.set(approvalId, { ...record, slackMessage: current, cardVersion: version });
+      return {
+        winner: true,
+        current,
+        ...(displaced && (displaced.channel !== channel || displaced.ts !== ts) ? { displaced } : {}),
+      };
+    },
+    async invalidateSlackMessage(approvalId, channel, ts) {
+      const record = core.messageApprovals.get(approvalId);
+      if (record?.slackMessage?.channel !== channel || record.slackMessage.ts !== ts) return false;
+      core.messageApprovals.set(approvalId, { ...record, slackMessage: undefined, cardVersion: undefined });
+      return true;
+    },
+    async admitContinuation() {
+      return null;
+    },
+    async beginToolInvocation() {
+      return undefined;
+    },
+    async reconcileContinuation() {},
+    async recover() {},
+    async sweep() {},
+  };
+}
 
 async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -355,6 +497,7 @@ async function fixture(
   } = {},
 ) {
   const core = new FakeCore();
+  const messageApprovals = fakeMessageApprovals(core);
   core.externalParticipants = options.externalParticipants ?? false;
   const started = startSlackPlugin(
     {
@@ -364,6 +507,7 @@ async function fixture(
       ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
     },
     core,
+    messageApprovals,
   );
   const app = FakeApp.instances.at(-1)!;
   app.client.membershipDelayMs = options.membershipDelayMs ?? 0;
@@ -409,6 +553,402 @@ test("config is all-or-nothing and numeric tuning fails closed", () => {
     SLACK_MAX_PRIVATE_CHANNELS: "10",
   });
   assert.deepEqual(config, { botToken: "xoxb", appToken: "xapp", maxPrivateChannels: 10 });
+});
+
+test("message approval deliveries post once, persist the timestamp, and update the durable current card", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    const record = messageApprovalRecord();
+    f.core.messageApprovals.set(record.id, record);
+    f.core.enqueueDelivery({
+      id: "delivery-1",
+      destination: { type: "slack", target: "C1:100.200", messageApproval: { id: record.id, version: 1 } },
+      text: "",
+      idempotencyKey: `message-approval:${record.id}:card:1`,
+      createdAt: Date.now(),
+      deliveredAt: null,
+    });
+    await waitFor(() => f.core.messageApprovalAcks.length === 1);
+    assert.equal(f.client.posts.length, 1);
+    assert.equal(f.client.posts[0].channel, "C1");
+    assert.equal(f.client.posts[0].thread_ts, "100.200");
+    assert.equal(f.client.posts[0].mrkdwn, false);
+    assert.deepEqual(f.core.messageApprovalAcks[0], {
+      approvalId: record.id,
+      version: 1,
+      slackMessage: { channel: "C1", ts: "posted-1" },
+    });
+
+    const current = f.core.messageApprovals.get(record.id)!;
+    f.core.messageApprovals.set(record.id, {
+      ...current,
+      state: "enqueued",
+      version: 2,
+    });
+    f.core.enqueueDelivery({
+      id: "delivery-2",
+      destination: { type: "slack", target: "C1:100.200", messageApproval: { id: record.id, version: 2 } },
+      text: "",
+      idempotencyKey: `message-approval:${record.id}:card:2`,
+      createdAt: Date.now(),
+      deliveredAt: null,
+    });
+    await waitFor(() => f.core.messageApprovalAcks.length === 2);
+    assert.equal(f.client.posts.length, 1);
+    assert.equal(f.client.updates.length, 1);
+    assert.equal(f.client.updates[0].mrkdwn, false);
+    assert.match(f.client.updates.at(-1).text, /Continuing in the original conversation/);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a waiting continuation delivery renders the normal command approval card", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    f.core.commandApprovals.set("command-1", {
+      requestId: "command-1",
+      command: "rm -rf build",
+      reason: "recursive delete",
+      purpose: "replace the generated build output",
+      request: {
+        actor: { externalId: "alice@example.com" },
+        conversation: { kind: "dm", threadRef: "slack:C1:100.200" },
+        deliveryTarget: "C1:100.200",
+        text: "",
+      },
+    });
+    f.core.enqueueDelivery({
+      id: "command-approval-delivery",
+      destination: { type: "slack", target: "C1:100.200", commandApproval: { requestIds: ["command-1"] } },
+      text: "",
+      idempotencyKey: "message-approval:draft-1:command-approval:4",
+      createdAt: Date.now(),
+      deliveredAt: null,
+    });
+    await waitFor(() => f.client.posts.length === 1);
+    const post = f.client.posts[0];
+    assert.equal(post.channel, "C1");
+    assert.equal(post.thread_ts, "100.200");
+    assert.match(post.text, /replace the generated build output/);
+    const actions = post.blocks.find((block: any) => block.type === "actions");
+    assert.deepEqual(
+      actions.elements.map((element: any) => [element.action_id, element.value]),
+      [
+        ["hilo_allow_once", "command-1"],
+        ["hilo_allow_session", "command-1"],
+        ["hilo_allow_always", "command-1"],
+        ["hilo_deny", "command-1"],
+      ],
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("explicit command approvals preserve continuation binding and leave subsequent cards to durable delivery", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    const binding = { approvalId: "draft-1", approvalVersion: 2, bindingId: "binding-1" };
+    const request = {
+      surface: "slack",
+      actor: { externalId: "alice@example.com" },
+      conversation: { kind: "dm", threadRef: "slack:C1:100.200" },
+      deliveryTarget: "C1:100.200",
+      text: "",
+      messageApprovalContinuation: binding,
+    };
+    f.core.commandApprovals.set("command-1", {
+      command: "first command",
+      reason: "approval",
+      request,
+    });
+    f.core.enqueueDelivery({
+      id: "command-1-delivery",
+      destination: { type: "slack", target: "C1:100.200", commandApproval: { requestIds: ["command-1"] } },
+      text: "",
+      idempotencyKey: "message-approval:draft-1:command-approval:4",
+      createdAt: Date.now(),
+      deliveredAt: null,
+    });
+    await waitFor(() => f.client.posts.length === 1);
+    f.core.result = {
+      status: "ok",
+      reply: "intermediate",
+      pendingApprovals: [{ requestId: "command-2", command: "second command", reason: "approval" }],
+    };
+    await f.app.emitAction(
+      { action_id: "hilo_allow_once", value: "command-1" },
+      {
+        user: { id: "U1" },
+        channel: { id: "C1" },
+        message: { ts: "posted-1", thread_ts: "100.200" },
+      },
+    );
+    await waitFor(() => f.core.turns.length === 1);
+    assert.deepEqual(f.core.turns[0].messageApprovalContinuation, binding);
+    assert.match(f.client.updates.at(-1).text, /waiting for the next command approval/);
+    assert.equal(f.client.posts.length, 1);
+
+    f.core.commandApprovals.set("command-2", {
+      command: "second command",
+      reason: "approval",
+      request: { ...request, approval: { requestId: "command-1", approved: true, scope: "once" } },
+    });
+    f.core.enqueueDelivery({
+      id: "command-2-delivery",
+      destination: { type: "slack", target: "C1:100.200", commandApproval: { requestIds: ["command-2"] } },
+      text: "",
+      idempotencyKey: "message-approval:draft-1:command-approval:6",
+      createdAt: Date.now(),
+      deliveredAt: null,
+    });
+    await waitFor(() => f.client.posts.length === 2);
+    const actions = f.client.posts[1].blocks.find((block: any) => block.type === "actions");
+    assert.deepEqual(
+      actions.elements.map((element: any) => element.value),
+      ["command-2", "command-2", "command-2", "command-2"],
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("recovered command approval retries retain durable grant and input constraints", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    f.core.commandApprovals.set("command-1", {
+      requestId: "command-1",
+      command: "security-screen",
+      reason: "untrusted instruction",
+      grantModes: { session: false, always: false },
+      blocksInput: true,
+      kind: "input",
+      request: {
+        surface: "slack",
+        actor: { externalId: "alice@example.com" },
+        conversation: { kind: "dm", threadRef: "slack:C1:100.200" },
+        deliveryTarget: "C1:100.200",
+        text: "review this",
+      },
+    });
+    f.core.submitError = new Error("temporary core failure");
+    await f.app.emitAction(
+      { action_id: "hilo_allow_once", value: "command-1" },
+      {
+        user: { id: "U1" },
+        channel: { id: "C1" },
+        message: { ts: "approval-card", thread_ts: "100.200" },
+      },
+    );
+    const retry = f.client.updates.at(-1);
+    const actions = retry.blocks
+      .filter((block: any) => block.type === "actions")
+      .flatMap((block: any) => block.elements.map((element: any) => element.action_id));
+    assert.deepEqual(actions, ["hilo_allow_once", "hilo_deny"]);
+    assert.match(retry.text, /approval is still pending/);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("an older claimed card delivery finishes by rendering the latest durable version", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    const record = messageApprovalRecord({ slackMessage: { channel: "C1", ts: "posted-1" }, cardVersion: 1 });
+    f.core.messageApprovals.set(record.id, record);
+    let advanced = false;
+    f.client.onUpdate = () => {
+      if (advanced) return;
+      advanced = true;
+      f.core.messageApprovals.set(record.id, {
+        ...record,
+        state: "enqueued",
+        version: 2,
+      });
+    };
+    f.core.enqueueDelivery({
+      id: "delivery-old",
+      destination: { type: "slack", target: "C1:100.200", messageApproval: { id: record.id, version: 1 } },
+      text: "",
+      idempotencyKey: `message-approval:${record.id}:card:1`,
+      createdAt: Date.now(),
+      deliveredAt: null,
+    });
+    await waitFor(() => f.core.messageApprovalAcks.length === 1);
+    assert.equal(f.client.updates.length, 2);
+    assert.match(f.client.updates.at(-1).text, /Continuing in the original conversation/);
+    assert.equal(f.core.messageApprovalAcks[0].version, 2);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("message approval delivery recovers a posted Slack timestamp from durable metadata", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    const record = messageApprovalRecord();
+    f.core.messageApprovals.set(record.id, record);
+    f.client.messagesByChannel.set("C1", [
+      {
+        ts: "recovered-1",
+        metadata: {
+          event_type: "qm_delivery",
+          event_payload: { idempotency_key: `message-approval:${record.id}:card:1` },
+        },
+      },
+    ]);
+    f.core.enqueueDelivery({
+      id: "delivery-recovery",
+      destination: { type: "slack", target: "C1", messageApproval: { id: record.id, version: 1 } },
+      text: "",
+      idempotencyKey: `message-approval:${record.id}:card:1`,
+      createdAt: Date.now(),
+      deliveredAt: null,
+    });
+    await waitFor(() => f.core.messageApprovalAcks.length === 1);
+    assert.equal(f.client.posts.length, 0);
+    assert.equal(f.client.updates.length, 0);
+    assert.equal(f.core.messageApprovalAcks[0].slackMessage.ts, "recovered-1");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("message approval delivery reposts a deleted stored pointer and atomically replaces it", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    const record = messageApprovalRecord({ slackMessage: { channel: "C1", ts: "deleted-1" }, cardVersion: 1 });
+    f.core.messageApprovals.set(record.id, record);
+    f.client.missingMessages.add("deleted-1");
+    f.core.enqueueDelivery({
+      id: "delivery-deleted",
+      destination: { type: "slack", target: "C1:100.200", messageApproval: { id: record.id, version: 1 } },
+      text: "",
+      idempotencyKey: `message-approval:${record.id}:card:1`,
+      createdAt: Date.now(),
+      deliveredAt: null,
+    });
+    await waitFor(() => f.core.messageApprovalAcks.length === 1);
+    assert.equal(f.client.updates.length, 1);
+    assert.equal(f.client.posts.length, 1);
+    assert.deepEqual(f.core.messageApprovalAcks[0].slackMessage, { channel: "C1", ts: "posted-1" });
+    assert.deepEqual(f.core.messageApprovals.get(record.id)?.slackMessage, { channel: "C1", ts: "posted-1" });
+  } finally {
+    await f.stop();
+  }
+});
+
+test("message approval actions classify the Slack actor, open the modal, clear subject, and reject aliases", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    const record = messageApprovalRecord();
+    f.core.messageApprovals.set(record.id, record);
+    await f.app.emitAction(
+      { action_id: "message_approval_edit", value: `${record.id}:1` },
+      { user: { id: "U1" }, channel: { id: "C1" }, trigger_id: "trigger-1" },
+    );
+    await waitFor(() => f.client.openedViews.length === 1);
+    assert.equal(f.client.openedViews.length, 1);
+    assert.equal(f.client.openedViews[0].view.private_metadata, `${record.id}:1`);
+
+    const acknowledgements = await f.app.emitView(
+      "message_approval_edit",
+      {
+        private_metadata: `${record.id}:1`,
+        state: {
+          values: {
+            recipient: { value: { value: "new@example.com" } },
+            subject: { value: { value: "" } },
+            body: { value: { value: "Edited body" } },
+          },
+        },
+      },
+      { user: { id: "U1" } },
+    );
+    assert.deepEqual(acknowledgements, [undefined]);
+    await waitFor(() => f.core.messageApprovalEdits.length === 1);
+    assert.equal(f.core.messageApprovalEdits[0].actorId, "alice@example.com");
+    assert.equal(f.core.messageApprovalEdits[0].subject, "");
+
+    await f.app.emitAction(
+      { action_id: "message_approval_approve", value: `${record.id}:1` },
+      { user: { id: "U1" }, channel: { id: "C1" } },
+    );
+    await waitFor(() => f.core.messageApprovalDecisions.length === 1);
+    assert.equal(f.core.messageApprovalDecisions[0].decision, "approve");
+    await f.app.emitAction(
+      { action_id: "message_approval_approve", value: `${record.id}:1` },
+      { user: { id: "U2" }, channel: { id: "C1" } },
+    );
+    await waitFor(() => f.client.ephemerals.length > 0);
+    assert.equal(f.core.messageApprovalDecisions.length, 1);
+    assert.match(f.client.ephemerals.at(-1).text, /original requester/);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("plugin stop awaits acknowledged message approval action and modal tasks", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  const record = messageApprovalRecord();
+  f.core.messageApprovals.set(record.id, record);
+  f.core.holdMessageApprovalMutations();
+  const action = f.app.emitAction(
+    { action_id: "message_approval_approve", value: `${record.id}:1` },
+    { user: { id: "U1" }, channel: { id: "C1" } },
+  );
+  const modal = f.app.emitView(
+    "message_approval_edit",
+    {
+      private_metadata: `${record.id}:1`,
+      state: {
+        values: {
+          recipient: { value: { value: "new@example.com" } },
+          subject: { value: { value: "Subject" } },
+          body: { value: { value: "Body" } },
+        },
+      },
+    },
+    { user: { id: "U1" } },
+  );
+  await waitFor(() => f.core.messageApprovalDecisions.length === 1 && f.core.messageApprovalEdits.length === 1);
+  let stopped = false;
+  const stopping = f.stop().then(() => {
+    stopped = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopped, false);
+  f.core.releaseMessageApprovalMutations?.();
+  await Promise.all([action, modal, stopping]);
+  assert.equal(stopped, true);
+  assert.equal(f.app.started, false);
+});
+
+test("message approval modal acknowledges immediately and posts a safe notice when core rejects asynchronously", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    const record = messageApprovalRecord();
+    const acknowledgements = await f.app.emitView(
+      "message_approval_edit",
+      {
+        private_metadata: `${record.id}:1`,
+        state: {
+          values: {
+            recipient: { value: { value: "new@example.com" } },
+            subject: { value: { value: "" } },
+            body: { value: { value: "Edited body" } },
+          },
+        },
+      },
+      { user: { id: "U1" } },
+    );
+    assert.deepEqual(acknowledgements, [undefined]);
+    await waitFor(() => f.client.posts.some((post: any) => post.channel === "U1"));
+    assert.match(f.client.posts.find((post: any) => post.channel === "U1").text, /not found/);
+  } finally {
+    await f.stop();
+  }
 });
 
 test("a mid-turn message that STEERS the live run does not post the reply twice", async () => {

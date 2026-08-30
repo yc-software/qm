@@ -52,7 +52,7 @@ const slackRuntime = createSlackRuntimeReconciler({
     if (slackConfig) return { version: "environment", config: slackConfig };
     return null;
   },
-  startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
+  startPlugin: (desired) => startSlackPlugin(desired, built.slackCore, built.messageApprovals),
   onError: (error) => console.error(`[qm] slack plugin reconciliation failed: ${errMessage(error)}`),
 });
 slackRuntime.start();

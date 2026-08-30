@@ -14,6 +14,14 @@ import { headSlice, tailSlice } from "../util/text.ts";
 import { GOAL_BLOCKED_MIN_ROUNDS, createGoalRecord, type GoalRecord } from "./goal.ts";
 import { unscreenedNotice, UNSCREENED_PREFIX, type SecurityScreenVerdict } from "../security/security-posture.ts";
 import { CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
+import {
+  MESSAGE_APPROVAL_LIMITS,
+  type MessageApprovalToolInvocation,
+  type MessageApprovalToolPermit,
+  type StageMessageApprovalInput,
+} from "../core/message-approval.ts";
+import { MESSAGE_APPROVAL_STAGE_FAILURE } from "../core/turn-error.ts";
+import type { HarnessTurnInput } from "./harness.ts";
 
 function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
   if (!a) return "Owned by you.";
@@ -62,6 +70,11 @@ export interface ToolContextRef {
   onGapWork?: (work: GapWork) => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
+  beforeToolInvocation?: (invocation: MessageApprovalToolInvocation) => Promise<MessageApprovalToolPermit | void>;
+  messageApprovalPermits?: Map<string, MessageApprovalToolPermit>;
+  messageApprovalAttempted?: boolean;
+  messageApprovalStaged?: boolean;
+  privatePersistence?: boolean;
   pollFire?: boolean;
   silentRequested?: boolean;
   /** The session's registered goal, if any (rehydrated across turns). */
@@ -292,6 +305,36 @@ export interface PiToolsOptions {
   readOnly?: boolean;
   surfaceTools?: boolean;
   surfaceName?: string;
+  messageApprovals?: boolean;
+}
+
+export function harnessToolOptions(
+  opts: Pick<
+    PiToolsOptions,
+    | "scratchExec"
+    | "ownerAuthExec"
+    | "reachExec"
+    | "mcpTools"
+    | "controlTools"
+    | "execTimeoutMs"
+    | "execTimeoutCeilingMs"
+    | "backgroundJobTtlMs"
+    | "backgroundJobTtlMaxMs"
+  >,
+  turn?: HarnessTurnInput,
+): PiToolsOptions {
+  return {
+    ...opts,
+    ...(turn
+      ? {
+          readOnly: turn.readOnly,
+          surfaceTools: turn.surfaceTools,
+          surfaceName: turn.surfaceName,
+          messageApprovals: turn.messageApprovals,
+          credentialExecServices: turn.credentialExecServices,
+        }
+      : { surfaceTools: true, surfaceName: "slack" }),
+  };
 }
 
 export type CoreToolOptions = Omit<PiToolsOptions, "readOnly" | "surfaceTools" | "surfaceName">;
@@ -310,6 +353,27 @@ export function coreToolOptions(config: Config): CoreToolOptions {
 }
 
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently"]);
+const READ_ONLY_SURFACE_ACTIONS = new Set(["read_thread", "whats_new", "search", "read_members", "read_file"]);
+const READ_ONLY_TOOL_ACTIONS = new Map<string, ReadonlySet<string>>([
+  ["memory", new Set(["search", "read"])],
+  ["background", new Set(["poll", "list"])],
+  ["cron", new Set(["list", "get", "runs"])],
+  ["webhook", new Set(["list"])],
+  ["guidance", new Set(["read"])],
+]);
+const READ_ONLY_NATIVE_TOOLS = new Set(["read", "history", "finish_silently", "stay_silent", "get_goal"]);
+const TOOL_INVOCATION_OUTCOME = Symbol("toolInvocationOutcome");
+
+function invocationOutcome(result: unknown): "failure" | "ambiguous" | undefined {
+  return result && typeof result === "object"
+    ? (result as { [TOOL_INVOCATION_OUTCOME]?: "failure" | "ambiguous" })[TOOL_INVOCATION_OUTCOME]
+    : undefined;
+}
+
+function withInvocationOutcome<T extends object>(result: T, outcome: "failure" | "ambiguous"): T {
+  Object.defineProperty(result, TOOL_INVOCATION_OUTCOME, { value: outcome });
+  return result;
+}
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested">,
@@ -332,6 +396,8 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
   const controlTools = !!opts?.controlTools;
   const credentialExecServices = opts?.credentialExecServices ?? ref.current?.credentialExecServices ?? [];
   const surfaceTools = !!opts?.surfaceTools;
+  const messageApprovals =
+    !!opts?.messageApprovals && surfaceTools && (opts.surfaceName ?? "slack") === "slack" && !opts.readOnly;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
@@ -351,7 +417,16 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       const callId = (payload as { callId?: unknown } | null)?.callId;
       if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
     }
-    await ref.emit({ type, payload, scopeLabel });
+    const persistedPayload = ref.privatePersistence
+      ? {
+          omitted: true,
+          ...((payload as { tool?: unknown } | null)?.tool ? { tool: (payload as { tool: unknown }).tool } : {}),
+          ...((payload as { callId?: unknown } | null)?.callId
+            ? { callId: (payload as { callId: unknown }).callId }
+            : {}),
+        }
+      : payload;
+    await ref.emit({ type, payload: persistedPayload, scopeLabel });
   };
 
   const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
@@ -2643,6 +2718,55 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     },
   });
 
+  const stageMessageApproval = defineTool({
+    name: "stage_message_approval",
+    label: "stage_message_approval",
+    description:
+      "Stage a draft for exact-value review in Slack. Approving the draft resumes the original conversation once with the approved recipient, subject, and body unchanged. It does not authorize, guarantee, or report any operation or sending.",
+    parameters: Type.Object(
+      {
+        title: Type.String({ minLength: 1, maxLength: MESSAGE_APPROVAL_LIMITS.title }),
+        recipient: Type.String({ minLength: 1, maxLength: MESSAGE_APPROVAL_LIMITS.recipient }),
+        subject: Type.Optional(Type.String({ maxLength: MESSAGE_APPROVAL_LIMITS.subject })),
+        body: Type.String({ minLength: 1, maxLength: MESSAGE_APPROVAL_LIMITS.body }),
+      },
+      { additionalProperties: false },
+    ),
+    async execute(callId, params) {
+      ref.messageApprovalAttempted = true;
+      ref.silentRequested = true;
+      const tc = ref.current;
+      if (!tc?.stageMessageApproval) {
+        await recordCall(callId, { tool: "stage_message_approval" }).catch(() => undefined);
+        return await recordResult(
+          callId,
+          { tool: "stage_message_approval", unavailable: true },
+          { ...text(MESSAGE_APPROVAL_STAGE_FAILURE), terminate: true },
+          true,
+        ).catch(() => ({ ...text(MESSAGE_APPROVAL_STAGE_FAILURE), terminate: true }));
+      }
+      const result: { ok: boolean; id?: string; version?: number; message: string } = await tc
+        .stageMessageApproval(params as StageMessageApprovalInput, callId)
+        .catch(() => ({ ok: false, message: MESSAGE_APPROVAL_STAGE_FAILURE }));
+      if (result.ok) {
+        ref.messageApprovalStaged = true;
+      }
+      await recordCall(callId, { tool: "stage_message_approval" }).catch(() => undefined);
+      return await recordResult(
+        callId,
+        { tool: "stage_message_approval", ok: result.ok, ...(result.id ? { id: result.id } : {}) },
+        result.ok
+          ? { ...text("[draft approval staged]"), terminate: true }
+          : { ...text(MESSAGE_APPROVAL_STAGE_FAILURE), terminate: true },
+        !result.ok,
+      ).catch(() =>
+        result.ok
+          ? { ...text("[draft approval staged]"), terminate: true }
+          : { ...text(MESSAGE_APPROVAL_STAGE_FAILURE), terminate: true },
+      );
+    },
+  });
+
   const finishSilently = defineTool({
     name: "finish_silently",
     label: "finish_silently",
@@ -2773,6 +2897,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
           if (!tc) return text("[error] no active tool context");
           await recordCall(callId, { tool: d.name, mcpServer: d.serverId, args: params });
           try {
+            await ref.messageApprovalPermits?.get(callId)?.assertMessageApprovalLease();
             const out = await tc.callMcpTool(d.name, (params ?? {}) as Record<string, unknown>);
             return recordExternalResult(
               callId,
@@ -2782,11 +2907,14 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
               `mcp server ${d.serverId}`,
             );
           } catch (error) {
-            return recordResult(
-              callId,
-              { tool: d.name, mcpServer: d.serverId, failed: true },
-              text(`[error] ${errMessage(error)}`),
-              true,
+            return withInvocationOutcome(
+              await recordResult(
+                callId,
+                { tool: d.name, mcpServer: d.serverId, failed: true },
+                text(`[error] ${errMessage(error)}`),
+                true,
+              ),
+              "ambiguous",
             );
           }
         },
@@ -2974,14 +3102,91 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     ...(controlTools ? [cron, webhook, share] : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
     ...(surfaceTools ? [surface, staySilent] : [finishSilently]),
+    ...(messageApprovals ? [stageMessageApproval] : []),
     ...mcpTools,
     createGoal,
     getGoal,
     updateGoal,
   ];
   const mcpNames = new Set(mcpTools.map((t) => t.name));
+  const mcpByName = new Map(mcpDefs.map((definition) => [definition.name, definition]));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
-  return active.map((t) => withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref));
+  return active.map((t) =>
+    withToolBodyTiming(
+      withToolApprovalGate(withToolInvocationFence(t, ref, mcpByName, surfaceName), ref, { recordCall, recordResult }),
+      ref,
+    ),
+  );
+}
+
+function toolInvocation(
+  tool: ToolDefinition,
+  params: unknown,
+  mcpByName: ReadonlyMap<string, McpToolDescriptor>,
+  surfaceName: string,
+): MessageApprovalToolInvocation {
+  const mcp = mcpByName.get(tool.name);
+  if (mcp) {
+    return {
+      name: tool.name,
+      kind: "mcp",
+      readOnly: mcp.readOnly,
+      arguments: params,
+      mcp: {
+        serverId: mcp.serverId,
+        inputSchema: mcp.inputSchema,
+        remoteName: mcp.remoteName,
+        description: mcp.description,
+      },
+    };
+  }
+  const action =
+    params && typeof params === "object" && !Array.isArray(params)
+      ? (params as { action?: unknown }).action
+      : undefined;
+  if (tool.name === surfaceName) {
+    return {
+      name: tool.name,
+      kind: "surface",
+      readOnly: typeof action === "string" && READ_ONLY_SURFACE_ACTIONS.has(action),
+      arguments: params,
+    };
+  }
+  const actionSet = READ_ONLY_TOOL_ACTIONS.get(tool.name);
+  return {
+    name: tool.name,
+    kind: "native",
+    readOnly: READ_ONLY_NATIVE_TOOLS.has(tool.name) || (typeof action === "string" && actionSet?.has(action) === true),
+    arguments: params,
+  };
+}
+
+function withToolInvocationFence(
+  tool: ToolDefinition,
+  ref: ToolContextRef,
+  mcpByName: ReadonlyMap<string, McpToolDescriptor>,
+  surfaceName: string,
+): ToolDefinition {
+  const inner = tool.execute.bind(tool);
+  return {
+    ...tool,
+    async execute(callId: string, params: unknown) {
+      if (ref.silentRequested) throw new Error("tool invocation rejected after turn termination");
+      const permit = await ref.beforeToolInvocation?.(toolInvocation(tool, params, mcpByName, surfaceName));
+      if (permit) (ref.messageApprovalPermits ??= new Map()).set(callId, permit);
+      let result: unknown;
+      try {
+        result = await (inner as (callId: string, params: unknown) => unknown)(callId, params);
+      } catch (error) {
+        await permit?.finish("ambiguous");
+        throw error;
+      } finally {
+        ref.messageApprovalPermits?.delete(callId);
+      }
+      await permit?.finish(invocationOutcome(result) ?? "success", result);
+      return result;
+    },
+  } as ToolDefinition;
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "stay_silent"]);

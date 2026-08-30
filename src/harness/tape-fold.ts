@@ -12,6 +12,7 @@ export function filterTapeForAudience(
   if (audience.length === 0) return [];
   const out: TapeRecord[] = [];
   for (const r of rows) {
+    if (r.kind === "message" && r.meta?.hidden) continue;
     if (
       r.kind !== "message" ||
       audience.every((p) => principalEntitledToScope(p, r.scopeLabel, sessionScopeId, orgScopeId))

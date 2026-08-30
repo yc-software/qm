@@ -13,10 +13,13 @@ import {
   clip,
   createApprovalRegistry,
   createThreadTracker,
+  decodeMessageApprovalAction,
   dmThreadRef,
   encodeDeliveryTarget,
   inlineCode,
   isBoundaryRefusal,
+  messageApprovalEditModal,
+  type MessageApprovalActionId,
   recoveredApprovalContext,
   resolveReactionTargets,
   slackReplyArgs,
@@ -27,6 +30,7 @@ import {
 } from "./lib.ts";
 import { resolveAgentRequestTarget } from "./approval-context.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import type { MessageApprovalService } from "../core/message-approval.ts";
 import type { TurnResult } from "../types.ts";
 import type { CoreBridge, CoreTurnBody } from "./core-bridge.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -52,6 +56,9 @@ interface SlackApprovalContext {
   reason: string;
   purpose?: string;
   summary?: string;
+  grantModes?: { session: boolean; always: boolean };
+  blocksInput?: boolean;
+  kind?: "approval" | "input";
   turn: Omit<CoreTurnBody, "approval">;
   allowedTs?: Set<string>;
   slackIdsByPrincipal?: ReadonlyMap<string, string>;
@@ -114,20 +121,34 @@ export interface Approvals {
     },
     requests: readonly AgentRequestDirective[],
   ): Promise<void>;
-  registerActions(app: { action(pattern: RegExp, handler: (args: any) => Promise<void>): void }): void;
+  registerActions(app: {
+    action(pattern: RegExp, handler: (args: any) => Promise<void>): void;
+    view(callbackId: string, handler: (args: any) => Promise<void>): void;
+  }): void;
+  stop(): Promise<void>;
 }
 
 export function createApprovals(deps: {
   core: SlackCoreClient;
+  messageApprovals: MessageApprovalService;
   bridge: CoreBridge;
   directory: Directory;
   threads: ReturnType<typeof createThreadTracker>;
   ids: BotIdentity;
 }): Approvals {
-  const { core, bridge, directory, threads, ids } = deps;
+  const { core, messageApprovals, bridge, directory, threads, ids } = deps;
   const { callCore, fetchBlobFromCore, fetchFileArtifactFromCore } = bridge;
 
   const pendingSlackApprovals = createApprovalRegistry<SlackApprovalContext>();
+  const postAckTasks = new Set<Promise<void>>();
+  const trackPostAck = (task: Promise<void>): Promise<void> => {
+    postAckTasks.add(task);
+    void task.then(
+      () => postAckTasks.delete(task),
+      () => postAckTasks.delete(task),
+    );
+    return task;
+  };
   const pendingSlackAgentRequests = new Map<string, SlackAgentRequestContext>();
 
   function rememberSlackApprovals(
@@ -141,6 +162,9 @@ export function createApprovals(deps: {
         reason: approval.reason,
         ...(approval.purpose ? { purpose: approval.purpose } : {}),
         ...(approval.summary ? { summary: approval.summary } : {}),
+        ...(approval.grantModes ? { grantModes: approval.grantModes } : {}),
+        ...(approval.blocksInput === undefined ? {} : { blocksInput: approval.blocksInput }),
+        ...(approval.kind ? { kind: approval.kind } : {}),
       });
     }
   }
@@ -638,6 +662,37 @@ export function createApprovals(deps: {
         return;
       }
 
+      const nextApprovals = result.pendingApprovals ?? [];
+      if (nextApprovals.length) {
+        const continuationIsWaiting =
+          !!ctx.turn.messageApprovalContinuation &&
+          nextApprovals.some((approval) => result.status === "pending_approval" || approval.blocksInput !== false);
+        if (continuationIsWaiting) {
+          await updateSlackMessage(
+            client,
+            cardChannel,
+            messageTs,
+            `Approved ${inlineCode(ctx.command)}; waiting for the next command approval in the original conversation.`,
+          );
+          return;
+        }
+        rememberSlackApprovals(nextApprovals, {
+          requesterId: ctx.requesterId,
+          channel: ctx.channel,
+          approvalChannel: cardChannel,
+          ...(ctx.replyThreadTs ? { replyThreadTs: ctx.replyThreadTs } : {}),
+          ...(ctx.triggerTs ? { triggerTs: ctx.triggerTs } : {}),
+          threadOnly: ctx.threadOnly,
+          turn: ctx.turn,
+          ...(ctx.allowedTs ? { allowedTs: ctx.allowedTs } : {}),
+          ...(ctx.slackIdsByPrincipal ? { slackIdsByPrincipal: ctx.slackIdsByPrincipal } : {}),
+          ...(ctx.recovered ? { recovered: true } : {}),
+        });
+        const msg = approvalMessage(nextApprovals);
+        await updateSlackMessage(client, cardChannel, messageTs, msg.text, msg.blocks);
+        return;
+      }
+
       if (result.status === "ok") {
         if (ctx.threadOnly && ctx.replyThreadTs) threads.mark(ctx.channel, ctx.replyThreadTs, true);
         const cleanedContinuation = cleanAgentReplyForSlack(result.reply ?? "");
@@ -689,22 +744,18 @@ export function createApprovals(deps: {
         return;
       }
 
+      if (ctx.turn.messageApprovalContinuation && result.status === "silent") {
+        await updateSlackMessage(client, cardChannel, messageTs, `Approved; ran ${inlineCode(ctx.command)}.`);
+        return;
+      }
+
       if (result.status === "pending_approval") {
-        const approvals = result.pendingApprovals ?? [];
-        rememberSlackApprovals(approvals, {
-          requesterId: ctx.requesterId,
-          channel: ctx.channel,
-          approvalChannel: cardChannel,
-          ...(ctx.replyThreadTs ? { replyThreadTs: ctx.replyThreadTs } : {}),
-          ...(ctx.triggerTs ? { triggerTs: ctx.triggerTs } : {}),
-          threadOnly: ctx.threadOnly,
-          turn: ctx.turn,
-          ...(ctx.allowedTs ? { allowedTs: ctx.allowedTs } : {}),
-          ...(ctx.slackIdsByPrincipal ? { slackIdsByPrincipal: ctx.slackIdsByPrincipal } : {}),
-          ...(ctx.recovered ? { recovered: true } : {}),
-        });
-        const msg = approvalMessage(approvals);
-        await updateSlackMessage(client, cardChannel, messageTs, msg.text, msg.blocks);
+        await updateSlackMessage(
+          client,
+          cardChannel,
+          messageTs,
+          "The approved command did not return a follow-up approval request.",
+        );
         return;
       }
 
@@ -735,6 +786,9 @@ export function createApprovals(deps: {
           reason: ctx.reason,
           ...(ctx.purpose ? { purpose: ctx.purpose } : {}),
           ...(ctx.summary ? { summary: ctx.summary } : {}),
+          ...(ctx.grantModes ? { grantModes: ctx.grantModes } : {}),
+          ...(ctx.blocksInput === undefined ? {} : { blocksInput: ctx.blocksInput }),
+          ...(ctx.kind ? { kind: ctx.kind } : {}),
         },
       ]);
       await updateSlackMessage(
@@ -853,10 +907,108 @@ export function createApprovals(deps: {
     }
   }
 
-  function registerActions(app: { action(pattern: RegExp, handler: (args: any) => Promise<void>): void }): void {
-    app.action(/^hilo_/, handleApprovalAction);
-    app.action(/^agent_request_/, handleAgentRequestAction);
+  async function messageApprovalNotice(client: any, body: any, text: string): Promise<void> {
+    const channel = String(body?.channel?.id ?? body?.container?.channel_id ?? "");
+    const user = String(body?.user?.id ?? "");
+    if (!user) return;
+    const notice = channel
+      ? client.chat.postEphemeral({ channel, user, text })
+      : client.chat.postMessage({ channel: user, text });
+    await notice.catch(swallowAs("slack: message approval response", undefined));
   }
 
-  return { rememberSlackApprovals, postApprovalButtons, postAgentRequests, registerActions };
+  async function processMessageApprovalAction(body: any, action: any, client: any): Promise<void> {
+    const actionId = action?.action_id as MessageApprovalActionId | undefined;
+    if (
+      actionId !== "message_approval_approve" &&
+      actionId !== "message_approval_edit" &&
+      actionId !== "message_approval_reject"
+    ) {
+      return;
+    }
+    const parsed = decodeMessageApprovalAction(action?.value);
+    if (!parsed) return messageApprovalNotice(client, body, "That draft approval is invalid.");
+    const clickerId = String(body?.user?.id ?? "");
+    const actor = await directory.classifyActor(client, clickerId);
+    if (actor.isExternalGuest) {
+      return messageApprovalNotice(client, body, "Only the original requester can act on this draft.");
+    }
+    const record = await messageApprovals.get(parsed.id, actor.externalId);
+    if (!record) {
+      return messageApprovalNotice(client, body, "Only the original requester can act on this draft.");
+    }
+    if (record.version !== parsed.version) {
+      return messageApprovalNotice(client, body, "This card is out of date. Use the newest version.");
+    }
+    if (actionId === "message_approval_edit") {
+      await client.views.open({ trigger_id: body.trigger_id, view: messageApprovalEditModal(record) });
+      return;
+    }
+    const result = await messageApprovals.decide({
+      ...parsed,
+      actorId: actor.externalId,
+      decision: actionId === "message_approval_approve" ? "approve" : "reject",
+    });
+    if (!result.ok) await messageApprovalNotice(client, body, result.message);
+  }
+
+  async function handleMessageApprovalAction({ ack, body, action, client }: any): Promise<void> {
+    await ack();
+    await processMessageApprovalAction(body, action, client).catch(() =>
+      messageApprovalNotice(client, body, "Could not process that draft approval."),
+    );
+  }
+
+  async function processMessageApprovalEdit(body: any, view: any, client: any): Promise<void> {
+    const parsed = decodeMessageApprovalAction(view?.private_metadata);
+    if (!parsed) {
+      await messageApprovalNotice(client, body, "That draft approval is invalid.");
+      return;
+    }
+    const values = view?.state?.values ?? {};
+    const recipient = String(values.recipient?.value?.value ?? "");
+    const subject = String(values.subject?.value?.value ?? "");
+    const messageBody = String(values.body?.value?.value ?? "");
+    const clickerId = String(body?.user?.id ?? "");
+    const actor = await directory.classifyActor(client, clickerId);
+    if (actor.isExternalGuest) {
+      await messageApprovalNotice(client, body, "Only the original requester can act on this draft.");
+      return;
+    }
+    const result = await messageApprovals.edit({
+      ...parsed,
+      actorId: actor.externalId,
+      recipient,
+      subject,
+      body: messageBody,
+    });
+    if (!result.ok) await messageApprovalNotice(client, body, result.message);
+  }
+
+  async function handleMessageApprovalEdit({ ack, body, view, client }: any): Promise<void> {
+    await ack();
+    await processMessageApprovalEdit(body, view, client).catch(() =>
+      messageApprovalNotice(client, body, "Could not process that draft approval."),
+    );
+  }
+
+  function registerActions(app: {
+    action(pattern: RegExp, handler: (args: any) => Promise<void>): void;
+    view(callbackId: string, handler: (args: any) => Promise<void>): void;
+  }): void {
+    app.action(/^hilo_/, (args) => trackPostAck(handleApprovalAction(args)));
+    app.action(/^agent_request_/, (args) => trackPostAck(handleAgentRequestAction(args)));
+    app.action(/^message_approval_/, (args) => trackPostAck(handleMessageApprovalAction(args)));
+    app.view("message_approval_edit", (args) => trackPostAck(handleMessageApprovalEdit(args)));
+  }
+
+  return {
+    rememberSlackApprovals,
+    postApprovalButtons,
+    postAgentRequests,
+    registerActions,
+    async stop() {
+      while (postAckTasks.size) await Promise.allSettled(postAckTasks);
+    },
+  };
 }

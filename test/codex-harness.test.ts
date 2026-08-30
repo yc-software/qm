@@ -22,9 +22,11 @@ import {
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
+import type { NewTapeRecord } from "../src/sessions/session-store.ts";
 import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
 import { CodexAppServer } from "../src/harness/codex-app-server.ts";
 import { DEFAULT_CODEX_MODEL_ID } from "../src/model/pi-models.ts";
+import { forModelContext } from "../src/harness/context-compaction.ts";
 
 const replaySmokeItems = [
   { type: "message", role: "user", content: [{ type: "input_text", text: "earlier question" }] },
@@ -47,6 +49,7 @@ function fakeCodexBinary(dir: string): string {
     path,
     `#!/usr/bin/env node
 const readline = require("node:readline");
+const fs = require("node:fs");
 const rl = readline.createInterface({ input: process.stdin });
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 rl.on("line", (line) => {
@@ -54,6 +57,7 @@ rl.on("line", (line) => {
   if (msg.method === "initialize") return send({ id: msg.id, result: { userAgent: "fake" } });
   if (msg.method === "initialized") return;
   if (msg.method === "thread/start") {
+    fs.appendFileSync(${JSON.stringify(join(dir, "thread-starts"))}, JSON.stringify(msg.params.config?.features ?? {}) + "\\n");
     if (msg.params.sandbox !== "read-only" || msg.params.approvalPolicy !== "never" || !Array.isArray(msg.params.dynamicTools) ||
         !Array.isArray(msg.params.environments) || msg.params.environments.length !== 0 ||
         msg.params.config?.features?.shell_tool !== false || msg.params.config?.features?.unified_exec !== false ||
@@ -65,6 +69,7 @@ rl.on("line", (line) => {
   }
   if (msg.method === "thread/inject_items") return send({ id: msg.id, result: {} });
   if (msg.method === "turn/start") {
+    fs.appendFileSync(${JSON.stringify(join(dir, "prompts"))}, JSON.stringify(msg.params.input) + "\\n");
     send({ id: msg.id, result: { turn: { id: "turn-1", status: "inProgress", items: [] } } });
     send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 100 }, last: { inputTokens: 100 } } } });
     send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 100 }, last: { inputTokens: 100 } } } });
@@ -90,6 +95,7 @@ function terminatingCodexBinary(dir: string): string {
     path,
     `#!/usr/bin/env node
 const readline = require("node:readline");
+const fs = require("node:fs");
 const rl = readline.createInterface({ input: process.stdin });
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 let lateTool;
@@ -100,10 +106,13 @@ rl.on("line", (line) => {
   if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "thread-stop" } } });
   if (msg.method === "turn/start") {
     send({ id: msg.id, result: { turn: { id: "turn-stop", status: "inProgress", items: [] } } });
-    return send({ id: "finish-call", method: "item/tool/call", params: { threadId: "thread-stop", turnId: "turn-stop", callId: "finish-1", tool: "finish_silently", arguments: { reason: "nothing new" } } });
+    return send({ id: "finish-call", method: "item/tool/call", params: { threadId: "thread-stop", turnId: "turn-stop", callId: "finish-1", tool: "stage_message_approval", arguments: { title: "Draft", recipient: "alex@example.com", subject: "Launch", body: "Ready" } } });
   }
   if (msg.id === "finish-call" && msg.result) {
-    lateTool = setTimeout(() => send({ id: "late-call", method: "item/tool/call", params: { threadId: "thread-stop", turnId: "turn-stop", callId: "late-1", tool: "history", arguments: { query: "must not run" } } }), 25);
+    lateTool = setTimeout(() => {
+      fs.writeFileSync(${JSON.stringify(join(dir, "late-tool"))}, "attempted");
+      send({ id: "late-call", method: "item/tool/call", params: { threadId: "thread-stop", turnId: "turn-stop", callId: "late-1", tool: "history", arguments: { query: "must not run" } } });
+    }, 25);
     return;
   }
   if (msg.id === "late-call" && msg.result) {
@@ -215,6 +224,96 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
   );
 });
 
+test("Codex keeps a hidden continuation out of durable tape, captures, and later replay", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-private-"));
+  const tasks = createMemoryTaskStore();
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: process.env, tasks });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const session = { id: "private-session" } as Session;
+  const entries: SessionEntry[] = [];
+  const tape: NewTapeRecord[] = [];
+  const captures: HarnessLlmRequestRecord[] = [];
+  const run = (input: string, continuation = false) =>
+    harness.turns.runTurn({
+      session,
+      input,
+      ...(continuation
+        ? {
+            continuationInstruction: {
+              kind: "message_approval" as const,
+              hidden: true as const,
+              value: {
+                approvalId: "approval-1",
+                approvalVersion: 2,
+                bindingId: "binding-1",
+                recipient: "private-recipient@example.com",
+                subject: "Private subject",
+                body: "Private body",
+              },
+            },
+          }
+        : {}),
+      systemPrompt: "be concise",
+      history: forModelContext(entries),
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) => {
+        const saved = {
+          ...entry,
+          sessionId: session.id,
+          seq: entries.length + 1,
+          createdAt: Date.now(),
+        } as SessionEntry;
+        entries.push(saved);
+        return saved;
+      },
+      tape: async (record) => void tape.push(record),
+      recordModelCall: () => {},
+      recordLlmRequest: async (record) => void captures.push(record),
+    });
+  await run("", true);
+  const features = JSON.parse(readFileSync(join(dir, "thread-starts"), "utf8").trim().split("\n")[0]!) as {
+    multi_agent?: boolean;
+  };
+  assert.equal(features.multi_agent, false);
+  assert.deepEqual(await tasks.list(), []);
+  assert.equal(
+    entries.some((entry) => JSON.stringify(entry.payload).includes("return ALPHA")),
+    false,
+  );
+  const providerPrompts = readFileSync(join(dir, "prompts"), "utf8").trim().split("\n");
+  assert.match(providerPrompts[0]!, /private-recipient@example\.com|Private body/);
+  assert.doesNotMatch(
+    JSON.stringify({ entries, tape, captures }),
+    /private-recipient@example\.com|Private subject|Private body/,
+  );
+  assert.ok(tape.length > 0);
+  assert.equal(
+    tape.every((record) => record.meta?.hidden === true),
+    true,
+  );
+  assert.equal(
+    tape.every((record) => JSON.stringify(record.payload) === '{"omitted":true}'),
+    true,
+  );
+  assert.equal(
+    captures.every((record) => JSON.stringify(record.promptEnvelope) === '{"omitted":true}'),
+    true,
+  );
+  await run("later turn");
+  const laterPrompt = readFileSync(join(dir, "prompts"), "utf8").trim().split("\n").at(-1)!;
+  assert.doesNotMatch(laterPrompt, /private-recipient@example\.com|Private subject|Private body/);
+  assert.equal(
+    tape.some((record) => record.meta?.hidden !== true),
+    true,
+  );
+});
+
 test("Codex task titles stay concise when the provider includes the parent request", () => {
   assert.equal(
     codexTaskTitle("The user asked for two workers. You are the WEST subagent. Return a useful summary."),
@@ -311,7 +410,13 @@ test("Codex children cannot use parent surface, control, or terminal tools", () 
   }
 });
 
-test("Codex interrupts the provider after a terminal QM tool", async (t) => {
+test("Codex source interrupts on the shared tool termination signal", () => {
+  const source = readFileSync(new URL("../src/harness/codex-harness.ts", import.meta.url), "utf8");
+  assert.match(source, /if \(result\.terminate \|\| state\.turn\.cancel\?\.aborted\)/);
+  assert.match(source, /void state\.interrupt\?\.\(\)/);
+});
+
+test("Codex interrupts the provider immediately after staging a message approval", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-stop-test-"));
   const harness = createCodexHarness({
     binaryPath: terminatingCodexBinary(dir),
@@ -324,15 +429,24 @@ test("Codex interrupts the provider after a terminal QM tool", async (t) => {
   });
   const entries: SessionEntry[] = [];
   const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  let staged = 0;
   const result = await harness.turns.runTurn({
     session: { id: "terminal-tool" } as Session,
     input: "poll",
     systemPrompt: "finish silently",
     history: [],
-    tools: {} as HarnessTurnInput["tools"],
+    tools: {
+      ...({} as HarnessTurnInput["tools"]),
+      stageMessageApproval: async () => {
+        staged += 1;
+        return { ok: true, id: "approval-1", message: "staged" };
+      },
+    },
     scopeLabel: scope,
     orgScopeId: scope,
-    pollFire: true,
+    surfaceTools: true,
+    surfaceName: "slack",
+    messageApprovals: true,
     emit: async (entry) => {
       const saved = {
         ...entry,
@@ -346,8 +460,10 @@ test("Codex interrupts the provider after a terminal QM tool", async (t) => {
     recordModelCall: () => {},
   });
 
+  assert.equal(staged, 1);
   assert.equal(result.silent, true);
   assert.notEqual(result.reply, "BAD");
+  assert.equal(existsSync(join(dir, "late-tool")), false);
   assert.equal(
     entries.some((entry) => entry.type === "assistant"),
     false,

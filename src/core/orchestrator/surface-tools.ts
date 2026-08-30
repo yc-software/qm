@@ -35,6 +35,7 @@ import { errMessage } from "../../util/errors.ts";
 import { orgId } from "../../config.ts";
 import { headLooksLikeText, replaceThreadSegment } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import { messageApprovalStagingKey } from "../message-approval.ts";
 
 const SURFACE_READ_DEFAULT = 100;
 const SURFACE_READ_MAX = 200;
@@ -206,6 +207,46 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     return { ok: true, attachments: r.attachments };
   };
   return {
+    ...(deps.messageApprovals &&
+    actor.type === "internal" &&
+    input.surface === "slack" &&
+    !!input.runId &&
+    !input.messageApprovalContinuation &&
+    (currentDestination.type === "slack" || currentDestination.type === "group")
+      ? {
+          stageMessageApproval: async (message) => {
+            try {
+              const record = await deps.messageApprovals!.stage({
+                idempotencyKey: messageApprovalStagingKey(input.runId!, message),
+                actor,
+                sessionId: session.id,
+                scopeId,
+                surface: input.surface!,
+                conversation,
+                originDestination: currentDestination,
+                ...(input.sessionParticipantIds?.length ? { sessionParticipantIds: input.sessionParticipantIds } : {}),
+                ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
+                ...(input.harness ? { harness: input.harness } : {}),
+                ...(input.model ? { model: input.model } : {}),
+                ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+                ...(input.fastMode === undefined ? {} : { fastMode: input.fastMode }),
+                ...(input.timezone ? { timezone: input.timezone } : {}),
+                message,
+              });
+              spine.surfaceOutboundCount += 1;
+              if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+              return {
+                ok: true,
+                id: record.id,
+                version: record.version,
+                message: "Draft approval staged for review.",
+              };
+            } catch {
+              return { ok: false, message: "Draft approval could not be staged." };
+            }
+          },
+        }
+      : {}),
     post: async (postText, opts, files) => {
       let destination = currentDestination;
       if (opts?.ts && destination.type !== "principal") {

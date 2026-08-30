@@ -87,6 +87,13 @@ export interface McpToolResult {
   isError?: boolean;
 }
 
+export class McpToolReportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "McpToolReportedError";
+  }
+}
+
 export function mcpResultText(result: McpToolResult): string {
   if (!Array.isArray(result.content)) return "";
   return result.content
@@ -200,7 +207,9 @@ export function createMcpClient(opts: {
     },
     async callTool(name, args) {
       const result = (await rpc("tools/call", { name, arguments: args })) as McpToolResult;
-      if (result.isError) throw new Error(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`);
+      if (result.isError) {
+        throw new McpToolReportedError(`mcp tool ${name} reported an error`);
+      }
       return result;
     },
   };

@@ -43,7 +43,8 @@ import { swallow } from "../util/errors.ts";
 import { fileArtifactId, isArtifactPath, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
-import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import type { McpToolDescriptor, McpToolService } from "../mcp/mcp-tool-service.ts";
+import type { StageMessageApprovalInput } from "../core/message-approval.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
   ControlService,
@@ -357,6 +358,10 @@ export interface SurfaceToolDeps {
     ambientEnabled?: boolean | null,
   ): Promise<SurfaceStandingOrderResult>;
   staySilent(reason: string): Promise<{ ok: true; message: string }>;
+  stageMessageApproval?(
+    input: StageMessageApprovalInput,
+    toolCallId: string,
+  ): Promise<{ ok: boolean; id?: string; version?: number; message: string }>;
 }
 
 export interface ControlUnavailable {
@@ -1086,6 +1091,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       deps.surface
         ? deps.surface.staySilent(reason)
         : Promise.resolve({ ok: true as const, message: "[staying silent]" }),
+    stageMessageApproval: (input, toolCallId) =>
+      deps.surface?.stageMessageApproval
+        ? deps.surface.stageMessageApproval(input, toolCallId)
+        : Promise.resolve({ ok: false, message: "message approvals are unavailable on this turn" }),
   };
 }
 

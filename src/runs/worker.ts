@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
+import { messageApprovalDurableTurnResult, type MessageApprovalService } from "../core/message-approval.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
@@ -13,6 +14,7 @@ export interface ProcessDeps {
   orchestrator: Orchestrator;
   leaseTtlMs: number;
   heartbeatIntervalMs?: number;
+  messageApprovals?: Pick<MessageApprovalService, "reconcileContinuation">;
 }
 
 export const LEASE_LOST_CONSECUTIVE = 3;
@@ -22,8 +24,12 @@ const CLAIM_FAIL_CRASH_CONSECUTIVE = 20;
 export async function processRun(deps: ProcessDeps, run: Run, opts?: { background?: boolean }): Promise<TurnResult> {
   const token = run.leaseToken;
   if (token === null) throw new Error(`processRun called with an unleased run ${run.id}`);
+  if (!(await deps.runs.ownsLease(run.id, token, run.attempts))) {
+    throw new Error(`run ${run.id} lost its lease before orchestration`);
+  }
   const intervalMs = deps.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(deps.leaseTtlMs / 3));
   const cancel = new AbortController();
+  const lostThreshold = run.maxAttempts <= 1 ? 1 : LEASE_LOST_CONSECUTIVE;
   let consecutiveLost = 0;
   let leaseLost = false;
   const beat = setInterval(() => {
@@ -35,7 +41,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
           return;
         }
         consecutiveLost += 1;
-        if (consecutiveLost >= LEASE_LOST_CONSECUTIVE && !leaseLost) {
+        if (consecutiveLost >= lostThreshold && !leaseLost) {
           leaseLost = true;
           clearInterval(beat);
           console.warn(
@@ -55,12 +61,17 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
     beatStopped = true;
     clearInterval(beat);
   };
+  const reconcileContinuation = async (): Promise<void> => {
+    const binding = run.request.messageApprovalContinuation;
+    if (binding && deps.messageApprovals) await deps.messageApprovals.reconcileContinuation(binding, run.id);
+  };
   try {
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
     const result = await deps.orchestrator.handleTurn({
       ...run.request,
       origin: resolveTurnOrigin(run.request),
       runId: run.id,
+      runLeaseToken: token,
       attempt: run.attempts,
       finalAttempt: errorParks(run, deps.runs.maxClaims),
       background: opts?.background ?? false,
@@ -68,15 +79,23 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
       ...(queueMs !== undefined ? { queueMs } : {}),
     });
     stopBeat();
-    if (!(await deps.runs.complete(run.id, token, result))) {
+    const durableResult = run.request.messageApprovalContinuation ? messageApprovalDurableTurnResult(result) : result;
+    if (!(await deps.runs.complete(run.id, token, durableResult))) {
       throw new Error(`run ${run.id} lost its lease before completion`);
     }
-    return result;
+    await reconcileContinuation().catch((error) => swallow("worker: message approval reconciliation failed", error));
+    return durableResult;
   } catch (err) {
     stopBeat();
-    await deps.runs.fail(run.id, token, errMessage(err), {
-      retry: !(err instanceof NonRetryableTurnError),
-    });
+    await deps.runs.fail(
+      run.id,
+      token,
+      run.request.messageApprovalContinuation ? "message approval continuation failed" : errMessage(err),
+      {
+        retry: !(err instanceof NonRetryableTurnError),
+      },
+    );
+    await reconcileContinuation().catch((error) => swallow("worker: message approval reconciliation failed", error));
     throw err;
   } finally {
     stopBeat();

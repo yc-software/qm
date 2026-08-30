@@ -14,8 +14,24 @@ import { swallow } from "../util/errors.ts";
 import { countTokens } from "../util/tokens.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { CodexAppServer, CodexRpcError } from "./codex-app-server.ts";
-import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
-import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
+import {
+  defineHarness,
+  harnessPersistedInputText,
+  harnessPersistedProviderRecord,
+  harnessDelegationAllowed,
+  harnessCapturedPromptEnvelope,
+  harnessTurnInputText,
+  type Harness,
+  type HarnessTurnInput,
+  type HarnessTurnResult,
+} from "./harness.ts";
+import {
+  coreToolOptions,
+  createPiTools,
+  harnessToolOptions,
+  type PiToolsOptions,
+  type ToolContextRef,
+} from "./pi-tools.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
 
@@ -65,6 +81,8 @@ export function codexToolContext(turn: HarnessTurnInput): ToolContextRef {
     orgScopeId: turn.orgScopeId,
     screenExternalContent: turn.screenExternalContent,
     toolApprovalGate: turn.toolApprovalGate,
+    beforeToolInvocation: turn.beforeToolInvocation,
+    privatePersistence: turn.continuationInstruction?.kind === "message_approval",
   };
 }
 
@@ -224,25 +242,20 @@ async function transitionTask(
 }
 
 function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
-  return {
-    scratchExec: opts.scratchExec,
-    ownerAuthExec: opts.ownerAuthExec,
-    reachExec: opts.reachExec,
-    ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
-    controlTools: opts.controlTools,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    ...(turn
-      ? {
-          readOnly: turn.readOnly,
-          surfaceTools: turn.surfaceTools,
-          surfaceName: turn.surfaceName,
-          credentialExecServices: turn.credentialExecServices,
-        }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
+  return harnessToolOptions(
+    {
+      scratchExec: opts.scratchExec,
+      ownerAuthExec: opts.ownerAuthExec,
+      reachExec: opts.reachExec,
+      ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
+      controlTools: opts.controlTools,
+      execTimeoutMs: opts.execTimeoutMs,
+      execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
+      backgroundJobTtlMs: opts.backgroundJobTtlMs,
+      backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
+    },
+    turn,
+  );
 }
 
 function asTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {
@@ -335,14 +348,14 @@ export function codexReasoningEffort(value: string | undefined): "low" | "medium
 }
 
 export function codexTurnInputText(
-  turn: Pick<HarnessTurnInput, "history" | "priorTurns" | "input" | "environment">,
+  turn: Pick<HarnessTurnInput, "history" | "priorTurns" | "input" | "environment" | "continuationInstruction">,
 ): string {
   const prior = turn.history.length
     ? ""
     : seedPriorTurns(turn.priorTurns ?? [])
         .map((message) => message.text)
         .join("\n");
-  return [prior, turn.input, turn.environment].filter((item) => item?.trim()).join("\n\n");
+  return [prior, harnessTurnInputText(turn), turn.environment].filter((item) => item?.trim()).join("\n\n");
 }
 
 export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
@@ -361,6 +374,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
   let startingServer: CodexAppServer | null = null;
 
   const processCollabItem = async (state: ActiveTurn, item: CodexItem): Promise<void> => {
+    if (!harnessDelegationAllowed(state.turn)) return;
     if (item.type !== "collabAgentToolCall") return;
     const tool = String(item.tool ?? "");
     const receivers = Array.isArray(item.receiverThreadIds)
@@ -459,19 +473,6 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             const item = p.item as CodexItem;
             if (method === "item/completed") {
               state.completedItems.push(item);
-              if (state.turn.tape) {
-                try {
-                  await state.turn.tape({
-                    kind: "message",
-                    harness: "codex",
-                    scopeLabel: state.turn.scopeLabel,
-                    payload: item,
-                  });
-                } catch (error) {
-                  state.tapeWriteFailed = true;
-                  swallow("codex: tape append", error);
-                }
-              }
             }
             await processCollabItem(state, item);
           }
@@ -626,7 +627,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           computer_use: false,
           image_generation: false,
           in_app_browser: false,
-          multi_agent: !turn.readOnly,
+          multi_agent: harnessDelegationAllowed(turn),
           request_permissions_tool: false,
           tool_suggest: false,
         },
@@ -651,7 +652,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         turn.emit({
           type: "user",
           payload: {
-            text: turn.input,
+            text: harnessPersistedInputText(turn),
             ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
             ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
           },
@@ -718,7 +719,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           turnSeq: userEntry.seq,
           step: 0,
           model: selectedModel,
-          promptEnvelope,
+          promptEnvelope: harnessCapturedPromptEnvelope(turn, promptEnvelope),
           truncated: Boolean(turn.images?.length),
           transport: { modelId: selectedModel },
           ttftMs: state.firstOutputAt ? state.firstOutputAt - startedAt : null,
@@ -731,33 +732,60 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     };
     if (turn.tape) {
       try {
+        const persisted = harnessPersistedProviderRecord(turn, {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: inputText },
+            ...(turn.images ?? []).map((image) => ({
+              type: "input_image",
+              image_url: "[image bytes omitted]",
+              media_type: image.mimeType,
+            })),
+          ],
+        });
         await turn.tape({
           kind: "message",
           harness: "codex",
           scopeLabel: turn.scopeLabel,
           entrySeq: userEntry.seq,
-          meta: {
-            bareText: turn.input,
-            ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
-          },
-          payload: {
-            type: "message",
-            role: "user",
-            content: [
-              { type: "input_text", text: inputText },
-              ...(turn.images ?? []).map((image) => ({
-                type: "input_image",
-                image_url: "[image bytes omitted]",
-                media_type: image.mimeType,
-              })),
-            ],
-          },
+          meta: persisted.hidden
+            ? { hidden: true }
+            : {
+                bareText: harnessPersistedInputText(turn),
+                ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
+              },
+          payload: persisted.payload,
         });
       } catch (error) {
         state.tapeWriteFailed = true;
         swallow("codex: tape append", error);
       }
     }
+    let completedTapeIndex = 0;
+    const flushCompletedTape = async (): Promise<void> => {
+      if (!turn.tape) return;
+      const items = state.completedItems.slice(completedTapeIndex);
+      completedTapeIndex = state.completedItems.length;
+      for (const item of items) {
+        try {
+          const persisted = harnessPersistedProviderRecord(turn, item, {
+            generated: true,
+            messageApprovalAttempted: ref.messageApprovalAttempted,
+          });
+          await turn.tape({
+            kind: "message",
+            harness: "codex",
+            scopeLabel: turn.scopeLabel,
+            payload: persisted.payload,
+            ...(persisted.hidden ? { meta: { hidden: true } } : {}),
+          });
+        } catch (error) {
+          state.tapeWriteFailed = true;
+          swallow("codex: tape append", error);
+        }
+      }
+    };
     let turnId = "";
     const interrupt = async (stopped: boolean) => {
       state.stopped ||= stopped;
@@ -821,6 +849,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           entryCount: turn.history.length,
         });
       }
+      await flushCompletedTape();
       if (result.status === "failed") throw codexProviderFailure(result.error?.message ?? "Codex turn failed");
       const terminal = ref.silentRequested || ref.pausedOnApproval;
       const reply = terminal ? "" : textFromTurn(result);
@@ -842,6 +871,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         ...(state.tapeWriteFailed ? { tapeWriteFailed: true } : {}),
       };
     } finally {
+      await flushCompletedTape();
       if (timer) clearTimeout(timer);
       await stopSignals?.();
       await recordRequest();

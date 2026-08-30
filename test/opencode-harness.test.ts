@@ -6,16 +6,21 @@ import { join } from "node:path";
 import { assistantFailure, createOpenCodeHarness, latestAssistantParts } from "../src/harness/opencode-harness.ts";
 import type { OpencodeClient } from "@opencode-ai/sdk";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
+import { forModelContext } from "../src/harness/context-compaction.ts";
+import type { NewTapeRecord } from "../src/sessions/session-store.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
+import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
 
 function fakeSidecar(dir: string, name: string, handlers: string): string {
   const script = join(dir, `${name}.js`);
   writeFileSync(
     script,
     `const http = require("node:http");
+const fs = require("node:fs");
 const port = Number((process.argv.find((a) => a.startsWith("--port=")) ?? "--port=0").slice("--port=".length));
 const readBody = (req) => new Promise((res) => { let d = ""; req.on("data", (c) => (d += c)); req.on("end", () => res(d)); });
 const json = (res, value) => { const t = JSON.stringify(value); res.writeHead(200, { "content-type": "application/json" }); res.end(t); };
+let lastPrompt = {};
 const capture = async (sessionId, body) =>
   fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + sessionId + "/capture", {
     method: "POST",
@@ -150,6 +155,170 @@ test("OpenCode records real usage, cost, and timings for each captured model cal
     totalTokens: 183,
     costUsd: 0.0353,
   });
+});
+
+test("OpenCode successful message approval terminates without persisting assistant output", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-approval-"));
+  const toolResultsPath = join(dir, "tool-results");
+  const terminalAssistant = `{
+    info: {
+      id: "msg_approval", sessionID: "ses_main", role: "assistant", time: { created: 1000, completed: 1100 },
+      parentID: "", modelID: "gpt-5", providerID: "openai", mode: "qm", path: { cwd: "/", root: "/" },
+      cost: 0, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, finish: "stop",
+    },
+    parts: [{ id: "prt_approval", sessionID: "ses_main", messageID: "msg_approval", type: "text", text: "I staged the draft and sent an extra reply" }],
+  }`;
+  const handlers = `
+  if (req.method === "POST" && message) {
+    await readBody(req);
+    const staged = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/tool", {
+      method: "POST",
+      headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET, "content-type": "application/json" },
+      body: JSON.stringify({
+        tool: "stage_message_approval",
+        callID: "approval-call",
+        args: { title: "Draft", recipient: "alex@example.com", subject: "Launch", body: "Ready" },
+      }),
+    }).then((response) => response.json());
+    const late = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/tool", {
+      method: "POST",
+      headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET, "content-type": "application/json" },
+      body: JSON.stringify({ tool: "history", callID: "late-call", args: { query: "must not run" } }),
+    }).then((response) => response.json());
+    fs.writeFileSync(${JSON.stringify(toolResultsPath)}, JSON.stringify({ staged, late }));
+    await capture(message[1], { system: "s", messages: [{ role: "user" }] });
+    return json(res, ${terminalAssistant});
+  }
+  if (req.method === "GET" && message) return json(res, [${terminalAssistant}]);
+`;
+  const harness = createOpenCodeHarness({ binaryPath: fakeSidecar(dir, "approval", handlers) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const llmRows: HarnessLlmRequestRecord[] = [];
+  const tape: NewTapeRecord[] = [];
+  let staged = 0;
+  let historyCalls = 0;
+  const input = turnInput(entries, llmRows);
+  input.surfaceTools = true;
+  input.surfaceName = "slack";
+  input.messageApprovals = true;
+  input.tools = {
+    stageMessageApproval: async () => {
+      staged += 1;
+      return { ok: true, id: "draft-1" };
+    },
+    history: async () => {
+      historyCalls += 1;
+      return [];
+    },
+  } as never;
+  input.tape = async (record) => void tape.push(record);
+
+  const result = await harness.turns.runTurn(input);
+  assert.equal(staged, 1);
+  assert.equal(historyCalls, 0);
+  const toolResults = JSON.parse(readFileSync(toolResultsPath, "utf8")) as {
+    staged: { terminate?: boolean };
+    late: { output?: string };
+  };
+  assert.equal(toolResults.staged.terminate, true);
+  assert.match(toolResults.late.output ?? "", /tool invocation rejected after turn termination/);
+  assert.equal(result.reply, "");
+  assert.equal(result.silent, true);
+  assert.equal(
+    entries.some((entry) => entry.type === "assistant"),
+    false,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(tape),
+    /I staged the draft and sent an extra reply|alex@example\.com|Ready|"subject":"Launch"/,
+  );
+});
+
+test("OpenCode keeps a hidden continuation in the active provider request only", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-private-"));
+  const promptPath = join(dir, "prompts");
+  const handlers = `
+  if (req.method === "POST" && message) {
+    const raw = await readBody(req);
+    fs.appendFileSync(${JSON.stringify(promptPath)}, raw + "\\n");
+    lastPrompt = JSON.parse(raw);
+    await capture(message[1], { system: lastPrompt.system, messages: [{ role: "user", content: lastPrompt.parts }] });
+    return json(res, ${okAssistant});
+  }
+  if (req.method === "GET" && message) return json(res, [
+    { info: { id: "msg_user", sessionID: "ses_main", role: "user" }, parts: [
+      ...(lastPrompt.parts ?? []),
+      { id: "private-task", sessionID: "ses_main", messageID: "msg_user", type: "tool", tool: "task", callID: "private-call", state: { status: "running", input: { description: "durable private title", prompt: "durable private prompt" } } },
+    ] },
+    ${okAssistant}
+  ]);
+`;
+  const tasks = createMemoryTaskStore();
+  const harness = createOpenCodeHarness({ binaryPath: fakeSidecar(dir, "private", handlers), tasks });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const tape: NewTapeRecord[] = [];
+  const captures: HarnessLlmRequestRecord[] = [];
+  const continuation = {
+    approvalId: "approval-1",
+    approvalVersion: 2,
+    bindingId: "binding-1",
+    recipient: "private-recipient@example.com",
+    subject: "Private subject",
+    body: "Private body",
+  };
+  const run = (input: string, includeContinuation = false) =>
+    harness.turns.runTurn({
+      ...turnInput(entries, captures),
+      input,
+      history: forModelContext(entries),
+      ...(includeContinuation
+        ? { continuationInstruction: { kind: "message_approval", value: continuation, hidden: true } as const }
+        : {}),
+      tape: async (record) => void tape.push(record),
+    });
+
+  await run("", true);
+  const providerPrompts = readFileSync(promptPath, "utf8").trim().split("\n");
+  assert.equal((JSON.parse(providerPrompts[0]!) as { tools?: { task?: boolean } }).tools?.task, false);
+  assert.deepEqual(await tasks.list(), []);
+  assert.equal(
+    entries.some((entry) => JSON.stringify(entry.payload).includes("durable private")),
+    false,
+  );
+  assert.match(providerPrompts[0]!, /private-recipient@example\.com|Private subject|Private body/);
+  assert.doesNotMatch(
+    JSON.stringify({ entries, tape, captures }),
+    /private-recipient@example\.com|Private subject|Private body/,
+  );
+  assert.ok(tape.length > 0);
+  assert.equal(
+    tape.every((record) => record.meta?.hidden === true),
+    true,
+  );
+  assert.equal(
+    tape.every((record) => JSON.stringify(record.payload) === '{"omitted":true}'),
+    true,
+  );
+  assert.equal(
+    captures.every((record) => JSON.stringify(record.promptEnvelope) === '{"omitted":true}'),
+    true,
+  );
+
+  await run("What happened later?");
+  const laterPrompt = readFileSync(promptPath, "utf8").trim().split("\n").at(-1)!;
+  assert.doesNotMatch(laterPrompt, /private-recipient@example\.com|Private subject|Private body/);
+  assert.equal(
+    tape.some((record) => record.meta?.hidden !== true),
+    true,
+  );
 });
 
 test("OpenCode startup failure reports the sidecar's real output and honors the configured timeout", async (t) => {

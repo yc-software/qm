@@ -1,8 +1,10 @@
 import { clip, inlineCode } from "./util.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
 import type { AgentRequestActionId } from "./agent-requests.ts";
+import { MESSAGE_APPROVAL_LIMITS, type MessageApprovalCardView } from "../core/message-approval.ts";
 
 export type ApprovalActionId = "hilo_allow_once" | "hilo_allow_session" | "hilo_allow_always" | "hilo_deny";
+export type MessageApprovalActionId = "message_approval_approve" | "message_approval_edit" | "message_approval_reject";
 
 export interface PendingApproval {
   requestId: string;
@@ -12,6 +14,7 @@ export interface PendingApproval {
   summary?: string;
   kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
+  blocksInput?: boolean;
 }
 
 export interface SlackApprovalMessage {
@@ -23,7 +26,7 @@ const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 
 export function button(
   text: string,
-  actionId: ApprovalActionId | AgentRequestActionId,
+  actionId: ApprovalActionId | AgentRequestActionId | MessageApprovalActionId,
   value: string,
   style?: "primary" | "danger",
 ): Record<string, unknown> {
@@ -33,6 +36,120 @@ export function button(
     action_id: actionId,
     value,
     ...(style ? { style } : {}),
+  };
+}
+
+function encodeMessageApprovalAction(record: Pick<MessageApprovalCardView, "id" | "version">): string {
+  return `${record.id}:${record.version}`;
+}
+
+export function decodeMessageApprovalAction(value: unknown): { id: string; version: number } | null {
+  const match = /^([^:]+):(\d+)$/.exec(String(value ?? ""));
+  if (!match) return null;
+  const version = Number(match[2]);
+  if (match[1]!.length > 200 || !Number.isSafeInteger(version) || version < 1) return null;
+  return { id: match[1]!, version };
+}
+
+function plainTextSections(text: string): Array<Record<string, unknown>> {
+  const characters = Array.from(text);
+  const blocks: Array<Record<string, unknown>> = [];
+  for (let offset = 0; offset < characters.length; offset += 3000) {
+    blocks.push({
+      type: "section",
+      text: { type: "plain_text", text: characters.slice(offset, offset + 3000).join(""), emoji: false },
+    });
+  }
+  return blocks;
+}
+
+export function messageApprovalMessage(record: MessageApprovalCardView): SlackApprovalMessage {
+  const blocks: Array<Record<string, unknown>> = [
+    ...plainTextSections(record.title),
+    ...plainTextSections(`Recipient\n${record.recipient}`),
+    ...plainTextSections(`Subject\n${record.subject ?? "None"}`),
+    ...plainTextSections("Message"),
+    ...plainTextSections(record.body),
+  ];
+  const value = encodeMessageApprovalAction(record);
+  if (record.state === "pending") {
+    blocks.push({
+      type: "actions",
+      block_id: `message_approval:${record.id}:${record.version}`.slice(0, 255),
+      elements: [
+        button("Approve draft", "message_approval_approve", value, "primary"),
+        button("Edit and approve draft", "message_approval_edit", value),
+        button("Reject", "message_approval_reject", value, "danger"),
+      ],
+    });
+    return { text: `Draft approval needed: ${record.title}`, blocks };
+  }
+  let status = "Draft approved; continuation queued.\nContinuing in the original conversation.";
+  if (record.continuationStatus === "running") {
+    status = "Draft approved; continuation running.\nContinuing in the original conversation.";
+  }
+  if (record.continuationStatus === "waiting") {
+    status = "Draft approved; continuation waiting for an explicit command approval in the original conversation.";
+  }
+  if (record.continuationStatus === "completed") {
+    status = "Draft approved; continuation completed.\nContinuing in the original conversation.";
+  }
+  if (record.continuationUnconfirmed) {
+    status = "Draft approved; QM could not confirm the operation and manual reconciliation is required.";
+  } else if (record.continuationStatus === "failed" || record.state === "failed") {
+    status = "Draft approved; continuation failed.\nContinuing in the original conversation was not completed.";
+  }
+  if (record.state === "rejected") status = "Rejected.";
+  if (record.state === "expired") status = "Draft approval expired.";
+  blocks.push(...plainTextSections(`Status\n${status}`));
+  return { text: `${record.title}: ${status}`, blocks };
+}
+
+export function messageApprovalEditModal(record: MessageApprovalCardView): Record<string, unknown> {
+  return {
+    type: "modal",
+    callback_id: "message_approval_edit",
+    private_metadata: encodeMessageApprovalAction(record),
+    title: { type: "plain_text", text: "Edit draft" },
+    submit: { type: "plain_text", text: "Approve draft" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "input",
+        block_id: "recipient",
+        label: { type: "plain_text", text: "Recipient" },
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          initial_value: record.recipient,
+          max_length: MESSAGE_APPROVAL_LIMITS.recipient,
+        },
+      },
+      {
+        type: "input",
+        block_id: "subject",
+        optional: true,
+        label: { type: "plain_text", text: "Subject" },
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          ...(record.subject ? { initial_value: record.subject } : {}),
+          max_length: MESSAGE_APPROVAL_LIMITS.subject,
+        },
+      },
+      {
+        type: "input",
+        block_id: "body",
+        label: { type: "plain_text", text: "Message" },
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          multiline: true,
+          initial_value: record.body,
+          max_length: MESSAGE_APPROVAL_LIMITS.body,
+        },
+      },
+    ],
   };
 }
 
@@ -90,8 +207,14 @@ export interface StoredApproval {
   requestId: string;
   command: string;
   reason?: string;
+  matched?: string;
   purpose?: string;
   summary?: string;
+  summaryDetail?: string;
+  approvalKey?: string;
+  grantModes?: { session: boolean; always: boolean };
+  blocksInput?: boolean;
+  kind?: "approval" | "input";
   request?: Record<string, unknown>;
 }
 
@@ -105,11 +228,17 @@ export interface RecoveredApprovalContext {
   reason: string;
   purpose?: string;
   summary?: string;
+  grantModes?: { session: boolean; always: boolean };
+  blocksInput?: boolean;
+  kind?: "approval" | "input";
   turn: Record<string, unknown>;
 }
 
 export function recoveredApprovalContext(
-  stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "request">,
+  stored: Pick<
+    StoredApproval,
+    "command" | "reason" | "purpose" | "summary" | "grantModes" | "blocksInput" | "kind" | "request"
+  >,
   click: { channel: string; threadTs?: string },
 ): RecoveredApprovalContext | null {
   const req = stored.request as
@@ -146,6 +275,9 @@ export function recoveredApprovalContext(
     reason: stored.reason ?? "requires approval",
     ...(stored.purpose ? { purpose: stored.purpose } : {}),
     ...(stored.summary ? { summary: stored.summary } : {}),
+    ...(stored.grantModes ? { grantModes: structuredClone(stored.grantModes) } : {}),
+    ...(stored.blocksInput === undefined ? {} : { blocksInput: stored.blocksInput }),
+    ...(stored.kind ? { kind: stored.kind } : {}),
     turn,
   };
 }

@@ -24,12 +24,23 @@ import {
   modelSupportsFastMode,
 } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
+import type { NewTapeRecord } from "../sessions/session-store.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { compactTranscript, deterministicCompactSummary } from "./context-compaction.ts";
-import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
+import {
+  defineHarness,
+  harnessPersistedInputText,
+  harnessPersistedProviderRecord,
+  harnessDelegationAllowed,
+  harnessCapturedPromptEnvelope,
+  harnessTurnInputText,
+  type Harness,
+  type HarnessTurnInput,
+  type HarnessTurnResult,
+} from "./harness.ts";
 import {
   buildDetectionPrompt,
   CONTEXT_COMPACTION_PROMPT,
@@ -39,7 +50,13 @@ import {
   parseDetectVerdict,
   renderDetectPrompt,
 } from "./pi-harness.ts";
-import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
+import {
+  coreToolOptions,
+  createPiTools,
+  harnessToolOptions,
+  type PiToolsOptions,
+  type ToolContextRef,
+} from "./pi-tools.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
 
@@ -88,6 +105,8 @@ export function claudeToolContext(turn: HarnessTurnInput): ToolContextRef {
     orgScopeId: turn.orgScopeId,
     screenExternalContent: turn.screenExternalContent,
     toolApprovalGate: turn.toolApprovalGate,
+    beforeToolInvocation: turn.beforeToolInvocation,
+    privatePersistence: turn.continuationInstruction?.kind === "message_approval",
   };
 }
 
@@ -192,25 +211,20 @@ class MessageQueue implements AsyncIterable<SDKUserMessage> {
 }
 
 function toolOptions(opts: ClaudeHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
-  return {
-    scratchExec: opts.scratchExec,
-    ownerAuthExec: opts.ownerAuthExec,
-    reachExec: opts.reachExec,
-    ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
-    controlTools: opts.controlTools,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    ...(turn
-      ? {
-          readOnly: turn.readOnly,
-          surfaceTools: turn.surfaceTools,
-          surfaceName: turn.surfaceName,
-          credentialExecServices: turn.credentialExecServices,
-        }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
+  return harnessToolOptions(
+    {
+      scratchExec: opts.scratchExec,
+      ownerAuthExec: opts.ownerAuthExec,
+      reachExec: opts.reachExec,
+      ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
+      controlTools: opts.controlTools,
+      execTimeoutMs: opts.execTimeoutMs,
+      execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
+      backgroundJobTtlMs: opts.backgroundJobTtlMs,
+      backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
+    },
+    turn,
+  );
 }
 
 function asTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {
@@ -259,7 +273,7 @@ function promptText(turn: HarnessTurnInput): string {
     : seedPriorTurns(turn.priorTurns ?? [])
         .map((message) => message.text)
         .join("\n");
-  return [replay, prior, turn.input, turn.environment].filter((value) => value?.trim()).join("\n\n");
+  return [replay, prior, harnessTurnInputText(turn), turn.environment].filter((value) => value?.trim()).join("\n\n");
 }
 
 function userMessage(text: string, images: HarnessTurnInput["images"] = []): SDKUserMessage {
@@ -345,7 +359,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const childToolNames = bridged
       .filter((definition) => CHILD_TOOL_NAMES.has(definition.name))
       .map((definition) => `mcp__qm__${definition.name}`);
-    const allowSubagents = !turn.readOnly;
+    const allowSubagents = harnessDelegationAllowed(turn);
     const childPolicy = `${turn.systemPrompt}\n\nComplete only the delegated task. Do not contact people, schedule work, change standing configuration, or suppress the parent reply.`;
     const childAgents = {
       research: {
@@ -383,7 +397,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const userEntry = await turn.emit({
       type: "user",
       payload: {
-        text: turn.input,
+        text: harnessPersistedInputText(turn),
         ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
         ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
       },
@@ -410,28 +424,42 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     let streamedText = "";
     let tapeWriteFailed = false;
     let initialUserEchoSkipped = false;
-    const appendTape = async (payload: unknown, trigger = false) => {
+    const pendingGeneratedTape: unknown[] = [];
+    const writeTape = async (payload: unknown, trigger = false) => {
       if (!turn.tape) return;
       try {
+        const persisted = harnessPersistedProviderRecord(turn, payload, {
+          generated: !trigger,
+          messageApprovalAttempted: ref.messageApprovalAttempted,
+        });
+        let meta: NewTapeRecord["meta"] | undefined;
+        if (persisted.hidden) {
+          meta = { hidden: true };
+        } else if (trigger) {
+          meta = {
+            bareText: harnessPersistedInputText(turn),
+            ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
+          };
+        }
         await turn.tape({
           kind: "message",
           harness: "claude",
-          payload,
+          payload: persisted.payload,
           scopeLabel: turn.scopeLabel,
-          ...(trigger
-            ? {
-                entrySeq: userEntry.seq,
-                meta: {
-                  bareText: turn.input,
-                  ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
-                },
-              }
-            : {}),
+          ...(trigger ? { entrySeq: userEntry.seq } : {}),
+          ...(meta ? { meta } : {}),
         });
       } catch (error) {
         tapeWriteFailed = true;
         swallow("claude: tape append", error);
       }
+    };
+    const appendTape = async (payload: unknown, trigger = false) => {
+      if (trigger) await writeTape(payload, true);
+      else pendingGeneratedTape.push(payload);
+    };
+    const flushGeneratedTape = async () => {
+      for (const payload of pendingGeneratedTape.splice(0)) await writeTape(payload);
     };
     const sdkQuery = query({
       prompt: queue,
@@ -559,7 +587,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           turnSeq: userEntry.seq,
           step,
           model,
-          promptEnvelope: recordedEnvelope,
+          promptEnvelope: harnessCapturedPromptEnvelope(turn, recordedEnvelope),
           truncated: false,
           transport: { modelId: model },
           ttftMs: message.subtype === "success" ? (message.ttft_ms ?? null) : null,
@@ -617,7 +645,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           if (message.type === "user" && !initialUserEchoSkipped) initialUserEchoSkipped = true;
           else if (message.type === "assistant" || message.type === "user")
             await appendTape(stripClaudeImageBytes(message));
-          if (message.type === "system" && message.subtype === "task_started") {
+          if (allowSubagents && message.type === "system" && message.subtype === "task_started") {
             const callId = message.tool_use_id ?? message.task_id;
             if (!taskStates.has(message.task_id)) {
               if (opts.tasks)
@@ -643,7 +671,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               }
             }
           }
-          if (message.type === "system" && message.subtype === "task_updated") {
+          if (allowSubagents && message.type === "system" && message.subtype === "task_updated") {
             const tracked = taskStates.get(message.task_id);
             let next: TaskStatus | undefined;
             if (message.patch.status === "completed") next = "completed";
@@ -654,7 +682,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               tracked.status = next;
             }
           }
-          if (message.type === "system" && message.subtype === "task_notification") {
+          if (allowSubagents && message.type === "system" && message.subtype === "task_notification") {
             const tracked = taskStates.get(message.task_id);
             if (tracked) {
               const next: TaskStatus = message.status === "completed" ? "completed" : "failed";
@@ -719,6 +747,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             ])
           : consume);
       } catch (error) {
+        await flushGeneratedTape();
         if (!controller.signal.aborted || error instanceof NonRetryableTurnError) throw error;
         const reply = streamedText.trim();
         await flushThinking();
@@ -734,6 +763,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           ...(tapeWriteFailed ? { tapeWriteFailed: true } : {}),
         };
       }
+      await flushGeneratedTape();
       const finalResult = result as SDKResultMessage | null;
       if (!finalResult) {
         if (controller.signal.aborted) {
@@ -796,6 +826,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         ...(tapeWriteFailed ? { tapeWriteFailed: true } : {}),
       };
     } finally {
+      await flushGeneratedTape();
       settled = true;
       if (timer) clearTimeout(timer);
       if (recordedSteps === 0) {
@@ -805,7 +836,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             turnSeq: userEntry.seq,
             step: 0,
             model,
-            promptEnvelope: recordedEnvelope,
+            promptEnvelope: harnessCapturedPromptEnvelope(turn, recordedEnvelope),
             truncated: false,
             transport: { modelId: model },
           });

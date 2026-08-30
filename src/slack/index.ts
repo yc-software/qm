@@ -18,6 +18,7 @@ import { createDeliveryPoller } from "./deliveries.ts";
 import { createDeferredAckReceiver } from "./deferred-ack.ts";
 import { createHttpEventsReceiver } from "./http-events.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
+import type { MessageApprovalService } from "../core/message-approval.ts";
 const { App, LogLevel } = bolt;
 
 export type { SlackCoreClient };
@@ -27,6 +28,7 @@ export { normalizeSlackApiUrl, slackPluginConfigFromEnv };
 export async function startSlackPlugin(
   cfg: SlackPluginConfig,
   core: SlackCoreClient,
+  messageApprovals: MessageApprovalService,
 ): Promise<{ stop(): Promise<void> }> {
   const EVENTS_MODE = cfg.eventsMode ?? "socket";
   if (!cfg.botToken) {
@@ -146,7 +148,7 @@ export async function startSlackPlugin(
     externalParticipantsEnabled,
     ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
-  const approvals = createApprovals({ core, bridge, directory, threads, ids });
+  const approvals = createApprovals({ core, messageApprovals, bridge, directory, threads, ids });
   const ensureHeader = createSurfaceHeaderEnsurer({
     headerFacts: (scope) => core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0]),
     channelPinEnabled: (scope) =>
@@ -224,7 +226,7 @@ export async function startSlackPlugin(
     ...(cfg.userToken ? { userToken: cfg.userToken } : {}),
     clientOptions: CLIENT_OPTIONS,
   });
-  const deliveries = createDeliveryPoller({ core, bridge, mirror, threads, clientForIdentity });
+  const deliveries = createDeliveryPoller({ core, messageApprovals, bridge, mirror, threads, clientForIdentity });
 
   let auth: any;
   try {
@@ -262,6 +264,7 @@ export async function startSlackPlugin(
 
   let deliveriesPollInFlight = false;
   let deliveriesPollAgain = false;
+  let deliveriesPoll: Promise<void> | null = null;
   const drainDeliveries = (): void => {
     if (stopped) return;
     if (deliveriesPollInFlight) {
@@ -269,13 +272,17 @@ export async function startSlackPlugin(
       return;
     }
     deliveriesPollInFlight = true;
-    void deliveries.pollDeliveries(app.client).finally(() => {
-      deliveriesPollInFlight = false;
-      if (deliveriesPollAgain) {
-        deliveriesPollAgain = false;
-        drainDeliveries();
-      }
-    });
+    deliveriesPoll = deliveries
+      .pollDeliveries(app.client)
+      .catch(swallowAs("slack: delivery poll failed", undefined))
+      .finally(() => {
+        deliveriesPollInFlight = false;
+        deliveriesPoll = null;
+        if (deliveriesPollAgain) {
+          deliveriesPollAgain = false;
+          drainDeliveries();
+        }
+      });
   };
   const unsubscribeDeliveries = core.onDeliveryEnqueued(drainDeliveries);
   const deliveriesTimer = setInterval(drainDeliveries, 60_000);
@@ -305,9 +312,14 @@ export async function startSlackPlugin(
       unsubscribeDeliveries();
       unsubscribeContextRequests();
       try {
+        await deliveriesPoll;
         await app.stop();
       } finally {
-        await devIntrospection?.close();
+        try {
+          await approvals.stop();
+        } finally {
+          await devIntrospection?.close();
+        }
       }
     },
   };

@@ -71,6 +71,7 @@ test("processRun threads runId + background into the turn and completes the run 
   const result = await processRun(deps, fg!);
   assert.deepEqual(result, { status: "ok", reply: "echo: x" });
   assert.equal(seen[0]?.runId, fg!.id, "the orchestrator sees the run's id");
+  assert.equal(seen[0]?.runLeaseToken, fg!.leaseToken, "the orchestrator sees the current claim token");
   assert.equal(seen[0]?.background, false, "foreground by default");
   assert.equal(seen[0]?.attempt, 1, "the orchestrator sees which claim this is");
 
@@ -85,6 +86,67 @@ test("processRun threads runId + background into the turn and completes the run 
   assert.equal(seen[1]?.background, true, "the worker-loop flag reaches the orchestrator");
 });
 
+test("processRun omits continuation reply and approval free text from its return and durable result", async () => {
+  const { runs } = createMemoryRunStore();
+  const secret = "Ready to launch echoed by the model";
+  const request: OrchestratorInput = {
+    ...turn,
+    messageApprovalContinuation: { approvalId: "draft-1", approvalVersion: 2, bindingId: "binding-1" },
+  };
+  const orchestrator = fakeOrchestrator(async () => ({
+    status: "ok",
+    reply: secret,
+    reason: secret,
+    pendingApprovals: [
+      {
+        requestId: "approval-1",
+        command: `send ${secret}`,
+        reason: secret,
+        purpose: secret,
+        summary: secret,
+        summaryDetail: secret,
+      },
+    ],
+  }));
+  const run = (await runs.enqueue({ sessionId: "s-private", request, maxAttempts: 1 })).run;
+  const claim = await runs.claimById(run.id, "privacy-worker", 5_000);
+  const result = await processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, claim!);
+  assert.deepEqual(result, {
+    status: "ok",
+    pendingApprovals: [{ requestId: "approval-1", command: "", reason: "" }],
+  });
+  assert.deepEqual((await runs.get(run.id))?.result, result);
+  assert.doesNotMatch(JSON.stringify(await runs.get(run.id)), new RegExp(secret));
+});
+
+test("processRun stores a generic continuation failure when the thrown error echoes plaintext", async () => {
+  const { runs } = createMemoryRunStore();
+  const secret = "Ready to launch echoed in an error";
+  const request: OrchestratorInput = {
+    ...turn,
+    messageApprovalContinuation: { approvalId: "draft-1", approvalVersion: 2, bindingId: "binding-1" },
+  };
+  const run = (await runs.enqueue({ sessionId: "s-private-error", request, maxAttempts: 1 })).run;
+  const claim = await runs.claimById(run.id, "privacy-worker", 5_000);
+  await assert.rejects(
+    () =>
+      processRun(
+        {
+          runs,
+          orchestrator: fakeOrchestrator(async () => {
+            throw new NonRetryableTurnError(secret);
+          }),
+          leaseTtlMs: 5_000,
+        },
+        claim!,
+      ),
+    new RegExp(secret),
+  );
+  const failed = await runs.get(run.id);
+  assert.equal(failed?.result?.reason, "message approval continuation failed");
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret));
+});
+
 test("processRun rejects when a reaped attempt finishes after a retry claims the run", async () => {
   const { runs } = createMemoryRunStore();
   let finish = (_: TurnResult) => {};
@@ -94,9 +156,10 @@ test("processRun rejects when a reaped attempt finishes after a retry claims the
   const orchestrator = fakeOrchestrator(() => turnResult);
 
   await runs.enqueue({ sessionId: "s1", request: turn });
-  const first = await runs.claim("w1", -1);
+  const first = await runs.claim("w1", 50);
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, first!);
 
+  await new Promise((resolve) => setTimeout(resolve, 60));
   assert.deepEqual(await runs.reapExpired(), { requeued: 1, parked: 0 });
   const second = await runs.claim("w2", 5_000);
   assert.equal(second?.attempts, 2);
@@ -108,6 +171,32 @@ test("processRun rejects when a reaped attempt finishes after a retry claims the
   assert.equal(current?.status, "running");
   assert.equal(current?.leaseToken, second?.leaseToken);
   assert.equal(current?.result, null);
+});
+
+test("processRun never invokes orchestration for a claim that was already reaped", async () => {
+  const { runs } = createMemoryRunStore();
+  let invoked = false;
+  await runs.enqueue({ sessionId: "s1", request: turn });
+  const stale = await runs.claim("w1", -1);
+  assert.deepEqual(await runs.reapExpired(), { requeued: 1, parked: 0 });
+  const current = await runs.claim("w2", 5_000);
+
+  await assert.rejects(
+    processRun(
+      {
+        runs,
+        orchestrator: fakeOrchestrator(async () => {
+          invoked = true;
+          return { status: "ok" };
+        }),
+        leaseTtlMs: 5_000,
+      },
+      stale!,
+    ),
+    /lost its lease before orchestration/,
+  );
+  assert.equal(invoked, false);
+  assert.equal((await runs.get(current!.id))?.leaseToken, current?.leaseToken);
 });
 
 test("processRun upgrades legacy queued provenance before orchestration", async () => {
@@ -145,6 +234,7 @@ test("processRun heartbeats the lease while the turn runs, and the beat stops wi
   const run = await runs.claim("w1", 9_000);
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
+  await microtasks();
   t.mock.timers.tick(3_000);
   await microtasks();
   assert.equal(beats.length, 1, "one heartbeat per interval");
@@ -184,6 +274,7 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
   const run = await runs.claim("w1", 9_000);
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
+  await microtasks();
   t.mock.timers.tick(3_000);
   await microtasks();
   assert.equal(beats.length, 1);
@@ -307,6 +398,7 @@ test("a thrown heartbeat (a DB blip) never cancels the turn", async (t) => {
   const run = await store.runs.claim("w1", 9_000);
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
+  await microtasks();
   for (let i = 0; i < LEASE_LOST_CONSECUTIVE + 3; i++) {
     t.mock.timers.tick(3_000);
     await microtasks();
@@ -327,6 +419,7 @@ test("a single definitive lease-lost beat does not cancel, but N consecutive do"
   const run = await store.runs.claim("w1", 9_000);
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
+  await microtasks();
   t.mock.timers.tick(3_000);
   await microtasks();
   assert.equal(cancelled(), false, "one false is not conclusive");
@@ -345,6 +438,23 @@ test("a single definitive lease-lost beat does not cancel, but N consecutive do"
   await pending;
 });
 
+test("a one-attempt run cancels on the first definitive lease-lost heartbeat", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const store = createMemoryRunStore();
+  const runs = scriptedHeartbeat(store.runs, [false]);
+  const { orchestrator, cancelled } = cancellableOrchestrator();
+
+  await store.runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 });
+  const run = await store.runs.claim("w1", 9_000);
+  const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
+
+  await microtasks();
+  t.mock.timers.tick(3_000);
+  await microtasks();
+  assert.equal(cancelled(), true);
+  await pending;
+});
+
 test("the heartbeat stops before complete(), so a late tick cannot spuriously abort", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const store = createMemoryRunStore();
@@ -360,6 +470,7 @@ test("the heartbeat stops before complete(), so a late tick cannot spuriously ab
   const run = await runs.claim("w1", 9_000);
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
+  await microtasks();
   t.mock.timers.tick(3_000);
   await microtasks();
   assert.equal(beats.length, 1);

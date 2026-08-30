@@ -67,7 +67,9 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async claim(workerId, ttlMs) {
       const pending = [...runs.values()]
-        .filter((r) => r.status === "pending" && !sessionHasRunning(r.sessionId))
+        .filter(
+          (r) => r.status === "pending" && (r.maxAttempts > 1 || r.attempts === 0) && !sessionHasRunning(r.sessionId),
+        )
         .sort((a, b) => a.createdAt - b.createdAt);
       const run = pending[0];
       if (!run) return null;
@@ -76,20 +78,48 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async claimById(runId, workerId, ttlMs) {
       const run = runs.get(runId);
-      if (!run || run.status !== "pending" || sessionHasRunning(run.sessionId)) return null;
+      if (
+        !run ||
+        run.status !== "pending" ||
+        (run.maxAttempts <= 1 && run.attempts > 0) ||
+        sessionHasRunning(run.sessionId)
+      )
+        return null;
       return lease(run, workerId, ttlMs);
     },
 
     async heartbeat(runId, leaseToken, ttlMs) {
       const run = runs.get(runId);
-      if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
+      if (
+        !run ||
+        run.status !== "running" ||
+        run.leaseToken !== leaseToken ||
+        run.leaseExpiresAt === null ||
+        (run.maxAttempts <= 1 && run.leaseExpiresAt <= Date.now())
+      )
+        return false;
       run.leaseExpiresAt = Date.now() + ttlMs;
       return true;
     },
 
+    async ownsLease(runId, leaseToken, attempt) {
+      const run = runs.get(runId);
+      return (
+        run?.status === "running" &&
+        run.leaseToken === leaseToken &&
+        run.attempts === attempt &&
+        run.leaseExpiresAt !== null &&
+        run.leaseExpiresAt > Date.now()
+      );
+    },
+
     async releaseLease(runId, leaseToken) {
       const run = runs.get(runId);
-      if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
+      if (!run || run.status !== "running" || run.leaseToken !== leaseToken || run.leaseExpiresAt === null)
+        return false;
+      if (run.maxAttempts <= 1) {
+        return retire(run, "run lease released before completion", false, { ifUnexpiredAt: Date.now() }).applied;
+      }
       run.status = "pending";
       run.leaseToken = null;
       run.leaseExpiresAt = null;
@@ -99,7 +129,14 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async complete(runId, leaseToken, result) {
       const run = runs.get(runId);
-      if (!run || run.leaseToken !== leaseToken) return false;
+      if (
+        !run ||
+        run.status !== "running" ||
+        run.leaseToken !== leaseToken ||
+        run.leaseExpiresAt === null ||
+        (run.maxAttempts <= 1 && run.leaseExpiresAt <= Date.now())
+      )
+        return false;
       run.status = "done";
       run.result = result;
       run.leaseToken = null;
@@ -112,7 +149,12 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     async fail(runId, leaseToken, error, opts) {
       const run = runs.get(runId);
       if (!run || run.leaseToken !== leaseToken) return { requeued: false };
-      return { requeued: retire(run, error, opts?.retry !== false, { countsAsError: true }).requeued };
+      return {
+        requeued: retire(run, error, opts?.retry !== false, {
+          countsAsError: true,
+          ...(run.maxAttempts <= 1 ? { ifUnexpiredAt: Date.now() } : {}),
+        }).requeued,
+      };
     },
 
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState) {
@@ -176,7 +218,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         const tooOld = opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
         const reason = tooOld ? "run exceeded max age (reaped)" : "lease expired (reaped)";
         const workerId = run.workerId;
-        const r = retire(run, reason, !tooOld, { ifExpiredAt: now });
+        const r = retire(run, reason, !tooOld && run.maxAttempts > 1, { ifExpiredAt: now });
         if (!r.applied) continue;
         if (r.requeued) requeued++;
         else parked++;
@@ -226,10 +268,16 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run: Run,
     error: string,
     retry: boolean,
-    opts?: { ifExpiredAt?: number; countsAsError?: boolean },
+    opts?: { ifExpiredAt?: number; ifUnexpiredAt?: number; countsAsError?: boolean },
   ): { requeued: boolean; applied: boolean } {
     if (run.status !== "running") return { requeued: false, applied: false };
     if (opts?.ifExpiredAt !== undefined && (run.leaseExpiresAt === null || run.leaseExpiresAt > opts.ifExpiredAt)) {
+      return { requeued: false, applied: false };
+    }
+    if (
+      opts?.ifUnexpiredAt !== undefined &&
+      (run.leaseExpiresAt === null || run.leaseExpiresAt <= opts.ifUnexpiredAt)
+    ) {
       return { requeued: false, applied: false };
     }
     run.leaseToken = null;

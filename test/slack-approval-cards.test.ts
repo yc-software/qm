@@ -5,7 +5,24 @@ import {
   approvalCardDestination,
   recoveredApprovalContext,
   createApprovalRegistry,
+  messageApprovalMessage,
+  messageApprovalEditModal,
 } from "../src/slack/lib.ts";
+import type { MessageApprovalCardView } from "../src/core/message-approval.ts";
+
+function messageApproval(state: MessageApprovalCardView["state"], version = 3): MessageApprovalCardView {
+  return {
+    id: "approval-1",
+    title: "Send launch note",
+    recipient: "alex@example.com",
+    subject: "Launch",
+    body: "Ready to launch",
+    version,
+    state,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
 
 test("approvalMessage builds Block Kit buttons for all approval choices", () => {
   const msg = approvalMessage([{ requestId: "req-1", command: "git push --force origin main", reason: "force push" }]);
@@ -147,6 +164,9 @@ test("recoveredApprovalContext rebuilds a button context from core's durable rec
   const stored = {
     command: "git push --force origin main",
     reason: "force push",
+    grantModes: { session: false, always: false },
+    blocksInput: true,
+    kind: "input" as const,
     request: {
       surface: "slack",
       async: true,
@@ -157,6 +177,7 @@ test("recoveredApprovalContext rebuilds a button context from core's durable rec
       conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [{ externalId: "U1" }] },
       deliveryTarget: "C1:t1",
       text: "!run git push --force origin main",
+      messageApprovalContinuation: { approvalId: "draft-1", approvalVersion: 2, bindingId: "binding-1" },
       unprompted: true,
     },
   };
@@ -169,12 +190,19 @@ test("recoveredApprovalContext rebuilds a button context from core's durable rec
   assert.equal(ctx!.threadOnly, true, "channel kind replies thread-only, like the original turn");
   assert.equal(ctx!.command, "git push --force origin main");
   assert.equal(ctx!.reason, "force push");
+  assert.deepEqual(ctx!.grantModes, { session: false, always: false });
+  assert.equal(ctx!.blocksInput, true);
+  assert.equal(ctx!.kind, "input");
   for (const gone of ["surface", "async", "idempotencyKey", "approval", "intakePreambleMs", "clientSentAt"]) {
     assert.ok(!(gone in ctx!.turn), `${gone} should be stripped from the replayed turn`);
   }
   assert.equal((ctx!.turn as { text?: string }).text, "!run git push --force origin main");
   assert.equal((ctx!.turn as { deliveryTarget?: string }).deliveryTarget, "C1:t1");
   assert.deepEqual((ctx!.turn as { actor?: unknown }).actor, stored.request.actor);
+  assert.deepEqual(
+    (ctx!.turn as { messageApprovalContinuation?: unknown }).messageApprovalContinuation,
+    stored.request.messageApprovalContinuation,
+  );
 });
 
 test("recoveredApprovalContext: a DM record is not thread-only and inherits the click's missing thread", () => {
@@ -257,4 +285,104 @@ test("a quarantine-release card offers only Allow once and Deny, with the screen
   const rendered = JSON.stringify(msg.blocks);
   assert.match(rendered, /instruction in untrusted data/);
   assert.match(rendered, /Blocked content preview/);
+});
+
+test("message approval pending card has versioned approve, edit, and reject actions", () => {
+  const rendered = messageApprovalMessage(messageApproval("pending", 7));
+  const actions = rendered.blocks.find((block) => block.type === "actions") as any;
+  assert.deepEqual(
+    actions.elements.map((element: any) => element.text.text),
+    ["Approve draft", "Edit and approve draft", "Reject"],
+  );
+  assert.deepEqual(
+    actions.elements.map((element: any) => [element.action_id, element.value]),
+    [
+      ["message_approval_approve", "approval-1:7"],
+      ["message_approval_edit", "approval-1:7"],
+      ["message_approval_reject", "approval-1:7"],
+    ],
+  );
+});
+
+test("message approval non-pending cards remove decision buttons and never offer retry", () => {
+  for (const state of ["approved", "enqueued", "rejected", "failed", "expired"] as const) {
+    const rendered = messageApprovalMessage(messageApproval(state));
+    assert.equal(
+      rendered.blocks.some((block) => block.type === "actions"),
+      false,
+      state,
+    );
+  }
+});
+
+test("message approval status language reports continuation state without claiming sending", () => {
+  for (const continuationStatus of ["queued", "running", "waiting", "completed", "failed"] as const) {
+    const rendered = messageApprovalMessage({
+      ...messageApproval(continuationStatus === "failed" ? "failed" : "enqueued"),
+      continuationStatus,
+    });
+    assert.match(rendered.text, new RegExp(`Draft approved; continuation ${continuationStatus}`));
+    assert.doesNotMatch(rendered.text, /sent|send authorization|operation approved/i);
+  }
+});
+
+test("message approval unconfirmed card requires manual reconciliation without claims, errors, or actions", () => {
+  const rendered = messageApprovalMessage({
+    ...messageApproval("failed"),
+    title: "Launch note",
+    continuationStatus: "failed",
+    continuationUnconfirmed: true,
+  });
+  const card = JSON.stringify(rendered);
+  assert.match(card, /QM could not confirm the operation and manual reconciliation is required/);
+  assert.doesNotMatch(card, /completed|sent|raw remote failure|retry/i);
+  assert.equal(
+    rendered.blocks.some((block) => block.type === "actions"),
+    false,
+  );
+});
+
+test("message approval card renders complete literal values in plain-text blocks without mention interpretation", () => {
+  const record = {
+    ...messageApproval("pending"),
+    title: "t".repeat(200),
+    recipient: "@channel <@U1> " + "r".repeat(284),
+    subject: "s".repeat(300),
+    body: "@here <@U2> " + "b".repeat(2987),
+  };
+  const rendered = messageApprovalMessage(record);
+  for (const block of rendered.blocks as any[]) {
+    if (block.type === "section") assert.ok(block.text.text.length <= 3000);
+    if (block.text) assert.equal(block.text.type, "plain_text");
+  }
+  const text = rendered.blocks
+    .filter((block: any) => block.type === "section")
+    .map((block: any) => block.text.text)
+    .join("\n");
+  assert.match(text, /@channel <@U1>/);
+  assert.match(text, /@here <@U2>/);
+  assert.ok(text.includes(record.recipient));
+  const bodyStart = rendered.blocks.findIndex((block: any) => block.text?.text === "Message");
+  const body = rendered.blocks
+    .slice(bodyStart + 1)
+    .filter((block: any) => block.type === "section")
+    .map((block: any) => block.text.text)
+    .join("");
+  assert.equal(body, record.body);
+  assert.doesNotMatch(JSON.stringify(rendered.blocks), /mrkdwn/);
+});
+
+test("message approval modal preserves exact editable values", () => {
+  const record = {
+    ...messageApproval("pending"),
+    recipient: "r".repeat(300),
+    subject: "s".repeat(300),
+    body: "b".repeat(3000),
+  };
+  const modal = messageApprovalEditModal(record) as any;
+  assert.equal(modal.submit.text, "Approve draft");
+  assert.equal(modal.private_metadata, "approval-1:3");
+  assert.equal(modal.blocks[0].element.initial_value, record.recipient);
+  assert.equal(modal.blocks[1].element.initial_value, record.subject);
+  assert.equal(modal.blocks[2].element.initial_value, record.body);
 });

@@ -8,6 +8,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { messageApprovalStagingKey } from "../src/core/message-approval.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>, outboxListing: string[]): Sandbox {
   return {
@@ -133,6 +134,74 @@ test("surface standing orders preserve and reset the stored ambient reply policy
   assert.equal((await channelPolicy.get("C1"))?.ambientEnabled, undefined);
   const defaultOrder = await tools.getStandingOrder();
   assert.equal(defaultOrder.ok && defaultOrder.ambientEnabled, undefined);
+});
+
+test("staged draft idempotency uses trusted run and canonical values instead of provider tool-call ids", async () => {
+  const spine = { surfaceOutboundCount: 0, crossConversationPosts: 0 };
+  const stagingKeys: string[] = [];
+  const marked: string[] = [];
+  const tools = createSurfaceToolDeps({
+    deps: {
+      deliveries: {},
+      messageApprovals: {
+        async stage(input: { idempotencyKey: string }) {
+          stagingKeys.push(input.idempotencyKey);
+          return {
+            id: "draft-1",
+            title: "Draft",
+            recipient: "alex@example.com",
+            body: "Exact body",
+            version: 1,
+            state: "pending",
+            createdAt: 1,
+            updatedAt: 1,
+          };
+        },
+      },
+      turnStream: { markSurfacePosted: (runId: string) => void marked.push(runId) },
+    },
+    input: { surfaceTools: true, surface: "slack", runId: "run-1" },
+    actor: { id: "alice@example.com", type: "internal" },
+    conversation: {
+      kind: "channel",
+      threadRef: "slack:C1:100.200",
+      channelRef: "C1",
+      audience: [
+        { id: "alice@example.com", type: "internal" },
+        { id: "external@example.com", type: "guest" },
+      ],
+    },
+    session: { id: "session-1" },
+    scopeId: "channel:C1",
+    defaultDestination: { type: "slack", target: "C1:100.200" },
+    strictReadOnly: false,
+    blobTransfer: {},
+    fileRegistration: {},
+    provision: async () => handle,
+    postProvenance: () => ({}),
+    spine,
+  } as unknown as SurfaceToolsContext)!;
+  const draft = { title: "Draft", recipient: "alex@example.com", body: "Exact body" };
+  const result = await tools.stageMessageApproval!(draft, "tool-call-1");
+  await tools.stageMessageApproval!(draft, "different-provider-call-id");
+  const otherDraft = { ...draft, body: "Different body" };
+  await tools.stageMessageApproval!(otherDraft, "tool-call-1");
+  assert.equal(result.ok, true);
+  assert.deepEqual(result, {
+    ok: true,
+    id: "draft-1",
+    version: 1,
+    message: "Draft approval staged for review.",
+  });
+  assert.doesNotMatch(JSON.stringify(result), /alex@example\.com|Exact body/);
+  assert.equal(spine.surfaceOutboundCount, 3);
+  assert.deepEqual(stagingKeys, [
+    messageApprovalStagingKey("run-1", draft),
+    messageApprovalStagingKey("run-1", draft),
+    messageApprovalStagingKey("run-1", otherDraft),
+  ]);
+  assert.notEqual(stagingKeys[0], stagingKeys[2]);
+  assert.deepEqual(marked, ["run-1", "run-1", "run-1"]);
 });
 
 test("collectNamedOutbound: a missing/empty path is reported (so post can fail the WHOLE call)", async () => {

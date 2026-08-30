@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { createPiTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/pi-tools.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
-import type { EntryType, SessionEntry } from "../src/types.ts";
+import type { EntryType, ScopeId, SessionEntry } from "../src/types.ts";
+import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import { McpToolReportedError } from "../src/mcp/mcp-client.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -333,6 +335,301 @@ const call = (tool: ReturnType<typeof createPiTools>[number] | undefined, params
   assert.ok(tool);
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
 };
+
+test("a stale one-attempt worker cannot invoke native, surface, or MCP tools after lease expiry", async () => {
+  const { runs } = createMemoryRunStore();
+  const run = (await runs.enqueue({ sessionId: "approval", request: {} as never, maxAttempts: 1 })).run;
+  const claim = await runs.claimById(run.id, "stale-worker", 1);
+  assert.ok(claim?.leaseToken);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  let effects = 0;
+  const context = {
+    ...fakeToolContext(),
+    async execute() {
+      effects += 1;
+      return { stdout: "", stderr: "", code: 0, timedOut: false };
+    },
+    async post() {
+      effects += 1;
+      return { ok: true, deliveryId: "d1" };
+    },
+    async callMcpTool() {
+      effects += 1;
+      return "ok";
+    },
+  } satisfies ToolContext;
+  const ref: ToolContextRef = {
+    current: context,
+    beforeToolInvocation: async () => {
+      if (!(await runs.ownsLease(claim.id, claim.leaseToken!, claim.attempts))) throw new Error("lease expired");
+    },
+  };
+  const tools = createPiTools(ref, {
+    surfaceTools: true,
+    surfaceName: "slack",
+    mcpTools: () => [
+      {
+        name: "remote_effect",
+        remoteName: "remote_effect",
+        serverId: "remote",
+        description: "remote effect",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: false,
+      },
+    ],
+  });
+
+  for (const [name, params] of [
+    ["execute", { command: "touch stale" }],
+    ["slack", { action: "post", text: "stale" }],
+    ["remote_effect", {}],
+  ] as const) {
+    await assert.rejects(
+      call(
+        tools.find((tool) => tool.name === name),
+        params,
+      ),
+      /lease expired/,
+    );
+  }
+  assert.equal(effects, 0);
+});
+
+test("the shared tool wrapper classifies read-only and writable native, surface, and MCP calls", async () => {
+  const invocations: Array<{ name: string; kind: string; readOnly: boolean }> = [];
+  const outcomes: string[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    async beforeToolInvocation(invocation) {
+      invocations.push({ name: invocation.name, kind: invocation.kind, readOnly: invocation.readOnly });
+      return {
+        async assertMessageApprovalLease() {},
+        async finish(outcome) {
+          outcomes.push(outcome);
+        },
+      };
+    },
+  };
+  const tools = createPiTools(ref, {
+    surfaceTools: true,
+    surfaceName: "slack",
+    mcpTools: () => [
+      {
+        name: "remote_read",
+        remoteName: "read",
+        serverId: "remote",
+        description: "read",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: true,
+      },
+      {
+        name: "remote_write",
+        remoteName: "write",
+        serverId: "remote",
+        description: "write",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: false,
+      },
+    ],
+  });
+  await call(
+    tools.find((tool) => tool.name === "read"),
+    { path: "x" },
+  );
+  await call(
+    tools.find((tool) => tool.name === "memory"),
+    { action: "read" },
+  );
+  await call(
+    tools.find((tool) => tool.name === "memory"),
+    { action: "remember", facts: ["x"] },
+  );
+  await call(
+    tools.find((tool) => tool.name === "slack"),
+    { action: "read_thread" },
+  );
+  await call(
+    tools.find((tool) => tool.name === "slack"),
+    { action: "post", text: "x" },
+  );
+  await call(
+    tools.find((tool) => tool.name === "remote_read"),
+    {},
+  );
+  await call(
+    tools.find((tool) => tool.name === "remote_write"),
+    {},
+  );
+  assert.deepEqual(invocations, [
+    { name: "read", kind: "native", readOnly: true },
+    { name: "memory", kind: "native", readOnly: true },
+    { name: "memory", kind: "native", readOnly: false },
+    { name: "slack", kind: "surface", readOnly: true },
+    { name: "slack", kind: "surface", readOnly: false },
+    { name: "remote_read", kind: "mcp", readOnly: true },
+    { name: "remote_write", kind: "mcp", readOnly: false },
+  ]);
+  assert.deepEqual(outcomes, Array(7).fill("success"));
+});
+
+test("message approval continuation tool records persist no arguments, results, or delegated titles", async () => {
+  const emitted: Emitted[] = [];
+  let finishedResult: unknown;
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async callMcpTool() {
+        return JSON.stringify({ task_id: "private-task-1", title: "private delegated title" });
+      },
+    },
+    privatePersistence: true,
+    scopeLabel: "personal:alice@example.com" as ScopeId,
+    orgScopeId: "org:test" as ScopeId,
+    emit: async (entry) => void emitted.push(entry as Emitted),
+    async beforeToolInvocation() {
+      return {
+        async assertMessageApprovalLease() {},
+        async finish(_outcome, result) {
+          finishedResult = result;
+        },
+      };
+    },
+  };
+  const tool = createPiTools(ref, {
+    mcpTools: () => [
+      {
+        name: "tasks_edit_task_action",
+        remoteName: "edit_task_action",
+        serverId: "tasks",
+        description: "Edit task action",
+        inputSchema: {
+          type: "object",
+          properties: { task_id: { type: "string" }, action: { type: "string" } },
+          additionalProperties: false,
+        },
+        readOnly: false,
+      },
+    ],
+  }).find((candidate) => candidate.name === "tasks_edit_task_action");
+
+  await call(tool, { task_id: "private-task-1", action: "private approved body" });
+
+  assert.ok(finishedResult);
+  assert.equal(emitted.length, 2);
+  assert.equal(
+    emitted.every((entry) => entry.payload.omitted === true),
+    true,
+  );
+  assert.doesNotMatch(JSON.stringify(emitted), /private-task-1|private delegated title|private approved body/);
+});
+
+test("normal tool authorization runs before the continuation fence", async () => {
+  let fenceCalls = 0;
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    pendingApprovals: [],
+    toolApprovalGate: () => false,
+    async beforeToolInvocation() {
+      fenceCalls += 1;
+    },
+  };
+  const tool = createPiTools(ref, {
+    mcpTools: () => [
+      {
+        name: "remote_write",
+        remoteName: "write",
+        serverId: "remote",
+        description: "write",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: false,
+      },
+    ],
+  }).find((candidate) => candidate.name === "remote_write");
+  await call(tool, {});
+  assert.equal(fenceCalls, 0);
+  assert.equal(ref.pausedOnApproval, true);
+  assert.equal(ref.pendingApprovals?.[0]?.approvalKey, "tool:remote_write");
+});
+
+test("all MCP failures after transport begins reach an ambiguous fence outcome", async () => {
+  const outcomes: string[] = [];
+  const context = {
+    ...fakeToolContext(),
+    async callMcpTool(name: string) {
+      if (name === "reported_failure") throw new McpToolReportedError("rejected");
+      throw new Error("connection dropped");
+    },
+  } satisfies ToolContext;
+  const ref: ToolContextRef = {
+    current: context,
+    async beforeToolInvocation() {
+      return {
+        async assertMessageApprovalLease() {},
+        async finish(outcome) {
+          outcomes.push(outcome);
+        },
+      };
+    },
+  };
+  const tools = createPiTools(ref, {
+    mcpTools: () =>
+      ["reported_failure", "ambiguous_failure"].map((name) => ({
+        name,
+        remoteName: name,
+        serverId: "remote",
+        description: name,
+        inputSchema: { type: "object", properties: {} },
+        readOnly: false,
+      })),
+  });
+  await call(
+    tools.find((tool) => tool.name === "reported_failure"),
+    {},
+  );
+  await call(
+    tools.find((tool) => tool.name === "ambiguous_failure"),
+    {},
+  );
+  assert.deepEqual(outcomes, ["ambiguous", "ambiguous"]);
+});
+
+test("the shared MCP path asserts the approval lease immediately before transport", async () => {
+  const order: string[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async callMcpTool() {
+        order.push("transport");
+        return "ok";
+      },
+    },
+    async beforeToolInvocation() {
+      order.push("authorize");
+      return {
+        async assertMessageApprovalLease() {
+          order.push("assert");
+        },
+        async finish() {
+          order.push("finish");
+        },
+      };
+    },
+  };
+  const tool = createPiTools(ref, {
+    mcpTools: () => [
+      {
+        name: "remote_write",
+        remoteName: "write",
+        serverId: "remote",
+        description: "write",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: false,
+      },
+    ],
+  }).find(({ name }) => name === "remote_write");
+  await call(tool, {});
+  assert.deepEqual(order, ["authorize", "assert", "transport", "finish"]);
+});
 
 test("each pi tool emits a tool_call then a tool_result", async () => {
   const emitted: Emitted[] = [];
@@ -1021,6 +1318,162 @@ test("readOnly assembles ONLY observational tools — no execute/background/writ
   for (const t of ["execute", "background", "read", "write", "publish", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
+});
+
+test("message approval tool has a message-only schema, ends the turn, and is writable Slack-only", async () => {
+  let staged: unknown;
+  const context: ToolContext = {
+    ...fakeToolContext(),
+    async stageMessageApproval(input) {
+      staged = input;
+      return { ok: true, id: "approval-1", version: 1, message: "staged" };
+    },
+  };
+  const params = {
+    title: "Send launch note",
+    recipient: "alex@example.com",
+    body: "Ready",
+  };
+  const options = { surfaceTools: true, messageApprovals: true };
+  const ref: ToolContextRef = { current: context };
+  const slack = createPiTools(ref, options).find((tool) => tool.name === "stage_message_approval");
+  assert.match(slack?.description ?? "", /does not authorize, guarantee, or report any operation or sending/);
+  assert.doesNotMatch(slack?.description ?? "", /approve and send|sent successfully/i);
+  const result = (await call(slack, params)) as { terminate?: boolean };
+  assert.deepEqual(staged, params);
+  assert.equal(ref.silentRequested, true);
+  assert.equal(ref.messageApprovalAttempted, true);
+  assert.equal(ref.messageApprovalStaged, true);
+  assert.equal(result.terminate, true);
+  const schema = slack?.parameters as { properties?: Record<string, unknown>; additionalProperties?: boolean };
+  assert.deepEqual(Object.keys(schema.properties ?? {}).sort(), ["body", "recipient", "subject", "title"]);
+  assert.equal(schema.additionalProperties, false);
+  assert.equal("approve" in (schema.properties ?? {}), false);
+  assert.equal("reject" in (schema.properties ?? {}), false);
+  assert.equal(
+    createPiTools({ current: context }, { ...options, readOnly: true }).some(
+      (tool) => tool.name === "stage_message_approval",
+    ),
+    false,
+  );
+  assert.equal(
+    createPiTools({ current: context }, { ...options, surfaceName: "web" }).some(
+      (tool) => tool.name === "stage_message_approval",
+    ),
+    false,
+  );
+});
+
+test("failed message approval returns only a generic tool result", async () => {
+  const context: ToolContext = {
+    ...fakeToolContext(),
+    async stageMessageApproval() {
+      return { ok: false, message: "private@example.com Private body" };
+    },
+  };
+  const ref: ToolContextRef = { current: context };
+  const tool = createPiTools(ref, { surfaceTools: true, surfaceName: "slack", messageApprovals: true }).find(
+    (candidate) => candidate.name === "stage_message_approval",
+  );
+  const result = (await call(tool, {
+    title: "Private launch draft",
+    recipient: "private@example.com",
+    subject: "Private subject",
+    body: "Private body",
+  })) as { content: Array<{ text?: string }>; terminate?: boolean };
+  assert.equal(result.terminate, true);
+  assert.equal(result.content[0]?.text, "Draft approval could not be staged.");
+  assert.equal(ref.messageApprovalAttempted, true);
+  assert.equal(ref.messageApprovalStaged, undefined);
+  assert.equal(ref.silentRequested, true);
+  assert.doesNotMatch(JSON.stringify(result), /private@example\.com|Private body/);
+});
+
+test("message approval service throws become terminal generic failures", async () => {
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async stageMessageApproval() {
+        throw new Error("private@example.com Private body");
+      },
+    },
+  };
+  const tools = createPiTools(ref, { surfaceTools: true, surfaceName: "slack", messageApprovals: true });
+  const result = (await call(
+    tools.find((tool) => tool.name === "stage_message_approval"),
+    { title: "Private", recipient: "private@example.com", body: "Private body" },
+  )) as { content: Array<{ text?: string }>; terminate?: boolean };
+  assert.equal(result.terminate, true);
+  assert.equal(result.content[0]?.text, "Draft approval could not be staged.");
+  assert.equal(ref.messageApprovalAttempted, true);
+  assert.equal(ref.messageApprovalStaged, undefined);
+  await assert.rejects(
+    call(
+      tools.find((tool) => tool.name === "history"),
+      { query: "later" },
+    ),
+    /tool invocation rejected after turn termination/,
+  );
+});
+
+test("successful message approval fences later native, surface, and MCP invocations", async () => {
+  let effects = 0;
+  const context = {
+    ...fakeToolContext(),
+    async stageMessageApproval() {
+      return { ok: true, id: "approval-1", message: "staged" };
+    },
+    async execute() {
+      effects += 1;
+      return { stdout: "", stderr: "", code: 0, timedOut: false };
+    },
+    async post() {
+      effects += 1;
+      return { ok: true, deliveryId: "delivery-1" };
+    },
+    async callMcpTool() {
+      effects += 1;
+      return "ok";
+    },
+  } satisfies ToolContext;
+  const tools = createPiTools(
+    { current: context },
+    {
+      surfaceTools: true,
+      surfaceName: "slack",
+      messageApprovals: true,
+      mcpTools: () => [
+        {
+          name: "remote_effect",
+          remoteName: "remote_effect",
+          serverId: "remote",
+          description: "remote effect",
+          inputSchema: { type: "object", properties: {} },
+          readOnly: false,
+        },
+      ],
+    },
+  );
+  const staged = (await call(
+    tools.find((tool) => tool.name === "stage_message_approval"),
+    { title: "Draft", recipient: "alex@example.com", body: "Ready" },
+  )) as { terminate?: boolean };
+  assert.equal(staged.terminate, true);
+
+  for (const [name, params] of [
+    ["execute", { command: "echo late" }],
+    ["slack", { action: "post", text: "late" }],
+    ["remote_effect", {}],
+  ] as const) {
+    await assert.rejects(
+      call(
+        tools.find((tool) => tool.name === name),
+        params,
+      ),
+      /tool invocation rejected after turn termination/,
+    );
+  }
+  assert.equal(effects, 0);
 });
 
 test("finish_silently on a poll fire terminates the turn at the tool contract; off one it no-ops", async () => {

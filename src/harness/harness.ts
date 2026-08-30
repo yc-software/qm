@@ -12,6 +12,17 @@ export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
+import {
+  messageApprovalContinuationPrompt,
+  type MessageApprovalContinuation,
+  type MessageApprovalToolInvocation,
+  type MessageApprovalToolPermit,
+} from "../core/message-approval.ts";
+import {
+  MESSAGE_APPROVAL_STAGE_FAILURE,
+  NonRetryableTurnError,
+  STAGED_MESSAGE_APPROVAL_FAILURE,
+} from "../core/turn-error.ts";
 
 interface HarnessImage {
   mimeType: string;
@@ -39,6 +50,12 @@ export interface HarnessLlmRequestRecord {
   usage?: LlmCallUsage | null;
 }
 
+interface HarnessContinuationInstruction {
+  kind: "message_approval";
+  value: MessageApprovalContinuation;
+  hidden: true;
+}
+
 interface HarnessSecurityScreenInput {
   payload: string;
   signal: AbortSignal;
@@ -51,6 +68,7 @@ export interface HarnessTurnInput {
   runId?: string;
   cancel?: AbortSignal;
   input: string;
+  continuationInstruction?: HarnessContinuationInstruction;
   triggerTs?: string;
   entryTs?: string;
   environment?: string;
@@ -65,6 +83,7 @@ export interface HarnessTurnInput {
   readOnly?: boolean;
   surfaceTools?: boolean;
   surfaceName?: string;
+  messageApprovals?: boolean;
   pollFire?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
@@ -92,11 +111,48 @@ export interface HarnessTurnInput {
   onDelta?(chunk: string): void;
   onTextBlockStart?(): void;
   screenToolResult?(tool: string, result: string, unscreenable: boolean): Promise<boolean | "unscreened">;
+  beforeToolInvocation?(invocation: MessageApprovalToolInvocation): Promise<MessageApprovalToolPermit | void>;
+}
+
+export function harnessTurnInputText(turn: Pick<HarnessTurnInput, "input" | "continuationInstruction">): string {
+  return turn.continuationInstruction?.kind === "message_approval"
+    ? messageApprovalContinuationPrompt(turn.continuationInstruction.value)
+    : turn.input;
+}
+
+export function harnessDelegationAllowed(
+  turn: Pick<HarnessTurnInput, "readOnly" | "continuationInstruction">,
+): boolean {
+  return !turn.readOnly && turn.continuationInstruction?.kind !== "message_approval";
+}
+
+export function harnessPersistedInputText(turn: Pick<HarnessTurnInput, "input">): string {
+  return turn.input;
+}
+
+export function harnessPersistedProviderRecord(
+  turn: Pick<HarnessTurnInput, "continuationInstruction">,
+  payload: unknown,
+  state?: { generated?: boolean; messageApprovalAttempted?: boolean },
+): { payload: unknown; hidden: boolean } {
+  return turn.continuationInstruction?.hidden || (state?.generated === true && state.messageApprovalAttempted === true)
+    ? { payload: { omitted: true }, hidden: true }
+    : { payload, hidden: false };
+}
+
+export function harnessCapturedPromptEnvelope(
+  turn: Pick<HarnessTurnInput, "continuationInstruction">,
+  envelope: unknown,
+): unknown {
+  const captured = turn.continuationInstruction ? envelopeWithoutMessages(envelope) : envelope;
+  return harnessPersistedProviderRecord(turn, captured).payload;
 }
 
 export interface HarnessTurnResult {
   reply: string;
   silent?: boolean;
+  messageApprovalAttempted?: true;
+  messageApprovalStaged?: true;
   stopped?: true;
   pendingApprovals?: Array<{
     command: string;
@@ -179,13 +235,173 @@ export interface Harness {
 
 export type HarnessImplementation = HarnessTurnController & HarnessModelUtilities;
 
+async function runApprovalPrivateTurn(
+  implementation: HarnessImplementation,
+  turn: HarnessTurnInput,
+): Promise<HarnessTurnResult> {
+  if (!turn.messageApprovals || !turn.tools.stageMessageApproval) return implementation.runTurn(turn);
+  const entries: Array<{ entry: NewEntry; provisional: SessionEntry }> = [];
+  const tape: NewTapeRecord[] = [];
+  const requests: HarnessLlmRequestRecord[] = [];
+  const stream: Array<{ type: "delta"; chunk: string } | { type: "block" }> = [];
+  const seqs = new Map<number, number>();
+  let triggerPersisted = false;
+  let provisionalSeq = -1;
+  let attempted = false;
+  let staged = false;
+  let tapeWriteFailed = false;
+  const stageMessageApproval = turn.tools.stageMessageApproval.bind(turn.tools);
+  const privateTurn: HarnessTurnInput = {
+    ...turn,
+    tools: new Proxy(turn.tools, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property !== "stageMessageApproval") {
+          if (!attempted || typeof value !== "function") return value;
+          return async () => {
+            throw new NonRetryableTurnError(MESSAGE_APPROVAL_STAGE_FAILURE);
+          };
+        }
+        return async (...args: Parameters<NonNullable<ToolContext["stageMessageApproval"]>>) => {
+          if (attempted) throw new NonRetryableTurnError(MESSAGE_APPROVAL_STAGE_FAILURE);
+          attempted = true;
+          const result = await stageMessageApproval(...args);
+          if (result.ok) staged = true;
+          return result;
+        };
+      },
+    }),
+    emit: async (entry) => {
+      if (!triggerPersisted && entry.type === "user") {
+        triggerPersisted = true;
+        return turn.emit(entry);
+      }
+      const provisional: SessionEntry = {
+        sessionId: turn.session.id,
+        seq: provisionalSeq--,
+        parentSeq: null,
+        type: entry.type,
+        payload: entry.payload,
+        scopeLabel: entry.scopeLabel,
+        createdAt: Date.now(),
+      };
+      entries.push({ entry, provisional });
+      return provisional;
+    },
+    ...(turn.tape
+      ? {
+          tape: async (record: NewTapeRecord) => {
+            tape.push(record);
+          },
+        }
+      : {}),
+    ...(turn.recordLlmRequest
+      ? {
+          recordLlmRequest: async (record: HarnessLlmRequestRecord) => {
+            requests.push(record);
+          },
+        }
+      : {}),
+    ...(turn.onDelta
+      ? {
+          onDelta: (chunk: string) => {
+            stream.push({ type: "delta", chunk });
+          },
+        }
+      : {}),
+    ...(turn.onTextBlockStart
+      ? {
+          onTextBlockStart: () => {
+            stream.push({ type: "block" });
+          },
+        }
+      : {}),
+  };
+  const flushPrivateTurn = async (): Promise<void> => {
+    for (const pending of entries) {
+      const actual = await turn.emit({
+        ...pending.entry,
+        ...(attempted ? { payload: { omitted: true, hidden: true } } : {}),
+      });
+      seqs.set(pending.provisional.seq, actual.seq);
+    }
+    for (const record of tape) {
+      const generated = record.kind !== "message" || record.meta?.bareText === undefined;
+      const remapped = {
+        ...record,
+        ...(record.entrySeq !== undefined ? { entrySeq: seqs.get(record.entrySeq) ?? record.entrySeq } : {}),
+        ...(record.coversEntrySeq !== undefined
+          ? { coversEntrySeq: seqs.get(record.coversEntrySeq) ?? record.coversEntrySeq }
+          : {}),
+        ...(attempted && generated ? { payload: { omitted: true }, meta: { ...record.meta, hidden: true } } : {}),
+      };
+      try {
+        await turn.tape!(remapped);
+      } catch {
+        tapeWriteFailed = true;
+      }
+    }
+    for (const request of requests) {
+      await turn.recordLlmRequest!({
+        ...request,
+        ...(request.turnSeq !== null ? { turnSeq: seqs.get(request.turnSeq) ?? request.turnSeq } : {}),
+        ...(attempted ? { promptEnvelope: { omitted: true } } : {}),
+      });
+    }
+    if (!attempted) {
+      for (const event of stream) {
+        if (event.type === "block") turn.onTextBlockStart?.();
+        else turn.onDelta?.(event.chunk);
+      }
+    }
+  };
+  let result: HarnessTurnResult;
+  try {
+    result = await implementation.runTurn.call(implementation, privateTurn);
+  } catch (error) {
+    try {
+      await flushPrivateTurn();
+    } catch (flushError) {
+      if (attempted)
+        throw new NonRetryableTurnError(staged ? STAGED_MESSAGE_APPROVAL_FAILURE : MESSAGE_APPROVAL_STAGE_FAILURE);
+      throw flushError;
+    }
+    if (attempted)
+      throw new NonRetryableTurnError(staged ? STAGED_MESSAGE_APPROVAL_FAILURE : MESSAGE_APPROVAL_STAGE_FAILURE);
+    throw error;
+  }
+  try {
+    await flushPrivateTurn();
+  } catch (error) {
+    if (attempted)
+      throw new NonRetryableTurnError(staged ? STAGED_MESSAGE_APPROVAL_FAILURE : MESSAGE_APPROVAL_STAGE_FAILURE);
+    throw error;
+  }
+  if (attempted && !staged) {
+    return {
+      reply: MESSAGE_APPROVAL_STAGE_FAILURE,
+      messageApprovalAttempted: true,
+      ...(result.stopped ? { stopped: true } : {}),
+      ...(result.modelCalls !== undefined ? { modelCalls: result.modelCalls } : {}),
+      ...(result.cacheUsage ? { cacheUsage: result.cacheUsage } : {}),
+      ...(result.compileMs !== undefined ? { compileMs: result.compileMs } : {}),
+      ...(tapeWriteFailed || result.tapeWriteFailed ? { tapeWriteFailed: true } : {}),
+    };
+  }
+  return {
+    ...result,
+    ...(tapeWriteFailed ? { tapeWriteFailed: true } : {}),
+    ...(staged ? { reply: "", silent: true, messageApprovalAttempted: true, messageApprovalStaged: true } : {}),
+  };
+}
+
 export function defineHarness(
   profile: HarnessAdapterProfile,
   implementation: HarnessImplementation,
   tools: HarnessToolPresentation = { name: (coreName) => coreName },
 ): Harness {
   const turns: HarnessTurnController = {
-    runTurn: implementation.runTurn.bind(implementation),
+    runTurn: (turn) => runApprovalPrivateTurn(implementation, turn),
     ...(implementation.close ? { close: implementation.close.bind(implementation) } : {}),
     ...(implementation.resetSession ? { resetSession: implementation.resetSession.bind(implementation) } : {}),
   };

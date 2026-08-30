@@ -98,6 +98,11 @@ import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
 import {
+  createMessageApprovalService,
+  type MessageApprovalRecord,
+  type MessageApprovalService,
+} from "./core/message-approval.ts";
+import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
   type BlobTransferStore,
@@ -338,6 +343,8 @@ export interface BuiltApp {
   refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
+  messageApprovals: MessageApprovalService;
+  approvals: DurableMap<PendingApprovalRecord>;
   acl: AclStore;
   skills: SkillStore;
   skillBundles: SkillBundleStore;
@@ -976,6 +983,33 @@ export function buildApp(
   if (pgArtifactMap)
     void disableLegacyWebhookRows(pgArtifactMap.pool).catch(swallowAs("wiring: legacy webhook sweep", undefined));
   const deliveries = config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore();
+  const messageApprovals = createMessageApprovalService({
+    records: artifactMap<MessageApprovalRecord>("message_approvals"),
+    approvals,
+    auditLog,
+    deliveries,
+    runs,
+    sessions,
+    resolveCanonicalPrincipal: async (principalId) => (await directory.get(principalId))?.principalId ?? null,
+    isActiveInternalPrincipal: async (principalId) => {
+      await identity.refresh();
+      return identity.isInternal(identity.classify(principalId));
+    },
+    isAuthorizedForScope: canWriteScope,
+  });
+  let messageApprovalsRecovered = false;
+  const messageApprovalSweeper = createSweeper(
+    async () => {
+      if (!messageApprovalsRecovered) {
+        await messageApprovals.recover();
+        messageApprovalsRecovered = true;
+        return;
+      }
+      await messageApprovals.sweep();
+    },
+    30_000,
+    { label: "message-approvals", immediate: true },
+  );
   const layerEnv = config.layerEnv ?? {};
   const layerBrokerCache = new Map<string, AwsRoleBroker>();
   const layerBrokerFor = (tool: BrokeredLayerTool): AwsRoleBroker | undefined => {
@@ -1024,6 +1058,7 @@ export function buildApp(
     acl,
     admin,
     mcp: mcpToolService,
+    messageApprovals,
     ...(config.maxContextEntries !== undefined ? { maxContextEntries: config.maxContextEntries } : {}),
     ...(config.maxContextTokens !== undefined ? { maxContextTokens: config.maxContextTokens } : {}),
     execTimeoutMs: config.execTimeoutDefaultMs,
@@ -1165,6 +1200,7 @@ export function buildApp(
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
     orchestrator,
+    messageApprovals,
     runs,
     leaseTtlMs,
     maxAttempts,
@@ -1425,6 +1461,7 @@ export function buildApp(
       runs,
       sessions,
       orchestrator,
+      messageApprovals,
       leaseTtlMs,
       heartbeatIntervalMs: config.heartbeatIntervalMs,
       pollMs: 250,
@@ -1482,6 +1519,7 @@ export function buildApp(
       reachDeniedNotifier?.start(config.insightsIntervalMs);
       wakeSweep.start();
       orphanedSignalSweeper.start();
+      messageApprovalSweeper.start();
       drain.start();
     },
     async releaseInFlightRuns() {
@@ -1498,6 +1536,7 @@ export function buildApp(
       blobSweeper.stop();
       wakeSweep.stop();
       orphanedSignalSweeper.stop();
+      await messageApprovalSweeper.stop();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
         swallowAs("wiring: worker drain failed", undefined),
       );
@@ -1537,6 +1576,8 @@ export function buildApp(
     refreshCustomProviders,
     mcpServers,
     mcpToolService,
+    messageApprovals,
+    approvals,
     acl,
     skills,
     skillBundles,

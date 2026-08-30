@@ -883,6 +883,9 @@ test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, ledger
     const second = await runs.claim("w2", 5_000);
     assert.equal(second?.id, rB.id, "sA already running → skip its 2nd, take sB");
     assert.equal(await runs.claim("w3", 5_000), null, "nothing else eligible");
+    assert.equal(await runs.ownsLease(first!.id, "wrong", first!.attempts), false);
+    assert.equal(await runs.ownsLease(first!.id, first!.leaseToken!, first!.attempts + 1), false);
+    assert.equal(await runs.ownsLease(first!.id, first!.leaseToken!, first!.attempts), true);
 
     assert.equal(
       await runs.complete(first!.id, "wrong", { status: "ok" } as TurnResult),
@@ -892,6 +895,7 @@ test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, ledger
     assert.equal((await runs.get(first!.id))?.status, "running");
     assert.equal(await runs.complete(first!.id, first!.leaseToken!, { status: "ok", reply: "done" }), true);
     assert.equal((await runs.get(first!.id))?.status, "done");
+    assert.equal(await runs.ownsLease(first!.id, first!.leaseToken!, first!.attempts), false);
 
     const a = await runs.enqueue({ sessionId: "s1", request: turn("hi"), dedupKey: "k1" });
     const b = await runs.enqueue({ sessionId: "s1", request: turn("again"), dedupKey: "k1" });
@@ -1078,6 +1082,28 @@ test("pg run store: reaper parks over-age runs, requeues young ones, and audits 
     await close();
   }
 });
+
+test(
+  "pg run store: an expired one-attempt run fails closed and cannot produce a second claimant",
+  { skip },
+  async () => {
+    const { runs, close } = createPostgresRunStore(URL!);
+    try {
+      const run = (await runs.enqueue({ sessionId: "singleAttempt", request: turn("approval"), maxAttempts: 1 })).run;
+      const stale = await runs.claimById(run.id, "w1", 1);
+      assert.ok(stale?.leaseToken);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      assert.equal(await runs.complete(run.id, stale!.leaseToken!, { status: "ok" }), false);
+      assert.deepEqual(await runs.fail(run.id, stale!.leaseToken!, "stale", { retry: false }), { requeued: false });
+      assert.deepEqual(await runs.reapExpired(), { requeued: 0, parked: 1 });
+      assert.equal((await runs.get(run.id))?.status, "failed");
+      assert.equal(await runs.claimById(run.id, "w2", 60_000), null);
+    } finally {
+      await close();
+    }
+  },
+);
 
 test("pg run store: one-running-per-session holds under concurrent claims (unique index)", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);

@@ -2,17 +2,27 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
+import type { NewEntry, NewTapeRecord } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { forModelContext } from "../src/harness/context-compaction.ts";
+import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
 
 let currentScript: Script = async function* () {};
+let currentOptions: Record<string, unknown> = {};
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
-    query: ({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+    query: ({
+      prompt,
+      options,
+    }: {
+      prompt: AsyncIterable<{ message: { content: unknown } }>;
+      options: Record<string, unknown>;
+    }) => {
+      currentOptions = options;
       const generator = currentScript(prompt);
       return {
         async initializationResult() {
@@ -70,10 +80,12 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
   entries: SessionEntry[];
   modelCalls: Array<{ model: string; inputTokens: number; entryCount: number }>;
   llmRequests: HarnessLlmRequestRecord[];
+  tape: NewTapeRecord[];
 } {
   const entries: SessionEntry[] = [];
   const modelCalls: Array<{ model: string; inputTokens: number; entryCount: number }> = [];
   const llmRequests: HarnessLlmRequestRecord[] = [];
+  const tape: NewTapeRecord[] = [];
   const scope = "org:test" as unknown as ScopeId;
   const turn: HarnessTurnInput = {
     session: { id: "session-1" } as HarnessTurnInput["session"],
@@ -100,10 +112,106 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
     recordLlmRequest: (rec) => {
       llmRequests.push(rec);
     },
+    tape: async (record) => void tape.push(record),
     ...overrides,
   };
-  return { turn, entries, modelCalls, llmRequests };
+  return { turn, entries, modelCalls, llmRequests, tape };
 }
+
+test("Claude keeps a hidden continuation active for one turn without retaining its draft", async () => {
+  const providerPrompts: string[] = [];
+  currentScript = async function* (prompts) {
+    const prompt = await prompts[Symbol.asyncIterator]().next();
+    providerPrompts.push(JSON.stringify(prompt.value));
+    yield assistantMessage("msg_private", "The approved operation is ready.", {
+      input_tokens: 5,
+      output_tokens: 5,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
+    yield resultMessage("The approved operation is ready.");
+  };
+  const continuation = {
+    approvalId: "approval-1",
+    approvalVersion: 2,
+    bindingId: "binding-1",
+    recipient: "private-recipient@example.com",
+    subject: "Private subject",
+    body: "Private body",
+  };
+  const harness = createClaudeHarness({});
+  const first = harnessTurn({
+    input: "",
+    continuationInstruction: { kind: "message_approval", value: continuation, hidden: true },
+  });
+  await harness.turns.runTurn(first.turn);
+  assert.match(providerPrompts[0]!, /private-recipient@example\.com|Private body/);
+  assert.doesNotMatch(
+    JSON.stringify({ entries: first.entries, tape: first.tape, captures: first.llmRequests }),
+    /private-recipient@example\.com|Private subject|Private body/,
+  );
+  assert.ok(first.tape.length > 0);
+  assert.equal(
+    first.tape.every((record) => record.meta?.hidden === true),
+    true,
+  );
+  assert.equal(
+    first.tape.every((record) => JSON.stringify(record.payload) === '{"omitted":true}'),
+    true,
+  );
+  assert.equal(
+    first.llmRequests.every((record) => JSON.stringify(record.promptEnvelope) === '{"omitted":true}'),
+    true,
+  );
+
+  const later = harnessTurn({ input: "What happened later?", history: forModelContext(first.entries) });
+  await harness.turns.runTurn(later.turn);
+  assert.doesNotMatch(providerPrompts[1]!, /private-recipient@example\.com|Private subject|Private body/);
+  assert.equal(
+    later.tape.some((record) => record.meta?.hidden !== true),
+    true,
+  );
+});
+
+test("Claude disables and ignores subagent tasks during a message approval continuation", async () => {
+  const tasks = createMemoryTaskStore();
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield {
+      type: "system",
+      subtype: "task_started",
+      task_id: "private-task",
+      tool_use_id: "private-call",
+      description: "durable private title",
+      prompt: "durable private prompt",
+      subagent_type: "research",
+    };
+    yield resultMessage("Continuation handled.");
+  };
+  const continuation = {
+    approvalId: "approval-1",
+    approvalVersion: 2,
+    bindingId: "binding-1",
+    recipient: "private-recipient@example.com",
+    subject: "Private subject",
+    body: "Private body",
+  };
+  const input = harnessTurn({
+    readOnly: false,
+    continuationInstruction: { kind: "message_approval", value: continuation, hidden: true },
+  });
+  const harness = createClaudeHarness({ tasks });
+  await harness.turns.runTurn(input.turn);
+
+  assert.deepEqual(currentOptions.tools, []);
+  assert.equal((currentOptions.allowedTools as string[]).includes("Agent"), false);
+  assert.equal(currentOptions.agents, undefined);
+  assert.deepEqual(await tasks.list(), []);
+  assert.equal(
+    input.entries.some((entry) => JSON.stringify(entry.payload).includes("durable private")),
+    false,
+  );
+});
 
 test("a steered turn persists every reply, not only the last result's", async () => {
   const signals = createMemoryRunSignalStore();

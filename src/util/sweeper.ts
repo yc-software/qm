@@ -2,7 +2,7 @@ import { swallow, swallowAs } from "./errors.ts";
 
 export interface Sweeper {
   start(intervalMs?: number): void;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 export function createSweeper(
@@ -12,9 +12,16 @@ export function createSweeper(
 ): Sweeper {
   const label = opts.label ?? "sweeper";
   let timer: ReturnType<typeof setInterval> | null = null;
+  let inFlight: Promise<void> | null = null;
   const sweep = (): void => {
+    if (inFlight) return;
     try {
-      void Promise.resolve(fn()).catch(swallowAs(`${label}: sweep failed`, undefined));
+      inFlight = Promise.resolve(fn())
+        .then(() => undefined)
+        .catch(swallowAs(`${label}: sweep failed`, undefined))
+        .finally(() => {
+          inFlight = null;
+        });
     } catch (e) {
       swallow(`${label}: sweep failed`, e);
     }
@@ -26,9 +33,10 @@ export function createSweeper(
       timer.unref?.();
       if (opts.immediate) sweep();
     },
-    stop() {
+    async stop() {
       if (timer) clearInterval(timer);
       timer = null;
+      await inFlight;
     },
   };
 }

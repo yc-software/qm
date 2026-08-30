@@ -1,6 +1,7 @@
 import type {
   CommandApprovalGrant,
   Conversation,
+  MessageApprovalContinuationBinding,
   Principal,
   PendingApprovalRecord,
   SurfaceContextQuery,
@@ -60,6 +61,7 @@ import type { DeployService } from "../../deploy/deploy-service.ts";
 import type { AclStore } from "../../acl/acl-store.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
+import type { MessageApprovalService } from "../message-approval.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -83,6 +85,7 @@ export interface OrchestratorInput extends Omit<
   conversation: Conversation;
   origin: TurnOrigin;
   runId?: string;
+  runLeaseToken?: string;
   attempt?: number;
   finalAttempt?: boolean;
   background?: boolean;
@@ -90,6 +93,7 @@ export interface OrchestratorInput extends Omit<
   queueMs?: number;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
+  messageApprovalContinuation?: MessageApprovalContinuationBinding;
 }
 
 export interface OrchestratorDeps {
@@ -129,6 +133,7 @@ export interface OrchestratorDeps {
   admin?: AdminService;
   memory: MemoryService;
   mcp?: McpToolService;
+  messageApprovals?: MessageApprovalService;
   memoryPolicy?: MemoryPolicy;
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;

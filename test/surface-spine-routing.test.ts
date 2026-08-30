@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
+import { STAGED_MESSAGE_APPROVAL_FAILURE } from "../src/core/turn-error.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -428,16 +429,232 @@ test("nudge tape reread failure falls back to refreshed history, never the stale
   }
 });
 
-test("addressed spine turn: the first text block posts immediately as the ack when real work follows", async () => {
+test("approval-eligible addressed turns hold the first text block and post the final reply once", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!preamble On it — checking the deploy logs.", "C-ack", "720.1"));
-    const ack = await pollFor(built.deliveries, (d) => d.text === "On it — checking the deploy logs.");
-    assert.ok(ack, "the first block was harvested and enqueued while the tool ran");
-    assert.equal(ack.destination.target, "slack:C-ack:720.1", "the ack lands in the addressed conversation");
-    const posted = await pollFor(built.deliveries, (d) => d.text === "All clear — nothing broke.");
-    assert.ok(posted, "the trailing reply text is delivered (the ack alone did not satisfy the reply contract)");
+    const posted = await pollFor(
+      built.deliveries,
+      (d) => d.text === "On it — checking the deploy logs.\n\nAll clear — nothing broke.",
+    );
+    assert.ok(posted);
+    assert.equal(posted.destination.target, "slack:C-ack:720.1");
+    const all = (await built.deliveries.pending("slack")) as any[];
+    assert.equal(all.length, 1);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("message approval buffers shared draft output and persists only hidden generated markers", async () => {
+  const built = freshApp();
+  await built.directory.replace([{ principalId: "U1", displayName: "Alice", type: "internal" }]);
+  await built.directory.replaceChannels(
+    [{ channelId: "C-private", name: "private", isPrivate: true }],
+    [{ channelId: "C-private", principalId: "U1" }],
+  );
+  built.runtime.start();
+  try {
+    const result = await built.app.turn({ ...mention("!stage-approval", "C-private", "740.1"), async: false });
+    assert.equal(result.status, "silent");
+    const shared = (await built.deliveries.pending("slack")) as any[];
+    assert.equal(shared.length, 0);
+    const cards = (await built.deliveries.pending("principal")) as any[];
+    assert.equal(cards.length, 1);
+    assert.deepEqual(cards[0].destination.messageApproval, { id: cards[0].destination.messageApproval.id, version: 1 });
+    const session = await built.sessions.getByThread("ch:C-private:740.1");
+    const entries = await built.sessions.getEntries(session!.id);
+    const tape = await built.sessions.getTape(session!.id);
+    const requests = await built.sessions.listLlmRequests(session!.id);
+    assert.doesNotMatch(
+      JSON.stringify({ entries, tape, requests }),
+      /private@example\.com|Private subject|Private body|Reasoning about/,
+    );
+    assert.equal(
+      entries
+        .filter((entry) => entry.type !== "user")
+        .every((entry) => {
+          const payload = entry.payload as { omitted?: unknown; hidden?: unknown };
+          return payload.omitted === true && payload.hidden === true;
+        }),
+      true,
+    );
+    assert.equal(
+      tape
+        .filter((record) => record.kind === "message" && record.meta?.bareText === undefined)
+        .every((record) => record.meta?.hidden === true && JSON.stringify(record.payload) === '{"omitted":true}'),
+      true,
+    );
+    assert.ok(tape.some((record) => record.kind === "message" && record.meta?.hidden === true));
+    assert.ok(requests.some((request) => JSON.stringify(request.promptEnvelope) === '{"omitted":true}'));
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("provider failure after staging stays opaque in every turn persistence channel", async () => {
+  const built = freshApp();
+  await built.directory.replace([{ principalId: "U1", displayName: "Alice", type: "internal" }]);
+  await built.directory.replaceChannels(
+    [{ channelId: "C-private-error", name: "private-error", isPrivate: true }],
+    [{ channelId: "C-private-error", principalId: "U1" }],
+  );
+  built.runtime.start();
+  try {
+    await assert.rejects(
+      built.app.turn({ ...mention("!stage-approval-then-throw", "C-private-error", "740.15"), async: false }),
+      (error: Error) => {
+        assert.equal(error.message, STAGED_MESSAGE_APPROVAL_FAILURE);
+        return true;
+      },
+    );
+    const run = (await built.runs.list()).find(
+      (candidate) => candidate.request.conversation.threadRef === "ch:C-private-error:740.15",
+    );
+    assert.equal(run?.status, "failed");
+    assert.equal(run?.result?.reason, STAGED_MESSAGE_APPROVAL_FAILURE);
+    const session = await built.sessions.getByThread("ch:C-private-error:740.15");
+    assert.ok(session);
+    const failureDelivery = await pollFor(built.deliveries, (delivery) =>
+      delivery.text.includes(STAGED_MESSAGE_APPROVAL_FAILURE),
+    );
+    assert.ok(failureDelivery);
+    const entries = await built.sessions.getEntries(session.id);
+    const tape = await built.sessions.getTape(session.id);
+    const requests = await built.sessions.listLlmRequests(session.id);
+    const errors = await built.errors.list({ sessionId: session.id });
+    const deliveries = [...(await built.deliveries.pending("slack")), ...(await built.deliveries.pending("principal"))];
+    assert.ok(errors.some((error) => error.message === STAGED_MESSAGE_APPROVAL_FAILURE));
+    assert.ok(
+      entries.some(
+        (entry) =>
+          entry.type === "system" &&
+          (entry.payload as { kind?: unknown; message?: unknown }).kind === "turn_failure" &&
+          (entry.payload as { message?: unknown }).message === STAGED_MESSAGE_APPROVAL_FAILURE,
+      ),
+    );
+    assert.doesNotMatch(
+      JSON.stringify({ run, entries, errors, deliveries, tape, requests }),
+      /private@example\.com|Private body/,
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("non-staging provider failures preserve their original exception", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const message = "API integrators: you can reduce refusals for your users by configuring a fallback model";
+    await assert.rejects(built.app.turn({ ...mention("!refuse", "C-raw-error", "740.16"), async: false }), {
+      message,
+    });
+    const run = (await built.runs.list()).find(
+      (candidate) => candidate.request.conversation.threadRef === "ch:C-raw-error:740.16",
+    );
+    assert.equal(run?.result?.reason, message);
+    const session = await built.sessions.getByThread("ch:C-raw-error:740.16");
+    assert.ok(session);
+    assert.ok((await built.errors.list({ sessionId: session.id })).some((error) => error.message === message));
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("failed message approval posts one generic reply without exposing the draft", async () => {
+  const built = freshApp();
+  await built.directory.replace([{ principalId: "U1", displayName: "Alice", type: "internal" }]);
+  built.messageApprovals.stage = async () => {
+    throw new Error("private@example.com Private body");
+  };
+  built.runtime.start();
+  try {
+    await built.app.turn({ ...mention("!stage-approval", "C-stage-fail", "740.2"), async: false });
+    const shared = (await built.deliveries.pending("slack")) as any[];
+    assert.deepEqual(
+      shared.map((delivery) => delivery.text),
+      ["Draft approval could not be staged."],
+    );
+    assert.doesNotMatch(JSON.stringify(shared), /private@example\.com|Private body/);
+    assert.equal((await built.deliveries.pending("principal")).length, 0);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("failed message approval delivery persists only the generic recovery", async () => {
+  const built = freshApp();
+  await built.directory.replace([{ principalId: "U1", displayName: "Alice", type: "internal" }]);
+  built.messageApprovals.stage = async () => {
+    throw new Error("private@example.com Private body");
+  };
+  const enqueue = built.deliveries.enqueue.bind(built.deliveries);
+  let failed = false;
+  built.deliveries.enqueue = async (delivery) => {
+    if (!failed && delivery.text === "Draft approval could not be staged.") {
+      failed = true;
+      throw new Error("private@example.com Private body");
+    }
+    return enqueue(delivery);
+  };
+  built.runtime.start();
+  try {
+    await assert.rejects(
+      built.app.turn({ ...mention("!stage-approval", "C-stage-delivery-fail", "740.25"), async: false }),
+      { message: "Draft approval could not be staged." },
+    );
+    const delivery = await pollFor(
+      built.deliveries,
+      (candidate) => candidate.text === "Draft approval could not be staged.",
+    );
+    assert.ok(delivery);
+    const run = (await built.runs.list()).find(
+      (candidate) => candidate.request.conversation.threadRef === "ch:C-stage-delivery-fail:740.25",
+    );
+    const session = await built.sessions.getByThread("ch:C-stage-delivery-fail:740.25");
+    assert.ok(session);
+    const entries = await built.sessions.getEntries(session.id);
+    const tape = await built.sessions.getTape(session.id);
+    const captures = await built.sessions.listLlmRequests(session.id);
+    const errors = await built.errors.list({ sessionId: session.id });
+    const deliveries = [...(await built.deliveries.pending("slack")), ...(await built.deliveries.pending("principal"))];
+    assert.equal(run?.result?.reason, "Draft approval could not be staged.");
+    assert.doesNotMatch(
+      JSON.stringify({ run, entries, tape, captures, errors, deliveries }),
+      /private@example\.com|Private body|Reasoning about/,
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("DM message approval shows only its private card", async () => {
+  const built = freshApp();
+  await built.directory.replace([{ principalId: "U1", displayName: "Alice", type: "internal" }]);
+  built.runtime.start();
+  try {
+    const request: TurnRequest = {
+      surface: "slack",
+      actor,
+      conversation: { kind: "dm", threadRef: "dm:U1:740.3", audience: [actor] },
+      deliveryTarget: "slack:D-private:740.3",
+      text: "!stage-approval",
+      liveActor: true,
+      addressed: true,
+      surfaceTools: true,
+      async: false,
+    };
+    const result = await built.app.turn(request);
+    assert.equal(result.status, "silent");
+    const deliveries = (await built.deliveries.pending("slack")) as any[];
+    assert.equal(deliveries.length, 1);
+    assert.deepEqual(deliveries[0].destination.messageApproval, {
+      id: deliveries[0].destination.messageApproval.id,
+      version: 1,
+    });
+    assert.equal(deliveries[0].destination.target, "slack:D-private:740.3");
   } finally {
     await built.runtime.stop();
   }

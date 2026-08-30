@@ -12,7 +12,7 @@ import { isCustomModelId } from "../model/custom-providers.ts";
 import type { CustomProviderSpec } from "../model/custom-providers.ts";
 import { DEFAULT_AGENT_MODEL_ID, resolveModel } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
-import type { LlmCallUsage } from "../sessions/session-store.ts";
+import type { LlmCallUsage, NewTapeRecord } from "../sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import type { TaskStore } from "../tasks/task-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
@@ -20,12 +20,23 @@ import { sleep } from "../util/async.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import {
   defineHarness,
+  harnessPersistedInputText,
+  harnessPersistedProviderRecord,
+  harnessDelegationAllowed,
+  harnessCapturedPromptEnvelope,
+  harnessTurnInputText,
   envelopeWithoutMessages,
   type Harness,
   type HarnessTurnInput,
   type HarnessTurnResult,
 } from "./harness.ts";
-import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
+import {
+  coreToolOptions,
+  createPiTools,
+  harnessToolOptions,
+  type PiToolsOptions,
+  type ToolContextRef,
+} from "./pi-tools.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { reconstructMessagesFromHistory } from "./replay.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
@@ -76,7 +87,10 @@ type BridgedTool = {
   name: string;
   description: string;
   parameters: unknown;
-  execute(callId: string, args: unknown): Promise<{ content?: Array<{ type?: string; text?: string }> }>;
+  execute(
+    callId: string,
+    args: unknown,
+  ): Promise<{ content?: Array<{ type?: string; text?: string }>; terminate?: boolean }>;
 };
 
 type LlmCapture = { sessionId: string; step: number; model: string; request: unknown; at: number };
@@ -107,25 +121,20 @@ type Runtime = {
 };
 
 function toolOptions(opts: OpenCodeHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
-  return {
-    scratchExec: opts.scratchExec,
-    ownerAuthExec: opts.ownerAuthExec,
-    reachExec: opts.reachExec,
-    ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
-    controlTools: opts.controlTools,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    ...(turn
-      ? {
-          readOnly: turn.readOnly,
-          surfaceTools: turn.surfaceTools,
-          surfaceName: turn.surfaceName,
-          credentialExecServices: turn.credentialExecServices,
-        }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
+  return harnessToolOptions(
+    {
+      scratchExec: opts.scratchExec,
+      ownerAuthExec: opts.ownerAuthExec,
+      reachExec: opts.reachExec,
+      ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
+      controlTools: opts.controlTools,
+      execTimeoutMs: opts.execTimeoutMs,
+      execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
+      backgroundJobTtlMs: opts.backgroundJobTtlMs,
+      backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
+    },
+    turn,
+  );
 }
 
 function asTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {
@@ -453,7 +462,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
   const active = new Map<string, ActiveTurn>();
   const definitionRef: ToolContextRef = { current: null };
   const definitionTools = [
-    ...asTools(definitionRef, toolOptions(opts)),
+    ...asTools(definitionRef, { ...toolOptions(opts), messageApprovals: true }),
     ...asTools(definitionRef, { ...toolOptions(opts), surfaceTools: false }),
   ];
   const definitions = [
@@ -492,7 +501,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     if (payload?.type === "session.created") {
       const info = payload.properties?.info as { id?: string; parentID?: string } | undefined;
       const parent = info?.parentID ? active.get(info.parentID) : undefined;
-      if (info?.id && parent) active.set(info.id, childState(parent));
+      if (info?.id && parent && harnessDelegationAllowed(parent.turn)) active.set(info.id, childState(parent));
       return;
     }
     if (payload?.type !== "message.part.updated") return;
@@ -501,7 +510,13 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const state = active.get(sessionID);
     if (!state || !part) return;
     const operation = state.eventTail.then(async () => {
-      if (part.type === "text" && typeof payload.properties?.delta === "string" && !state.child) {
+      if (
+        part.type === "text" &&
+        typeof payload.properties?.delta === "string" &&
+        !state.child &&
+        !state.ref.silentRequested &&
+        !state.ref.pausedOnApproval
+      ) {
         const partId = String(part.id ?? "");
         const snapshot = typeof part.text === "string" ? part.text : "";
         const delta =
@@ -513,6 +528,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         if (delta) state.turn.onDelta?.(delta);
       }
       if (part.type !== "tool" || part.tool !== "task") return;
+      if (!harnessDelegationAllowed(state.turn)) return;
       const partId = String(part.id ?? "");
       const toolState = part.state as Record<string, unknown> | undefined;
       const status = typeof toolState?.status === "string" ? toolState.status : "";
@@ -589,7 +605,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
               const session = await runtime.client.session.get({ path: { id: requestedSessionId } }).catch(() => null);
               const parentId = session?.data?.parentID;
               const parent = parentId ? active.get(parentId) : undefined;
-              if (parent) {
+              if (parent && harnessDelegationAllowed(parent.turn)) {
                 state = childState(parent);
                 active.set(requestedSessionId, state);
               }
@@ -635,7 +651,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
                 .join("\n");
               return json(res, 200, {
                 output,
-                terminate: Boolean(state.ref.pausedOnApproval || state.ref.silentRequested),
+                terminate: Boolean(result.terminate || state.ref.pausedOnApproval || state.ref.silentRequested),
               });
             } catch (error) {
               return json(res, 200, { output: `[tool failed] ${errMessage(error)}` });
@@ -857,6 +873,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       orgScopeId: turn.orgScopeId,
       screenExternalContent: turn.screenExternalContent,
       toolApprovalGate: turn.toolApprovalGate,
+      beforeToolInvocation: turn.beforeToolInvocation,
+      privatePersistence: turn.continuationInstruction?.kind === "message_approval",
     };
     const controller = new AbortController();
     ref.abortSignal = controller.signal;
@@ -864,7 +882,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const userEntry = await turn.emit({
       type: "user",
       payload: {
-        text: turn.input,
+        text: harnessPersistedInputText(turn),
         ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
         ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
       },
@@ -971,7 +989,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             turnSeq: state.userSeq,
             step: capture.step,
             model: capture.model,
-            promptEnvelope: envelopeWithoutMessages(capture.request),
+            promptEnvelope: harnessCapturedPromptEnvelope(turn, envelopeWithoutMessages(capture.request)),
             truncated: false,
             transport: info?.providerID && info.modelID ? { modelId: `${info.providerID}/${info.modelID}` } : null,
             ttftMs: null,
@@ -986,7 +1004,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         }
       }
     };
-    const prompt = [turn.input, turn.environment].filter((item) => item?.trim()).join("\n\n");
+    const prompt = [harnessTurnInputText(turn), turn.environment].filter((item) => item?.trim()).join("\n\n");
     const promptParts: Array<Record<string, unknown>> = [
       { type: "text", text: prompt },
       ...(turn.images ?? []).map((image, index) => ({
@@ -998,7 +1016,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     ];
     const enabled = Object.fromEntries(definitions.map((tool) => [tool.name, false]));
     for (const tool of tools) enabled[bridgeToolName(tool.name)] = true;
-    enabled.task = !turn.readOnly;
+    enabled.task = harnessDelegationAllowed(turn);
     let timer: NodeJS.Timeout | undefined;
     let signalsStopped = false;
     try {
@@ -1034,28 +1052,36 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         }
       }
       let tapeWriteFailed = false;
+      const terminal = ref.silentRequested || ref.pausedOnApproval;
       if (turn.tape) {
         try {
           let tapedTriggerUser = false;
           for (const message of messages.data ?? []) {
             const role = (message as { info?: { role?: string } }).info?.role;
             if (role !== "user" && role !== "assistant") continue;
+            if (terminal && role === "assistant") continue;
             const isTrigger = role === "user" && !tapedTriggerUser;
             if (isTrigger) tapedTriggerUser = true;
+            const persisted = harnessPersistedProviderRecord(turn, stripDataUrls(message), {
+              generated: role === "assistant",
+              messageApprovalAttempted: ref.messageApprovalAttempted,
+            });
+            let meta: NewTapeRecord["meta"] | undefined;
+            if (persisted.hidden) {
+              meta = { hidden: true };
+            } else if (isTrigger) {
+              meta = {
+                bareText: harnessPersistedInputText(turn),
+                ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
+              };
+            }
             await turn.tape({
               kind: "message",
               harness: "opencode",
-              payload: stripDataUrls(message),
+              payload: persisted.payload,
               scopeLabel: turn.scopeLabel,
-              ...(isTrigger
-                ? {
-                    entrySeq: userEntry.seq,
-                    meta: {
-                      bareText: turn.input,
-                      ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
-                    },
-                  }
-                : {}),
+              ...(isTrigger ? { entrySeq: userEntry.seq } : {}),
+              ...(meta ? { meta } : {}),
             });
           }
         } catch (error) {
@@ -1063,10 +1089,12 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           swallow("opencode: tape append", error);
         }
       }
-      for (const thinking of reasoningFromParts(parts))
-        await turn.emit({ type: "thinking", payload: thinking, scopeLabel: turn.scopeLabel });
-      const reply = textFromParts(parts);
-      if (reply)
+      if (!terminal) {
+        for (const thinking of reasoningFromParts(parts))
+          await turn.emit({ type: "thinking", payload: thinking, scopeLabel: turn.scopeLabel });
+      }
+      const reply = terminal ? "" : textFromParts(parts);
+      if (reply && !terminal)
         await turn.emit({
           type: "assistant",
           payload: { text: reply, stopped: state.stopped || undefined },

@@ -52,6 +52,10 @@ import {
 import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
 import {
   defineHarness,
+  harnessPersistedInputText,
+  harnessPersistedProviderRecord,
+  harnessCapturedPromptEnvelope,
+  harnessTurnInputText,
   envelopeWithoutMessages,
   type Harness,
   type HarnessCompactInput,
@@ -1279,12 +1283,14 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     readOnly?: boolean,
     surfaceTools?: boolean,
     surfaceName?: string,
+    messageApprovals?: boolean,
     turnScope?: ScopeId,
     credentialExecServices?: readonly { service: string; binary: string }[],
     tapeRows?: TapeRecord[],
     tapeMode?: "shadow" | "serve",
     tapeFold?: unknown[],
     tape?: HarnessTurnInput["tape"],
+    continuationInstruction?: HarnessTurnInput["continuationInstruction"],
   ): Promise<{ entry: TurnSession; compileMs: number; tapeWriteFailed: boolean }> {
     const compileStart = Date.now();
     const cacheBoundary =
@@ -1344,6 +1350,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ...(credentialExecServices?.length ? { credentialExecServices } : {}),
           ...(surfaceTools ? { surfaceTools: true } : {}),
           ...(surfaceName ? { surfaceName } : {}),
+          ...(messageApprovals ? { messageApprovals: true } : {}),
           ...(readOnly ? { readOnly: true } : {}),
           ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
           ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
@@ -1373,10 +1380,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         seedRawMessagesIntoSession(session, messages);
         if (tape) {
           try {
+            const persisted = harnessPersistedProviderRecord(
+              { continuationInstruction },
+              { event: "legacy_import", messages },
+            );
             await tape({
               kind: "context_event",
-              payload: { event: "legacy_import", messages },
+              payload: persisted.payload,
               scopeLabel: turnScope!,
+              ...(persisted.hidden ? { meta: { hidden: true } } : {}),
             });
           } catch (err) {
             bootstrapTapeWriteFailed = true;
@@ -1497,12 +1509,14 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.readOnly,
           turn.surfaceTools,
           turn.surfaceName,
+          turn.messageApprovals,
           turn.scopeLabel,
           turn.credentialExecServices,
           turn.tapeRows,
           turn.tapeMode,
           turn.tapeFold,
           turn.tape,
+          turn.continuationInstruction,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
@@ -1517,6 +1531,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.orgScopeId = turn.orgScopeId;
           entry.ref.screenExternalContent = turn.screenExternalContent;
           entry.ref.toolApprovalGate = turn.toolApprovalGate;
+          entry.ref.beforeToolInvocation = turn.beforeToolInvocation;
+          entry.ref.privatePersistence = turn.continuationInstruction?.kind === "message_approval";
+          entry.ref.messageApprovalAttempted = false;
+          entry.ref.messageApprovalStaged = false;
+          entry.ref.messageApprovalPermits = new Map();
 
           const desiredModelId = turn.model ?? resolveModelId(turn.scopeLabel);
           const wantFast = wantsFastMode(turn.fastMode, desiredModelId);
@@ -1552,7 +1571,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const userEntry = await turn.emit({
             type: "user",
             payload: {
-              text: turn.input,
+              text: harnessPersistedInputText(turn),
               ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
               ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
             },
@@ -1576,7 +1595,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
           const modelPrompt = [
             activeGoalAtStart ? goalSteeringNote(activeGoalAtStart) : "",
-            turn.input,
+            harnessTurnInputText(turn),
             turn.environment,
           ]
             .filter((s) => s && s.trim())
@@ -1602,6 +1621,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           let tapeWriteFailed = bootstrapTapeWriteFailed;
           let tapeFlushed = false;
           let tapedTriggerUser = false;
+          const pendingTapeMessages: Array<{
+            message: unknown;
+            isTrigger: boolean;
+            resultScope?: ScopeId;
+            generated: boolean;
+          }> = [];
           const tapeMessage = (message: unknown): void => {
             if (!turn.tape) return;
             const role = (message as { role?: string }).role;
@@ -1611,27 +1636,47 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
-            const rec: NewTapeRecord = {
-              kind: "message",
-              harness: "pi",
-              payload: stripImageBytes(message, isTrigger ? turn.images : undefined),
-              scopeLabel: resultScope ?? turn.scopeLabel,
-              ...(isTrigger
-                ? {
-                    entrySeq: userEntry.seq,
-                    meta: {
-                      bareText: turn.input,
-                      ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
-                    },
-                  }
-                : {}),
-            };
-            tapeTail = tapeTail
-              .then(() => turn.tape!(rec))
-              .catch((err) => {
-                tapeWriteFailed = true;
-                swallow("pi: tape message append", err);
-              });
+            pendingTapeMessages.push({
+              message,
+              isTrigger,
+              ...(resultScope ? { resultScope } : {}),
+              generated: role !== "user",
+            });
+          };
+          const flushTapeMessages = (): void => {
+            for (const pending of pendingTapeMessages.splice(0)) {
+              const persisted = harnessPersistedProviderRecord(
+                turn,
+                stripImageBytes(pending.message, pending.isTrigger ? turn.images : undefined),
+                {
+                  generated: pending.generated,
+                  messageApprovalAttempted: entry.ref.messageApprovalAttempted,
+                },
+              );
+              let meta: NewTapeRecord["meta"] | undefined;
+              if (persisted.hidden) {
+                meta = { hidden: true };
+              } else if (pending.isTrigger) {
+                meta = {
+                  bareText: harnessPersistedInputText(turn),
+                  ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
+                };
+              }
+              const rec: NewTapeRecord = {
+                kind: "message",
+                harness: "pi",
+                payload: persisted.payload,
+                scopeLabel: pending.resultScope ?? turn.scopeLabel,
+                ...(pending.isTrigger ? { entrySeq: userEntry.seq } : {}),
+                ...(meta ? { meta } : {}),
+              };
+              tapeTail = tapeTail
+                .then(() => turn.tape!(rec))
+                .catch((err) => {
+                  tapeWriteFailed = true;
+                  swallow("pi: tape message append", err);
+                });
+            }
           };
           const unsubscribe = entry.agentSession.subscribe((event) => {
             if (event.type === "message_end") tapeMessage((event as { message?: unknown }).message);
@@ -1720,7 +1765,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   turnSeq: userEntry.seq,
                   step,
                   model: captured[step]!.transport?.modelId ?? effectiveModel,
-                  promptEnvelope: captured[step]!.envelope,
+                  promptEnvelope: harnessCapturedPromptEnvelope(turn, captured[step]!.envelope),
                   truncated: captured[step]!.truncated,
                   transport: captured[step]!.transport ?? null,
                   ttftMs: stat?.ttftMs ?? null,
@@ -1783,7 +1828,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                           swallow("pi: steer persist", e);
                         }
                       }
-                      if (entry.agentSession.isStreaming) entry.ref.silentRequested = false;
+                      if (entry.agentSession.isStreaming && !entry.ref.messageApprovalAttempted)
+                        entry.ref.silentRequested = false;
                       await entry.agentSession.steer(text);
                     },
                     onAbort: async () => {
@@ -1856,6 +1902,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 blocked: () =>
                   userAborted ||
                   !!turn.cancel?.aborted ||
+                  !!entry.ref.messageApprovalAttempted ||
                   !!entry.ref.pausedOnApproval ||
                   !!entry.ref.pendingApprovals?.length,
                 beforePrompt: async (note) => {
@@ -1864,7 +1911,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   );
                   void note;
                   entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
-                  entry.ref.silentRequested = false;
+                  if (!entry.ref.messageApprovalAttempted) entry.ref.silentRequested = false;
                   await thinkTail;
                 },
                 prompt: (note) => {
@@ -1950,6 +1997,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             await stopSignalPoll?.();
             unsubscribe?.();
             await thinkTail;
+            flushTapeMessages();
             tapeFlushed = await Promise.race([
               tapeTail.then(() => true),
               sleep(10_000, { unref: true }).then(() => false),
@@ -1959,6 +2007,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             entry.ref.onGapWork = undefined;
             entry.ref.abortSignal = undefined;
             entry.ref.screenToolResult = undefined;
+            entry.ref.beforeToolInvocation = undefined;
+            entry.ref.privatePersistence = undefined;
+            entry.ref.messageApprovalPermits = undefined;
+            entry.ref.messageApprovalAttempted = undefined;
+            entry.ref.messageApprovalStaged = undefined;
           }
           if (wallClock !== "ok" && !userAborted) {
             const capLabel =

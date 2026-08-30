@@ -264,6 +264,9 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.displayText ? { displayText: input.displayText } : {}),
     ...(typeof input.turnWallClockMs === "number" ? { turnWallClockMs: input.turnWallClockMs } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...(input.messageApprovalContinuation
+      ? { messageApprovalContinuation: structuredClone(input.messageApprovalContinuation) }
+      : {}),
   };
 }
 

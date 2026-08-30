@@ -6,13 +6,21 @@ import { createSweeper } from "../src/util/sweeper.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for sweeper");
+    await sleep(5);
+  }
+}
+
 test("createSweeper ticks fn on the interval until stopped", async () => {
   let ticks = 0;
   const s = createSweeper(() => {
     ticks += 1;
   }, 10);
   s.start();
-  await sleep(35);
+  await waitFor(() => ticks >= 2);
   s.stop();
   const after = ticks;
   assert.ok(after >= 2, `expected multiple ticks, got ${after}`);
@@ -41,7 +49,7 @@ test("createSweeper survives a throwing or rejecting fn", async () => {
     return undefined;
   }, 10);
   s.start();
-  await sleep(45);
+  await waitFor(() => ticks >= 3);
   s.stop();
   assert.ok(ticks >= 3, `interval kept ticking past failures, got ${ticks}`);
 });
@@ -78,7 +86,7 @@ test("createSweeper start(intervalMs) overrides the construction-time interval",
     ticks += 1;
   }, 60_000);
   s.start(10);
-  await sleep(35);
+  await waitFor(() => ticks >= 2);
   s.stop();
   assert.ok(ticks >= 2, `expected ticks at the start-time interval, got ${ticks}`);
 });
@@ -117,4 +125,31 @@ test("createSweeper unrefs its timer so it never keeps the process alive", () =>
     globalThis.setInterval = realSetInterval;
   }
   assert.deepEqual(calls, ["unref"], "the interval was unref()'d on start");
+});
+
+test("createSweeper prevents overlapping passes and stop awaits in-flight work", async () => {
+  let active = 0;
+  let maxActive = 0;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const sweeper = createSweeper(async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await blocked;
+    active -= 1;
+  }, 5);
+  sweeper.start();
+  await sleep(20);
+  let stopped = false;
+  const stop = sweeper.stop().then(() => {
+    stopped = true;
+  });
+  await sleep(10);
+  assert.equal(stopped, false);
+  assert.equal(maxActive, 1);
+  release();
+  await stop;
+  assert.equal(active, 0);
 });

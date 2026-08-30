@@ -23,6 +23,7 @@ test("OpenCode plugin forwards calls and honors bridge termination", () => {
   assert.match(source, /if \(result\.terminate\)/);
   assert.match(source, /client\.session\.abort\(\{ path: \{ id: context\.sessionID \} \}\)\.catch/);
   assert.match(source, /return result\.output/);
+  assert.match(harnessSource, /result\.terminate \|\| state\.ref\.pausedOnApproval \|\| state\.ref\.silentRequested/);
 });
 
 test("OpenCode plugin replaces core context without dropping the live user message", () => {
@@ -53,9 +54,18 @@ test("OpenCode plugin recognizes imported non-empty history", () => {
 });
 
 test("OpenCode prompt disables bridged tools absent from this turn", () => {
+  assert.match(harnessSource, /toolOptions\(opts\), messageApprovals: true/);
   assert.match(harnessSource, /\.\.\.asTools\(definitionRef, \{ \.\.\.toolOptions\(opts\), surfaceTools: false \}\)/);
   assert.match(harnessSource, /Object\.fromEntries\(definitions\.map\(\(tool\) => \[tool\.name, false\]\)\)/);
   assert.match(harnessSource, /for \(const tool of tools\) enabled\[bridgeToolName\(tool\.name\)\] = true/);
+});
+
+test("OpenCode suppresses terminal assistant output from reply, entries, and tape", () => {
+  assert.match(harnessSource, /const terminal = ref\.silentRequested \|\| ref\.pausedOnApproval/);
+  assert.match(harnessSource, /if \(terminal && role === "assistant"\) continue/);
+  assert.match(harnessSource, /!state\.ref\.silentRequested &&\s*!state\.ref\.pausedOnApproval/);
+  assert.match(harnessSource, /if \(!terminal\) \{\s*for \(const thinking of reasoningFromParts\(parts\)\)/);
+  assert.match(harnessSource, /const reply = terminal \? "" : textFromParts\(parts\)/);
 });
 
 test("OpenCode observes cancellation before runtime startup, session creation, and prompt dispatch", () => {

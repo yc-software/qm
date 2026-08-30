@@ -154,6 +154,9 @@ for (const backend of backends) {
 
     assert.equal(await runs.heartbeat(r.id, "wrong-token", 5_000), false);
     assert.equal(await runs.heartbeat(r.id, token, 5_000), true);
+    assert.equal(await runs.ownsLease(r.id, "wrong-token", claimed!.attempts), false);
+    assert.equal(await runs.ownsLease(r.id, token, claimed!.attempts + 1), false);
+    assert.equal(await runs.ownsLease(r.id, token, claimed!.attempts), true);
 
     assert.equal(await runs.complete(r.id, "wrong-token", { status: "ok", reply: "x" }), false);
     assert.equal((await runs.get(r.id))?.status, "running");
@@ -162,6 +165,7 @@ for (const backend of backends) {
     assert.equal(done?.status, "done");
     assert.equal(done?.result?.reply, "done");
     assert.equal(done?.leaseToken, null);
+    assert.equal(await runs.ownsLease(r.id, token, claimed!.attempts), false);
   });
 
   test(`[${backend.name}] releaseLease (deploy drain) hands the run back as a retry without spending budget`, async () => {
@@ -259,6 +263,34 @@ for (const backend of backends) {
     const swept = await runs.reapExpired();
     assert.deepEqual(swept, { requeued: 0, parked: 0 });
     assert.equal((await runs.get(r.id))?.status, "running");
+  });
+
+  test(`[${backend.name}] an expired one-attempt run fails closed and cannot be claimed again`, async () => {
+    const { runs } = backend.make();
+    const r = (await runs.enqueue({ sessionId: "s1", request: turn("approval continuation"), maxAttempts: 1 })).run;
+    const claimed = await runs.claim("w1", 1);
+    assert.equal(claimed?.id, r.id);
+    await sleep(10);
+
+    assert.equal(await runs.complete(r.id, claimed?.leaseToken ?? "", { status: "ok" }), false);
+    assert.deepEqual(await runs.fail(r.id, claimed?.leaseToken ?? "", "stale", { retry: false }), {
+      requeued: false,
+    });
+    assert.deepEqual(await runs.reapExpired(), { requeued: 0, parked: 1 });
+    const failed = await runs.get(r.id);
+    assert.equal(failed?.status, "failed");
+    assert.match(failed?.result?.reason ?? "", /lease expired/);
+    assert.equal(await runs.claim("w2", 5_000), null);
+    assert.equal(await runs.claimById(r.id, "w2", 5_000), null);
+  });
+
+  test(`[${backend.name}] releasing a live one-attempt run fails closed instead of handing it back`, async () => {
+    const { runs } = backend.make();
+    const r = (await runs.enqueue({ sessionId: "s1", request: turn("approval continuation"), maxAttempts: 1 })).run;
+    const claimed = await runs.claim("w1", 5_000);
+    assert.equal(await runs.releaseLease(r.id, claimed?.leaseToken ?? ""), true);
+    assert.equal((await runs.get(r.id))?.status, "failed");
+    assert.equal(await runs.claimById(r.id, "w2", 5_000), null);
   });
 
   test(`[${backend.name}] reaper parks (not requeues) a run older than the durable age cap`, async () => {

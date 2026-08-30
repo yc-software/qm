@@ -19,6 +19,7 @@ import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
 import type { EngagedRegistry } from "../wake/engaged-registry.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
+import type { MessageApprovalService } from "../core/message-approval.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
@@ -509,6 +510,7 @@ export interface AppDeps {
   publicWebUrl?: string;
   sessions: SessionStore;
   orchestrator: Orchestrator;
+  messageApprovals?: Pick<MessageApprovalService, "reconcileContinuation">;
   runs: RunStore;
   leaseTtlMs: number;
   maxAttempts: number;

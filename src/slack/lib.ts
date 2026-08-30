@@ -66,8 +66,12 @@ export {
 } from "./attachments.ts";
 export {
   type ApprovalActionId,
+  type MessageApprovalActionId,
   approvalCardDestination,
   approvalMessage,
+  decodeMessageApprovalAction,
+  messageApprovalMessage,
+  messageApprovalEditModal,
   type StoredApproval,
   recoveredApprovalContext,
   createApprovalRegistry,

@@ -178,6 +178,8 @@ export interface Destination {
   delete?: { messageTs: string };
   identity?: string;
   debugFooter?: string;
+  messageApproval?: { id: string; version: number };
+  commandApproval?: { requestIds: string[] };
 }
 
 export interface CandidateDestination extends Destination {
@@ -387,6 +389,12 @@ export type TurnOrigin =
   | { kind: "automation"; screenData?: string; destination?: Destination; useOwnerKeychain?: boolean }
   | { kind: "direct" };
 
+export interface MessageApprovalContinuationBinding {
+  approvalId: string;
+  approvalVersion: number;
+  bindingId: string;
+}
+
 export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
@@ -438,6 +446,7 @@ export interface TurnRequest {
   intakePreambleMs?: number;
   clientSentAt?: number;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
+  messageApprovalContinuation?: MessageApprovalContinuationBinding;
   proactiveOpener?: boolean;
   spawned?: boolean;
   idempotencyKey?: string;

@@ -121,9 +121,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     run: Run,
     error: string,
     retry: boolean,
-    opts?: { ifExpiredAt?: number; countsAsError?: boolean },
+    opts?: { ifExpiredAt?: number; ifUnexpiredAt?: number; countsAsError?: boolean },
   ): Promise<{ requeued: boolean; applied: boolean }> {
     const ifExpiredAt = opts?.ifExpiredAt ?? null;
+    const ifUnexpiredAt = opts?.ifUnexpiredAt ?? null;
     const countsAsError = opts?.countsAsError ?? false;
     const errorAttemptsAfter = run.errorAttempts + (countsAsError ? 1 : 0);
     const overClaimed = run.attempts >= maxClaims;
@@ -131,8 +132,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       const { rowCount } = await q(
         `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL,
            error_attempts=error_attempts+$4
-         WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3)`,
-        [run.id, run.leaseToken, ifExpiredAt, countsAsError ? 1 : 0],
+         WHERE id=$1 AND lease_token=$2 AND status='running'
+           AND ($3::bigint IS NULL OR lease_expires_at <= $3)
+           AND ($5::bigint IS NULL OR lease_expires_at > $5)`,
+        [run.id, run.leaseToken, ifExpiredAt, countsAsError ? 1 : 0, ifUnexpiredAt],
       );
       return { requeued: rowCount > 0, applied: rowCount > 0 };
     }
@@ -144,8 +147,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     const { rowCount } = await q(
       `UPDATE runs SET status='failed', result=$4, lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, finished_at=$5,
          error_attempts=error_attempts+$6
-       WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3)`,
-      [run.id, run.leaseToken, ifExpiredAt, JSON.stringify(result), Date.now(), countsAsError ? 1 : 0],
+       WHERE id=$1 AND lease_token=$2 AND status='running'
+         AND ($3::bigint IS NULL OR lease_expires_at <= $3)
+         AND ($7::bigint IS NULL OR lease_expires_at > $7)`,
+      [run.id, run.leaseToken, ifExpiredAt, JSON.stringify(result), Date.now(), countsAsError ? 1 : 0, ifUnexpiredAt],
     );
     if (rowCount > 0) settle(await getRun(run.id));
     return { requeued: false, applied: rowCount > 0 };
@@ -175,7 +180,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
-             SELECT id FROM runs WHERE status='pending'
+              SELECT id FROM runs WHERE status='pending' AND (max_attempts > 1 OR attempts = 0)
                AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
              ORDER BY created_at ASC, seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
@@ -196,7 +201,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
-             SELECT id FROM runs WHERE id=$5 AND status='pending'
+              SELECT id FROM runs WHERE id=$5 AND status='pending' AND (max_attempts > 1 OR attempts = 0)
                AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
              FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
@@ -210,14 +215,29 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     },
 
     async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
+      const now = Date.now();
       const { rowCount } = await q(
-        "UPDATE runs SET lease_expires_at=$1 WHERE id=$2 AND lease_token=$3 AND status='running'",
-        [Date.now() + ttlMs, runId, leaseToken],
+        "UPDATE runs SET lease_expires_at=$1 WHERE id=$2 AND lease_token=$3 AND status='running' AND (max_attempts > 1 OR lease_expires_at > $4)",
+        [now + ttlMs, runId, leaseToken, now],
       );
       return rowCount > 0;
     },
 
+    async ownsLease(runId, leaseToken, attempt): Promise<boolean> {
+      const { rows } = await q(
+        "SELECT 1 FROM runs WHERE id=$1 AND lease_token=$2 AND attempts=$3 AND status='running' AND lease_expires_at > $4",
+        [runId, leaseToken, attempt, Date.now()],
+      );
+      return rows.length > 0;
+    },
+
     async releaseLease(runId, leaseToken): Promise<boolean> {
+      const run = await getRun(runId);
+      if (!run || run.leaseToken !== leaseToken) return false;
+      if (run.maxAttempts <= 1) {
+        return (await retire(run, "run lease released before completion", false, { ifUnexpiredAt: Date.now() }))
+          .applied;
+      }
       const { rowCount } = await q(
         "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL WHERE id=$1 AND lease_token=$2 AND status='running'",
         [runId, leaseToken],
@@ -226,9 +246,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     },
 
     async complete(runId, leaseToken, result): Promise<boolean> {
+      const now = Date.now();
       const { rowCount } = await q(
-        "UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2 WHERE id=$3 AND lease_token=$4",
-        [JSON.stringify(result), Date.now(), runId, leaseToken],
+        "UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2 WHERE id=$3 AND lease_token=$4 AND status='running' AND (max_attempts > 1 OR lease_expires_at > $5)",
+        [JSON.stringify(result), now, runId, leaseToken, now],
       );
       if (rowCount > 0) {
         settle(await getRun(runId));
@@ -240,7 +261,14 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     async fail(runId, leaseToken, error, opts): Promise<{ requeued: boolean }> {
       const run = await getRun(runId);
       if (!run || run.leaseToken !== leaseToken) return { requeued: false };
-      return { requeued: (await retire(run, error, opts?.retry !== false, { countsAsError: true })).requeued };
+      return {
+        requeued: (
+          await retire(run, error, opts?.retry !== false, {
+            countsAsError: true,
+            ...(run.maxAttempts <= 1 ? { ifUnexpiredAt: Date.now() } : {}),
+          })
+        ).requeued,
+      };
     },
 
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
@@ -308,7 +336,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       for (const run of expired) {
         const tooOld = opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
         const reason = tooOld ? "run exceeded max age (reaped)" : "lease expired (reaped)";
-        const r = await retire(run, reason, !tooOld, { ifExpiredAt: now });
+        const r = await retire(run, reason, !tooOld && run.maxAttempts > 1, { ifExpiredAt: now });
         if (!r.applied) continue;
         if (r.requeued) requeued++;
         else parked++;

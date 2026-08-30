@@ -38,8 +38,9 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
     ownerKeychainUnion: _ownerKeychainUnion,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
+    messageApprovalContinuation: _messageApprovalContinuation,
     ...safeBody
-  } = body;
+  } = body as TurnRequest & { messageApprovalContinuation?: unknown };
   const resolvedOrigin = publicTurnOrigin(safeBody);
   if (resolvedOrigin.error) return sendJson(res, 400, { error: "bad_request", message: resolvedOrigin.error });
   const origin = resolvedOrigin.origin;

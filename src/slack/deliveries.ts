@@ -17,8 +17,11 @@ import {
   uploadAttachments,
   uploadFailureNote,
   applyReactions,
+  approvalMessage,
+  messageApprovalMessage,
 } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import type { MessageApprovalService } from "../core/message-approval.ts";
 import type { Delivery } from "../types.ts";
 import type { CoreBridge } from "./core-bridge.ts";
 import type { Mirror } from "./mirror.ts";
@@ -35,14 +38,20 @@ function mergeSlackApiMs(body: unknown, slackApiMs: number | undefined): unknown
   return body;
 }
 
+function slackMessageMissing(error: unknown): boolean {
+  const value = error as { data?: { error?: unknown }; message?: unknown };
+  return value?.data?.error === "message_not_found" || value?.message === "message_not_found";
+}
+
 export function createDeliveryPoller(deps: {
   core: SlackCoreClient;
+  messageApprovals: MessageApprovalService;
   bridge: CoreBridge;
   mirror: Mirror;
   threads: ReturnType<typeof createThreadTracker>;
   clientForIdentity(identity: string): any;
 }): { pollDeliveries(client: any): Promise<void> } {
-  const { core, bridge, mirror, threads, clientForIdentity } = deps;
+  const { core, messageApprovals, bridge, mirror, threads, clientForIdentity } = deps;
   const { inFlightRuns, fetchBlobFromCore, fetchFileArtifactFromCore } = bridge;
   const { mirrorSelfPost } = mirror;
 
@@ -57,6 +66,54 @@ export function createDeliveryPoller(deps: {
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number } | undefined);
 
+  const neutralizeApprovalPost = async (postClient: any, message: { channel: string; ts: string }): Promise<void> => {
+    try {
+      await postClient.chat.delete({ channel: message.channel, ts: message.ts, ...botIdentityArgs() });
+    } catch {
+      await postClient.chat
+        .update({
+          channel: message.channel,
+          ts: message.ts,
+          text: "This draft approval card was superseded.",
+          blocks: [],
+          mrkdwn: false,
+          ...botIdentityArgs(),
+        })
+        .catch(() => undefined);
+    }
+  };
+
+  const acknowledge = async (delivery: Delivery, body: unknown, client: any, slackApiMs?: number): Promise<void> => {
+    const approval = (
+      body as { messageApproval?: { id?: string; version?: number; channel?: string; ts?: string } } | undefined
+    )?.messageApproval;
+    const recipientThreadRef = (body as { recipientThreadRef?: string } | undefined)?.recipientThreadRef;
+    if (approval?.id && approval.version && approval.channel && approval.ts) {
+      const result = await messageApprovals.acknowledgeSlackMessage(
+        approval.id,
+        approval.version,
+        approval.channel,
+        approval.ts,
+      );
+      const postClient = delivery.destination.identity ? clientForIdentity(delivery.destination.identity) : client;
+      const losing = [
+        ...(!result.winner ? [{ channel: approval.channel, ts: approval.ts }] : []),
+        ...(result.displaced ? [result.displaced] : []),
+      ].filter(
+        (message, index, all) =>
+          !(result.current && result.current.channel === message.channel && result.current.ts === message.ts) &&
+          all.findIndex((candidate) => candidate.channel === message.channel && candidate.ts === message.ts) === index,
+      );
+      await Promise.all(losing.map((message) => neutralizeApprovalPost(postClient, message)));
+      await core.ackDelivery(delivery.id, {
+        ...(recipientThreadRef ? { recipientThreadRef } : {}),
+        ...(slackApiMs === undefined ? {} : { slackApiMs }),
+      });
+      return;
+    }
+    await ackDelivery(delivery.id, mergeSlackApiMs(body, slackApiMs));
+  };
+
   const deliveryTracker = createDeliveryTracker();
 
   const logDeliveryError =
@@ -67,6 +124,77 @@ export function createDeliveryPoller(deps: {
         (err as Error).message,
       );
     };
+
+  async function postMessageApproval(
+    delivery: Delivery,
+    postClient: any,
+    channel: string,
+    threadTs?: string,
+  ): Promise<unknown> {
+    const approvalRef = delivery.destination.messageApproval;
+    if (!approvalRef) return undefined;
+    let record = await messageApprovals.get(approvalRef.id);
+    if (!record) return undefined;
+    let slackMessage = record.slackMessage;
+    for (let renderAttempt = 0; renderAttempt < 8; renderAttempt++) {
+      const renderedVersion = record.version;
+      const rendered = messageApprovalMessage(record);
+      if (slackMessage) {
+        try {
+          await postClient.chat.update({
+            channel: slackMessage.channel,
+            ts: slackMessage.ts,
+            text: rendered.text,
+            blocks: rendered.blocks,
+            mrkdwn: false,
+            ...botIdentityArgs(),
+          });
+        } catch (error) {
+          if (!slackMessageMissing(error)) throw error;
+          const invalidated = await messageApprovals.invalidateSlackMessage(
+            record.id,
+            slackMessage.channel,
+            slackMessage.ts,
+          );
+          const current = await messageApprovals.get(record.id);
+          if (!current) return undefined;
+          record = current;
+          slackMessage = invalidated ? undefined : current.slackMessage;
+          if (!invalidated && slackMessage) continue;
+        }
+      }
+      if (!slackMessage) {
+        slackMessage = await postWithVerify(
+          postClient,
+          {
+            ...slackReplyArgs(channel, rendered.text, threadTs, { threadOnly: Boolean(threadTs) }),
+            blocks: rendered.blocks,
+            mrkdwn: false,
+          },
+          `message-approval:${record.id}:card:${renderedVersion}`,
+          {
+            verifyFirst: true,
+            verifyOldest: String((record.createdAt - 5_000) / 1000),
+          },
+        );
+      }
+      const current = await messageApprovals.get(record.id);
+      if (!current || current.version === renderedVersion) {
+        return current && slackMessage
+          ? {
+              messageApproval: {
+                id: current.id,
+                version: renderedVersion,
+                channel: slackMessage.channel,
+                ts: slackMessage.ts,
+              },
+            }
+          : undefined;
+      }
+      record = current;
+    }
+    throw new Error("message approval changed repeatedly while its Slack card was rendering");
+  }
 
   async function deliverToConversations(client: any): Promise<void> {
     for (const d of [...(await fetchDeliveries("slack")), ...(await fetchDeliveries("group"))]) {
@@ -81,6 +209,54 @@ export function createDeliveryPoller(deps: {
           const tPost = performance.now();
           try {
             const postClient = d.destination.identity ? clientForIdentity(d.destination.identity) : client;
+            const commandApproval = d.destination.commandApproval;
+            if (commandApproval) {
+              const stored = await Promise.all(
+                commandApproval.requestIds.map((requestId) => core.getApproval(requestId)),
+              );
+              const approvals = stored.flatMap((approval, index) =>
+                approval
+                  ? [
+                      {
+                        requestId: commandApproval.requestIds[index]!,
+                        command: approval.command,
+                        reason: approval.reason ?? "requires approval",
+                        ...(approval.matched ? { matched: approval.matched } : {}),
+                        ...(approval.purpose ? { purpose: approval.purpose } : {}),
+                        ...(approval.summary ? { summary: approval.summary } : {}),
+                        ...(approval.summaryDetail ? { summaryDetail: approval.summaryDetail } : {}),
+                        ...(approval.approvalKey ? { approvalKey: approval.approvalKey } : {}),
+                        ...(approval.grantModes ? { grantModes: approval.grantModes } : {}),
+                        ...(approval.blocksInput === undefined ? {} : { blocksInput: approval.blocksInput }),
+                        ...(approval.kind ? { kind: approval.kind } : {}),
+                      },
+                    ]
+                  : [],
+              );
+              if (!approvals.length) return undefined;
+              const rendered = approvalMessage(approvals);
+              const origin = parseDeliveryTarget(d.destination.target);
+              await postWithVerify(
+                postClient,
+                {
+                  ...slackReplyArgs(origin.channel, rendered.text, origin.threadTs, {
+                    threadOnly: Boolean(origin.threadTs),
+                  }),
+                  blocks: rendered.blocks,
+                },
+                d.idempotencyKey ?? d.id,
+                {
+                  verifyFirst: true,
+                  ...(typeof d.createdAt === "number" ? { verifyOldest: String((d.createdAt - 5_000) / 1000) } : {}),
+                },
+              );
+              return undefined;
+            }
+            const approvalRef = d.destination.messageApproval;
+            if (approvalRef) {
+              const origin = parseDeliveryTarget(d.destination.target);
+              return postMessageApproval(d, postClient, origin.channel, origin.threadTs);
+            }
             const { channel, threadTs } = parseDeliveryTarget(d.destination.target);
             if (d.destination.react) {
               const { failed } = await applyReactions(client, channel, d.destination.react.messageTs, [
@@ -250,7 +426,7 @@ export function createDeliveryPoller(deps: {
             slackApiMs = Math.round(performance.now() - tPost);
           }
         },
-        ack: (body) => ackDelivery(d.id, mergeSlackApiMs(body, slackApiMs)),
+        ack: (body) => acknowledge(d, body, client, slackApiMs),
         onError: logDeliveryError(d.id),
       });
     }
@@ -265,6 +441,11 @@ export function createDeliveryPoller(deps: {
         post: async () => {
           const tPost = performance.now();
           try {
+            if (d.destination.messageApproval) {
+              const channel = await openConversationFor(client, [d.destination.target]);
+              const body = await postMessageApproval(d, client, channel);
+              return { ...(body as object), recipientThreadRef: dmThreadRef(channel) };
+            }
             const text = toSlackMrkdwn(stripReactionDirectives(d.text));
             if (!text.trim() && !d.attachments?.length) return undefined;
             const channel = await openConversationFor(client, [d.destination.target]);

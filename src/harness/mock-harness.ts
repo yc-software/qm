@@ -1,4 +1,7 @@
 import {
+  harnessTurnInputText,
+  harnessCapturedPromptEnvelope,
+  harnessPersistedInputText,
   defineHarness,
   type Harness,
   type HarnessDetectInput,
@@ -83,26 +86,53 @@ export function createMockHarness(): Harness {
     },
     {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
+        turn = {
+          ...turn,
+          tools: new Proxy(turn.tools, {
+            get(target, property, receiver) {
+              const value = Reflect.get(target, property, receiver);
+              if (typeof value !== "function") return value;
+              return async (...args: unknown[]) => {
+                const permit = await turn.beforeToolInvocation?.({
+                  name: String(property),
+                  kind: "native",
+                  readOnly: false,
+                  arguments: args,
+                });
+                let result: unknown;
+                try {
+                  result = await Reflect.apply(value, target, args);
+                } catch (error) {
+                  await permit?.finish("ambiguous");
+                  throw error;
+                }
+                await permit?.finish("success");
+                return result;
+              };
+            },
+          }),
+        };
         const userEntry = await turn.emit({
           type: "user",
           payload: {
-            text: turn.input,
+            text: harnessPersistedInputText(turn),
             ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
             ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
           },
           scopeLabel: turn.scopeLabel,
         });
-        const modelPrompt = [turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
+        const input = harnessTurnInputText(turn);
+        const modelPrompt = [input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
 
         turn.recordModelCall({
           model: "mock",
           inputTokens: countTokens(turn.systemPrompt) + estimateHistoryTokens(turn.history) + countTokens(modelPrompt),
           entryCount: turn.history.length,
         });
-        const firstLine = turn.input.split("\n")[0]?.trim() ?? "";
-        const whyCmd = /<why>\s*(![^<\n]+)/.exec(turn.input)?.[1]?.trim();
-        const addressedCmd = /<addressed-messages[^>]*>\s*<message[^>]*>\s*(![^<\n]+)/.exec(turn.input)?.[1]?.trim();
-        const cmd = firstLine.startsWith("<") ? (whyCmd ?? addressedCmd ?? turn.input) : turn.input;
+        const firstLine = input.split("\n")[0]?.trim() ?? "";
+        const whyCmd = /<why>\s*(![^<\n]+)/.exec(input)?.[1]?.trim();
+        const addressedCmd = /<addressed-messages[^>]*>\s*<message[^>]*>\s*(![^<\n]+)/.exec(input)?.[1]?.trim();
+        const cmd = firstLine.startsWith("<") ? (whyCmd ?? addressedCmd ?? input) : input;
         const command0 = cmd.split("\n")[0]?.trim() ?? "";
         const cacheMiss = command0 === "!cachemiss";
         const systemPromptTokens = countTokens(turn.systemPrompt);
@@ -121,7 +151,7 @@ export function createMockHarness(): Harness {
           turnSeq: userEntry.seq,
           step: 0,
           model: "mock",
-          promptEnvelope: {
+          promptEnvelope: harnessCapturedPromptEnvelope(turn, {
             model: "mock",
             system: turn.systemPrompt,
             messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
@@ -129,7 +159,7 @@ export function createMockHarness(): Harness {
               ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
               : {}),
             ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
-          },
+          }),
           truncated: false,
           usage: callUsage(0),
         });
@@ -265,6 +295,63 @@ export function createMockHarness(): Harness {
             scopeLabel: turn.scopeLabel,
           });
           reply = "thought about it";
+        } else if (command0 === "!stage-approval" || command0 === "!stage-approval-then-throw") {
+          const draft = {
+            title: "Private launch draft",
+            recipient: "private@example.com",
+            subject: "Private subject",
+            body: "Private body",
+          };
+          turn.onTextBlockStart?.();
+          for (const chunk of streamChunks(`Draft for ${draft.recipient}: ${draft.body}`)) turn.onDelta?.(chunk);
+          await turn.emit({
+            type: "thinking",
+            payload: { thinking: `Reasoning about ${draft.recipient} and ${draft.body}` },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.emit({
+            type: "text",
+            payload: { text: `Draft for ${draft.recipient}: ${draft.body}` },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.tape?.({
+            kind: "message",
+            harness: "mock",
+            payload: { role: "assistant", content: `Draft for ${draft.recipient}: ${draft.body}` },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.recordLlmRequest?.({
+            turnSeq: userEntry.seq,
+            step: 99,
+            model: "mock",
+            promptEnvelope: {
+              messages: [{ role: "assistant", content: `Draft for ${draft.recipient}: ${draft.body}` }],
+            },
+            truncated: false,
+          });
+          const staged = await turn.tools.stageMessageApproval!(draft, "mock-stage-approval");
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "stage_message_approval", callId: "mock-stage-approval" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "stage_message_approval", ...staged },
+            scopeLabel: turn.scopeLabel,
+          });
+          usedTool = true;
+          silent = staged.ok;
+          if (command0 === "!stage-approval-then-throw" && staged.ok) {
+            const failure = `${draft.recipient} ${draft.body}`;
+            await turn.tape?.({
+              kind: "annotation",
+              payload: { error: failure },
+              scopeLabel: turn.scopeLabel,
+            });
+            throw new Error(failure);
+          }
+          reply = staged.ok ? `Staged ${draft.recipient}: ${draft.body}` : staged.message;
         } else if (command0.startsWith("!credential ")) {
           const rest = command0.slice("!credential ".length);
           const split = rest.indexOf(" ");
@@ -674,6 +761,8 @@ export function createMockHarness(): Harness {
                 .map((m) => `${m.name ?? "you"}@${m.ts}: ${m.text}${m.files?.length ? ` [${m.files.join(",")}]` : ""}`)
                 .join("\n")
             : "overheard:none";
+        } else if (turn.continuationInstruction) {
+          reply = "Approved draft continuation processed.";
         } else {
           reply = `You said: ${modelPrompt}`;
         }
@@ -682,7 +771,7 @@ export function createMockHarness(): Harness {
             turnSeq: userEntry.seq,
             step: 1,
             model: "mock",
-            promptEnvelope: {
+            promptEnvelope: harnessCapturedPromptEnvelope(turn, {
               model: "mock",
               system: turn.systemPrompt,
               messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
@@ -690,7 +779,7 @@ export function createMockHarness(): Harness {
                 ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
                 : {}),
               ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
-            },
+            }),
             truncated: false,
             usage: callUsage(1),
           });
