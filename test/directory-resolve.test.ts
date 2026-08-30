@@ -88,6 +88,46 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     assert.ok(matches.every((m) => m.principalId));
   });
 
+  it("resolves an id substring to every matching member", async () => {
+    const res = await get("/v1/directory/resolve?q=acme.com");
+    assert.equal(res.status, 200);
+    const { matches } = (await res.json()) as { matches: Array<{ principalId: string }> };
+    assert.equal(matches.length, 4, "an id substring matches all four fixture members");
+  });
+
+  it("resolves a unique email local-part prefix to a single match", async () => {
+    const res = await get("/v1/directory/resolve?q=carol@acm");
+    assert.equal(res.status, 200);
+    const { matches } = (await res.json()) as { matches: Array<{ principalId: string }> };
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0]!.principalId, "carol@acme.com");
+  });
+
+  it("keeps label-contains matches ahead of a lone id-prefix hit", async () => {
+    await built.app.upsertDirectory([
+      { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
+      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
+      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
+      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+      { principalId: "asmith@acme.com", displayName: "Alice Smith", type: "internal" },
+      { principalId: "bsmith@acme.com", displayName: "Bob Smith", type: "internal" },
+      { principalId: "smith.dave@acme.com", displayName: "Dave Jones", type: "internal" },
+    ]);
+    const res = await get("/v1/directory/resolve?q=smith");
+    await built.app.upsertDirectory([
+      { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
+      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
+      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
+      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+    ]);
+    assert.equal(res.status, 200);
+    const { matches } = (await res.json()) as { matches: Array<{ principalId: string }> };
+    assert.ok(matches.length >= 2, "surname query stays ambiguous across the label-contains Smiths");
+    const ids = matches.map((m) => m.principalId);
+    assert.ok(ids.includes("asmith@acme.com") && ids.includes("bsmith@acme.com"));
+    assert.ok(!ids.includes("smith.dave@acme.com"), "an id-prefix-only hit does not preempt label-contains matches");
+  });
+
   it("returns an empty match set for an unknown name (agent falls back to plain text)", async () => {
     const res = await get("/v1/directory/resolve?q=nobody-here");
     assert.equal(res.status, 200);
