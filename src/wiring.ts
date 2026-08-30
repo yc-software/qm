@@ -896,7 +896,7 @@ export function buildApp(
         store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
       });
     if (config.deployProvider === "fly") return createFlyDeployProvider(config.flyDeploy);
-    return createDockerDeployProvider();
+    return createDockerDeployProvider(config.deployDockerNetwork ? { network: config.deployDockerNetwork } : {});
   })();
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
     console.warn(
