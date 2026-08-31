@@ -187,6 +187,29 @@ test("boolEnv: one vocabulary for every boolean env knob", () => {
   for (const v of [undefined, "", "2", "enabled"]) assert.equal(boolEnv(v), undefined, String(v));
 });
 
+test("MEMORABLE is off by default and QM_MEMORABLE kills it in the shared vocabulary", () => {
+  assert.equal(loadConfig({}).memorableEnabled, false);
+  assert.equal(loadConfig({}).memorableBin, "memorable");
+  for (const on of ["1", "true", "yes", "on", "TRUE", " On "]) {
+    assert.equal(loadConfig({ MEMORABLE: on }).memorableEnabled, true, `MEMORABLE=${on}`);
+    for (const kill of ["0", "false", "no", "off", "none", "OFF", " off "]) {
+      assert.equal(
+        loadConfig({ MEMORABLE: on, QM_MEMORABLE: kill }).memorableEnabled,
+        false,
+        `MEMORABLE=${on} QM_MEMORABLE=${kill}`,
+      );
+    }
+  }
+  for (const off of ["0", "false", "no", "off", "none", ""]) {
+    assert.equal(loadConfig({ MEMORABLE: off }).memorableEnabled, false, `MEMORABLE=${off}`);
+  }
+  assert.throws(() => loadConfig({ MEMORABLE: "2" }), /MEMORABLE="2" is not a recognized boolean/);
+  assert.throws(
+    () => loadConfig({ MEMORABLE: "1", QM_MEMORABLE: "2" }),
+    /QM_MEMORABLE="2" is not a recognized boolean/,
+  );
+});
+
 test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   const off = loadConfig({ SEED_SKILLS: "off", EXECUTE_SCRATCH: "off", REACH_EXEC: "off", PI_CAPTURE_REQUESTS: "off" });
   assert.equal(off.seedSkills, false);

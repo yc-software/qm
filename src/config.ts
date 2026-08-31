@@ -971,7 +971,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       numEnvStrict("INSIGHTS_INTERVAL_MS", env.INSIGHTS_INTERVAL_MS) ?? CONFIG_DEFAULTS.insightsIntervalMs,
     ...(env.REACH_DENIED_NOTIFY_CHANNEL ? { reachDeniedNotifyChannel: env.REACH_DENIED_NOTIFY_CHANNEL.trim() } : {}),
     scratchExecEnabled: boolEnvStrict("EXECUTE_SCRATCH", env.EXECUTE_SCRATCH) ?? false,
-    memorableEnabled: (boolEnvStrict("MEMORABLE", env.MEMORABLE) ?? false) && env.QM_MEMORABLE !== "0",
+    memorableEnabled:
+      (boolEnvStrict("MEMORABLE", env.MEMORABLE) ?? false) && (boolEnvStrict("QM_MEMORABLE", env.QM_MEMORABLE) ?? true),
     memorableBin: env.MEMORABLE_BIN?.trim() || "memorable",
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     sharedOwnerAuthIsolation: boolEnvStrict("SHARED_OWNER_AUTH_ISOLATION", env.SHARED_OWNER_AUTH_ISOLATION) ?? false,

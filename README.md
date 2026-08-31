@@ -173,52 +173,30 @@ messages, and screenshots for organization identifiers before it pushes. Nothing
 
 ## Procedural memory (Memorable)
 
-QM can remember _how_ it solved a task, not just what was said. With the
-[Memorable](https://github.com/NIkhil-cmd-cmd/memorable-qm) integration enabled, a finished
-session's tool-call trace is parsed — deterministically, no LLM involved — into a
-structured procedure (which files changed, which commands verified the work, in what
-order, with real exit codes) and stored in QM's own Postgres. When a later session starts
-on a similar task, a short pointer (~290 tokens) is recalled and injected into the
-prompt, telling the agent where the fix landed last time and authorizing it to skip
-re-diagnosis.
+Optional, off by default, additive. QM can record _how_ a task was done and replay that
+later, so a recurring job is not re-diagnosed from scratch every time. A prompt and the
+tool calls that followed it become one _memorable_: which files changed, which commands
+verified the work, in what order, with the real exit codes. A later prompt that one of
+them already answers gets a short pointer injected into the system prompt.
 
-- Off by default. Set `MEMORABLE=1` to enable the capture relay and recall injection;
-  `QM_MEMORABLE=0` is the kill-switch that wins over everything.
-- Consent is per scope and fail-closed: writes happen only for scopes explicitly set to
-  `read-write` via `memorable enable` (unset means deny).
-- Storage rides QM's own database (`memorable_procedures` / `memorable_mode` tables in
-  the same `DATABASE_URL` Postgres) — no second store.
-- Injected context is wrapped in a data-not-instructions envelope, control-character
-  stripped, and size-capped at write time.
-- A prompt that is several things at once can be answered with a **plan** instead of one
-  procedure: several stored procedures in dependency order, each naming the files its
-  verified run wrote and the command that proved it. The order is not guessed — a
-  procedure that writes a file and one that reads it are a dependency, in that direction,
-  and both facts are already in the recorded steps. Steps that share no dependency are
-  marked as safe to run in parallel, and anything memory cannot cover is stated as such
-  rather than covered by the nearest vaguely-similar procedure. Opt in per call with
-  `memorable inject --chain` (or `MEMORABLE_CHAIN=1`); the block uses the same envelope
-  and the same size cap, so nothing in the harness changes to accept one.
+`MEMORABLE=1` turns it on; unset, empty, or any false value means off, and
+`QM_MEMORABLE=0` forces off even when `MEMORABLE=1`. With it off, `buildApp` installs no
+hook and passes no dependency, and the orchestrator's one added check short-circuits on
+`undefined`. QM itself opens no socket and makes no HTTP call for this: it spawns the
+[Memorable](https://github.com/NIkhil-cmd-cmd/memorable-qm) CLI, which does the network
+work outside the QM process, writes only to scopes explicitly consented `read-write`, and
+stores into QM's own `DATABASE_URL` Postgres rather than a second store.
 
-```mermaid
-flowchart LR
-  subgraph QM["QM host process"]
-    LOOP["agent loop"] -->|emits tool_call / tool_result| SE[("session_entries")]
-    SE -->|last run for thread done| RELAY["session-end relay"]
-  end
-  RELAY -->|trace JSON, stdin| CLI["memorable CLI"]
-  CLI -->|POST /v1/extract| API["extraction worker<br/>stateless · deterministic · no LLM"]
-  API -->|procedure draft| CLI
-  CLI -->|write iff consent read-write| DB[("memorable_* tables<br/>in QM's own Postgres")]
-  DB -->|recall top hit| CLI
-  CLI -->|"~300-token pointer, a multi-step plan, or nothing"| LOOP
-```
+[`docs/procedural-memory.md`](./docs/procedural-memory.md) has the rest: exactly which
+guarantees are enforced by code in this repository and which are enforced by the binary,
+what the injected block is allowed to contain, and where a model is and is not involved.
 
 ## Going deeper
 
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
+- [`docs/procedural-memory.md`](./docs/procedural-memory.md) — the optional Memorable integration in full
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`plugins/`](./plugins) — the surfaces (Slack, web UI, admin, portal)
 

@@ -399,6 +399,8 @@ export interface BuiltApp {
   slackCore: SlackCoreClient;
 }
 
+const MEMORABLE_RELAY_ENTRY_WINDOW = 2_000;
+
 export function buildApp(
   config: Config,
   overrides: {
@@ -1364,8 +1366,8 @@ export function buildApp(
         if (await runs.activeForThread(run.sessionId)) return;
         const session = await sessions.getByThread(run.sessionId);
         if (!session) return;
-        const capture = captureSession(session.id, await sessions.getEntries(session.id));
-        if (!capture.tool_calls.length) return;
+        const entries = await sessions.getEntries(session.id, { limit: MEMORABLE_RELAY_ENTRY_WINDOW });
+        const capture = captureSession(session.id, entries);
         if (!capture.scope_id) capture.scope_id = session.scopeId;
         await relayRecord(config.memorableBin, capture);
       })().catch(swallowAs("memorable: record relay", undefined));
