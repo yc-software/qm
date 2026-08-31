@@ -36,7 +36,7 @@ test("relayRecord pipes the capture as JSON to the configured binary", async () 
   await relayRecord(bin, capture);
   const [body, args] = readFileSync(marker, "utf8").split("|");
   assert.deepEqual(JSON.parse(body ?? ""), capture);
-  assert.equal(args, "record --scope personal:U1");
+  assert.equal(args, "record --scope personal:U1 -");
 });
 
 test("relayRecord resolves quietly when the binary is missing", async () => {

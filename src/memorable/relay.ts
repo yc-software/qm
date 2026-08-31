@@ -15,7 +15,7 @@ export function relayRecord(
       return;
     }
     const [cmd = "memorable", ...preArgs] = bin.split(" ").filter(Boolean);
-    const child = spawn(cmd, [...preArgs, "record", "--scope", capture.scope_id], {
+    const child = spawn(cmd, [...preArgs, "record", "--scope", capture.scope_id, "-"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     child.unref();

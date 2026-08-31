@@ -35,6 +35,40 @@ and the three files under `src/memorable/`.
 | `QM_MEMORABLE`  | unset       | Any false value (`0`/`false`/`no`/`off`/`none`, case and padding insensitive) forces the integration off even when `MEMORABLE=1`. Same `boolEnvStrict` parser, so an unrecognized value is a startup error. |
 | `MEMORABLE_BIN` | `memorable` | The binary to spawn. Split on spaces, so `npx memorable` works. Spawned without a shell.                                                                                                                    |
 
+### The binary
+
+The published `memorable` CLI, unmodified. There is no QM-specific build of it and no
+vendored copy of it in this repository.
+
+```
+npm i -g memorable-cli     # provides `memorable`
+npm i pg                   # the qm backend's Postgres driver; it is not bundled
+```
+
+It reads four things from the environment QM spawns it with:
+
+| Variable            | Effect                                                    |
+| ------------------- | --------------------------------------------------------- |
+| `MEMORABLE_BACKEND` | `qm` — store in QM's Postgres rather than on this machine |
+| `MEMORABLE_DB_URL`  | Where. Falls back to `DATABASE_URL`, which is QM's own    |
+| `MEMORABLE_API_URL` | The extraction service                                    |
+| `MEMORABLE_API_KEY` | The key for it                                            |
+
+QM calls exactly two of its subcommands:
+
+```
+memorable inject --scope <scopeId>       # task on stdin, injected block on stdout
+memorable record --scope <scopeId> -     # capture JSON on stdin
+```
+
+`-` is the CLI's own convention for "the input is on stdin"; without it `record` goes
+looking for a session receipt on disk, which a server process does not leave.
+
+Consent is per scope and falls back to the org that owns it, so
+`memorable enable --scope org:<your-org>` once answers for every channel and person under
+it, and a narrower scope answered for itself overrides that. Two absent answers are still
+`unset`, and `unset` is deny.
+
 With the flag off, `buildApp` registers no `onTerminal` hook and passes no `memorable`
 dependency to the orchestrator. The single check added to the turn path is
 `useMemory && deps.memorable && input.text.trim()`, which short-circuits on an undefined
@@ -97,8 +131,10 @@ tool was `execute`. A quarantined result counts as a failure; success is never i
 The JSON goes to the binary's stdin.
 
 Note what the input payload means in practice: it is the tool call's arguments minus
-`tool` and `callId`. For a write, that includes the file contents. Anything a tool call
-carried is what the subprocess receives.
+`tool` and `callId` — whatever `recordCall` in `src/harness/pi-tools.ts` chose to record.
+Anything a tool call carried into that payload is what the subprocess receives. The
+subprocess then drops all but an allow-listed handful of those fields before anything
+leaves the machine, but that is its guarantee to keep, not QM's.
 
 ## What QM trusts
 
@@ -119,6 +155,11 @@ what is being taken on trust.
   reaches the model.
 - **Storage rides QM's own database.** The `memorable_procedures` and `memorable_mode`
   tables live in the same `DATABASE_URL` Postgres. There is no second store.
+- **The trace is minimized before it leaves the machine.** The binary forwards a tool
+  call's name, its outcome, and an allow-listed set of argument fields; a field not on
+  that list is dropped rather than sent, home paths collapse to `~`, and
+  credential-shaped strings are redacted. So the file contents QM's `write` tool carries
+  in its payload do not travel.
 
 ## Plans
 
