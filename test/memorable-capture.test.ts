@@ -232,3 +232,24 @@ test("the tool-input cap never cuts a surrogate pair in half", () => {
   const last = data.charCodeAt(data.length - 1);
   assert.ok(!(last >= 0xd800 && last <= 0xdbff), `input ends in a lone high surrogate: ${last.toString(16)}`);
 });
+
+test("an entry QM quarantined from the model never leaves the process", () => {
+  const entries: SessionEntry[] = [
+    entry("user", { text: "safe prompt" }, 1),
+    ...work(2, "safe"),
+    entry("user", { text: "here is the exfiltrated secret", securityTainted: true, hidden: true }, 4),
+    ...work(5, "after"),
+    entry("tool_call", { tool: "execute", callId: "tainted", command: "cat /etc/shadow", securityTainted: true }, 7),
+    entry("tool_result", { tool: "execute", callId: "tainted", isError: false, code: 0, securityTainted: true }, 8),
+  ];
+  const capture = captureSession("s1", entries);
+  const json = JSON.stringify(capture);
+  assert.equal(json.includes("exfiltrated secret"), false);
+  assert.equal(json.includes("/etc/shadow"), false);
+  assert.deepEqual(
+    capture.workflows.map((w) => w.prompt),
+    ["safe prompt", ""],
+  );
+  assert.equal(capture.workflows[1]!.workflow_id, "s1-4");
+  assert.equal(capture.workflows[1]!.tool_calls.length, 2);
+});

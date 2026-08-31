@@ -52,6 +52,10 @@ function capInput(input: Record<string, unknown>): Record<string, unknown> {
   return capped ?? input;
 }
 
+function securityTainted(entry: SessionEntry): boolean {
+  return (entry.payload as { securityTainted?: unknown } | null)?.securityTainted === true;
+}
+
 function callKey(call: MemorableToolCall): string {
   return `${call.name}\u0000${JSON.stringify(call.input)}`;
 }
@@ -67,7 +71,7 @@ export function captureSession(sessionId: string, entries: SessionEntry[]): Memo
   let scopeId = "";
   const outcomes = new Map<string, Array<{ ok: boolean; exit_code?: number }>>();
   for (const entry of entries) {
-    if (entry.type !== "tool_result") continue;
+    if (entry.type !== "tool_result" || securityTainted(entry)) continue;
     const payload = entry.payload as Record<string, unknown> | null;
     if (!payload || typeof payload.callId !== "string") continue;
     const ok = payload.isError !== true;
@@ -84,6 +88,13 @@ export function captureSession(sessionId: string, entries: SessionEntry[]): Memo
   };
   for (const entry of entries) {
     if (!scopeId && entry.scopeLabel) scopeId = entry.scopeLabel;
+    if (securityTainted(entry)) {
+      if (entry.type === "user") {
+        close();
+        current = { workflow_id: workflowId(sessionId, entry.seq), prompt: "", tool_calls: [] };
+      }
+      continue;
+    }
     if (entry.type === "user") {
       const text = (entry.payload as { text?: unknown } | null)?.text;
       if (typeof text !== "string") continue;
