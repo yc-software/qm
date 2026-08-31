@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import { codeChallengeS256, deriveCodeVerifier } from "../src/oidc.ts";
 
 let whoamiProbes = 0;
 let lastConsentClicker: string | null = null;
@@ -230,12 +232,23 @@ test("the webhook passthrough is exact-shape + POST-only (no widening of /v1)", 
   assert.equal((await fetch(`${base}/v1/webhooks`, { method: "POST" })).status, 404);
 });
 
-test("the provider callback still passes through publicly with NO session/cookie", async () => {
-  const cb = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=s`, { redirect: "manual" });
+test("the provider callback is session-bound: no session bounces to login, a session vouches for the finisher", async () => {
+  const anonymous = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=s`, { redirect: "manual" });
+  assert.equal(anonymous.status, 302);
+  assert.match(
+    anonymous.headers.get("location") ?? "",
+    /^\/auth\/login\?returnTo=%2Fv1%2Fconnectors%2Foauth%2Fgoogle%2Fcallback%3Fcode%3Dc%26state%3Ds$/,
+  );
+
+  const cb = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=s`, {
+    headers: { cookie: sessionCookie("U1") },
+    redirect: "manual",
+  });
   assert.equal(cb.status, 200);
-  const cbb = (await cb.json()) as { url: string; cookie: string | null };
+  const cbb = (await cb.json()) as { url: string; cookie: string | null; headers: Record<string, string> };
   assert.equal(cbb.url, "/v1/connectors/oauth/google/callback?code=c&state=s");
-  assert.equal(cbb.cookie, null);
+  assert.equal(cbb.cookie, null, "the portal session cookie never reaches core");
+  assert.equal(typeof cbb.headers["x-portal-identity"], "string");
 });
 
 test("the legacy /v1 browser-leg aliases are gone: the portal no longer serves them, /v1 stays private", async () => {
@@ -347,7 +360,36 @@ test("auth/login sets the tmp cookie and 302s to the IdP with PKCE+state+nonce",
   assert.ok(u.searchParams.get("state"));
   assert.ok(u.searchParams.get("nonce"));
   assert.equal(u.searchParams.get("code_challenge_method"), "S256");
-  assert.match(r.headers.get("set-cookie") ?? "", /portal_oidc_tmp=/);
+  const setCookie = r.headers.get("set-cookie") ?? "";
+  assert.match(setCookie, /portal_oidc_tmp=/);
+
+  const cookie = decodeURIComponent(setCookie.match(/portal_oidc_tmp=([^;]+)/)?.[1] ?? "");
+  const payload = Buffer.from(cookie.split(".")[0]!, "base64url").toString("utf8");
+  const claims = JSON.parse(payload) as Record<string, unknown>;
+  const challenge = u.searchParams.get("code_challenge") ?? "";
+  assert.ok(challenge, "the authorize URL carries the challenge");
+
+  const pkceKey = deriveKey("router-test-portal-secret", "portal.pkce.v1");
+  const verifier = deriveCodeVerifier(String(claims.nonce), pkceKey);
+  assert.notEqual(
+    verifier,
+    deriveCodeVerifier(String(claims.nonce), deriveKey("router-test-portal-secret", "portal.tmp.v1")),
+    "the verifier key is domain-separated from the tmp-cookie MAC key",
+  );
+  assert.equal(
+    challenge,
+    codeChallengeS256(verifier),
+    "the challenge is the one the callback re-derives from the nonce",
+  );
+  assert.ok(!payload.includes(verifier), "the cookie the user-agent carries is free of the verifier at any depth");
+  for (const [name, value] of [...Object.entries(claims), ...u.searchParams]) {
+    if (typeof value !== "string") continue;
+    assert.notEqual(
+      createHash("sha256").update(value).digest("base64url"),
+      challenge,
+      `nothing the browser carries may be the verifier — "${name}" is it in plain sight`,
+    );
+  }
 });
 
 test("auth/callback with no tmp cookie fails closed (400, no token exchange)", async () => {

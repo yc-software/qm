@@ -2,6 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ import { envKey } from "../src/credentials/connector-token.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "./support/portal-identity.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -85,6 +87,7 @@ test("cross-org — the callback rejects sealed state minted for a different org
   try {
     const state = await sealOAuthState(
       {
+        nonce: randomUUID(),
         provider: "google",
         principalId: "U1",
         redirectUri: `${base}/v1/connectors/oauth/google/callback`,
@@ -115,10 +118,17 @@ test("empty-token guard — an adapter returning no access token fails the conne
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const state = await sealOAuthState(
-      { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
+      {
+        provider: "google",
+        principalId: "U1",
+        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
+        nonce: randomUUID(),
+      },
       { secret: SECRET },
     );
-    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
+    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`, {
+      headers: { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, SECRET) },
+    });
     assert.equal(res.status, 400);
     assert.match(await res.text(), /empty access token/);
     assert.equal(

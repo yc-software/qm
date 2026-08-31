@@ -68,7 +68,11 @@ test("injectBranding rewrites the tab title with the escaped label when a suffix
   assert.match(injectBranding(shell, {}, { titleSuffix: "· Web" }), /<title>QM · Web<\/title>/);
   const hostile = injectBranding(shell, { selfLabel: "x</title><script>alert(1)</script>" }, { titleSuffix: "· Web" });
   assert.doesNotMatch(hostile, /<script>/i);
-  assert.match(hostile, /<title>x&lt;\/title&gt;/);
+  assert.equal(
+    /<title>([\s\S]*?)<\/title>/.exec(hostile)?.[1],
+    "x/titlescriptalert(1)/script · Web",
+    "markup in the label is stripped, not merely escaped",
+  );
 });
 
 test("brandName() reads the injected self-label and falls back to the product name", async () => {
@@ -83,4 +87,55 @@ test("brandName() reads the injected self-label and falls back to the product na
     delete (globalThis as { document?: Document }).document;
   }
   assert.equal(brandName!(), "QM");
+});
+
+test("injectBranding cannot be broken out of the style block by a hostile accent or mark", async () => {
+  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const shell = "<!doctype html><html><head></head><body></body></html>";
+
+  const hostile = injectBranding(shell, {
+    accent: "red;} :root{--x:url(https://evil/a)",
+    mark: "</style><img src=https://evil/x>",
+  });
+  const markValue = /--brand-mark:"([^"]*)"/.exec(hostile)?.[1] ?? "";
+  assert.ok(markValue.length > 0, "the mark still renders, sanitized");
+  assert.doesNotMatch(markValue, /[<>{}"\\]/, "nothing that could end the CSS string or the style element survives");
+  assert.ok(!hostile.includes("--brand-accent"), "an accent that is not a plain hex colour is dropped, not emitted");
+  assert.equal(hostile.match(/<\/style>/g)?.length, 1, "exactly one style element — no breakout");
+
+  const good = injectBranding(shell, { accent: "#f0652f", mark: "Y" });
+  assert.match(good, /<style>:root\{--brand-accent:#f0652f;--brand-mark:"Y"\}<\/style>/);
+});
+
+test("every surface's branding cache sanitizes what the fetcher returned", async () => {
+  const { createBrandingCache } = await import("../../chassis/src/branding.ts");
+  const cache = createBrandingCache(async () => ({
+    accent: "red;} :root{--x:url(https://evil/a)",
+    mark: "</style><img src=https://evil/x>",
+    selfLabel: "Acme\r\n</title>",
+  }));
+  assert.deepEqual(await cache.forRender(), { mark: "/s", selfLabel: "Acme/title" });
+  assert.deepEqual(cache.current(), { mark: "/s", selfLabel: "Acme/title" });
+});
+
+test("sanitizeBranding keeps the mark grammar core stores and strips only what ends a CSS string", async () => {
+  const { sanitizeBranding } = await import("../../chassis/src/branding.ts");
+
+  assert.deepEqual(sanitizeBranding({ accent: "  #f0652f  ", mark: "Y", selfLabel: " Acme " }), {
+    accent: "#f0652f",
+    mark: "Y",
+    selfLabel: "Acme",
+  });
+  assert.deepEqual(sanitizeBranding({ accent: "rgb(1,2,3)", mark: 7, selfLabel: "" }), {});
+  assert.equal(sanitizeBranding({ mark: "abcdef" }).mark, "ab", "the mark stays a two-glyph badge");
+  for (const mark of [";)", ":)", "A;", "🚀", "Añ"]) {
+    assert.equal(sanitizeBranding({ mark }).mark, mark, `a mark core accepts survives here too: ${mark}`);
+  }
+  assert.equal(sanitizeBranding({ mark: '"\\' }).mark, undefined, "only what could end the CSS string is stripped");
+  assert.equal(sanitizeBranding({ selfLabel: "z".repeat(80) }).selfLabel?.length, 40, "the self-label is capped");
+  assert.equal(
+    sanitizeBranding({ selfLabel: "Acme\r\nSubject: spoofed</title>{x}" }).selfLabel,
+    "AcmeSubject: spoofed/titlex",
+    "the label reaches sign-in pages and an outbound email subject with no line breaks or markup left in it",
+  );
 });

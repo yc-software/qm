@@ -1,8 +1,6 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-
-const IDENTITY_TTL_MS = 60_000;
+import { portalIdentityHeaders } from "../../chassis/src/portal-identity.ts";
 
 const FORWARD_REQUEST_HEADERS = ["content-type", "accept", "accept-language", "user-agent", "accept-encoding"];
 
@@ -91,19 +89,15 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
     `${t.cookieName}=${encodeURIComponent(t.principal)}` +
     (t.displayName ? `; ${t.cookieName}_name=${encodeURIComponent(t.displayName)}` : "") +
     (t.impersonator ? `; webui_impersonator=${encodeURIComponent(t.impersonator)}` : "");
-  const base: Record<string, string> = { host: upstream.host, cookie };
-  if (t.identitySecret) {
-    const now = t.nowMs ?? Date.now();
-    base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      {
-        p: t.principal,
-        ...(t.displayName ? { n: t.displayName } : {}),
-        ...(t.impersonator ? { imp: t.impersonator } : {}),
-        exp: now + IDENTITY_TTL_MS,
-      },
-      t.identitySecret,
-    );
-  }
+  const base: Record<string, string> = {
+    host: upstream.host,
+    cookie,
+    ...portalIdentityHeaders(t.principal, t.identitySecret, {
+      ...(t.displayName ? { displayName: t.displayName } : {}),
+      ...(t.impersonator ? { impersonator: t.impersonator } : {}),
+      ...(t.nowMs !== undefined ? { nowMs: t.nowMs } : {}),
+    }),
+  };
   const headers = safeForwardHeaders(req, base);
   relay(req, res, {
     protocol: upstream.protocol,
@@ -144,8 +138,6 @@ export const FORWARD_DEPLOYMENT_LAYER_HEADERS = [
   "x-signature",
 ];
 
-export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
-
 export interface DeploymentTarget {
   coreBase: string;
   id: string;
@@ -161,12 +153,12 @@ export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: 
   const corePath = `/d/${encodeURIComponent(t.id)}${t.subPath}${t.search}`;
   const core = new URL(t.coreBase);
   const signed = signedHeaders(t.signingSecret, method, corePath, "", t.principal);
-  const base: Record<string, string> = { host: core.host, "x-as-principal": t.principal, ...signed };
-  if (t.identitySecret)
-    base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      { p: t.principal, exp: Date.now() + IDENTITY_TTL_MS },
-      t.identitySecret,
-    );
+  const base: Record<string, string> = {
+    host: core.host,
+    "x-as-principal": t.principal,
+    ...signed,
+    ...portalIdentityHeaders(t.principal, t.identitySecret),
+  };
   const headers = safeForwardHeaders(req, base);
   delete headers["content-type"];
   const ct = req.headers["content-type"];

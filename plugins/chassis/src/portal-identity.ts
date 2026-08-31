@@ -35,3 +35,25 @@ export function verifyPortalIdentity(token: string, secret: string, nowMs: numbe
 }
 
 export const PORTAL_IDENTITY_HEADER = "x-portal-identity";
+
+const IDENTITY_TTL_MS = 60_000;
+
+export function portalIdentityHeaders(
+  principal: string,
+  secret: string | undefined,
+  extra: { displayName?: string; impersonator?: string; nowMs?: number } = {},
+): Record<string, string> {
+  if (!secret) return {};
+  const now = extra.nowMs ?? Date.now();
+  return {
+    [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+      {
+        p: principal,
+        ...(extra.displayName ? { n: extra.displayName } : {}),
+        ...(extra.impersonator ? { imp: extra.impersonator } : {}),
+        exp: now + IDENTITY_TTL_MS,
+      },
+      secret,
+    ),
+  };
+}

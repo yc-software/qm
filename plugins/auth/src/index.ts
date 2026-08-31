@@ -5,7 +5,7 @@ import { portFromEnv } from "../../chassis/src/env.ts";
 import { bootProblems, readConfig } from "./config.ts";
 import { coreClaimStore } from "../../chassis/src/claims.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { createBrandingCache } from "../../chassis/src/branding.ts";
+import { createBrandingCache, type RawBranding } from "../../chassis/src/branding.ts";
 import { mailerFor } from "./email.ts";
 import { loadSigningKey } from "./keys.ts";
 import { TokenSigner } from "./tokens.ts";
@@ -32,8 +32,7 @@ export async function startServer(): Promise<void> {
       signal: AbortSignal.timeout(2_000),
     });
     if (!r.ok) throw new Error(`surface-config ${r.status}`);
-    const b = ((await r.json()) as { branding?: { selfLabel?: unknown } }).branding;
-    return typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {};
+    return ((await r.json()) as { branding?: RawBranding }).branding ?? {};
   });
   const handle = createAuthHandler({
     cfg: CFG,

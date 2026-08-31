@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { exportJWK, SignJWT } from "jose";
 import {
-  pkcePair,
+  deriveCodeVerifier,
+  codeChallengeS256,
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserinfo,
@@ -29,10 +30,17 @@ function jwt(payload: Record<string, unknown>): string {
   return `${b64({ alg: "RS256" })}.${b64(payload)}.sig`;
 }
 
-test("pkcePair challenge is the S256 of the verifier", () => {
-  const { verifier, challenge } = pkcePair();
-  assert.equal(challenge, createHash("sha256").update(verifier).digest("base64url"));
-  assert.notEqual(verifier, challenge);
+test("the verifier is derived from the nonce under the tmp key, never stored, never guessable", () => {
+  const key = randomBytes(32);
+  const verifier = deriveCodeVerifier("NONCE", key);
+  assert.equal(codeChallengeS256(verifier), createHash("sha256").update(verifier).digest("base64url"));
+  assert.match(verifier, /^[A-Za-z0-9_-]+$/);
+  assert.ok(verifier.length >= 43, "at least 256 bits of entropy encoded");
+  assert.notEqual(verifier, codeChallengeS256(verifier));
+  assert.equal(deriveCodeVerifier("NONCE", key), verifier, "the callback re-derives the same verifier");
+  assert.notEqual(deriveCodeVerifier("OTHER", key), verifier, "a different login gets a different verifier");
+  assert.notEqual(deriveCodeVerifier("NONCE", randomBytes(32)), verifier, "knowing the nonce is not enough");
+  assert.throws(() => deriveCodeVerifier("", key), /nonce required/);
 });
 
 test("buildAuthorizeUrl carries code+PKCE+state+nonce", () => {

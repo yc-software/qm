@@ -73,10 +73,12 @@ export async function refreshChatGPTTokens(refreshToken: string): Promise<UserOA
 export interface ClaudeAuthStart {
   authorizeUrl: string;
   verifier: string;
+  state: string;
 }
 
 export function startClaudeLogin(): ClaudeAuthStart {
   const verifier = generateCodeVerifier();
+  const state = generateCodeVerifier();
   const challenge = codeChallengeS256(verifier);
   const url = new URL(CLAUDE_AUTHORIZE);
   url.searchParams.set("code", "true");
@@ -86,12 +88,21 @@ export function startClaudeLogin(): ClaudeAuthStart {
   url.searchParams.set("scope", CLAUDE_SCOPE);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
-  url.searchParams.set("state", verifier);
-  return { authorizeUrl: url.toString(), verifier };
+  url.searchParams.set("state", state);
+  return { authorizeUrl: url.toString(), verifier, state };
 }
 
-export async function completeClaudeLogin(pastedCode: string, verifier: string): Promise<UserOAuthTokens> {
-  const [code, state] = pastedCode.trim().split("#");
+export async function completeClaudeLogin(
+  pastedCode: string,
+  verifier: string,
+  expectedState?: string,
+): Promise<UserOAuthTokens> {
+  const [code, pastedState] = pastedCode.trim().split("#");
+  if (pastedState && expectedState && pastedState !== expectedState) {
+    throw new Error("this code belongs to a different login attempt — start the connect flow again");
+  }
+  const state = pastedState || expectedState;
+  if (!state) throw new Error("paste the whole code from claude.ai, including the part after the #");
   const res = await fetch(CLAUDE_TOKEN, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -99,7 +110,7 @@ export async function completeClaudeLogin(pastedCode: string, verifier: string):
       grant_type: "authorization_code",
       client_id: CLAUDE_CLIENT_ID,
       code,
-      state: state ?? verifier,
+      state,
       code_verifier: verifier,
       redirect_uri: CLAUDE_REDIRECT,
     }),

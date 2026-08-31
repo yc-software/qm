@@ -6,9 +6,11 @@ import {
   makeRefresh,
   openOAuthState,
   sealOAuthState,
+  sealPkceState,
+  pkceVerifierFor,
   createSecretClientResolver,
   scopesFor,
-  generateCodeVerifier,
+  deriveCodeVerifier,
   codeChallengeS256,
   PROVIDERS,
   type FetchLike,
@@ -364,11 +366,14 @@ test("codeChallengeS256 matches the RFC 7636 test vector", () => {
   assert.equal(codeChallengeS256(verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
 });
 
-test("generateCodeVerifier is URL-safe and high-entropy", () => {
-  const v = generateCodeVerifier();
+test("deriveCodeVerifier is URL-safe, deterministic per nonce, and bound to the server secret", () => {
+  const v = deriveCodeVerifier("nonce-1", "state-secret");
   assert.match(v, /^[A-Za-z0-9_-]+$/, "base64url, no padding");
   assert.ok(v.length >= 43, "at least 256 bits of entropy encoded");
-  assert.notEqual(v, generateCodeVerifier(), "fresh each call");
+  assert.equal(v, deriveCodeVerifier("nonce-1", "state-secret"), "same nonce re-derives the same verifier");
+  assert.notEqual(v, deriveCodeVerifier("nonce-2", "state-secret"), "a different request gets a different verifier");
+  assert.notEqual(v, deriveCodeVerifier("nonce-1", "other-secret"), "unguessable without the server secret");
+  assert.throws(() => deriveCodeVerifier("nonce-1", ""), /secret required/);
 });
 
 test("authorizeUrl adds code_challenge + S256 only when a challenge is supplied", async () => {
@@ -408,13 +413,40 @@ test("exchangeCode sends code_verifier in the token body when provided, omits it
   assert.doesNotMatch(bodies[1]!, /code_verifier/, "no verifier when none provided");
 });
 
-test("OAuth state round-trips the PKCE verifier", async () => {
-  const sealed = await sealOAuthState(
-    { provider: "x", principalId: "U1", redirectUri: "https://app/cb", codeVerifier: "ver-abc" },
-    { secret: "state-secret" },
+test("sealPkceState keeps the verifier out of the browser-visible state; the callback re-derives it", async () => {
+  const secret = "state-secret";
+  const { state, codeChallenge } = await sealPkceState(
+    { provider: "x", principalId: "U1", redirectUri: "https://app/cb" },
+    { secret },
   );
-  const opened = await openOAuthState(sealed, { secret: "state-secret" });
-  assert.equal(opened.codeVerifier, "ver-abc");
+  assert.ok(codeChallenge, "a PKCE provider mints a challenge");
+
+  const payload = Buffer.from(state.split(".")[1]!, "base64url").toString("utf8");
+  const claims = JSON.parse(payload) as Record<string, unknown>;
+  for (const [claim, value] of Object.entries(claims)) {
+    if (typeof value !== "string") continue;
+    assert.notEqual(
+      codeChallengeS256(value),
+      codeChallenge,
+      `a signed-not-encrypted state must not carry the verifier — claim "${claim}" is it in plain sight`,
+    );
+  }
+
+  const opened = await openOAuthState(state, { secret });
+  const verifier = pkceVerifierFor(opened, secret);
+  assert.ok(verifier, "the callback re-derives a verifier");
+  assert.equal(codeChallengeS256(verifier), codeChallenge, "the re-derived verifier matches the challenge sent");
+  assert.ok(!payload.includes(verifier), "the state the user-agent carries is free of the verifier at any depth");
+});
+
+test("an empty nonce cannot collapse the verifier to a constant", async () => {
+  const secret = "state-secret";
+  assert.throws(() => deriveCodeVerifier("", secret), /nonce required/);
+  const sealed = await sealOAuthState(
+    { provider: "x", principalId: "U1", redirectUri: "https://app/cb", nonce: "" },
+    { secret },
+  );
+  await assert.rejects(openOAuthState(sealed, { secret }), /invalid OAuth state/);
 });
 
 const xClient = (): Promise<ResolvedClient> => resolve("x", {});

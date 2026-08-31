@@ -117,9 +117,10 @@ async function claudeComplete(ctx: ApiCtx): Promise<void> {
   const body = bodyObj(ctx);
   const code = typeof body.code === "string" ? body.code : "";
   const verifier = typeof body.verifier === "string" ? body.verifier : "";
+  const state = typeof body.state === "string" && body.state ? body.state : undefined;
   if (!code || !verifier) return sendJson(ctx.res, 400, { error: "bad_request" });
   try {
-    const tokens = await completeClaudeLogin(code, verifier);
+    const tokens = await completeClaudeLogin(code, verifier, state);
     await ctx.deps.userModelCredentials.setOAuth(principal, "anthropic", tokens);
     audit(ctx.deps, {
       principalId: principal,
