@@ -19,6 +19,7 @@ export interface ToolPayload {
   code?: number;
   timedOut?: boolean;
   action?: string;
+  text?: string;
   process_id?: string;
   monitor_id?: string;
   added?: number;
@@ -62,6 +63,17 @@ export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): Too
 function callIdOf(a: ToolActivity): string | undefined {
   const id = (a.payload as { callId?: unknown } | null)?.callId;
   return typeof id === "string" && id ? id : undefined;
+}
+
+export function postSpeechText(row: ToolRowModel, allowInFlight = false): string | null {
+  const call = (row.call?.payload ?? {}) as ToolPayload;
+  if (call.action !== "post" || typeof call.text !== "string" || !call.text.trim()) return null;
+  if (row.result) {
+    const result = (row.result.payload ?? {}) as ToolPayload & { isError?: boolean; ok?: boolean };
+    if (result.isError === true || result.ok === false || result.error || result.denied === true) return null;
+    return call.text;
+  }
+  return allowInFlight ? call.text : null;
 }
 
 function orphanCallSignature(row: ToolRowModel): string | null {
