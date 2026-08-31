@@ -45,14 +45,48 @@ npm i -g memorable-cli     # provides `memorable`
 npm i pg                   # the qm backend's Postgres driver; it is not bundled
 ```
 
-It reads four things from the environment QM spawns it with:
+#### Getting a key
+
+There is no key to request and no form to fill in. Run this once, on a machine with a
+browser:
+
+```
+memorable login
+```
+
+It opens a loopback listener and your browser at the Memorable sign-in page; signing in
+creates the account if you do not have one and writes the issued key to
+`~/.memorable/config.json` (mode 0600). On a container, an SSH session or a CI runner,
+`memorable login --code` prints a short code and a URL to approve it from somewhere else.
+
+A QM server process has no browser and no home directory to read, so copy the `api_key`
+value out of that file and set it as `MEMORABLE_API_KEY` in the server's environment.
+That is the only manual step. Everything the environment does not supply falls back to
+the config file, and an explicit environment variable always wins.
+
+#### What the CLI reads from QM's environment
 
 | Variable            | Effect                                                    |
 | ------------------- | --------------------------------------------------------- |
 | `MEMORABLE_BACKEND` | `qm` — store in QM's Postgres rather than on this machine |
 | `MEMORABLE_DB_URL`  | Where. Falls back to `DATABASE_URL`, which is QM's own    |
 | `MEMORABLE_API_URL` | The extraction service                                    |
-| `MEMORABLE_API_KEY` | The key for it                                            |
+| `MEMORABLE_API_KEY` | The key `memorable login` issued, above                   |
+
+#### What lands in your database
+
+QM ships no migration for this and the schema is not QM's. The CLI creates three tables
+on first write, in the database `MEMORABLE_DB_URL` (or `DATABASE_URL`) already points at:
+
+```sql
+CREATE TABLE IF NOT EXISTS memorable_procedures (id TEXT PRIMARY KEY, json JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS memorable_mode       (id TEXT PRIMARY KEY, json JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS memorable_stats      (id TEXT PRIMARY KEY, json JSONB NOT NULL);
+```
+
+They use QM's own DurableMap row shape, so QM can adopt them natively later. No new
+database is created. Removing the integration leaves these three tables behind; drop them
+if you want the data gone.
 
 QM calls exactly two of its subcommands:
 
