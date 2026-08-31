@@ -1,4 +1,5 @@
 import { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -35,6 +36,7 @@ const WORKSPACE_DIR = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
 const HOME_TAR = "/tmp/agent-home.tar";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
+const INSTALLED_EXECUTABLE_LIMIT = 1024 * 1024;
 const SNAPSHOT_PRUNE = [
   "./.cache",
   "./.cache/*",
@@ -95,6 +97,8 @@ export interface AwsSandboxOptions {
 interface BodyRef {
   microvmId: string;
   endpoint: string;
+  imageIdentifier?: string;
+  imageVersion?: string;
 }
 
 export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOptions): Sandbox {
@@ -222,30 +226,62 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     return resolvedImageArn;
   }
 
-  async function launchBody(scope: string | undefined): Promise<{ id: string; endpoint: string }> {
+  async function launchBody(
+    executionAuthority?: "none",
+  ): Promise<{ id: string; endpoint: string; imageIdentifier: string; imageVersion?: string }> {
+    const selectedImage = await imageArn();
     const run = await api.runMicrovm({
-      imageIdentifier: await imageArn(),
+      imageIdentifier: selectedImage,
       ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
       ingressNetworkConnectors: ingress,
-      egressNetworkConnectors: egress,
-      ...(opts.executionRoleArn ? { executionRoleArn: opts.executionRoleArn } : {}),
+      egressNetworkConnectors: executionAuthority === "none" ? [] : egress,
+      ...(opts.executionRoleArn && executionAuthority !== "none" ? { executionRoleArn: opts.executionRoleArn } : {}),
       idlePolicy: {
         autoResumeEnabled: true,
         maxIdleDurationSeconds: opts.maxIdleDurationSeconds ?? 900,
         suspendedDurationSeconds: opts.suspendedDurationSeconds ?? 3600,
       },
       maximumDurationInSeconds,
-      clientToken: `${scope ?? "scratch"}-${Date.now()}`,
+      clientToken: `${executionAuthority === "none" ? "authority-none" : "standard"}-${randomUUID()}`,
     });
-    const ready = await api.waitForState(run.microvmId, "RUNNING");
-    const endpoint = run.endpoint ?? ready.endpoint;
-    if (!endpoint) throw new Error(`microVM ${run.microvmId} has no endpoint`);
-    endpointById.set(run.microvmId, endpoint);
-    await client.waitDaemon(run.microvmId, endpoint);
-    return { id: run.microvmId, endpoint };
+    try {
+      const ready = await api.waitForState(run.microvmId, "RUNNING");
+      const observedImageArn = ready.imageArn ?? run.imageArn;
+      const observedImageVersion = ready.imageVersion ?? run.imageVersion;
+      if (run.imageArn && ready.imageArn && run.imageArn !== ready.imageArn) {
+        throw new Error("AWS sandbox provider returned conflicting MicroVM image ARNs");
+      }
+      if (run.imageVersion && ready.imageVersion && run.imageVersion !== ready.imageVersion) {
+        throw new Error("AWS sandbox provider returned conflicting MicroVM image versions");
+      }
+      if (executionAuthority === "none" && (run.executionRoleArn || ready.executionRoleArn)) {
+        throw new Error("AWS sandbox authority-free MicroVM unexpectedly has an execution role");
+      }
+      if (executionAuthority === "none" && observedImageArn !== selectedImage) {
+        throw new Error("AWS sandbox authority-free MicroVM image ARN does not match the selected image");
+      }
+      if (opts.imageVersion && observedImageVersion !== opts.imageVersion) {
+        throw new Error("AWS sandbox MicroVM image version does not match the selected version");
+      }
+      const endpoint = run.endpoint ?? ready.endpoint;
+      if (!endpoint) throw new Error(`microVM ${run.microvmId} has no endpoint`);
+      endpointById.set(run.microvmId, endpoint);
+      await client.waitDaemon(run.microvmId, endpoint);
+      return {
+        id: run.microvmId,
+        endpoint,
+        imageIdentifier: observedImageArn ?? selectedImage,
+        ...(observedImageVersion ? { imageVersion: observedImageVersion } : {}),
+      };
+    } catch (error) {
+      await api.terminate(run.microvmId).catch(() => {});
+      throw error;
+    }
   }
 
-  async function ensureBody(scope: string): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
+  async function ensureBody(
+    scope: string,
+  ): Promise<{ id: string; endpoint: string; coldStart: boolean; imageIdentifier?: string; imageVersion?: string }> {
     return provisionQueue(scope, () =>
       advisoryLock.withLock(`aws-provision:${scope}`, async () => {
         const stored = await store.get(scope);
@@ -268,7 +304,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
             await api.terminate(stored.microvmId).catch(() => {});
           }
         }
-        const body = await launchBody(scope);
+        const body = await launchBody();
         scopeByMicrovm.set(body.id, scope);
         const hydrated = await hydrateHome(scope, body.id);
         await store.put(scope, {
@@ -279,25 +315,52 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
           ...(hydrated ? { lastSnapshotMs: Date.now() } : {}),
           orgId: configOrgId(),
         });
-        return { id: body.id, endpoint: body.endpoint, coldStart: !hydrated };
+        return {
+          id: body.id,
+          endpoint: body.endpoint,
+          coldStart: !hydrated,
+          imageIdentifier: body.imageIdentifier,
+          imageVersion: body.imageVersion,
+        };
       }),
     );
   }
 
-  async function ensureScratch(key: string): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
-    return provisionQueue(`scratch:${key}`, async () => {
-      const existing = scratchByKey.get(key);
+  async function ensureScratch(
+    key: string,
+    executionAuthority?: "none",
+  ): Promise<{ id: string; endpoint: string; coldStart: boolean; imageIdentifier?: string; imageVersion?: string }> {
+    const cacheKey = `${executionAuthority ?? "default"}:${key}`;
+    return provisionQueue(`scratch:${cacheKey}`, async () => {
+      const existing = scratchByKey.get(cacheKey);
       if (existing) {
         const desc = await api.tryGetMicrovm(existing.microvmId);
         if (desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING") {
           endpointById.set(existing.microvmId, existing.endpoint);
           await ensureRunning(existing.microvmId);
-          return { id: existing.microvmId, endpoint: existing.endpoint, coldStart: false };
+          return {
+            id: existing.microvmId,
+            endpoint: existing.endpoint,
+            coldStart: false,
+            imageIdentifier: existing.imageIdentifier,
+            imageVersion: existing.imageVersion,
+          };
         }
       }
-      const body = await launchBody(undefined);
-      scratchByKey.set(key, { microvmId: body.id, endpoint: body.endpoint });
-      return { id: body.id, endpoint: body.endpoint, coldStart: true };
+      const body = await launchBody(executionAuthority);
+      scratchByKey.set(cacheKey, {
+        microvmId: body.id,
+        endpoint: body.endpoint,
+        imageIdentifier: body.imageIdentifier,
+        imageVersion: body.imageVersion,
+      });
+      return {
+        id: body.id,
+        endpoint: body.endpoint,
+        coldStart: true,
+        imageIdentifier: body.imageIdentifier,
+        imageVersion: body.imageVersion,
+      };
     });
   }
 
@@ -368,9 +431,12 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
+      if (provOpts?.executionAuthority === "none" && !scratch) {
+        throw new Error("AWS sandbox authority-free execution requires a scratch MicroVM");
+      }
       const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
       const scope = writable?.scopeId ?? "default";
-      const body = scratch ? await ensureScratch(scratch.key) : await ensureBody(scope);
+      const body = scratch ? await ensureScratch(scratch.key, provOpts?.executionAuthority) : await ensureBody(scope);
       const id = body.id;
       endpointById.set(id, body.endpoint);
       const coldStart = body.coldStart;
@@ -387,7 +453,11 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         id,
         rootDir: WORKSPACE_DIR,
         homeDir: HOME_DIR,
+        backend: "aws",
         coldStart,
+        ...(body.imageIdentifier ? { imageIdentifier: body.imageIdentifier } : {}),
+        ...(body.imageVersion ? { imageVersion: body.imageVersion } : {}),
+        ...(provOpts?.executionAuthority === "none" ? { executionAuthority: "none" as const } : {}),
         ...(scratch ? { scratch: true } : {}),
         ...(env ? { env } : {}),
       };
@@ -426,6 +496,33 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     },
     async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
       return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
+    },
+    async readInstalledExecutable(handle, binary): Promise<Uint8Array | null> {
+      if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(binary)) throw new Error("invalid installed executable name");
+      const res = await client.daemon(handle.id, await resolveEndpoint(handle.id), "/attest-executable", { binary });
+      if (res.status === 404) return null;
+      if (res.status !== 200) throw new Error(`microVM installed executable read failed (${res.status})`);
+      if (Buffer.byteLength(res.text, "utf8") > Math.ceil((INSTALLED_EXECUTABLE_LIMIT * 4) / 3) + 100) {
+        throw new Error("microVM installed executable exceeded the size limit");
+      }
+      const parsed = JSON.parse(res.text) as { b64?: unknown; size?: unknown; mode?: unknown };
+      if (
+        Object.keys(parsed).length !== 3 ||
+        typeof parsed.b64 !== "string" ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(parsed.b64) ||
+        !Number.isInteger(parsed.size) ||
+        !Number.isInteger(parsed.mode) ||
+        (parsed.mode as number) < 0 ||
+        (parsed.mode as number) > 0o777 ||
+        ((parsed.mode as number) & 0o111) === 0
+      ) {
+        throw new Error("microVM installed executable read returned invalid data");
+      }
+      const bytes = Buffer.from(parsed.b64, "base64");
+      if (!bytes.length || bytes.byteLength > INSTALLED_EXECUTABLE_LIMIT || bytes.byteLength !== parsed.size) {
+        throw new Error("microVM installed executable exceeded the size limit");
+      }
+      return bytes;
     },
     async readFile(handle, relPath): Promise<string | null> {
       const bytes = await sandbox.readFileBytes(handle, relPath);

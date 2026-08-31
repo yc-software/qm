@@ -28,9 +28,10 @@ import {
   writeHeartbeat,
   writeMeta,
 } from "../scripts/dev/lib/lease.ts";
-import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
+import { assembleEnv, completeDevSecuritySecrets, withoutTransientProviderSecrets } from "../scripts/dev/lib/envctx.ts";
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
 import { loadConfig, OPENCODE_RUNTIME_VERSION, providerKeysPresent } from "../src/config.ts";
+import { DEV_GEMINI_BASE_URL, DEV_GEMINI_MODEL } from "../src/model/dev-gemini-provider.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
 
 function tmpStore(): string {
@@ -265,6 +266,21 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(codex.env.HARNESS, "codex");
   assert.equal(codex.openaiKeySource, "your shell export");
 
+  const gemini = await assembleEnv({
+    worktree,
+    callerEnv: { GEMINI_API_KEY: "gemini-secret" },
+    allowMock: false,
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(gemini.harness, "pi");
+  assert.equal(gemini.env.HARNESS, "pi");
+  assert.equal(gemini.env.PI_MODEL, DEV_GEMINI_MODEL);
+  assert.equal(gemini.env.GEMINI_API_KEY, undefined);
+  assert.equal(gemini.coreEnv.GEMINI_API_KEY, "gemini-secret");
+  assert.equal(gemini.coreEnv.GEMINI_BASE_URL, DEV_GEMINI_BASE_URL);
+  assert.equal(gemini.geminiKeySource, "your shell export");
+
   const claude = await assembleEnv({
     worktree,
     callerEnv: { HARNESS: "claude" },
@@ -321,6 +337,38 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(mock.harness, "mock");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;
   else process.env.QM_DEV_ENV = prevLive;
+  rmSync(worktree, { recursive: true, force: true });
+});
+
+test("Gemini dev credentials fail closed on files, endpoint, model, and harness", async () => {
+  const worktree = mkdtempSync(join(tmpdir(), "qm-wt-"));
+  mkdirSync(join(worktree, ".git"));
+  const liveEnv = join(worktree, "dev.env");
+  writeFileSync(liveEnv, "");
+  const previous = process.env.QM_DEV_ENV;
+  process.env.QM_DEV_ENV = liveEnv;
+  const options = { worktree, allowMock: false, log: () => {}, probeLoginShell: async () => "" };
+  await assert.rejects(
+    assembleEnv({ ...options, callerEnv: { GEMINI_API_KEY: "key", GEMINI_BASE_URL: "https://proxy.example" } }),
+    /GEMINI_BASE_URL/,
+  );
+  await assert.rejects(
+    assembleEnv({ ...options, callerEnv: { GEMINI_API_KEY: "key", GEMINI_MODEL: "gemini-other" } }),
+    /GEMINI_MODEL/,
+  );
+  await assert.rejects(
+    assembleEnv({ ...options, callerEnv: { GEMINI_API_KEY: "key", HARNESS: "opencode" } }),
+    /requires HARNESS=pi/,
+  );
+  await assert.rejects(
+    assembleEnv({ ...options, callerEnv: { GEMINI_API_KEY: "key", HARNESS: "codex", OPENAI_API_KEY: "key" } }),
+    /requires HARNESS=pi/,
+  );
+  writeFileSync(join(worktree, ".env"), "GEMINI_API_KEY=file-secret\n");
+  await assert.rejects(assembleEnv({ ...options, callerEnv: {} }), /invoking process environment/);
+  assert.deepEqual(withoutTransientProviderSecrets({ A: "1", GEMINI_API_KEY: "secret" }), { A: "1" });
+  if (previous === undefined) delete process.env.QM_DEV_ENV;
+  else process.env.QM_DEV_ENV = previous;
   rmSync(worktree, { recursive: true, force: true });
 });
 
@@ -417,6 +465,7 @@ test("supervised children share the selected dev org", () => {
       HOME: "/tmp/home",
       CODEX_HOME: "/tmp/home/.codex",
     },
+    coreEnv: {},
     watch: false,
     webUiBasePath: "/",
     slack: { botToken: "xoxb-test", appToken: "xapp-test" },
@@ -447,6 +496,39 @@ test("child specs omit Slack env when no Slack tokens are supplied", () => {
     worktree: "/tmp/worktree",
     ports: slotPorts("pool1"),
     baseEnv: {},
+    coreEnv: { GEMINI_API_KEY: "transient-secret", DEV_INSTANCE_GEMINI_PROVIDER: "1" },
+    watch: false,
+    webUiBasePath: "/",
+    sessionStore: "memory",
+    runStore: "memory",
+    databaseUrl: "",
+    adminGrantsSeed: "",
+    coreSigningSecret: "",
+    portalSessionSecret: "secret",
+    portalDevPrincipal: "U1",
+    sandboxEnv: {},
+  };
+  const specs = buildChildSpecs(inputs);
+  const core = specs.find((spec) => spec.name === "core")!;
+  assert.equal(core.env.SLACK_BOT_TOKEN, undefined);
+  assert.equal(core.env.SLACK_APP_TOKEN, undefined);
+  assert.equal(core.env.DEV_INTROSPECTION, undefined);
+  assert.equal(core.env.DEV_HEALTH_PORT, undefined);
+  assert.equal(core.env.CORE_ORG_ID, "acme");
+  assert.equal(core.env.PUBLIC_WEB_URL, `http://localhost:${inputs.ports.portal}`);
+  assert.equal(core.env.GEMINI_API_KEY, "transient-secret");
+  for (const spec of specs.filter((child) => child.name !== "core")) {
+    assert.equal(spec.env.GEMINI_API_KEY, undefined);
+    assert.equal(spec.env.DEV_INSTANCE_GEMINI_PROVIDER, undefined);
+  }
+});
+
+test("child specs keep an operator-set PUBLIC_WEB_URL so Slack playground links are reachable", () => {
+  const inputs: SpecInputs = {
+    worktree: "/tmp/worktree",
+    ports: slotPorts("pool1"),
+    baseEnv: { PUBLIC_WEB_URL: "https://tunnel.example" },
+    coreEnv: {},
     watch: false,
     webUiBasePath: "/",
     sessionStore: "memory",
@@ -459,11 +541,28 @@ test("child specs omit Slack env when no Slack tokens are supplied", () => {
     sandboxEnv: {},
   };
   const core = buildChildSpecs(inputs).find((spec) => spec.name === "core")!;
-  assert.equal(core.env.SLACK_BOT_TOKEN, undefined);
-  assert.equal(core.env.SLACK_APP_TOKEN, undefined);
-  assert.equal(core.env.DEV_INTROSPECTION, undefined);
-  assert.equal(core.env.DEV_HEALTH_PORT, undefined);
-  assert.equal(core.env.CORE_ORG_ID, "acme");
+  assert.equal(core.env.PUBLIC_WEB_URL, "https://tunnel.example");
+});
+
+test("child specs replace an empty operator PUBLIC_WEB_URL with the local portal", () => {
+  const inputs: SpecInputs = {
+    worktree: "/tmp/worktree",
+    ports: slotPorts("pool1"),
+    baseEnv: { PUBLIC_WEB_URL: "" },
+    coreEnv: {},
+    watch: false,
+    webUiBasePath: "/",
+    sessionStore: "memory",
+    runStore: "memory",
+    databaseUrl: "",
+    adminGrantsSeed: "",
+    coreSigningSecret: "",
+    portalSessionSecret: "secret",
+    portalDevPrincipal: "U1",
+    sandboxEnv: {},
+  };
+  const core = buildChildSpecs(inputs).find((spec) => spec.name === "core")!;
+  assert.equal(core.env.PUBLIC_WEB_URL, `http://localhost:${inputs.ports.portal}`);
 });
 
 test("formatAge renders the bash-compatible shapes", () => {

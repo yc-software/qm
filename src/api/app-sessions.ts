@@ -11,7 +11,7 @@ import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
-import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/attachments.ts";
+import { attachmentMime, MAX_ATTACHMENT_BYTES, safeAttachmentName } from "../core/attachments.ts";
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
@@ -115,7 +115,7 @@ export function createSessionMethods(
       const createdInScope = input.scopeId ?? ownerScopeId;
       if (!(await canUseContext(principalId, createdInScope))) return null;
       const name = safeAttachmentName(input.name);
-      const mimetype = (input.mimetype ?? mimeFromName(name)).split(";")[0]!.trim().toLowerCase() || mimeFromName(name);
+      const mimetype = attachmentMime(name, input.mimetype);
       const id = fileArtifactId(`upload:${principalId}:${createdInScope}:${Date.now()}:${randomUUID()}`, "in", 0);
       const path = artifactPath(id, name);
       const { artifact } = await deps.files.put({

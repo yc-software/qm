@@ -258,7 +258,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
         "Paste the Client ID + Client secret below; we validate by dry-running the consent URL.",
       ],
       scopesRationale:
-        "gmail.modify/calendar/drive/spreadsheets/tasks back the Google Workspace skills; openid+email identify the account.",
+        "gmail.modify/calendar/drive/spreadsheets/tasks back the Google Workspace skills; Drive authority also covers Docs and Slides; openid+email identify the account.",
     },
   },
 

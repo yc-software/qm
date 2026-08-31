@@ -1060,7 +1060,8 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
   ]);
-  const harnessId = deps.harnessId ?? "pi";
+  const forcedRuntime = deps.runtimeChoiceOverride;
+  const harnessId = forcedRuntime?.harnessId ?? deps.harnessId ?? "pi";
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
   const configuredKeys = deps.providerKeys ?? managedKeys;
   const providerStatus = harnessId === "pi" && managedKeys ? managedKeys : configuredKeys;
@@ -1068,10 +1069,15 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
   const allowed = selectableCatalogForHarness(catalog, harnessId).map((model) => model.id);
-  const configuredPicker = webuiModels?.filter((id) => modelSupportedByHarness(id, harnessId)) ?? [];
-  const resolvedBase = modelSupportedByHarness(baseModel ?? undefined, harnessId)
-    ? baseModel!
-    : defaultModelForHarness(harnessId, deps.baseModelDefault);
+  const configuredPicker = forcedRuntime
+    ? [forcedRuntime.modelId]
+    : (webuiModels?.filter((id) => modelSupportedByHarness(id, harnessId)) ?? []);
+  let resolvedBase = forcedRuntime?.modelId;
+  if (!resolvedBase) {
+    resolvedBase = modelSupportedByHarness(baseModel ?? undefined, harnessId)
+      ? baseModel!
+      : defaultModelForHarness(harnessId, deps.baseModelDefault);
+  }
   const resolvedBranding = {
     ...(branding.accent ? { accent: branding.accent } : {}),
     ...(branding.mark ? { mark: branding.mark } : {}),
@@ -1114,6 +1120,22 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
 
 async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<string, unknown>> {
   const config = ctx.deps.config!;
+  const forcedRuntime = ctx.deps.runtimeChoiceOverride;
+  if (forcedRuntime) {
+    const model = resolveModel(forcedRuntime.modelId);
+    return {
+      scopeId: scope,
+      approvedHarnesses: [forcedRuntime.harnessId],
+      modelsByHarness: { [forcedRuntime.harnessId]: [forcedRuntime.modelId] },
+      modelCatalog: model ? { [forcedRuntime.modelId]: { name: model.name, provider: model.provider } } : {},
+      orgDefault: { ...forcedRuntime, revision: 0 },
+      scopeOverride: null,
+      effective: forcedRuntime,
+      upgradeAvailable: false,
+      fastModeModelIds: FAST_MODE_MODEL_IDS,
+      interactiveFastMode: await config.getInteractiveFastModeDurable(),
+    };
+  }
   const fallback = runtimeFallback(ctx);
   const org = orgScope(ctx.deps);
   const approvedHarnesses = ((await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId]).filter(isHarnessId);
@@ -1257,6 +1279,18 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
+  const forcedRuntime = ctx.deps.runtimeChoiceOverride;
+  if (forcedRuntime) {
+    const requestedHarness = ctx.body.harnessId;
+    const requestedModel = ctx.body.modelId;
+    if (
+      (requestedHarness !== undefined && requestedHarness !== forcedRuntime.harnessId) ||
+      (requestedModel !== undefined && requestedModel !== forcedRuntime.modelId)
+    ) {
+      return sendJson(ctx.res, 400, { error: "runtime_fixed" });
+    }
+    return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
+  }
   const config = ctx.deps.config;
   if (ctx.body.inherit === true) await config.setRuntimeSelectionLatest(target.scope, null);
   else if (ctx.body.keep === true) {

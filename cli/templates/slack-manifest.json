@@ -65,7 +65,8 @@
         "reaction_added",
         "reaction_removed",
         "assistant_thread_started",
-        "assistant_thread_context_changed"
+        "assistant_thread_context_changed",
+        "agent_session_stopped"
       ]
     },
     "interactivity": {

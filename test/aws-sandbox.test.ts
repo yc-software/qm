@@ -143,6 +143,126 @@ test("a scratch box is a fresh, ephemeral body terminated on teardown", async ()
   assert.equal(fake.s3store.size, 0, "scratch boxes own nothing durable");
 });
 
+test("an authority-free scratch box launches without configured egress connectors or an execution role", async () => {
+  const fake = installFakeMicrovm();
+  const sb = makeSandbox(fake, { imageVersion: "3", executionRoleArn: "arn:aws:iam::123456789012:role/runtime" });
+  const handle = await sb.provision([], { scratch: { key: "authority-free" }, executionAuthority: "none" });
+  assert.deepEqual(fake.runInputs[0]?.egressNetworkConnectors, []);
+  assert.equal(fake.runInputs[0]?.executionRoleArn, undefined);
+  assert.equal(handle.backend, "aws");
+  assert.equal(handle.executionAuthority, "none");
+  assert.match(handle.imageIdentifier ?? "", /^arn:aws:lambda:/);
+  assert.equal(handle.imageVersion, "3");
+  fake.bodies.get(handle.id)!.fs.set("/usr/local/bin/sample-tool", Buffer.from("installed bytes"));
+  const installed = await sb.readInstalledExecutable!(handle, "sample-tool");
+  assert.ok(installed);
+  assert.equal(Buffer.from(installed).toString("utf8"), "installed bytes");
+  await assert.rejects(() => sb.readInstalledExecutable!(handle, "../sample-tool"), /invalid installed executable/);
+  await sb.teardown(handle, { destroy: true });
+});
+
+test("an authority-free scratch box requires provider-observed image provenance and no provider role", async (t) => {
+  const expectedArn = "arn:aws:lambda:us-west-2:0:microvm-image:img";
+  const cases: Array<{
+    name: string;
+    transform: (
+      value: Awaited<ReturnType<FakeMicrovm["api"]["runMicrovm"]>>,
+    ) => Awaited<ReturnType<FakeMicrovm["api"]["runMicrovm"]>>;
+    pattern: RegExp;
+  }> = [
+    {
+      name: "missing image ARN",
+      transform: ({ imageArn: _, ...value }) => value,
+      pattern: /image ARN does not match/,
+    },
+    {
+      name: "wrong image ARN",
+      transform: (value) => ({ ...value, imageArn: `${expectedArn}-other` }),
+      pattern: /image ARN does not match/,
+    },
+    {
+      name: "missing image version",
+      transform: ({ imageVersion: _, ...value }) => value,
+      pattern: /image version does not match/,
+    },
+    {
+      name: "wrong image version",
+      transform: (value) => ({ ...value, imageVersion: "other-version" }),
+      pattern: /image version does not match/,
+    },
+    {
+      name: "unexpected execution role",
+      transform: (value) => ({ ...value, executionRoleArn: "arn:aws:iam::123456789012:role/unexpected" }),
+      pattern: /unexpectedly has an execution role/,
+    },
+  ];
+  for (const entry of cases) {
+    await t.test(entry.name, async () => {
+      const fake = installFakeMicrovm();
+      const runMicrovm = fake.api.runMicrovm.bind(fake.api);
+      const waitForState = fake.api.waitForState.bind(fake.api);
+      fake.api.runMicrovm = async (input) => entry.transform(await runMicrovm(input));
+      fake.api.waitForState = async (id, target, options) => entry.transform(await waitForState(id, target, options));
+      const sb = makeSandbox(fake, { imageVersion: "provider-revision-3" });
+      await assert.rejects(
+        () => sb.provision([], { scratch: { key: entry.name }, executionAuthority: "none" }),
+        entry.pattern,
+      );
+      assert.equal(fake.runInputs[0]?.imageIdentifier, expectedArn);
+      assert.equal(fake.runInputs[0]?.imageVersion, "provider-revision-3");
+      assert.equal([...fake.bodies.values()][0]?.state, "TERMINATED");
+    });
+  }
+});
+
+test("scratch cache identity includes execution authority and cannot relabel a default body", async () => {
+  const fake = installFakeMicrovm();
+  const sb = makeSandbox(fake, { executionRoleArn: "arn:aws:iam::123456789012:role/runtime" });
+  const normal = await sb.provision([], { scratch: { key: "same-key" } });
+  const authorityFree = await sb.provision([], { scratch: { key: "same-key" }, executionAuthority: "none" });
+  assert.notEqual(normal.id, authorityFree.id);
+  assert.equal(fake.runCount, 2);
+  assert.notDeepEqual(fake.runInputs[0]?.egressNetworkConnectors, []);
+  assert.equal(fake.runInputs[0]?.executionRoleArn, "arn:aws:iam::123456789012:role/runtime");
+  assert.deepEqual(fake.runInputs[1]?.egressNetworkConnectors, []);
+  assert.equal(fake.runInputs[1]?.executionRoleArn, undefined);
+  assert.equal(normal.executionAuthority, undefined);
+  assert.equal(authorityFree.executionAuthority, "none");
+  const authorityFreeFirst = await sb.provision([], {
+    scratch: { key: "reverse-key" },
+    executionAuthority: "none",
+  });
+  const normalSecond = await sb.provision([], { scratch: { key: "reverse-key" } });
+  assert.notEqual(authorityFreeFirst.id, normalSecond.id);
+  assert.deepEqual(fake.runInputs[2]?.egressNetworkConnectors, []);
+  assert.equal(fake.runInputs[2]?.executionRoleArn, undefined);
+  assert.notDeepEqual(fake.runInputs[3]?.egressNetworkConnectors, []);
+  assert.equal(fake.runInputs[3]?.executionRoleArn, "arn:aws:iam::123456789012:role/runtime");
+  await sb.teardown(normal, { destroy: true });
+  await sb.teardown(authorityFree, { destroy: true });
+  await sb.teardown(authorityFreeFirst, { destroy: true });
+  await sb.teardown(normalSecond, { destroy: true });
+});
+
+test("distinct scratch keys produce authority-bound distinct AWS idempotency tokens at the same clock instant", async (t) => {
+  const fake = installFakeMicrovm();
+  const sb = makeSandbox(fake);
+  t.mock.method(Date, "now", () => 42);
+  const [first, second, unusual] = await Promise.all([
+    sb.provision([], { scratch: { key: "first" }, executionAuthority: "none" }),
+    sb.provision([], { scratch: { key: "second" }, executionAuthority: "none" }),
+    sb.provision([], { scratch: { key: `${"long/unsafe key:".repeat(100)}\n` }, executionAuthority: "none" }),
+  ]);
+  assert.notEqual(fake.runInputs[0]?.clientToken, fake.runInputs[1]?.clientToken);
+  assert.match(fake.runInputs[0]?.clientToken ?? "", /^authority-none-[0-9a-f-]{36}$/);
+  assert.match(fake.runInputs[1]?.clientToken ?? "", /^authority-none-[0-9a-f-]{36}$/);
+  assert.match(fake.runInputs[2]?.clientToken ?? "", /^authority-none-[0-9a-f-]{36}$/);
+  assert.ok((fake.runInputs[2]?.clientToken?.length ?? 0) < 64);
+  await sb.teardown(first, { destroy: true });
+  await sb.teardown(second, { destroy: true });
+  await sb.teardown(unusual, { destroy: true });
+});
+
 test("concurrent provisions for one scope launch a single body", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake);

@@ -8,6 +8,8 @@ requiredCapabilities:
 
 # Google Workspace
 
+If trusted system or deployment guidance advertises a fixed Google execution tool, immediately read and use the named deployment-specific Google skill. Its commands and permission/approval UX replace every command and approval instruction below: show the exact preview, then attempt its sealed write so QM can pause on the native once-only approval. Do not ask a separate conversational yes/no question. Do not invoke this skill's Python helper, direct HTTP examples, or token variables alongside it.
+
 Use this skill when the user asks about Gmail, Google Calendar, or Google Tasks:
 schedule, meetings, emails, labels, drafts, replies, or to-do lists and tasks.
 
@@ -22,6 +24,19 @@ Do not ask the user for a token, log it, or use another principal's. If the vari
 empty or Google returns 401/403, the user either has not connected Google or connected
 before this permission existed — tell them to (re)connect it through the product OAuth
 flow.
+
+## Permission and progress UX
+
+When the user directly asks you to read their Gmail, Calendar, or Tasks, start that read
+in the same turn. Do not ask a second conversational yes/no question such as “may I read
+your calendar?”, and do not claim that you are checking before you have started the
+command. The user's request authorizes the attempt; QM's native command-approval UI is
+the only additional approval step when policy requires one. If QM pauses the command,
+stop and let that approval control speak for itself. After approval, resume the same
+operation and return either the actual result or a clear connection/permission error.
+
+This does not authorize a write. Every write still follows the separate exact-preview
+and explicit-approval rules below.
 
 ## Gmail
 

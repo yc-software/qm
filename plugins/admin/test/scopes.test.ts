@@ -80,6 +80,58 @@ test("GET /api/connector-catalog forwards the live connector catalog signed + at
   assert.equal(c.signed, true);
 });
 
+test("the MCP registry is reachable only through the signed Admin proxy", async () => {
+  for (const [method, path, corePath] of [
+    ["GET", "/api/mcp-servers", "/v1/admin/mcp-servers"],
+    ["PUT", "/api/mcp-servers/risely-brain", "/v1/admin/mcp-servers/risely-brain"],
+    ["DELETE", "/api/mcp-servers/risely-brain", "/v1/admin/mcp-servers/risely-brain"],
+  ] as const) {
+    const response = await fetch(`${base}${path}`, {
+      method,
+      headers: { cookie: ADMIN, "content-type": "application/json" },
+      ...(method === "PUT" ? { body: "{}" } : {}),
+    });
+    assert.equal(response.status, 200);
+    const call = calls.at(-1)!;
+    assert.equal(call.method, method);
+    assert.equal(call.url, corePath);
+    assert.equal(call.actor, "U-admin@acme");
+    assert.equal(call.signed, true);
+  }
+  const before = calls.length;
+  assert.equal((await fetch(`${base}/api/mcp-servers`)).status, 401);
+  assert.equal((await fetch(`${base}/api/mcp-servers/risely-brain`, { method: "PUT", body: "{}" })).status, 401);
+  assert.equal(calls.length, before);
+});
+
+test("an exact safe-id runtime self-check POST is proxied, while adjacent runtime paths stay closed", async () => {
+  const response = await fetch(`${base}/api/runtime/tools/sample-tool/self-check`, {
+    method: "POST",
+    headers: { cookie: ADMIN, "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(response.status, 200);
+  const call = calls.at(-1)!;
+  assert.equal(call.method, "POST");
+  assert.equal(call.url, "/v1/admin/runtime/tools/sample-tool/self-check");
+  assert.equal(call.actor, "U-admin@acme");
+  assert.equal(call.signed, true);
+
+  const before = calls.length;
+  assert.equal((await fetch(`${base}/api/runtime/tools/sample-tool/exec`, { method: "POST" })).status, 404);
+  assert.equal((await fetch(`${base}/api/runtime/tools/UPPER/self-check`, { method: "POST" })).status, 404);
+  assert.equal(calls.length, before);
+});
+
+test("the runtime self-check proxy requires a signed-in cookie", async () => {
+  const before = calls.length;
+  assert.equal(
+    (await fetch(`${base}/api/runtime/tools/sample-tool/self-check`, { method: "POST", body: "{}" })).status,
+    401,
+  );
+  assert.equal(calls.length, before);
+});
+
 test("the scope directory requires a signed-in cookie → 401 (no core hop)", async () => {
   const before = calls.length;
   assert.equal((await fetch(`${base}/api/scopes`)).status, 401);

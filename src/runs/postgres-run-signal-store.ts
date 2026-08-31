@@ -1,4 +1,5 @@
-import { createPgPool, type PoolClient } from "../persistence/pg-pool.ts";
+import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { insertTransactionalOutbox, TRANSACTIONAL_OUTBOX_SCHEMA } from "../persistence/transactional-outbox.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
 
@@ -18,6 +19,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       )`,
     `ALTER TABLE run_signals ADD COLUMN IF NOT EXISTS payload JSONB`,
     `CREATE INDEX IF NOT EXISTS idx_run_signals_pending ON run_signals(run_id) WHERE consumed_at IS NULL`,
+    ...TRANSACTIONAL_OUTBOX_SCHEMA,
   ]);
   const q = pg.query;
 
@@ -65,14 +67,18 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
   }
 
   return {
-    async send(runId, signal) {
-      await q(
-        `WITH ins AS (
-           INSERT INTO run_signals(run_id, kind, text, payload, created_at) VALUES ($1,$2,$3,$4,$5)
-         )
-         SELECT pg_notify('${CHANNEL}', $1)`,
-        [runId, signal.kind, signal.text ?? null, JSON.stringify(signal), Date.now()],
-      );
+    async send(runId, signal, acceptanceOutbox) {
+      await withPgTransaction(await pg.pool(), async (client) => {
+        await client.query(`INSERT INTO run_signals(run_id, kind, text, payload, created_at) VALUES ($1,$2,$3,$4,$5)`, [
+          runId,
+          signal.kind,
+          signal.text ?? null,
+          JSON.stringify(signal),
+          Date.now(),
+        ]);
+        if (acceptanceOutbox) await insertTransactionalOutbox(client, acceptanceOutbox);
+        await client.query(`SELECT pg_notify('${CHANNEL}', $1)`, [runId]);
+      });
     },
 
     async takePending(runId) {

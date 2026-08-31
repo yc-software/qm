@@ -22,6 +22,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
     runs: built.runs,
     workspace: built.workspace,
     files: built.files,
+    blobTransfer: built.blobTransfer,
     config: built.config,
     deliveries: built.deliveries,
     crons: built.crons,
@@ -1002,6 +1003,27 @@ test("a saved document is read and downloaded by artifact id", async () => {
     );
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("admin workflow artifact upload uses the shared transport MIME", async () => {
+  const s = start();
+  try {
+    const staged = await s.built.blobTransfer.put(Buffer.from('{"version":1}'));
+    const response = await fetch(`${s.base}/v1/admin/files/upload?scope=org%3Adefault-org`, {
+      method: "POST",
+      headers: { ...ALICE, "content-type": "application/json" },
+      body: JSON.stringify({
+        blobId: staged.blobId,
+        name: "summary.workflow.json",
+        mimetype: "application/json",
+      }),
+    });
+    assert.equal(response.status, 200);
+    const uploaded = (await response.json()) as { file: { mimetype: string } };
+    assert.equal(uploaded.file.mimetype, "application/vnd.qm.workflow-artifact+json;v=1");
+  } finally {
+    await s.close();
   }
 });
 

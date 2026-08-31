@@ -26,9 +26,12 @@ import type { TurnStream } from "../runs/turn-stream.ts";
 import type { TaskStore, TaskStatus } from "../tasks/task-store.ts";
 import { swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable, type RuntimeChoice } from "../harness/harness-router.ts";
-import { modelDisplayName } from "../model/pi-models.ts";
+import { modelDisplayName, resolveModel } from "../model/pi-models.ts";
+import type { McpAuthoritySigner } from "../mcp/mcp-authority.ts";
+import type { QmAnalyticsNativeCard } from "../types.ts";
 
 interface SlackRunHooks {
+  onDelta?(delta: string): void;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
   onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
@@ -40,6 +43,7 @@ interface StoredApprovalView {
   reason?: string;
   purpose?: string;
   summary?: string;
+  grantModes?: { session: boolean; always: boolean };
   request?: Record<string, unknown>;
 }
 
@@ -79,6 +83,7 @@ export interface SlackCoreClient {
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<void>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
+  analyticsNativeCard?(delivery: Delivery): QmAnalyticsNativeCard | null;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   onDeliveryEnqueued(listener: () => void): () => void;
   pendingContextRequests(): Promise<SurfaceContextRequest[]>;
@@ -105,6 +110,7 @@ export interface SlackCoreClientDeps {
   app: App;
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
+  runtimeChoiceOverride?: RuntimeChoice;
   blobTransfer: BlobTransferStore;
   deliveries: DeliveryStore;
   metrics: MetricsSink;
@@ -115,6 +121,7 @@ export interface SlackCoreClientDeps {
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
   brandingDefault?: OrgBranding;
+  analyticsCardVerifier?: Pick<McpAuthoritySigner, "verifyAnalyticsCard">;
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
@@ -138,12 +145,22 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async surfaceHeaderFacts(scope) {
       const [choice, branding] = await Promise.all([
-        resolveRuntimeChoiceDurable(deps.config, orgScope, scope, deps.runtimeFallback),
+        resolveRuntimeChoiceDurable(
+          deps.config,
+          orgScope,
+          scope,
+          deps.runtimeFallback,
+          undefined,
+          undefined,
+          deps.runtimeChoiceOverride,
+        ),
         resolveBranding(deps.config, orgScope, deps.brandingDefault),
       ]);
       return {
         ...(branding.selfLabel ? { agentLabel: branding.selfLabel } : {}),
-        modelName: modelDisplayName(choice.modelId),
+        modelName: deps.runtimeChoiceOverride
+          ? (resolveModel(choice.modelId)?.name ?? modelDisplayName(choice.modelId))
+          : modelDisplayName(choice.modelId),
       };
     },
 
@@ -190,6 +207,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async waitRun(runId, hooks = {}) {
+      let streamedChars = 0;
       let firstBlockSignaled = false;
       let surfaceSignaled = false;
       const signalFirstBlock = (text: string): void => {
@@ -202,12 +220,20 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         surfaceSignaled = true;
         hooks.onSurfacePosted?.();
       };
+      const signalDelta = (delta: string): void => {
+        if (!delta) return;
+        streamedChars += delta.length;
+        hooks.onDelta?.(delta);
+      };
       const waiters = terminalWaiters.get(runId) ?? new Set();
       terminalWaiters.set(runId, waiters);
       const unsubscribe = deps.turnStream.subscribe(runId, {
+        onDelta: signalDelta,
         onFirstBlock: signalFirstBlock,
         onSurfacePosted: signalSurface,
       });
+      const initialSnapshot = deps.turnStream.snapshot(runId);
+      if (initialSnapshot && streamedChars === 0) signalDelta(initialSnapshot);
       let lastProgressAt = Date.now();
       let lastMark = "";
       let taskSnapshot = "";
@@ -304,6 +330,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         ...(record.reason !== undefined ? { reason: record.reason } : {}),
         ...(record.purpose !== undefined ? { purpose: record.purpose } : {}),
         ...(record.summary !== undefined ? { summary: record.summary } : {}),
+        ...(record.grantModes !== undefined ? { grantModes: record.grantModes } : {}),
         ...(record.request !== undefined ? { request: record.request as unknown as Record<string, unknown> } : {}),
       };
     },
@@ -325,6 +352,13 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     claimDeliveries(type, claimMs) {
       return deps.app.pendingDeliveries(type, claimMs);
+    },
+
+    analyticsNativeCard(delivery) {
+      return (
+        deps.analyticsCardVerifier?.verifyAnalyticsCard(delivery.trustedAnalyticsCard, delivery.destination.target) ??
+        null
+      );
     },
 
     async ackDelivery(id, body) {

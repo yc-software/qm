@@ -1,10 +1,12 @@
-export type ApprovalDecision = "require_approval" | "deny";
+export type ApprovalDecision = "allow" | "require_approval" | "deny";
 
 export interface ToolApproval {
   command?: string;
   pattern?: string;
   decision?: ApprovalDecision;
   reason?: string;
+  approvalScope?: "rule" | "command";
+  subsumesToolApproval?: true;
 }
 
 interface ToolAuthDescriptor {
@@ -37,6 +39,8 @@ export interface ToolDescriptor {
   auth?: ToolAuthDescriptor;
   approvals?: ToolApproval[];
   install?: { binary?: string };
+  selfCheck?: { kind: "executable-sha256-v1" };
+  requestWorkspace?: { maxBytes: number };
 }
 
 const BUILT_IN_CREDENTIAL_PATHS: readonly ToolCredentialPath[] = [
@@ -113,6 +117,41 @@ export function parseToolDescriptor(raw: string, sourcePath: string): ToolDescri
     out.install = binary !== undefined ? { binary: binary as string } : {};
   }
 
+  if (d["selfCheck"] !== undefined) {
+    const selfCheck = d["selfCheck"];
+    if (typeof selfCheck !== "object" || selfCheck === null || Array.isArray(selfCheck)) {
+      throw new Error(`${sourcePath}: "selfCheck" must be an object`);
+    }
+    const record = selfCheck as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length !== 1 || !keys.includes("kind")) {
+      throw new Error(`${sourcePath}: "selfCheck" supports only kind`);
+    }
+    if (record["kind"] !== "executable-sha256-v1") {
+      throw new Error(`${sourcePath}: "selfCheck.kind" must be executable-sha256-v1`);
+    }
+    out.selfCheck = { kind: "executable-sha256-v1" };
+  }
+
+  if (d["requestWorkspace"] !== undefined) {
+    const requestWorkspace = d["requestWorkspace"];
+    if (typeof requestWorkspace !== "object" || requestWorkspace === null || Array.isArray(requestWorkspace)) {
+      throw new Error(`${sourcePath}: "requestWorkspace" must be an object`);
+    }
+    const record = requestWorkspace as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== "maxBytes")) {
+      throw new Error(`${sourcePath}: "requestWorkspace" only accepts "maxBytes"`);
+    }
+    if (
+      !Number.isInteger(record["maxBytes"]) ||
+      (record["maxBytes"] as number) < 1 ||
+      (record["maxBytes"] as number) > 20 * 1024 * 1024
+    ) {
+      throw new Error(`${sourcePath}: "requestWorkspace.maxBytes" must be an integer from 1 through 20971520`);
+    }
+    out.requestWorkspace = { maxBytes: record["maxBytes"] as number };
+  }
+
   const credentialPaths = out.auth?.credentialPaths ?? [];
   for (const [index, credentialPath] of credentialPaths.entries()) {
     const { path, kind } = credentialPath;
@@ -178,6 +217,11 @@ export function parseToolDescriptor(raw: string, sourcePath: string): ToolDescri
     if (approval.pattern !== undefined && !rawApprovalTargetsTool(binary, approval.pattern)) {
       throw new Error(
         `${sourcePath}: approvals[${i}].pattern must refer to its own tool binary by starting with \\b${binary}\\b and may not use a top-level alternative`,
+      );
+    }
+    if (approval.subsumesToolApproval && !safeSubsumingPattern(binary, compiled.pattern)) {
+      throw new Error(
+        `${sourcePath}: approvals[${i}].subsumesToolApproval requires an anchored single-command safe pattern`,
       );
     }
   }
@@ -293,14 +337,41 @@ function parseApprovals(raw: unknown, sourcePath: string): ToolApproval[] {
     if (hasPattern) out.pattern = e["pattern"] as string;
     if (e["decision"] !== undefined) {
       const dec = e["decision"];
-      if (dec !== "require_approval" && dec !== "deny") {
-        throw new Error(`${sourcePath}: approvals[${i}].decision must be require_approval or deny`);
+      if (dec !== "allow" && dec !== "require_approval" && dec !== "deny") {
+        throw new Error(`${sourcePath}: approvals[${i}].decision must be allow, require_approval, or deny`);
       }
       out.decision = dec;
     }
     if (e["reason"] !== undefined) {
       if (typeof e["reason"] !== "string") throw new Error(`${sourcePath}: approvals[${i}].reason must be a string`);
       out.reason = e["reason"];
+    }
+    if (e["approvalScope"] !== undefined) {
+      if (e["approvalScope"] !== "rule" && e["approvalScope"] !== "command") {
+        throw new Error(`${sourcePath}: approvals[${i}].approvalScope must be rule or command`);
+      }
+      if (e["approvalScope"] === "command" && (e["decision"] ?? "require_approval") !== "require_approval") {
+        throw new Error(`${sourcePath}: approvals[${i}].approvalScope command requires decision require_approval`);
+      }
+      out.approvalScope = e["approvalScope"];
+    }
+    if (e["subsumesToolApproval"] !== undefined) {
+      if (e["subsumesToolApproval"] !== true) {
+        throw new Error(`${sourcePath}: approvals[${i}].subsumesToolApproval must be true`);
+      }
+      if (!hasPattern) {
+        throw new Error(`${sourcePath}: approvals[${i}].subsumesToolApproval requires an exact pattern`);
+      }
+      if ((e["decision"] ?? "require_approval") === "deny") {
+        throw new Error(`${sourcePath}: approvals[${i}].subsumesToolApproval cannot be used with deny`);
+      }
+      if ((e["decision"] ?? "require_approval") === "require_approval" && e["approvalScope"] !== "command") {
+        throw new Error(`${sourcePath}: approvals[${i}].subsumesToolApproval requires command-scoped write approval`);
+      }
+      out.subsumesToolApproval = true;
+    }
+    if (out.decision === "allow" && out.subsumesToolApproval !== true) {
+      throw new Error(`${sourcePath}: approvals[${i}].decision allow requires subsumesToolApproval`);
     }
     return out;
   });
@@ -311,6 +382,36 @@ const POSIX_FUNCTION_NAME_RE = /^[a-z_][a-z0-9_]*$/;
 const SPLIT_ENV_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
 
 const MAX_APPROVAL_PATTERN_LEN = 256;
+function safeSubsumingPattern(binary: string, pattern: string): boolean {
+  const prefix = `^${escapeRegex(binary)} `;
+  if (!pattern.startsWith(prefix) || !pattern.endsWith("$") || pattern.includes("\n") || pattern.includes("\r"))
+    return false;
+  for (let i = prefix.length; i < pattern.length - 1; i++) {
+    const char = pattern[i]!;
+    if (/[A-Za-z0-9 _@%=,:/_-]/.test(char)) continue;
+    if (char === "\\" && pattern[i + 1] === ".") {
+      i++;
+      continue;
+    }
+    if (char === "[") {
+      const end = pattern.indexOf("]", i + 1);
+      if (end < 0 || !["A-Za-z0-9", "A-Za-z0-9_-", "A-Za-z0-9._-", "a-f0-9"].includes(pattern.slice(i + 1, end))) {
+        return false;
+      }
+      i = end;
+      continue;
+    }
+    if (char === "{") {
+      const quantifier = pattern.slice(i).match(/^\{(\d+)(?:,(\d+))?\}/);
+      if (!quantifier || Number(quantifier[2] ?? quantifier[1]) > 256) return false;
+      i += quantifier[0].length - 1;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 function approvalPatternTooSlow(pattern: string): boolean {
   if (/\\[1-9]|\\k<[^>]+>/.test(pattern)) return true;
   type AtomChars = { ascii: Set<number>; asciiOnly: boolean };
@@ -579,7 +680,8 @@ function approvalPatternTooSlow(pattern: string): boolean {
 const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function rawApprovalTargetsTool(binary: string, pattern: string): boolean {
-  if (!pattern.startsWith(`\\b${escapeRegex(binary)}\\b`)) return false;
+  if (!pattern.startsWith(`\\b${escapeRegex(binary)}\\b`) && !pattern.startsWith(`^${escapeRegex(binary)} `))
+    return false;
   let depth = 0;
   let inClass = false;
   let escaped = false;
@@ -608,11 +710,31 @@ function rawApprovalTargetsTool(binary: string, pattern: string): boolean {
   return true;
 }
 
-export function compileApproval(binary: string, a: ToolApproval): { pattern: string; decision: ApprovalDecision } {
+export function compileApproval(
+  binary: string,
+  a: ToolApproval,
+): {
+  pattern: string;
+  decision: ApprovalDecision;
+  approvalScope?: "rule" | "command";
+  subsumesToolApproval?: true;
+} {
   const decision: ApprovalDecision = a.decision ?? "require_approval";
-  if (a.pattern !== undefined) return { pattern: a.pattern, decision };
+  if (a.pattern !== undefined) {
+    return {
+      pattern: a.pattern,
+      decision,
+      ...(a.approvalScope ? { approvalScope: a.approvalScope } : {}),
+      ...(a.subsumesToolApproval ? { subsumesToolApproval: true as const } : {}),
+    };
+  }
   const words = (a.command ?? "").trim().split(/\s+/).filter(Boolean).map(escapeRegex);
-  return { pattern: `\\b${[escapeRegex(binary), ...words].join("\\s+")}(?:\\b|\\s|$)`, decision };
+  return {
+    pattern: `\\b${[escapeRegex(binary), ...words].join("\\s+")}(?:\\b|\\s|$)`,
+    decision,
+    ...(a.approvalScope ? { approvalScope: a.approvalScope } : {}),
+    ...(a.subsumesToolApproval ? { subsumesToolApproval: true as const } : {}),
+  };
 }
 
 export function interpolateSplitEnv(

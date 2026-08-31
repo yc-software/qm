@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { listSlots, readSlotFlag, slotFlagged, slotPorts } from "../lib/pool.ts";
 import { heartbeatFresh, leaseStale, listLeases, myLease, supervisorAlive } from "../lib/lease.ts";
-import { callerEnvSnapshot, gitHead, repoRoot } from "../lib/envctx.ts";
+import { callerEnvSnapshot, gitHead, repoRoot, withoutTransientProviderSecrets } from "../lib/envctx.ts";
 import { portHolders } from "../lib/proc.ts";
 import { resolveSocketPath, supervisorReachable, supervisorRequest } from "../lib/client.ts";
 import { EXIT, CHILD_ORDER } from "../lib/types.ts";
@@ -138,7 +138,12 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
         sock,
         "POST",
         "/reload",
-        { callerEnv: callerEnvSnapshot(), force: false, dryRun: true },
+        {
+          callerEnv: withoutTransientProviderSecrets(callerEnvSnapshot()),
+          geminiApiKey: process.env.GEMINI_API_KEY,
+          force: false,
+          dryRun: true,
+        },
         60_000,
       ).catch(() => null);
       checks.push({

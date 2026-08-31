@@ -56,6 +56,7 @@ export interface TriggerSpec {
   readOnly?: boolean;
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
+  runIdempotency?: boolean;
 }
 
 export interface TriggerOutcome {
@@ -245,7 +246,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.shadow ? { shadow: true } : {}),
     });
   };
-  const ran = await deps.idempotency.once(spec.fireKey, async () => {
+  const execute = async () => {
     if (spec.message !== undefined) {
       status = "ok";
       if (!spec.destination) return;
@@ -328,7 +329,14 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     }
     if (res.status === "ok") note = "produced no reply";
     else note = res.reason ? `${res.status}: ${res.reason}` : res.status;
-  });
+  };
+  let ran: boolean;
+  if (spec.runIdempotency) {
+    await execute();
+    ran = true;
+  } else {
+    ran = await deps.idempotency.once(spec.fireKey, execute);
+  }
 
   const outcome: TriggerOutcome = {
     authzFailed: false,

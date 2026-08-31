@@ -24,6 +24,27 @@ test("mint → verify round-trips the claims", async () => {
   assert.deepEqual(got, { orgId: "default-org", ...c });
 });
 
+test("verified capability destinations cannot carry analytics renderer payloads", async () => {
+  const forged = claims({
+    destination: {
+      type: "slack",
+      target: "D123",
+      nativeCard: { renderer: "qm.analytics.card.v1", heading: "Invented" },
+    } as never,
+    destinations: [
+      {
+        type: "slack",
+        target: "D123",
+        key: "here",
+        label: "Here",
+        nativeCard: { renderer: "qm.analytics.card.v1", heading: "Invented" },
+      } as never,
+    ],
+  });
+  const verified = await verifyCapabilityToken(await mintCapabilityToken(forged, SECRET), SECRET);
+  assert.equal(JSON.stringify(verified).includes("nativeCard"), false);
+});
+
 test("grants round-trip and reject malformed claims", async () => {
   const granted = claims({ grants: ["admin.sessions.read"] });
   assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(granted, SECRET), SECRET), {

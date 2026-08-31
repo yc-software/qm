@@ -362,6 +362,40 @@ test("an addressed bare 'stop' still ABORTS a live AUTOMATION run", async () => 
   assert.equal(signals[0]!.kind, "abort");
 });
 
+test("an addressed message cannot steer or abort a signed scheduled run", async () => {
+  const built = freshApp();
+  const channel = "C16";
+  const root = "1600.1";
+  const threadRef = `ch:${channel}:${root}`;
+  const { run } = await built.runs.enqueue({
+    sessionId: threadRef,
+    durableSessionId: "scheduled-session-16",
+    request: {
+      surface: "slack",
+      actor: { id: "U-owner", type: "internal" },
+      conversation: {
+        kind: "channel",
+        threadRef,
+        channelRef: channel,
+        audience: [{ id: "U-owner", type: "internal" }],
+      },
+      origin: { kind: "automation", useOwnerKeychain: true },
+      text: "run the scheduled provider action",
+      unattendedGrants: ["admin.sessions.read"],
+      surfaceTools: true,
+    },
+  });
+
+  assert.deepEqual(await built.app.withdrawRun(run.id), { withdrawn: false, reason: "scheduled_run" });
+  assert.ok(await built.runs.get(run.id));
+  const follow = await built.app.turn(mention("stop", channel, root));
+  assert.notEqual(follow.runId, run.id);
+  assert.equal((await built.signals.takePending(run.id)).length, 0);
+  const fresh = await built.runs.get(follow.runId!);
+  assert.equal(fresh?.request.origin.kind, "human");
+  assert.equal(fresh?.request.unattendedGrants, undefined);
+});
+
 test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run — screened, no authority", async () => {
   const built = freshApp();
   const channel = "C15";
@@ -666,6 +700,94 @@ test("signalRun: a steer already terminal at send is refused up front", async ()
   assert.equal(refused.accepted, false);
   assert.equal(refused.reason, "terminal");
   assert.equal((await built.signals.takePending(liveRunId)).length, 0, "nothing left rotting in the queue");
+});
+
+test("signalRun and terminal replay reject every signal for a signed scheduled run", async () => {
+  const built = freshApp();
+  const threadRef = "cron:signed-provider-run";
+  const { run } = await built.runs.enqueue({
+    sessionId: threadRef,
+    durableSessionId: "scheduled-session-replay",
+    request: {
+      surface: "cron",
+      actor: { id: "U-owner", type: "internal" },
+      conversation: { kind: "dm", threadRef, audience: [{ id: "U-owner", type: "internal" }] },
+      origin: { kind: "automation", useOwnerKeychain: true },
+      text: "perform provider write",
+      unattendedGrants: ["admin.sessions.read"],
+      surfaceTools: true,
+    },
+  });
+
+  assert.deepEqual(await built.app.signalRun(run.id, { kind: "steer", text: "replace the signed action" }), {
+    accepted: false,
+    reason: "scheduled_run",
+  });
+  assert.deepEqual(await built.app.signalRun(run.id, { kind: "abort" }), {
+    accepted: false,
+    reason: "scheduled_run",
+  });
+  assert.equal((await built.signals.takePending(run.id)).length, 0);
+
+  await built.signals.send(run.id, { kind: "steer", text: "requestless provider write" });
+  await built.signals.send(run.id, {
+    kind: "steer",
+    text: "request-bearing provider write",
+    request: {
+      surface: "slack",
+      actor: { externalId: "U-owner" },
+      conversation: { kind: "dm", threadRef, audience: [{ externalId: "U-owner" }] },
+      text: "request-bearing provider write",
+      triggered: true,
+      ownerKeychainUnion: true,
+      unattendedGrants: ["admin.sessions.read"],
+      surfaceTools: true,
+    },
+  });
+  const claimed = await built.runs.claimById(run.id, "signed-worker", 30_000);
+  assert.ok(claimed?.leaseToken);
+  await built.runs.complete(run.id, claimed.leaseToken, { status: "silent" });
+  await built.app.replayOrphanedRunSignals(run.id);
+
+  assert.equal((await built.signals.takePending(run.id)).length, 0);
+  assert.deepEqual(
+    (await built.runs.list()).map((candidate) => candidate.id),
+    [run.id],
+  );
+
+  const ordinary = await built.app.turn(dm("ordinary work", "D17"));
+  assert.deepEqual(await built.app.signalRun(ordinary.runId!, { kind: "steer", text: "ordinary steer" }), {
+    accepted: true,
+  });
+  assert.equal((await built.signals.takePending(ordinary.runId!))[0]?.text, "ordinary steer");
+});
+
+test("terminal replay drops a request-bearing signal when source provenance is missing", async () => {
+  const built = freshApp();
+  const missingRunId = "missing-signed-source";
+  const before = (await built.runs.list()).map((run) => run.id);
+  await built.signals.send(missingRunId, {
+    kind: "steer",
+    text: "replay provider write",
+    request: {
+      surface: "slack",
+      actor: { externalId: "U-owner" },
+      conversation: { kind: "dm", threadRef: "missing-source", audience: [{ externalId: "U-owner" }] },
+      text: "replay provider write",
+      triggered: true,
+      ownerKeychainUnion: true,
+      unattendedGrants: ["admin.sessions.read"],
+      surfaceTools: true,
+    },
+  });
+
+  await built.app.replayOrphanedRunSignals(missingRunId);
+
+  assert.equal((await built.signals.takePending(missingRunId)).length, 0);
+  assert.deepEqual(
+    (await built.runs.list()).map((run) => run.id),
+    before,
+  );
 });
 
 function completeOnSend(built: ReturnType<typeof freshApp>): void {

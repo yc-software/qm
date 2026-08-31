@@ -1,4 +1,4 @@
-import type { ModelProvider, ModelProviderAvailability } from "../model/pi-models.ts";
+import type { HarnessId, ModelProvider, ModelProviderAvailability } from "../model/pi-models.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { CustomProviderStore } from "../model/custom-provider-store.ts";
@@ -85,6 +85,7 @@ export interface ServerDeps {
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;
   baseModelDefault?: string;
+  runtimeChoiceOverride?: { harnessId: HarnessId; modelId: string };
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   modelCredentials?: ModelCredentialStore;
@@ -109,6 +110,7 @@ export interface ServerDeps {
   files?: FileArtifactStore;
   memory?: MemoryService;
   sandboxBackend?: string;
+  sandboxImage?: { identifier: string; version?: string };
   egressDeclaredEnforcement?: EgressEnforcement;
   egressEnforcement?: EgressEnforcement;
   egressControlPlaneConfigured?: boolean;

@@ -17,6 +17,7 @@ import {
   MAX_OUTBOUND_FILES,
   MAX_INBOUND_FILES,
   MAX_SHARED_FILES_LISTED,
+  attachmentMime,
   collectOutbound,
   deliveryManifest,
   environmentNote,
@@ -91,6 +92,11 @@ test("mimeFromName maps known extensions, defaults to octet-stream", () => {
   assert.equal(mimeFromName("a.csv"), "text/csv");
   assert.equal(mimeFromName("a.PNG"), "image/png");
   assert.equal(mimeFromName("a.webp"), "image/webp");
+  assert.equal(mimeFromName("summary.workflow.json"), "application/vnd.qm.workflow-artifact+json;v=1");
+  assert.equal(
+    attachmentMime("summary.json", "application/vnd.qm.workflow-artifact+json;v=1; charset=utf-8"),
+    "application/vnd.qm.workflow-artifact+json;v=1",
+  );
   assert.equal(mimeFromName("noext"), "application/octet-stream");
 });
 
@@ -437,6 +443,14 @@ test("collectOutbound stages ./outbox/ files as blob attachments", async () => {
   assert.equal(attachments[0]!.sizeBytes, 7);
   const blob = await transfer.open(attachments[0]!.blobId);
   assert.equal((await collectBlob(blob!.stream)).toString("utf8"), "a,b\n1,2");
+});
+
+test("collectOutbound preserves the workflow artifact transport identity", async () => {
+  const { sandbox, handle, files } = fakeSandbox();
+  const transfer = createMemoryBlobTransferStore();
+  files.set("outbox/summary.workflow.json", new Uint8Array(Buffer.from('{"version":1}')));
+  const { attachments } = await collectOutbound(sandbox, handle, transfer);
+  assert.equal(attachments[0]?.mimetype, "application/vnd.qm.workflow-artifact+json;v=1");
 });
 
 test("collectOutbound delivers a safe basename for a nested outbox path (not a Slack path)", async () => {

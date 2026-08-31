@@ -1,4 +1,5 @@
 import type { TurnOrigin, TurnRequest } from "../types.ts";
+import { sanitizeDestination } from "../delivery/destination.ts";
 export type { TurnOrigin } from "../types.ts";
 
 type LegacyTurnOrigin = Pick<
@@ -30,7 +31,9 @@ export function resolveTurnOrigin(input: Partial<LegacyTurnOrigin> & { origin?: 
     return {
       kind: "automation",
       ...(screenData !== undefined ? { screenData } : {}),
-      ...((typed.destination ?? legacy.destination) ? { destination: typed.destination ?? legacy.destination! } : {}),
+      ...((typed.destination ?? legacy.destination)
+        ? { destination: sanitizeDestination(typed.destination ?? legacy.destination!) }
+        : {}),
       ...(typed.useOwnerKeychain || legacy.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
     };
   }
@@ -48,6 +51,9 @@ export function resolveTurnOrigin(input: Partial<LegacyTurnOrigin> & { origin?: 
       ...(typed.live === true || legacy.live === true ? { live: true } : {}),
     };
   }
+  if (typed.kind === "automation" && typed.destination) {
+    return { ...typed, destination: sanitizeDestination(typed.destination) };
+  }
   return typed;
 }
 
@@ -56,7 +62,7 @@ export function normalizeTurnOrigin(input: LegacyTurnOrigin): TurnOrigin {
     return {
       kind: "automation",
       ...(input.securityScreenData !== undefined ? { screenData: input.securityScreenData } : {}),
-      ...(input.triggerDestination ? { destination: input.triggerDestination } : {}),
+      ...(input.triggerDestination ? { destination: sanitizeDestination(input.triggerDestination) } : {}),
       ...(input.ownerKeychainUnion === true ? { useOwnerKeychain: true } : {}),
     };
   }

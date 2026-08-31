@@ -35,6 +35,7 @@ test("assistant events are acknowledged as no-ops and pane messages dispatch as 
   });
   assert.equal(app.hasEvent("assistant_thread_started"), true);
   assert.equal(app.hasEvent("assistant_thread_context_changed"), true);
+  assert.equal(app.hasEvent("agent_session_stopped"), true);
   await app.fire("assistant_thread_started", { assistant_thread: { channel_id: "D111", thread_ts: "100.1" } });
   await app.im({ channel: "D111", user: "U1", text: "hello", ts: "100.2", thread_ts: "100.1" });
   assert.equal(dispatched.length, 1);

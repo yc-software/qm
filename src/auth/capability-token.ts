@@ -1,6 +1,7 @@
 import { orgId as configOrgId } from "../config.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
+import { sanitizeCandidateDestination, sanitizeDestination } from "../delivery/destination.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
 
@@ -75,7 +76,17 @@ export async function verifyCapabilityToken(
   }
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
-  if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
+  if (
+    claims.destination !== undefined &&
+    (!claims.destination || typeof claims.destination !== "object" || Array.isArray(claims.destination))
+  )
+    return null;
+  if (
+    claims.destinations !== undefined &&
+    (!Array.isArray(claims.destinations) ||
+      claims.destinations.some((destination) => !destination || typeof destination !== "object"))
+  )
+    return null;
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;
   if (
     claims.grants !== undefined &&
@@ -90,7 +101,15 @@ export async function verifyCapabilityToken(
   if (claims.blob !== undefined && claims.blob?.dir !== "read" && claims.blob?.dir !== "write") return null;
   if (claims.drop !== undefined && typeof claims.drop !== "string") return null;
   if (now >= claims.exp) return null;
-  return claims;
+  try {
+    return {
+      ...claims,
+      ...(claims.destination ? { destination: sanitizeDestination(claims.destination) } : {}),
+      ...(claims.destinations ? { destinations: claims.destinations.map(sanitizeCandidateDestination) } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 const BLOB_ID = /^[0-9a-f]{32}$/;

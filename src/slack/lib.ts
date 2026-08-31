@@ -139,9 +139,13 @@ export {
   DEFAULT_ACK_REACTIONS,
   CURATED_ACK_EMOJI,
   stripAckPrefix,
+  type AckPresenter,
   createAckPresenter,
   type RunTaskView,
   renderTaskList,
   type TaskListPresenter,
   createTaskListPresenter,
+  type NativeAgentPresenter,
+  setNativeAgentSessionStatus,
+  createNativeAgentPresenter,
 } from "./presenters.ts";

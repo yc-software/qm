@@ -41,6 +41,7 @@ import { deleteModelProvider, getModelProviders, putModelProvider } from "./admi
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
+import { runtimeToolSelfCheck } from "./admin/runtime-self-check.ts";
 
 const timed =
   (handle: (ctx: ApiCtx) => void | Promise<void>) =>
@@ -98,6 +99,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/audit", auth: "either", handle: listAdminAudit },
   { method: "GET", path: "/v1/admin/security/flags", auth: "either", handle: listSecurityFlags },
   { method: "POST", path: "/v1/admin/security/release", auth: "either", handle: releaseSecurityTaint },
+  { method: "POST", path: "/v1/admin/runtime/tools/:tool/self-check", auth: "either", handle: runtimeToolSelfCheck },
   {
     match: (m, p) =>
       m === "GET" && (p === "/v1/admin/crons" || p === "/v1/admin/deployments" || p === "/v1/admin/skills"),

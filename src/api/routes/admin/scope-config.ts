@@ -56,8 +56,8 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
     const orgPolicy = deps.config.getCommandPolicy(orgScope(deps)) ?? defaultOrgPolicy();
     const effective = targetKind === "org" ? target : composePolicy(orgPolicy, target);
     const result = evaluateCommand(command, effective);
-    const effectiveRuleIndex = result.approvalKey
-      ? effective.rules.findIndex((rule) => rule.pattern === result.approvalKey)
+    const effectiveRuleIndex = result.rulePattern
+      ? effective.rules.findIndex((rule) => rule.pattern === result.rulePattern)
       : -1;
     const orgRuleCount = targetKind === "org" ? 0 : orgPolicy.rules.length;
     let ruleSource: "organization" | "scope" | null = null;

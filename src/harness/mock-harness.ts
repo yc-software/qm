@@ -59,6 +59,45 @@ function textPayload(payload: unknown): string {
   return typeof text === "string" ? text : "";
 }
 
+type ScriptedToolStep = { tool: "write"; path: string; data: string } | { tool: "execute"; command: string };
+
+function scriptedToolSteps(encoded: string): ScriptedToolStep[] {
+  const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
+  if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 8) throw new Error("invalid scripted tool flow");
+  return parsed.map((value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("invalid scripted tool step");
+    }
+    const step = value as Record<string, unknown>;
+    if (step.tool === "write" && typeof step.path === "string" && typeof step.data === "string") {
+      if (Object.keys(step).length !== 3) throw new Error("invalid scripted write step");
+      return { tool: "write", path: step.path, data: step.data };
+    }
+    if (step.tool === "execute" && typeof step.command === "string") {
+      if (Object.keys(step).length !== 2) throw new Error("invalid scripted execute step");
+      return { tool: "execute", command: step.command };
+    }
+    throw new Error("invalid scripted tool step");
+  });
+}
+
+function expandScriptedValue(value: string, environment: string, results: unknown[]): string {
+  const inbox = /\.agent-turn\/[a-f0-9]{24}\/[a-z0-9]+-[a-f0-9]{24}\/inbox\/[A-Za-z0-9._-]+/.exec(environment)?.[0];
+  return value.replace(/\{\{(inbox|result:(\d+):([A-Za-z][A-Za-z0-9]*))\}\}/g, (_match, token, index, field) => {
+    if (token === "inbox") {
+      if (!inbox) throw new Error("scripted tool flow has no inbound attachment");
+      return inbox;
+    }
+    const result = results[Number(index)];
+    if (result === null || typeof result !== "object" || Array.isArray(result)) {
+      throw new Error("scripted tool result is unavailable");
+    }
+    const expanded = (result as Record<string, unknown>)[String(field)];
+    if (typeof expanded !== "string") throw new Error("scripted tool result field is unavailable");
+    return expanded;
+  });
+}
+
 function mockProviderMessages(
   history: HarnessTurnInput["history"],
 ): Array<{ role: "user" | "assistant"; content: string }> {
@@ -144,10 +183,11 @@ export function createMockHarness(): Harness {
           kind?: "approval";
           matched?: string;
           approvalKey?: string;
+          grantModes?: { session: boolean; always: boolean };
         }> = [];
         let pausedOnApproval = false;
-        const gateTool = (tool: string): boolean => {
-          if (!turn.toolApprovalGate || turn.toolApprovalGate(tool)) return false;
+        const gateTool = (tool: string, input?: unknown): boolean => {
+          if (!turn.toolApprovalGate || turn.toolApprovalGate(tool, input)) return false;
           collected.push({
             command: tool,
             reason: "strict posture: this tool call requires human approval",
@@ -286,7 +326,7 @@ export function createMockHarness(): Harness {
           if (command0.startsWith("!scratch ")) tag = "!scratch ";
           else if (command0.startsWith("!owner ")) tag = "!owner ";
           const command = cmd.slice(cmd.indexOf(tag) + tag.length);
-          if (gateTool("execute")) {
+          if (gateTool("execute", { command })) {
             await turn.emit({
               type: "tool_call",
               payload: { tool: "execute", command, blocked: "needs_approval" },
@@ -304,6 +344,56 @@ export function createMockHarness(): Harness {
             turn.onProgress?.({ toolCalls: 1 });
             usedTool = true;
             reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
+          }
+        } else if (command0.startsWith("!tool-sequence ")) {
+          const steps = scriptedToolSteps(command0.slice("!tool-sequence ".length));
+          const results: unknown[] = [];
+          reply = "tool sequence completed";
+          for (const step of steps) {
+            if (step.tool === "write") {
+              const path = expandScriptedValue(step.path, turn.environment ?? "", results);
+              const data = expandScriptedValue(step.data, turn.environment ?? "", results);
+              if (gateTool("write", { path, data })) {
+                reply = "";
+                break;
+              }
+              await turn.tools.write(path, data);
+              results.push({ path });
+              usedTool = true;
+              continue;
+            }
+            const command = expandScriptedValue(step.command, turn.environment ?? "", results);
+            if (gateTool("execute", { command })) {
+              await turn.emit({
+                type: "tool_call",
+                payload: { tool: "execute", command, blocked: "needs_approval" },
+                scopeLabel: turn.scopeLabel,
+              });
+              reply = "";
+              usedTool = true;
+              break;
+            }
+            await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+            try {
+              const result = await turn.tools.execute(command);
+              await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+              const text = result.stdout.trim();
+              results.push(text ? JSON.parse(text) : {});
+            } catch (error) {
+              if (!(error instanceof NeedsApproval)) throw error;
+              collected.push({
+                command: error.command,
+                reason: error.approvalReason,
+                kind: error.kind,
+                matched: error.matched,
+                ...(error.approvalKey ? { approvalKey: error.approvalKey } : {}),
+                ...(error.grantModes ? { grantModes: error.grantModes } : {}),
+              });
+              pausedOnApproval = true;
+              reply = "";
+              break;
+            }
+            usedTool = true;
           }
         } else if (command0.startsWith("!screened-run ")) {
           const command = cmd.slice(cmd.indexOf("!screened-run ") + "!screened-run ".length);
@@ -393,6 +483,7 @@ export function createMockHarness(): Harness {
               kind: e.kind,
               matched: e.matched,
               ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+              ...(e.grantModes ? { grantModes: e.grantModes } : {}),
             });
             reply = `[blocked] ${e.approvalReason}`;
           }
@@ -414,6 +505,7 @@ export function createMockHarness(): Harness {
                 kind: e.kind,
                 matched: e.matched,
                 ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+                ...(e.grantModes ? { grantModes: e.grantModes } : {}),
               });
             }
           }
@@ -442,7 +534,7 @@ export function createMockHarness(): Harness {
           const sp = rest.indexOf(" ");
           const path = sp === -1 ? rest : rest.slice(0, sp);
           const data = sp === -1 ? "" : rest.slice(sp + 1);
-          if (gateTool("write")) {
+          if (gateTool("write", { path, data })) {
             usedTool = true;
             reply = "";
           } else {

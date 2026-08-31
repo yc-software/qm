@@ -25,6 +25,53 @@ interface CustomProviderStatus extends CustomProviderSpec {
   updatedBy: string;
 }
 
+export function withTransientCustomProvider(
+  base: CustomProviderStore,
+  transient: { spec: CustomProviderSpec; apiKey: string; updatedBy: string },
+): CustomProviderStore {
+  validateCustomProviderSpec(transient.spec);
+  if (!transient.apiKey.trim()) throw new Error("transient custom provider apiKey is required");
+  if (!transient.updatedBy.trim()) throw new Error("transient custom provider updatedBy is required");
+  const modelIds = new Set(transient.spec.models.map((model) => model.id));
+  const conflicts = (spec: CustomProviderSpec): boolean =>
+    spec.id === transient.spec.id || spec.models.some((model) => modelIds.has(model.id));
+  const rejectConflict = (spec: CustomProviderSpec): void => {
+    if (conflicts(spec)) throw new Error(`custom provider conflicts with transient provider "${transient.spec.id}"`);
+  };
+
+  return {
+    async enabled() {
+      const stored = await base.enabled();
+      stored.forEach(rejectConflict);
+      return [...stored, transient.spec];
+    },
+    async statuses() {
+      const stored = await base.statuses();
+      stored.forEach(rejectConflict);
+      return [
+        ...stored,
+        {
+          ...transient.spec,
+          disabled: false,
+          hasKey: true,
+          updatedAt: 0,
+          updatedBy: transient.updatedBy,
+        },
+      ];
+    },
+    async resolveKey(id) {
+      return id === transient.spec.id ? transient.apiKey : base.resolveKey(id);
+    },
+    async upsert(spec, apiKey, updatedBy) {
+      rejectConflict(spec);
+      return base.upsert(spec, apiKey, updatedBy);
+    },
+    async delete(id, updatedBy) {
+      return id === transient.spec.id ? false : base.delete(id, updatedBy);
+    },
+  };
+}
+
 export interface CustomProviderStore {
   /** Enabled specs only — what the runtime registry should serve. */
   enabled(): Promise<CustomProviderSpec[]>;

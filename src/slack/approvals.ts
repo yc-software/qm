@@ -11,6 +11,7 @@ import {
   approvalMessage,
   botIdentityArgs,
   clip,
+  createNativeAgentPresenter,
   createApprovalRegistry,
   createThreadTracker,
   dmThreadRef,
@@ -21,6 +22,8 @@ import {
   resolveReactionTargets,
   slackReplyArgs,
   stripAckPrefix,
+  setNativeAgentSessionStatus,
+  type NativeAgentPresenter,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
@@ -37,6 +40,7 @@ import {
   cleanAgentReplyForSlack,
   conversationPlaceLabel,
   personalAgentLabel,
+  stripSlackDirectives,
   tryUpdateSlackMessage,
   updateSlackMessage,
 } from "./messaging.ts";
@@ -52,11 +56,13 @@ interface SlackApprovalContext {
   reason: string;
   purpose?: string;
   summary?: string;
+  grantModes?: { session: boolean; always: boolean };
   turn: Omit<CoreTurnBody, "approval">;
   allowedTs?: Set<string>;
   slackIdsByPrincipal?: ReadonlyMap<string, string>;
   agentRequest?: SlackAgentRequestContext;
   ackedFirstBlock?: string;
+  nativeAgentSession?: { channel: string; threadTs: string };
   recovered?: boolean;
 }
 
@@ -123,8 +129,10 @@ export function createApprovals(deps: {
   directory: Directory;
   threads: ReturnType<typeof createThreadTracker>;
   ids: BotIdentity;
+  activeNativeAgentSessions: Map<string, string>;
+  stoppedAgentSessions: Map<string, string>;
 }): Approvals {
-  const { core, bridge, directory, threads, ids } = deps;
+  const { core, bridge, directory, threads, ids, activeNativeAgentSessions, stoppedAgentSessions } = deps;
   const { callCore, fetchBlobFromCore, fetchFileArtifactFromCore } = bridge;
 
   const pendingSlackApprovals = createApprovalRegistry<SlackApprovalContext>();
@@ -141,6 +149,7 @@ export function createApprovals(deps: {
         reason: approval.reason,
         ...(approval.purpose ? { purpose: approval.purpose } : {}),
         ...(approval.summary ? { summary: approval.summary } : {}),
+        ...(approval.grantModes ? { grantModes: approval.grantModes } : {}),
       });
     }
   }
@@ -600,17 +609,74 @@ export function createApprovals(deps: {
 
     const cardChannel = ctx.approvalChannel;
     const cardIsRemote = cardChannel !== ctx.channel;
+    const nativeSessionKey = ctx.nativeAgentSession
+      ? `${ctx.nativeAgentSession.channel}:${ctx.nativeAgentSession.threadTs}`
+      : undefined;
+    let nativeContinuation: NativeAgentPresenter | undefined;
+    let nativeRunId: string | undefined;
+    let nativeRunToken: string | undefined;
+    const nativeRunMarker = (): string | undefined => nativeRunId ?? nativeRunToken;
+    const nativeContinuationWasStopped = (): boolean => {
+      const marker = nativeRunMarker();
+      return !!nativeSessionKey && !!marker && stoppedAgentSessions.get(nativeSessionKey) === marker;
+    };
+    const consumeStoppedContinuation = async (): Promise<boolean> => {
+      if (!nativeContinuationWasStopped() || !nativeSessionKey) return false;
+      stoppedAgentSessions.delete(nativeSessionKey);
+      settle();
+      await updateSlackMessage(client, cardChannel, messageTs, "Canceled.").catch(
+        swallowAs("slack: update stopped approval", undefined),
+      );
+      clearActiveNativeRun();
+      return true;
+    };
+    const clearActiveNativeRun = (): void => {
+      const marker = nativeRunMarker();
+      if (nativeSessionKey && marker && activeNativeAgentSessions.get(nativeSessionKey) === marker)
+        activeNativeAgentSessions.delete(nativeSessionKey);
+    };
+    const finishNativeContinuation = async (text: string, status: "active" | "suspended"): Promise<boolean> => {
+      if (!nativeContinuation) return false;
+      try {
+        await nativeContinuation.finish(text, status);
+        return true;
+      } catch (error) {
+        console.error("[slack-plugin] native approval continuation failed:", (error as Error).message);
+        return false;
+      }
+    };
+    const setNativeApprovalStatus = async (status: "active" | "suspended"): Promise<void> => {
+      if (!ctx.nativeAgentSession) return;
+      await setNativeAgentSessionStatus(client, {
+        channel_id: ctx.nativeAgentSession.channel,
+        thread_ts: ctx.nativeAgentSession.threadTs,
+        status,
+        ...botIdentityArgs(),
+      }).catch((error) => console.error("[slack-plugin] native approval status failed:", (error as Error).message));
+    };
     try {
       const approver = await directory.classifyActor(client, clickerId);
-      const onQueued =
-        messageTs && !cardIsRemote
-          ? (runId: string): void => {
-              bridge.reportRunEditRef(runId, messageTs);
-            }
-          : undefined;
+      const onQueued = (runId: string): void => {
+        nativeRunId = runId;
+        bridge.inFlightRunByThread.set(ctx.turn.conversation.threadRef, runId);
+        if (nativeSessionKey) {
+          activeNativeAgentSessions.set(nativeSessionKey, runId);
+          if (nativeRunToken && stoppedAgentSessions.get(nativeSessionKey) === nativeRunToken) {
+            stoppedAgentSessions.set(nativeSessionKey, runId);
+            void bridge.signalRunAbort(runId).catch(swallowAs("slack: abort pre-queued approval run", undefined));
+          }
+        }
+        if (messageTs && !cardIsRemote) bridge.reportRunEditRef(runId, messageTs);
+      };
       if (selected === "deny") {
-        await callCore({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
+        try {
+          await callCore({ ...ctx.turn, actor: approver, approval }, { onQueued });
+        } finally {
+          if (nativeRunId) bridge.inFlightRunByThread.clear(ctx.turn.conversation.threadRef, nativeRunId);
+        }
+        if (await consumeStoppedContinuation()) return;
         settle();
+        await setNativeApprovalStatus("active");
         await updateSlackMessage(client, cardChannel, messageTs, `Denied ${inlineCode(ctx.command)}.`);
         if (ctx.agentRequest) {
           await failAgentRequest(
@@ -627,7 +693,55 @@ export function createApprovals(deps: {
       if (selected === "once") scopeLabel = "Allowed once";
       else if (selected === "session") scopeLabel = "Allowed for this conversation";
       await updateSlackMessage(client, cardChannel, messageTs, `${scopeLabel}; running ${inlineCode(ctx.command)}...`);
-      const result = await callCore({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
+      if (ctx.nativeAgentSession) {
+        const candidate = createNativeAgentPresenter({
+          client,
+          channel: ctx.nativeAgentSession.channel,
+          threadTs: ctx.nativeAgentSession.threadTs,
+          initiatorUserId: clickerId,
+          recipientTeamId: ids.ownTeamId,
+          title: `Continue: ${ctx.turn.text}`,
+          sanitize: stripSlackDirectives,
+          checkpoint: async (ts) => {
+            if (nativeRunId) await bridge.checkpointRunEditRef(nativeRunId, ts);
+          },
+          onSurfacePosted: () => {},
+          isCancelled: nativeContinuationWasStopped,
+          onError: (error) =>
+            console.error("[slack-plugin] native approval presentation failed:", (error as Error).message),
+        });
+        nativeRunToken = `pending-native:${randomUUID()}`;
+        activeNativeAgentSessions.set(nativeSessionKey!, nativeRunToken);
+        if (await candidate.begin()) nativeContinuation = candidate;
+        else {
+          const stoppedDuringBegin = stoppedAgentSessions.get(nativeSessionKey!) === nativeRunToken;
+          clearActiveNativeRun();
+          if (!stoppedDuringBegin) nativeRunToken = undefined;
+        }
+      }
+      if (await consumeStoppedContinuation()) return;
+      let result: TurnResult;
+      try {
+        result = await callCore(
+          { ...ctx.turn, actor: approver, approval },
+          {
+            onQueued,
+            ...(nativeContinuation
+              ? {
+                  onDelta: (delta: string) => {
+                    if (!nativeContinuationWasStopped()) nativeContinuation?.onDelta(delta);
+                  },
+                  onTasks: async (tasks) => {
+                    if (!nativeContinuationWasStopped()) await nativeContinuation?.onTasks(tasks);
+                  },
+                }
+              : {}),
+          },
+        );
+      } finally {
+        if (nativeRunId) bridge.inFlightRunByThread.clear(ctx.turn.conversation.threadRef, nativeRunId);
+      }
+      if (await consumeStoppedContinuation()) return;
       settle();
 
       if (ctx.agentRequest) {
@@ -647,12 +761,23 @@ export function createApprovals(deps: {
         let reply = "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length || actionableAgentRequests.length) reply = "Done.";
+        if (await consumeStoppedContinuation()) return;
+        const deliveredNatively = await finishNativeContinuation(replyBody || reply, "active");
+        if (await consumeStoppedContinuation()) return;
+        if (!nativeContinuation) await setNativeApprovalStatus("active");
+        if (await consumeStoppedContinuation()) return;
         if (cardIsRemote) {
           await updateSlackMessage(client, cardChannel, messageTs, `Approved; ran ${inlineCode(ctx.command)}.`);
-          await postApprovalFollowup(client, ctx, reply);
+          if (!deliveredNatively) await postApprovalFollowup(client, ctx, reply);
         } else {
-          await updateSlackMessage(client, cardChannel, messageTs, reply);
+          await updateSlackMessage(
+            client,
+            cardChannel,
+            messageTs,
+            deliveredNatively ? `Approved; ran ${inlineCode(ctx.command)}.` : reply,
+          );
         }
+        if (await consumeStoppedContinuation()) return;
         if (result.attachments?.length) {
           try {
             await uploadAttachments(
@@ -662,14 +787,17 @@ export function createApprovals(deps: {
               result.attachments,
               fetchBlobFromCore,
               fetchFileArtifactFromCore,
+              { isCancelled: nativeContinuationWasStopped },
             );
           } catch (err) {
             console.error("[slack-plugin] file upload failed:", (err as Error).message);
-            await postApprovalFollowup(client, ctx, uploadFailureNote(err));
+            if (!nativeContinuationWasStopped()) await postApprovalFollowup(client, ctx, uploadFailureNote(err));
           }
         }
+        if (await consumeStoppedContinuation()) return;
         const { directives } = resolveReactionTargets(reactions, ctx.allowedTs ?? new Set());
         await applyAndLogReactions(client, ctx.channel, ctx.triggerTs, directives);
+        if (await consumeStoppedContinuation()) return;
         if (actionableAgentRequests.length) {
           await postAgentRequests(
             client,
@@ -690,6 +818,9 @@ export function createApprovals(deps: {
       }
 
       if (result.status === "pending_approval") {
+        if (await consumeStoppedContinuation()) return;
+        await finishNativeContinuation("", "suspended");
+        if (await consumeStoppedContinuation()) return;
         const approvals = result.pendingApprovals ?? [];
         rememberSlackApprovals(approvals, {
           requesterId: ctx.requesterId,
@@ -701,6 +832,7 @@ export function createApprovals(deps: {
           turn: ctx.turn,
           ...(ctx.allowedTs ? { allowedTs: ctx.allowedTs } : {}),
           ...(ctx.slackIdsByPrincipal ? { slackIdsByPrincipal: ctx.slackIdsByPrincipal } : {}),
+          ...(ctx.nativeAgentSession ? { nativeAgentSession: ctx.nativeAgentSession } : {}),
           ...(ctx.recovered ? { recovered: true } : {}),
         });
         const msg = approvalMessage(approvals);
@@ -710,6 +842,10 @@ export function createApprovals(deps: {
 
       const failLink = isBoundaryRefusal(result.reason) ? null : (result.adminUrl ?? null);
       const failDetail = failLink ? ` Full error: ${failLink}` : "";
+      if (await consumeStoppedContinuation()) return;
+      await finishNativeContinuation(`I can't continue — ${result.reason ?? "refused"}.${failDetail}`, "active");
+      if (await consumeStoppedContinuation()) return;
+      if (!nativeContinuation) await setNativeApprovalStatus("active");
       await updateSlackMessage(
         client,
         cardChannel,
@@ -717,6 +853,7 @@ export function createApprovals(deps: {
         `I can't continue — ${result.reason ?? "refused"}.${failDetail}`,
       );
     } catch (err) {
+      if (await consumeStoppedContinuation()) return;
       const msg = (err as Error).message;
       if (settled) {
         await updateSlackMessage(client, cardChannel, messageTs, `⚠️ ${msg}`).catch(
@@ -727,6 +864,7 @@ export function createApprovals(deps: {
         }
         return;
       }
+      await finishNativeContinuation("", "suspended");
       pendingSlackApprovals.release(requestId);
       const retry = approvalMessage([
         {
@@ -735,6 +873,7 @@ export function createApprovals(deps: {
           reason: ctx.reason,
           ...(ctx.purpose ? { purpose: ctx.purpose } : {}),
           ...(ctx.summary ? { summary: ctx.summary } : {}),
+          ...(ctx.grantModes ? { grantModes: ctx.grantModes } : {}),
         },
       ]);
       await updateSlackMessage(
@@ -750,6 +889,8 @@ export function createApprovals(deps: {
           ...retry.blocks,
         ],
       ).catch(swallowAs("slack: update approval message", undefined));
+    } finally {
+      clearActiveNativeRun();
     }
   }
 

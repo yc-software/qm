@@ -21,6 +21,19 @@ test("create stores an enabled webhook with a generated id", async () => {
   assert.equal((await store.list()).length, 1);
 });
 
+test("webhook destinations never persist caller-authored analytics cards", async () => {
+  const store = createWebhookStore();
+  const webhook = await store.create({
+    ...base,
+    destination: {
+      type: "slack",
+      target: "C1",
+      nativeCard: { renderer: "qm.analytics.card.v1", heading: "Invented" },
+    } as never,
+  });
+  assert.equal(JSON.stringify(webhook.destination).includes("nativeCard"), false);
+});
+
 test("create rejects filters that could silently weaken or suppress the webhook", async () => {
   const store = createWebhookStore();
   await assert.rejects(

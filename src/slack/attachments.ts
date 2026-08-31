@@ -1,5 +1,12 @@
 import { sleep } from "./util.ts";
 import { messageWithForwardedContent, type SlackMessageAttachment } from "./forwards.ts";
+import {
+  WORKFLOW_ARTIFACT_MIME,
+  decodeWorkflowArtifactCard,
+  type WorkflowArtifactCard,
+} from "../../plugins/chassis/src/workflow-artifact-card.ts";
+import { WORKFLOW_ARTIFACT_SUFFIX, workflowArtifactMime } from "../../plugins/chassis/src/workflow-artifact.ts";
+import { botIdentityArgs } from "./delivery.ts";
 
 export interface IncomingAttachment {
   name: string;
@@ -188,7 +195,81 @@ export async function processInboundFiles(
 }
 
 export interface UploadClient {
-  files: { uploadV2(args: any): Promise<unknown>; info(args: { file: string }): Promise<unknown> };
+  files: {
+    uploadV2(args: any): Promise<unknown>;
+    info(args: { file: string }): Promise<unknown>;
+    delete?(args: { file: string }): Promise<unknown>;
+  };
+  chat?: { postMessage(args: any): Promise<unknown>; delete?(args: { channel: string; ts: string }): Promise<unknown> };
+}
+
+const SLACK_WORKFLOW_BASE_URL = "https://workflow-artifact.invalid/";
+
+function escapeMrkdwn(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function clipped(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function slackWorkflowHref(href: string): string | undefined {
+  const url = new URL(href);
+  if (url.origin === new URL(SLACK_WORKFLOW_BASE_URL).origin) return undefined;
+  return href.replace(/\|/g, "%7C").replace(/</g, "%3C").replace(/>/g, "%3E");
+}
+
+function linkedValue(value: string, href: string | undefined): string {
+  const label = escapeMrkdwn(value);
+  const safe = href ? slackWorkflowHref(href) : undefined;
+  return safe ? `<${safe}|${label}>` : label;
+}
+
+function workflowArtifactBlocks(card: WorkflowArtifactCard): Array<Record<string, unknown>> {
+  const toneIcon = {
+    neutral: ":white_circle:",
+    info: ":large_blue_circle:",
+    success: ":large_green_circle:",
+    warning: ":large_yellow_circle:",
+    danger: ":red_circle:",
+  } as const;
+  const blocks: Array<Record<string, unknown>> = [
+    { type: "header", text: { type: "plain_text", text: clipped(card.heading, 150), emoji: true } },
+  ];
+  if (card.status) {
+    blocks.push({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `${toneIcon[card.status.tone]} *${escapeMrkdwn(card.status.label)}*` }],
+    });
+  }
+  if (card.summary) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: clipped(escapeMrkdwn(card.summary), 3_000) } });
+  }
+  for (const section of card.sections ?? []) {
+    const rows = section.items.map((item) => {
+      const value = linkedValue(item.value, item.href);
+      return item.label ? `• *${escapeMrkdwn(item.label)}:* ${value}` : `• ${value}`;
+    });
+    const text = `*${escapeMrkdwn(section.label)}*${rows.length ? `\n${rows.join("\n")}` : ""}`;
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: clipped(text, 3_000) } });
+  }
+  if (card.links?.length) {
+    const links = card.links
+      .map((link) => {
+        const href = slackWorkflowHref(link.href);
+        return href ? `<${href}|${escapeMrkdwn(link.label)}>` : escapeMrkdwn(link.label);
+      })
+      .join(" · ");
+    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: clipped(links, 3_000) }] });
+  }
+  return blocks;
+}
+
+function isWorkflowArtifact(attachment: Pick<OutgoingAttachment, "name" | "mimetype">): boolean {
+  return (
+    workflowArtifactMime(attachment.mimetype) === WORKFLOW_ARTIFACT_MIME ||
+    attachment.name.toLowerCase().endsWith(WORKFLOW_ARTIFACT_SUFFIX)
+  );
 }
 
 async function waitForShareCommit(client: UploadClient, channel: string, fileId: string): Promise<string | undefined> {
@@ -222,9 +303,17 @@ export async function uploadAttachments(
   attachments: readonly OutgoingAttachment[],
   fetchBlob: (blobId: string) => Promise<Buffer>,
   fetchArtifact?: (artifactId: string, viewerId: string) => Promise<Buffer>,
-  opts: { initialComment?: string } = {},
+  opts: { initialComment?: string; isCancelled?(): boolean } = {},
 ): Promise<{ uploaded: boolean; messageTs?: string }> {
   const fileUploads: Array<{ filename: string; file: Buffer }> = [];
+  const cards: Array<{ fallbackText: string; blocks: Array<Record<string, unknown>> }> = [];
+  const postedCardTs: string[] = [];
+  const cleanupCards = async (): Promise<void> => {
+    await Promise.all(postedCardTs.map((ts) => client.chat?.delete?.({ channel, ts }).catch(() => undefined)));
+  };
+  const cleanupFiles = async (fileIds: readonly string[]): Promise<void> => {
+    await Promise.all(fileIds.map((file) => client.files.delete?.({ file }).catch(() => undefined)));
+  };
   for (const attachment of attachments) {
     let file: Buffer;
     try {
@@ -233,20 +322,71 @@ export async function uploadAttachments(
       if (!fetchArtifact || !attachment.artifactId || !attachment.artifactViewerId) throw err;
       file = await fetchArtifact(attachment.artifactId, attachment.artifactViewerId);
     }
-    if (file.length > 0) fileUploads.push({ filename: attachment.name, file });
+    if (opts.isCancelled?.()) return { uploaded: false };
+    if (file.length === 0) continue;
+    if (isWorkflowArtifact(attachment) && client.chat) {
+      try {
+        const { envelope, card } = decodeWorkflowArtifactCard(file, SLACK_WORKFLOW_BASE_URL);
+        cards.push({ fallbackText: envelope.fallbackText, blocks: workflowArtifactBlocks(card) });
+        continue;
+      } catch {
+        fileUploads.push({ filename: attachment.name, file });
+        continue;
+      }
+    }
+    fileUploads.push({ filename: attachment.name, file });
   }
-  if (!fileUploads.length) return { uploaded: false };
+
+  let messageTs: string | undefined;
+  for (let i = 0; i < cards.length; i++) {
+    if (opts.isCancelled?.()) return { uploaded: false, ...(messageTs ? { messageTs } : {}) };
+    const card = cards[i]!;
+    const lead = i === 0 ? opts.initialComment?.trim() : undefined;
+    const blocks = [
+      ...(lead ? [{ type: "section", text: { type: "mrkdwn", text: clipped(escapeMrkdwn(lead), 3_000) } }] : []),
+      ...card.blocks,
+    ];
+    const response = (await client.chat!.postMessage({
+      channel,
+      ...(threadTs ? { thread_ts: threadTs, reply_broadcast: false } : {}),
+      text: lead ? `${lead}\n\n${card.fallbackText}` : card.fallbackText,
+      blocks,
+      unfurl_links: false,
+      unfurl_media: false,
+      ...botIdentityArgs(),
+    })) as { ts?: unknown };
+    if (response?.ts) {
+      const ts = String(response.ts);
+      postedCardTs.push(ts);
+      messageTs ??= ts;
+    }
+    if (opts.isCancelled?.()) {
+      await cleanupCards();
+      return { uploaded: false };
+    }
+  }
+
+  if (!fileUploads.length) return { uploaded: cards.length > 0, ...(messageTs ? { messageTs } : {}) };
+  if (opts.isCancelled?.()) return { uploaded: false, ...(messageTs ? { messageTs } : {}) };
 
   const response = await client.files.uploadV2({
     channel_id: channel,
     ...(threadTs ? { thread_ts: threadTs } : {}),
-    ...(opts.initialComment ? { initial_comment: opts.initialComment } : {}),
+    ...(opts.initialComment && cards.length === 0 ? { initial_comment: opts.initialComment } : {}),
     file_uploads: fileUploads,
   });
-  let messageTs: string | undefined;
-  for (const fileId of uploadedFileIds(response)) {
+  const fileIds = uploadedFileIds(response);
+  if (opts.isCancelled?.()) {
+    await cleanupFiles(fileIds);
+    return { uploaded: false };
+  }
+  for (const fileId of fileIds) {
     const sharedTs = await waitForShareCommit(client, channel, fileId);
     messageTs ??= sharedTs;
+  }
+  if (opts.isCancelled?.()) {
+    await cleanupFiles(fileIds);
+    return { uploaded: false };
   }
   return { uploaded: true, ...(messageTs ? { messageTs } : {}) };
 }

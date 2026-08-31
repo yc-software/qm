@@ -16,6 +16,11 @@ import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
+import {
+  WORKFLOW_ARTIFACT_MIME,
+  WORKFLOW_ARTIFACT_SUFFIX,
+  workflowArtifactMime,
+} from "../../plugins/chassis/src/workflow-artifact.ts";
 
 export const INBOX_DIR = "inbox";
 export const OUTBOX_DIR = "outbox";
@@ -101,8 +106,17 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 export function mimeFromName(name: string): string {
-  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+  const normalized = name.toLowerCase();
+  if (normalized.endsWith(WORKFLOW_ARTIFACT_SUFFIX)) return WORKFLOW_ARTIFACT_MIME;
+  const ext = normalized.includes(".") ? normalized.slice(normalized.lastIndexOf(".") + 1) : "";
   return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
+export function attachmentMime(name: string, declared?: string): string {
+  const inferred = mimeFromName(name);
+  const workflow = workflowArtifactMime(declared);
+  if (workflow || inferred === WORKFLOW_ARTIFACT_MIME) return WORKFLOW_ARTIFACT_MIME;
+  return baseMime(declared ?? "") || inferred;
 }
 
 export const MAX_OUTBOUND_FILES = 20;
@@ -302,7 +316,7 @@ export async function materializeInbound(
     const bytes = await collectBlob(blob.stream);
     const name = uniqueName(safeAttachmentName(a.name), usedNames);
     usedNames.add(name);
-    const mimetype = baseMime(a.mimetype || mimeFromName(name));
+    const mimetype = attachmentMime(name, a.mimetype);
     const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
     if (screenText && textContent !== null) {
       const verdict = await screenText({ content: textContent, name, mimetype });

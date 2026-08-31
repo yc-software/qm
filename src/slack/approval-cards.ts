@@ -92,6 +92,7 @@ export interface StoredApproval {
   reason?: string;
   purpose?: string;
   summary?: string;
+  grantModes?: { session: boolean; always: boolean };
   request?: Record<string, unknown>;
 }
 
@@ -99,17 +100,19 @@ export interface RecoveredApprovalContext {
   requesterId: string;
   channel: string;
   replyThreadTs?: string;
+  nativeAgentSession?: { channel: string; threadTs: string };
   threadOnly: boolean;
   approvalChannel: string;
   command: string;
   reason: string;
   purpose?: string;
   summary?: string;
+  grantModes?: { session: boolean; always: boolean };
   turn: Record<string, unknown>;
 }
 
 export function recoveredApprovalContext(
-  stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "request">,
+  stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "grantModes" | "request">,
   click: { channel: string; threadTs?: string },
 ): RecoveredApprovalContext | null {
   const req = stored.request as
@@ -140,12 +143,14 @@ export function recoveredApprovalContext(
     requesterId: req.actor.externalId,
     channel: origin.channel,
     ...(origin.threadTs ? { replyThreadTs: origin.threadTs } : {}),
+    ...(origin.threadTs ? { nativeAgentSession: { channel: origin.channel, threadTs: origin.threadTs } } : {}),
     threadOnly: kind === "channel",
     approvalChannel: click.channel,
     command: stored.command,
     reason: stored.reason ?? "requires approval",
     ...(stored.purpose ? { purpose: stored.purpose } : {}),
     ...(stored.summary ? { summary: stored.summary } : {}),
+    ...(stored.grantModes ? { grantModes: stored.grantModes } : {}),
     turn,
   };
 }

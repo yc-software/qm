@@ -934,7 +934,11 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
                 await queueSignal(text);
               },
             },
-            { onError: (error) => swallow("opencode signal poll", error), drainOnStop: true },
+            {
+              onError: (error) => swallow("opencode signal poll", error),
+              drainOnStop: true,
+              discard: turn.acceptRunSignals === false,
+            },
           )
         : null;
     const flushLlmRequests = async () => {

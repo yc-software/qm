@@ -1,16 +1,16 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type CommandPolicy, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import type { Config } from "../src/config.ts";
 import type { ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
-import { egressClaimAllowingControlPlane } from "../src/core/orchestrator.ts";
+import { egressClaimAllowingControlPlane, requestWorkspaceWriteAllowed } from "../src/core/orchestrator.ts";
 import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
 import { contextSummaryPayload } from "../src/harness/context-compaction.ts";
 import { egressDecision } from "../src/resolution/egress-policy.ts";
@@ -1967,6 +1967,92 @@ test("an admin-registered rule grants by rule across turns; the approval is keye
   assert.equal(sibling.status, "ok");
 });
 
+test("an exact-command approval is once-only, cannot grant a session, and cannot authorize a sibling command", async () => {
+  const { app, config } = freshApp();
+  const pattern = "^zz-tool (?:alpha|beta)$";
+  config.setCommandPolicy(scopeId("org", "default-org"), {
+    mode: "allowlist",
+    rules: [{ pattern, decision: "require_approval", reason: "exact test write", approvalScope: "command" }],
+  });
+
+  const first = await app.turn(dm("!run zz-tool alpha"));
+  assert.equal(first.status, "pending_approval");
+  const pending = first.pendingApprovals![0]!;
+  assert.equal(pending.approvalKey, "zz-tool alpha");
+  assert.deepEqual(pending.grantModes, { session: false, always: false });
+
+  const refused = await app.turn(
+    dm("!run zz-tool alpha", {
+      approval: { requestId: pending.requestId, approved: true, scope: "session" },
+    }),
+  );
+  assert.equal(refused.status, "pending_approval");
+  assert.equal(refused.pendingApprovals![0]!.requestId, pending.requestId);
+  assert.deepEqual(refused.pendingApprovals![0]!.grantModes, { session: false, always: false });
+  assert.match(refused.reason ?? "", /only be approved once/);
+
+  const allowed = await app.turn(
+    dm("!run zz-tool alpha", {
+      approval: { requestId: pending.requestId, approved: true, scope: "once" },
+    }),
+  );
+  assert.equal(allowed.status, "ok");
+
+  const quoted = await app.turn(dm("!run zz-tool 'alpha'"));
+  assert.equal(quoted.status, "pending_approval", "a raw variant with the same scannable command must re-prompt");
+  assert.equal(quoted.pendingApprovals![0]!.approvalKey, "zz-tool 'alpha'");
+  await app.turn(
+    dm("!run zz-tool 'alpha'", {
+      approval: { requestId: quoted.pendingApprovals![0]!.requestId, approved: false },
+    }),
+  );
+
+  const replay = await app.turn(dm("!run zz-tool alpha"));
+  assert.equal(replay.status, "pending_approval", "an identical second provider write must re-prompt");
+  const replayPending = replay.pendingApprovals![0]!;
+  assert.notEqual(replayPending.requestId, pending.requestId);
+  const stale = await app.turn(
+    dm("!run zz-tool alpha", {
+      approval: { requestId: pending.requestId, approved: true },
+    }),
+  );
+  assert.equal(stale.status, "pending_approval");
+  assert.equal(stale.pendingApprovals?.[0]?.requestId, replayPending.requestId);
+  const replayAllowed = await app.turn(
+    dm("!run zz-tool alpha", {
+      approval: { requestId: replayPending.requestId, approved: true },
+    }),
+  );
+  assert.equal(replayAllowed.status, "ok");
+
+  const sibling = await app.turn(dm("!run zz-tool beta"));
+  assert.equal(sibling.status, "pending_approval", "a sibling operation cannot reuse the exact alpha approval");
+  assert.equal(sibling.pendingApprovals![0]!.approvalKey, "zz-tool beta");
+});
+
+test("harness-collected exact-command approvals preserve once-only grant modes", async () => {
+  const { app, config } = freshApp();
+  config.setCommandPolicy(scopeId("org", "default-org"), {
+    mode: "denylist",
+    rules: [{ pattern: "^zz-tool alpha$", decision: "require_approval", approvalScope: "command" }],
+  });
+
+  const first = await app.turn(dm("!double-exec zz-tool alpha"));
+  assert.equal(first.status, "ok");
+  const pending = first.pendingApprovals![0]!;
+  assert.equal(pending.approvalKey, "zz-tool alpha");
+  assert.deepEqual(pending.grantModes, { session: false, always: false });
+
+  const second = await app.turn(
+    dm("!double-exec zz-tool alpha", {
+      approval: { requestId: pending.requestId, approved: true, scope: "once" },
+    }),
+  );
+  assert.match(second.reply ?? "", /ran 1/);
+  assert.deepEqual(second.pendingApprovals![0]!.grantModes, { session: false, always: false });
+  assert.equal(second.pendingApprovals![0]!.approvalKey, "zz-tool alpha");
+});
+
 test("Dangerous posture keeps predeclared command approvals and hard denials", async () => {
   const { app, config } = freshApp();
   const org = scopeId("org", "default-org");
@@ -2104,25 +2190,21 @@ test("Strict posture gates tool actions behind HiLO and honors a session grant",
   assert.equal(otherTool.pendingApprovals?.[0]?.approvalKey, "tool:read");
 });
 
-test("Strict posture layers predeclared command approvals on top of the tool gate", async () => {
+test("Strict posture layers ordinary predeclared command approvals on top of the tool gate", async () => {
   const built = freshApp();
   await built.config.setSecurityPosture(scopeId("org", "default-org"), "strict");
 
   const first = await built.app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const toolPending = first.pendingApprovals![0]!;
-  assert.equal(toolPending.approvalKey, "tool:execute", "the strict tool gate fires first");
+  assert.equal(toolPending.approvalKey, "tool:execute");
 
   const afterToolGrant = await built.app.turn(
     dm("!run git push --force origin main", {
       approval: { requestId: toolPending.requestId, approved: true, scope: "session" },
     }),
   );
-  assert.equal(
-    afterToolGrant.status,
-    "pending_approval",
-    "the predeclared force-push rule still fires beneath the tool grant",
-  );
+  assert.equal(afterToolGrant.status, "pending_approval");
   const rulePending = afterToolGrant.pendingApprovals![0]!;
   assert.notEqual(rulePending.approvalKey, "tool:execute");
   assert.match(rulePending.reason, /force push/);
@@ -2131,6 +2213,164 @@ test("Strict posture layers predeclared command approvals on top of the tool gat
     dm("!run git push --force origin main", { approval: { requestId: rulePending.requestId, approved: true } }),
   );
   assert.equal(done.status, "ok");
+});
+
+test("Strict posture presents one exact once-only approval for a descriptor-owned write command", async () => {
+  const org = scopeId("org", "default-org");
+  const requestPath = "work/fixed-tool/create.json";
+  const readCommand = "fixed-tool read --request work/fixed-tool/read.json";
+  const sealCommand = `fixed-tool seal-request create --request ${requestPath}`;
+  const command = `fixed-tool create --request ${requestPath} --request-sha256 ` + "a".repeat(64);
+  const readPattern = "^fixed-tool read --request work/fixed-tool/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.json$";
+  const sealPattern =
+    "^fixed-tool seal-request create --request work/fixed-tool/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.json$";
+  const pattern =
+    "^fixed-tool create --request work/fixed-tool/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.json --request-sha256 [a-f0-9]{64}$";
+  const layerDir = mkdtempSync(join(tmpdir(), "strict-layer-"));
+  const toolDir = join(layerDir, "tools", "fixed-tool");
+  mkdirSync(toolDir, { recursive: true });
+  writeFileSync(
+    join(toolDir, "tool.json"),
+    JSON.stringify({
+      id: "fixed-tool",
+      requestWorkspace: { maxBytes: 1024 },
+      approvals: [
+        { pattern: readPattern, decision: "allow", subsumesToolApproval: true },
+        { pattern: sealPattern, decision: "allow", subsumesToolApproval: true },
+        {
+          pattern,
+          decision: "require_approval",
+          approvalScope: "command",
+          reason: "create provider object",
+          subsumesToolApproval: true,
+        },
+      ],
+    }),
+  );
+  const built = freshApp({ deploymentLayerDir: layerDir });
+  await built.config.setSecurityPosture(org, "strict");
+  await built.config.setCommandPolicy(org, {
+    mode: "allowlist",
+    rules: [
+      { pattern: readPattern, decision: "allow" },
+      { pattern: sealPattern, decision: "allow" },
+      { pattern, decision: "require_approval", approvalScope: "command", reason: "create provider object" },
+    ],
+  });
+
+  const staged = await built.app.turn(dm(`!write ${requestPath} {"target":"primary"}`));
+  assert.equal(staged.status, "ok", "descriptor-owned request staging does not add a broad write approval");
+  const read = await built.app.turn(dm(`!run ${readCommand}`));
+  assert.equal(read.status, "ok", "an exact descriptor-owned read does not add a broad execute approval");
+  const sealed = await built.app.turn(dm(`!run ${sealCommand}`));
+  assert.equal(sealed.status, "ok", "an exact descriptor-owned seal does not add a broad execute approval");
+
+  const first = await built.app.turn(dm(`!run ${command}`));
+  assert.equal(first.status, "pending_approval");
+  assert.equal(first.pendingApprovals?.length, 1);
+  const pending = first.pendingApprovals![0]!;
+  assert.equal(pending.command, command);
+  assert.equal(pending.approvalKey, command);
+  assert.deepEqual(pending.grantModes, { session: false, always: false });
+
+  const done = await built.app.turn(
+    dm(`!run ${command}`, { approval: { requestId: pending.requestId, approved: true } }),
+  );
+  assert.equal(done.status, "ok");
+
+  const replay = await built.app.turn(dm(`!run ${command}`));
+  assert.equal(replay.status, "pending_approval");
+  assert.equal(replay.pendingApprovals?.[0]?.approvalKey, command);
+  assert.notEqual(replay.pendingApprovals?.[0]?.requestId, pending.requestId);
+});
+
+test("Strict descriptor subsumption is exact and cannot be enabled by stored policies or raw variants", async () => {
+  const command = "safe-tool read --request work/safe-tool/a.json";
+  const pattern = "^safe-tool read --request work/safe-tool/[A-Za-z0-9]+\\.json$";
+
+  const storedOnly = freshApp();
+  await storedOnly.config.setSecurityPosture(scopeId("org", "default-org"), "strict");
+  await storedOnly.config.setCommandPolicy(scopeId("org", "default-org"), {
+    mode: "allowlist",
+    rules: [{ pattern, decision: "allow", subsumesToolApproval: true }],
+  });
+  const storedPending = await storedOnly.app.turn(dm(`!run ${command}`));
+  assert.equal(storedPending.pendingApprovals?.[0]?.approvalKey, "tool:execute");
+
+  for (const policy of [
+    { mode: "allowlist", rules: [{ pattern: "^safe-tool read$", decision: "deny" }] },
+    { mode: "allowlist", rules: [{ pattern, decision: "allow" }] },
+  ] satisfies CommandPolicy[]) {
+    const built = freshApp();
+    built.deploymentLayer.commandRules.push({ pattern, decision: "allow", subsumesToolApproval: true });
+    await built.config.setSecurityPosture(scopeId("org", "default-org"), "strict");
+    await built.config.setCommandPolicy(scopeId("org", "default-org"), policy);
+    const pending = await built.app.turn(dm("!run safe-tool read"));
+    assert.equal(pending.pendingApprovals?.[0]?.approvalKey, "tool:execute");
+  }
+
+  for (const rawCommand of [
+    "safe-tool 'read' --request work/safe-tool/a.json",
+    "safe-tool read --request work/safe-tool/a\\.json",
+    "safe-tool read --request work/safe-tool/a.json --extra",
+  ]) {
+    const built = freshApp();
+    built.deploymentLayer.commandRules.push({ pattern, decision: "allow", subsumesToolApproval: true });
+    await built.config.setSecurityPosture(scopeId("org", "default-org"), "strict");
+    await built.config.setCommandPolicy(scopeId("org", "default-org"), {
+      mode: "allowlist",
+      rules: [{ pattern, decision: "allow" }],
+    });
+    const pending = await built.app.turn(dm(`!run ${rawCommand}`));
+    assert.equal(pending.pendingApprovals?.[0]?.approvalKey, "tool:execute", rawCommand);
+  }
+});
+
+test("request workspace staging accepts only exact bounded unshared string writes below the derived prefix", () => {
+  const workspaces = [{ prefix: "work/fixed-tool", maxBytes: 4 }];
+  assert.equal(requestWorkspaceWriteAllowed({ path: "work/fixed-tool/a.json", data: "test" }, workspaces), true);
+  assert.equal(
+    requestWorkspaceWriteAllowed(
+      Object.assign(Object.create(null), { path: "work/fixed-tool/a", data: "ok" }),
+      workspaces,
+    ),
+    true,
+  );
+  for (const input of [
+    { path: "work/fixed-tool/a", data: "\u00e9\u00e9\u00e9" },
+    { path: "work/fixed-toolish/a", data: "x" },
+    { path: "work/fixed-tool", data: "x" },
+    { path: "work/fixed-tool/../outside", data: "x" },
+    { path: "work/fixed-tool/./a", data: "x" },
+    { path: "work/fixed-tool//a", data: "x" },
+    { path: "work/fixed-tool/a b", data: "x" },
+    { path: "work/fixed-tool/a\\b", data: "x" },
+    { path: "/work/fixed-tool/a", data: "x" },
+    { path: "~/work/fixed-tool/a", data: "x" },
+    { path: "work/fixed-tool/a", data: "x", share: [] },
+    { path: "work/fixed-tool/a", data: "x", share: ["global"] },
+    { path: "work/fixed-tool/a", data: "x", extra: true },
+  ]) {
+    assert.equal(requestWorkspaceWriteAllowed(input, workspaces), false, JSON.stringify(input));
+  }
+  const accessor = { data: "x" } as { path?: string; data: string };
+  Object.defineProperty(accessor, "path", { enumerable: true, get: () => "work/fixed-tool/a" });
+  assert.equal(requestWorkspaceWriteAllowed(accessor, workspaces), false);
+  assert.equal(
+    requestWorkspaceWriteAllowed(
+      new Proxy(
+        {},
+        {
+          ownKeys: () => {
+            throw new Error("trap");
+          },
+        },
+      ),
+      workspaces,
+    ),
+    false,
+  );
+  assert.equal(requestWorkspaceWriteAllowed({ path: "work/fixed-tool/a", data: "x" }, []), false);
 });
 
 test("Auto asks for input approval on suspicious data, skips re-screening on approval, and honors denial", async () => {

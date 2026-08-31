@@ -5,6 +5,7 @@ import path from "node:path";
 
 const PORT = Number(process.env.AGENT_PORT || 8080);
 const MAX_BUFFER = 256 * 1024 * 1024;
+const MAX_ATTEST_EXECUTABLE = 1024 * 1024;
 const START_MS = Date.now();
 
 function readBody(req, cap = MAX_BUFFER) {
@@ -71,6 +72,53 @@ async function handleRead(req, res) {
   send(res, 200, { b64: buf.toString("base64") });
 }
 
+export function readAttestedExecutable(binary, root = "/usr/local/bin") {
+  if (typeof binary !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(binary)) {
+    throw new Error("invalid binary");
+  }
+  const canonicalRoot = fs.realpathSync(root);
+  const target = path.join(root, binary);
+  const canonicalTarget = path.join(canonicalRoot, binary);
+  const before = fs.lstatSync(target);
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.size > MAX_ATTEST_EXECUTABLE ||
+    (before.mode & 0o111) === 0
+  ) {
+    throw new Error("invalid executable");
+  }
+  if (fs.realpathSync(target) !== canonicalTarget) throw new Error("invalid executable path");
+  const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.size > MAX_ATTEST_EXECUTABLE || (opened.mode & 0o111) === 0) {
+      throw new Error("invalid executable");
+    }
+    const bytes = Buffer.allocUnsafe(MAX_ATTEST_EXECUTABLE + 1);
+    let length = 0;
+    for (;;) {
+      const read = fs.readSync(fd, bytes, length, bytes.length - length, null);
+      if (read === 0) break;
+      length += read;
+      if (length > MAX_ATTEST_EXECUTABLE) throw new Error("executable too large");
+    }
+    return { bytes: bytes.subarray(0, length), mode: opened.mode & 0o777 };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+async function handleAttestExecutable(req, res) {
+  const body = JSON.parse((await readBody(req, 1024)).toString("utf8") || "{}");
+  try {
+    const { bytes, mode } = readAttestedExecutable(body.binary);
+    return send(res, 200, { b64: bytes.toString("base64"), size: bytes.length, mode });
+  } catch (error) {
+    return send(res, 409, { error: error instanceof Error ? error.message : "attestation failed" });
+  }
+}
+
 const server = http.createServer((req, res) => {
   const route = (req.url || "").split("?")[0];
   (async () => {
@@ -84,8 +132,11 @@ const server = http.createServer((req, res) => {
     if (req.method === "POST" && route === "/exec") return handleExec(req, res);
     if (req.method === "POST" && route === "/write") return handleWrite(req, res);
     if (req.method === "POST" && route === "/read") return handleRead(req, res);
+    if (req.method === "POST" && route === "/attest-executable") return handleAttestExecutable(req, res);
     return send(res, 404, { error: "not found", route });
   })().catch((e) => send(res, 500, { error: String((e && e.message) || e) }));
 });
 
-server.listen(PORT, "0.0.0.0", () => console.log(`[microvm-agent] exec daemon listening on ${PORT}`));
+if (import.meta.main) {
+  server.listen(PORT, "0.0.0.0", () => console.log(`[microvm-agent] exec daemon listening on ${PORT}`));
+}

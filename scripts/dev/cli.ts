@@ -28,7 +28,7 @@ import {
   supervisorAlive,
   takenSummary,
 } from "./lib/lease.ts";
-import { callerEnvSnapshot, currentBranch, repoRoot } from "./lib/envctx.ts";
+import { callerEnvSnapshot, currentBranch, repoRoot, withoutTransientProviderSecrets } from "./lib/envctx.ts";
 import { killTree, pidAlive, portHolders, spawnDetached } from "./lib/proc.ts";
 import {
   resolveSocketPath,
@@ -117,7 +117,8 @@ function emitJson(payload: unknown): void {
 
 const orgId = opts.org ?? process.env.DEV_INSTANCE_ORG_ID ?? "acme";
 const withSlack = !opts["no-slack"] && process.env.DEV_INSTANCE_NO_SLACK !== "1";
-const devCallerEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
+const devSupervisorEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
+const devCallerEnv = (): Record<string, string> => withoutTransientProviderSecrets(devSupervisorEnv());
 
 async function legacyTeardown(lease: LeaseInfo): Promise<void> {
   for (const name of ["portal", "admin", "web", "web-build", "slack", "core", "tunnel", "supervisor"]) {
@@ -235,6 +236,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
   }
 
   const callerEnv = devCallerEnv();
+  const supervisorEnv = devSupervisorEnv();
   const canaryChannel = (tokens?.canaryChannel ?? "") || callerEnv.DEV_INSTANCE_CANARY_CHANNEL || "";
   writeFileSync(
     join(lock, "boot-spec.json"),
@@ -261,7 +263,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
     cwd: worktree,
     logFile: join(lock, "supervisor.log"),
     argv: ["node", supervisorScript, "--slot", slot, "--worktree", worktree, "--store", store],
-    env: callerEnv,
+    env: supervisorEnv,
   });
 
   const sock = resolveSocketPath(lock);
@@ -337,7 +339,7 @@ async function cmdUp(): Promise<number> {
           sock,
           "POST",
           "/reload",
-          { callerEnv: devCallerEnv(), force: opts.force },
+          { callerEnv: devCallerEnv(), geminiApiKey: process.env.GEMINI_API_KEY, force: opts.force },
           300_000,
         );
         emitJson(res.body);

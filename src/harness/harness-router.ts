@@ -15,6 +15,16 @@ export interface RuntimeChoice {
   modelId: string;
 }
 
+function resolveForcedRuntimeChoice(forced: RuntimeChoice, requested?: Partial<RuntimeChoice>): RuntimeChoice {
+  if (
+    (requested?.harnessId && requested.harnessId !== forced.harnessId) ||
+    (requested?.modelId && requested.modelId !== forced.modelId)
+  ) {
+    throw new NonRetryableTurnError(`runtime is fixed to ${forced.harnessId}/${forced.modelId} for this dev instance`);
+  }
+  return forced;
+}
+
 export function resolveRuntimeChoice(
   config: Pick<ScopedConfigStore, "getApprovedHarnesses" | "getRuntimeSelection" | "getBaseModel">,
   orgScopeId: ScopeId,
@@ -66,7 +76,9 @@ export async function resolveRuntimeChoiceDurable(
   fallback: RuntimeChoice,
   requested?: Partial<RuntimeChoice>,
   hydrateModelCatalog?: () => Promise<unknown>,
+  forced?: RuntimeChoice,
 ): Promise<RuntimeChoice> {
+  if (forced) return resolveForcedRuntimeChoice(forced, requested);
   const approved = (await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId];
   const [orgStored, scopedStored, orgLegacy, scopedLegacy] = await Promise.all([
     config.getRuntimeSelectionDurable(orgScopeId),

@@ -4,8 +4,10 @@ import { createServer } from "./api/server.ts";
 import { errMessage } from "./util/errors.ts";
 import { slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
+import { takeDevGeminiApiKey } from "./model/dev-gemini-provider.ts";
 
 const config = loadConfig();
+if (config.devGeminiProvider) takeDevGeminiApiKey(process.env);
 
 const built = buildApp(config);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);

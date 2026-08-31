@@ -39,6 +39,72 @@ test("a calendar cron supports multiple local times per day", async (t) => {
   assert.equal(cron.nextFireAt, Date.parse("2026-06-19T00:00:00.000Z"));
 });
 
+test("schedule authority aligns activeFrom and versions configuration and state independently", async (t) => {
+  t.mock.method(Date, "now", () => Date.parse("2039-01-01T00:00:00.000Z"));
+  const store = createCronStore();
+  const authority = {
+    contractVersion: 1 as const,
+    authorityRef: "qm:test:scheduler",
+    issuerRef: "qm:test",
+    keyId: "schedule-test-1",
+    profileRef: "profile:test:1",
+    profileSha256: "1".repeat(64),
+    scheduleDefinition: {
+      scheduleRef: "schedule-test",
+      cadence: "daily" as const,
+      timeZone: "America/Los_Angeles",
+      localTime: "09:00",
+      weeklyDay: null,
+      monthlyDay: null,
+      activeFrom: "2040-09-01",
+      activeUntil: "2040-09-30",
+    },
+    runRequestTemplateSha256: "2".repeat(64),
+    receiptLifetimeMs: 300_000,
+  };
+  const cron = await store.create({
+    ...base,
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    scheduleAuthority: authority,
+  });
+  assert.equal(cron.nextFireAt, Date.parse("2040-09-01T16:00:00.000Z"));
+  assert.equal(cron.scheduleAuthority?.configurationGeneration, 1);
+  assert.equal(cron.scheduleAuthority?.stateRevision, 1);
+  const firstRevision = cron.scheduleAuthority!.cronRevisionSha256;
+  const repeated = await store.update(cron.id, { action: "x" });
+  assert.equal(repeated?.scheduleAuthority?.configurationGeneration, 2);
+  assert.equal(repeated?.scheduleAuthority?.stateRevision, 1);
+  assert.notEqual(repeated?.scheduleAuthority?.cronRevisionSha256, firstRevision);
+  await store.setEnabled(cron.id, false);
+  const disabled = await store.get(cron.id);
+  assert.equal(disabled?.scheduleAuthority?.configurationGeneration, 2);
+  assert.equal(disabled?.scheduleAuthority?.stateRevision, 2);
+  await store.setEnabled(cron.id, true);
+  const reenabled = await store.get(cron.id);
+  assert.equal(reenabled?.scheduleAuthority?.configurationGeneration, 3);
+  assert.equal(reenabled?.scheduleAuthority?.stateRevision, 3);
+  assert.notEqual(reenabled?.scheduleAuthority?.cronRevisionSha256, repeated?.scheduleAuthority?.cronRevisionSha256);
+  const signedSnapshot = structuredClone(reenabled);
+  const scheduledAt = reenabled!.nextFireAt!;
+  await store.markFired(cron.id, scheduledAt + 1_000, scheduledAt);
+  assert.equal(await store.claimSlot(cron.id, scheduledAt, scheduledAt + 2_000), false);
+  await store.unclaimSlot(cron.id, scheduledAt, scheduledAt + 2_000, reenabled!.lastFiredAt);
+  assert.deepEqual(await store.get(cron.id), signedSnapshot);
+  await assert.rejects(store.delete(cron.id), /signed schedule crons cannot be deleted/u);
+  assert.deepEqual(await store.get(cron.id), signedSnapshot);
+
+  const unsigned = await store.create({
+    ...base,
+    action: "unsigned",
+    schedule: { cron: "0 10 * * *", timezone: "America/Los_Angeles" },
+  });
+  await assert.rejects(
+    store.update(unsigned.id, { scheduleAuthority: authority }),
+    /schedule authority must be configured when the cron is created/u,
+  );
+  assert.equal((await store.get(unsigned.id))?.scheduleAuthority, undefined);
+});
+
 test("a late calendar fire advances from the scheduled instant, not the tick instant", async (t) => {
   const now = Date.parse("2026-06-18T15:58:00.000Z");
   t.mock.method(Date, "now", () => now);
@@ -318,6 +384,21 @@ test("setDestination(undefined) removes the destination field", async () => {
   assert.equal((await store.get(cron.id))?.destination?.target, "C1");
   await store.setDestination(cron.id, undefined);
   assert.equal("destination" in ((await store.get(cron.id)) ?? {}), false);
+});
+
+test("cron destinations never persist caller-authored analytics cards", async () => {
+  const store = createCronStore();
+  const forged = {
+    type: "slack",
+    target: "C1",
+    nativeCard: { renderer: "qm.analytics.card.v1", heading: "Invented" },
+  } as never;
+  const cron = await store.create({ ...base, schedule: { everyMs: 1000 }, destination: forged });
+  assert.equal(JSON.stringify(cron.destination).includes("nativeCard"), false);
+  await store.update(cron.id, { destination: forged });
+  assert.equal(JSON.stringify((await store.get(cron.id))?.destination).includes("nativeCard"), false);
+  await store.setDestination(cron.id, forged);
+  assert.equal(JSON.stringify((await store.get(cron.id))?.destination).includes("nativeCard"), false);
 });
 
 test("create dedups a byte-identical retry: same input inserts once and returns the same id", async () => {

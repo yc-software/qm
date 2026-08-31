@@ -13,6 +13,17 @@ import { evaluateCommandWithLayer } from "../src/policy/command-policy.ts";
 const credentialFile = (path: string) => ({ path, kind: "file" as const });
 const credentialDirectory = (path: string) => ({ path, kind: "directory" as const });
 
+test("tool self-check opt-in is a closed executable digest contract", () => {
+  assert.deepEqual(
+    parseToolDescriptor(JSON.stringify({ id: "sample-tool", selfCheck: { kind: "executable-sha256-v1" } }), "t.json")
+      .selfCheck,
+    { kind: "executable-sha256-v1" },
+  );
+  for (const selfCheck of [true, {}, { kind: "other" }, { kind: "executable-sha256-v1", argument: "self-check" }]) {
+    assert.throws(() => parseToolDescriptor(JSON.stringify({ id: "sample-tool", selfCheck }), "t.json"), /selfCheck/);
+  }
+});
+
 function layerDir(tools: Record<string, unknown>): string {
   const dir = mkdtempSync(join(tmpdir(), "layer-"));
   for (const [id, descriptor] of Object.entries(tools)) {
@@ -140,6 +151,60 @@ test("command-form approval rules target install.binary and are enforced by poli
   );
   assert.equal(evaluateCommandWithLayer("acmectl delete", policy, layer.commandRules).decision, "require_approval");
   assert.equal(evaluateCommandWithLayer("acmectl deleteall", policy, layer.commandRules).decision, "allow");
+});
+
+test("deployment-layer command-scoped approvals preserve exact raw keys and once-only grant modes", () => {
+  const layer = loadDeploymentLayer(
+    layerDir({
+      acme: {
+        id: "acme",
+        approvals: [{ pattern: "\\bacme\\b\\s+publish\\b", approvalScope: "command" }],
+      },
+    }),
+  );
+  assert.deepEqual(layer.commandRules, [
+    {
+      pattern: "\\bacme\\b\\s+publish\\b",
+      decision: "require_approval",
+      approvalScope: "command",
+    },
+  ]);
+  const command = "acme publish artifact-a";
+  const evaluated = evaluateCommandWithLayer(command, { mode: "denylist", rules: [] }, layer.commandRules);
+  assert.equal(evaluated.decision, "require_approval");
+  assert.equal(evaluated.approvalKey, command);
+  assert.deepEqual(evaluated.grantModes, { session: false, always: false });
+});
+
+test("deployment-layer subsumption and request staging remain descriptor-owned runtime metadata", () => {
+  const pattern = "^acme read --request work/acme/[A-Za-z0-9]{1,64}\\.json$";
+  const layer = loadDeploymentLayer(
+    layerDir({
+      acme: {
+        id: "acme",
+        requestWorkspace: { maxBytes: 2048 },
+        approvals: [{ pattern, decision: "allow", subsumesToolApproval: true }],
+      },
+    }),
+  );
+  assert.deepEqual(layer.requestWorkspaces, [{ prefix: "work/acme", maxBytes: 2048 }]);
+  assert.deepEqual(layer.commandRules, [{ pattern, decision: "allow", subsumesToolApproval: true }]);
+  assert.equal(
+    evaluateCommandWithLayer(
+      "acme read --request work/acme/a.json",
+      { mode: "denylist", rules: [] },
+      layer.commandRules,
+    ).subsumesToolApproval,
+    true,
+  );
+  assert.equal(
+    evaluateCommandWithLayer(
+      "acme 'read' --request work/acme/a.json",
+      { mode: "denylist", rules: [] },
+      layer.commandRules,
+    ).subsumesToolApproval,
+    undefined,
+  );
 });
 
 test("loadDeploymentLayer: a dir with no tools/ is a valid, empty layer", () => {

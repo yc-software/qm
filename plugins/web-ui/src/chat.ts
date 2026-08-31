@@ -14,12 +14,10 @@ import {
   ChevronRight,
   Clock3,
   Copy,
-  FileImage,
   FileText,
   Files,
   GitFork,
   Maximize2,
-  Paperclip,
   Pencil,
   Plug,
   Radar,
@@ -101,6 +99,8 @@ import { backgroundLabel, clearWorking, conversationBackground, isAbandonedNewCh
 import { liveTurnThreadRef } from "./working-dot";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
+import { WorkflowArtifactRegistry, createDefaultWorkflowArtifactRegistry } from "./workflow-artifact-registry.ts";
+import { deliveredFileBadge, fileChip, imageChip } from "./delivered-file.ts";
 
 installMarkdownSanitizer();
 
@@ -134,11 +134,16 @@ export function markConnectorConnected(provider: string): void {
 
 export function createChatSurface(
   ctx: ConvCtx,
-  dependencies: { fetchTranscript?: typeof fetchTranscript; openSession?: typeof openSession } = {},
+  dependencies: {
+    fetchTranscript?: typeof fetchTranscript;
+    openSession?: typeof openSession;
+    workflowArtifacts?: WorkflowArtifactRegistry;
+  } = {},
 ): ChatSurface {
   const runSlot = createRunSlot();
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
+  const workflowArtifacts = dependencies.workflowArtifacts ?? createDefaultWorkflowArtifactRegistry();
 
   const chatState = {
     agent: null as Agent | null,
@@ -1493,7 +1498,7 @@ export function createChatSurface(
 
   function assistantFileList(files: DeliveredFile[] | undefined): TemplateResult | typeof nothing {
     if (!files?.length) return nothing;
-    return html`<div class="message-files">${files.map((f) => deliveredFileBadge(f))}</div>`;
+    return html`<div class="message-files">${files.map((f) => deliveredFileBadge(f, workflowArtifacts))}</div>`;
   }
 
   function markdown(text: string): TemplateResult {
@@ -2217,22 +2222,6 @@ export function createChatSurface(
     redrawTranscript();
   }
 
-  function chipBadge(glyph: IconNode, name: string, size?: number, href?: string, download = false): TemplateResult {
-    const inner = html`${icon(glyph, 14)}<span>${name}</span>${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}`;
-    if (!href) return html`<span class="file-chip">${inner}</span>`;
-    return download
-      ? html`<a class="file-chip" href=${href} download=${name}>${inner}</a>`
-      : html`<a class="file-chip" href=${href} target="_blank" rel="noreferrer">${inner}</a>`;
-  }
-
-  function fileChip(name: string, size?: number, href?: string): TemplateResult {
-    return chipBadge(Paperclip, name, size, href);
-  }
-
-  function imageChip(name: string, size?: number, href?: string): TemplateResult {
-    return chipBadge(FileImage, name, size, href, true);
-  }
-
   interface UserAttachmentView {
     fileName: string;
     mimeType?: string;
@@ -2259,18 +2248,6 @@ export function createChatSurface(
       }
     }
     return fileChip(a.fileName, a.size, artifactHref);
-  }
-
-  function deliveredFileBadge(file: DeliveredFile): TemplateResult {
-    if (!file.artifactId) return fileChip(file.name, file.sizeBytes);
-    const href = withBase(`/api/files/${encodeURIComponent(file.artifactId)}/content`);
-    if (file.mimetype?.startsWith("image/")) {
-      if (!browserRenderableImage(file.mimetype)) return imageChip(file.name, file.sizeBytes, href);
-      return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" title=${file.name}
-        ><img src=${href} alt=${file.name} loading="lazy"
-      /></a>`;
-    }
-    return fileChip(file.name, file.sizeBytes, href);
   }
 
   let stickToBottom = true;

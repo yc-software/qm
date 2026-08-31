@@ -43,6 +43,16 @@ test("authorizeUrl builds a consent URL with client id, scopes, redirect, state"
   assert.match(u.searchParams.get("scope") ?? "", /gmail\.modify/);
   assert.match(u.searchParams.get("scope") ?? "", /auth\/drive(\s|$)/);
   assert.match(u.searchParams.get("scope") ?? "", /spreadsheets/);
+  assert.match(u.searchParams.get("scope") ?? "", /auth\/calendar(\s|$)/);
+  assert.match(u.searchParams.get("scope") ?? "", /auth\/tasks(\s|$)/);
+  assert.doesNotMatch(u.searchParams.get("scope") ?? "", /auth\/(?:documents|presentations)(\s|$)/);
+  assert.deepEqual(PROVIDERS.google!.hosts, [
+    "gmail.googleapis.com",
+    "www.googleapis.com",
+    "sheets.googleapis.com",
+    "docs.googleapis.com",
+    "slides.googleapis.com",
+  ]);
 });
 
 test("createSecretClientResolver refuses when the provider isn't configured (creds = the only gap)", async () => {

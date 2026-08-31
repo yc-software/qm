@@ -40,6 +40,15 @@ import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from 
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import {
+  createPrivateTurnObservationOutbox,
+  type PrivateTurnObservationOutbox,
+} from "./api/private-turn-observation-outbox.ts";
+import { createSignedPrivateTurnObserver } from "./api/signed-private-turn-observer.ts";
+import {
+  createMemoryTransactionalOutbox,
+  createPostgresTransactionalOutbox,
+} from "./persistence/transactional-outbox.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { configurePgCaTrust } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
@@ -78,6 +87,8 @@ import {
 } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
+import { createPostgresScheduleAuthority, type PostgresScheduleAuthority } from "./cron/postgres-schedule-authority.ts";
+import { createScheduleAuthoritySigner } from "./cron/schedule-authority.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, disableLegacyWebhookRows } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
@@ -101,8 +112,9 @@ import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import { createMemoryService, type MemoryService } from "./memory/memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
-import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
+import { createMcpServerStore, type McpServerStore, type StoredMcpServer } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpAuthoritySigner } from "./mcp/mcp-authority.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -181,7 +193,11 @@ import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import { setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
-import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
+import {
+  createCustomProviderStore,
+  withTransientCustomProvider,
+  type CustomProviderStore,
+} from "./model/custom-provider-store.ts";
 import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import type { SessionStore } from "./sessions/session-store.ts";
@@ -394,6 +410,8 @@ export interface BuiltApp {
   uiState: UiStateStore;
   skillSyncEngine: SkillSyncEngine;
   slackCore: SlackCoreClient;
+  privateTurnObservationOutbox?: PrivateTurnObservationOutbox;
+  scheduleAuthority?: PostgresScheduleAuthority;
 }
 
 export function buildApp(
@@ -402,8 +420,18 @@ export function buildApp(
     securityScreener?: SecurityScreener;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
+    privateTurnObserver?: import("./api/private-turn-observer.ts").PrivateTurnObservationSink;
+    privateTurnObserverTimeoutMs?: number;
   } = {},
 ): BuiltApp {
+  if (
+    overrides.privateTurnObserverTimeoutMs !== undefined &&
+    (!Number.isSafeInteger(overrides.privateTurnObserverTimeoutMs) ||
+      overrides.privateTurnObserverTimeoutMs < 1 ||
+      overrides.privateTurnObserverTimeoutMs > 10_000)
+  ) {
+    throw new TypeError("privateTurnObserverTimeoutMs must be an integer from 1 through 10000");
+  }
   if (config.databaseUrl && !config.connectorSecretKey) {
     throw new Error("CONNECTOR_SECRET_KEY is required with durable storage");
   }
@@ -433,7 +461,34 @@ export function buildApp(
   const pgArtifactMap = config.databaseUrl ? createPostgresMapFactory(config.databaseUrl) : null;
   const artifactMap = <T>(table: string): DurableMap<T> =>
     pgArtifactMap ? pgArtifactMap.map<T>(table) : createMemoryMap<T>();
+  const privateTurnObserver =
+    overrides.privateTurnObserver ??
+    (config.privateTurnObserverUrl && config.privateTurnObserverSigningSecret
+      ? createSignedPrivateTurnObserver({
+          endpoint: config.privateTurnObserverUrl,
+          signingSecret: config.privateTurnObserverSigningSecret,
+        })
+      : undefined);
+  if (privateTurnObserver && config.production && (!config.databaseUrl || config.runStore !== "postgres")) {
+    throw new Error("production private-turn observer requires DATABASE_URL and RUN_STORE=postgres");
+  }
+  const memoryTransactionalOutbox =
+    privateTurnObserver && config.runStore !== "postgres" ? createMemoryTransactionalOutbox() : undefined;
+  const postgresTransactionalOutbox =
+    privateTurnObserver && config.runStore === "postgres" && config.databaseUrl
+      ? createPostgresTransactionalOutbox(config.databaseUrl)
+      : undefined;
+  const transactionalOutboxStorage = postgresTransactionalOutbox ?? memoryTransactionalOutbox;
+  const privateTurnObservationOutbox =
+    privateTurnObserver && transactionalOutboxStorage
+      ? createPrivateTurnObservationOutbox({
+          storage: transactionalOutboxStorage,
+          downstream: privateTurnObserver,
+          timeoutMs: overrides.privateTurnObserverTimeoutMs ?? 1_000,
+        })
+      : undefined;
   setProviderBaseUrls(config.providerBaseUrls);
+  setCustomProviders(config.devGeminiProvider ? [config.devGeminiProvider.spec] : []);
   const modelCredentials = createModelCredentialStore({
     backing: artifactMap("model_credentials"),
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
@@ -598,8 +653,16 @@ export function buildApp(
   const baseMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
-  const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
-  const mcpToolService = createMcpToolService({ servers: mcpServers, audit: auditLog });
+  const mcpSecretKey = deriveConnectorKey(config.connectorSecretKey ?? randomBytes(32), "mcp-server-secrets");
+  const mcpServers = createMcpServerStore(artifactMap<StoredMcpServer>("mcp_servers"), mcpSecretKey);
+  const mcpAuthoritySigner = config.mcpAuthoritySigner
+    ? createMcpAuthoritySigner(config.mcpAuthoritySigner)
+    : undefined;
+  const mcpToolService = createMcpToolService({
+    servers: mcpServers,
+    audit: auditLog,
+    ...(mcpAuthoritySigner ? { authoritySigner: mcpAuthoritySigner } : {}),
+  });
   const mcpTools = () => mcpToolService.toolDefs();
   const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
@@ -771,12 +834,18 @@ export function buildApp(
   const runSignals: RunSignalStore =
     runStoreKind === "postgres"
       ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
-      : createMemoryRunSignalStore();
+      : createMemoryRunSignalStore({ transactionalOutbox: memoryTransactionalOutbox });
   const tasks = config.databaseUrl ? createPostgresTaskStore(config.databaseUrl) : createMemoryTaskStore();
-  const customProviders = createCustomProviderStore({
+  const storedCustomProviders = createCustomProviderStore({
     backing: artifactMap("custom_model_providers"),
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
   });
+  const customProviders = config.devGeminiProvider
+    ? withTransientCustomProvider(storedCustomProviders, {
+        ...config.devGeminiProvider,
+        updatedBy: "system:dev-instance",
+      })
+    : storedCustomProviders;
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
@@ -814,8 +883,14 @@ export function buildApp(
     };
   };
   const runtimeOrgScope = scopeId("org", config.orgId);
+  const devGeminiRuntime = config.devGeminiProvider
+    ? { harnessId: "pi" as const, modelId: config.devGeminiProvider.spec.models[0]!.id }
+    : undefined;
   const orgBaseModelId = (): string | undefined =>
-    configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
+    devGeminiRuntime?.modelId ??
+    configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ??
+    configStore.getBaseModel(runtimeOrgScope) ??
+    undefined;
   const adapters = new Map<HarnessId, Harness>([
     [
       "pi",
@@ -823,6 +898,7 @@ export function buildApp(
         ...piHarnessConfigOptions(config),
         resolveBaseModelId: orgBaseModelId,
         resolveProviderKeys: resolveModelProviderKeys,
+        ...(config.devGeminiProvider ? { devGeminiProviderId: config.devGeminiProvider.spec.id } : {}),
         signals: runSignals,
         mcpTools,
       }),
@@ -905,7 +981,7 @@ export function buildApp(
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) => {
-    if (input.runtimePinned && input.harness && isHarnessId(input.harness) && input.model) {
+    if (!devGeminiRuntime && input.runtimePinned && input.harness && isHarnessId(input.harness) && input.model) {
       return { harnessId: input.harness, modelId: input.model };
     }
     return resolveRuntimeChoiceDurable(
@@ -918,6 +994,7 @@ export function buildApp(
         ...(input.model ? { modelId: input.model } : {}),
       },
       hydrateModelCatalog,
+      devGeminiRuntime,
     );
   });
 
@@ -926,9 +1003,23 @@ export function buildApp(
   const runStore =
     runStoreKind === "postgres"
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
-      : createMemoryRunStore({ maxClaims: config.maxClaims });
+      : createMemoryRunStore({
+          maxClaims: config.maxClaims,
+          transactionalOutbox: memoryTransactionalOutbox,
+        });
   const runs: RunStore = runStore.runs;
   const ledger = runStore.ledger;
+  const scheduleAuthority = config.scheduleAuthority
+    ? createPostgresScheduleAuthority({
+        connectionString: requireDbUrl("SCHEDULE_AUTHORITY"),
+        signer: createScheduleAuthoritySigner({
+          authorityRef: config.scheduleAuthority.authorityRef,
+          issuerRef: config.scheduleAuthority.issuerRef,
+          keyId: config.scheduleAuthority.keyId,
+          privateKey: { key: config.scheduleAuthority.signingJwk, format: "jwk" },
+        }),
+      })
+    : undefined;
 
   let processes: ProcessRegistry | undefined;
   if (supportsProcessSessions(sandbox)) {
@@ -1088,6 +1179,7 @@ export function buildApp(
     resolution,
     config: configStore,
     defaultHarness: fallbackHarness,
+    ...(devGeminiRuntime ? { runtimeChoiceOverride: devGeminiRuntime } : {}),
     userModelCredentials,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     sessionTapeMode: config.sessionTapeMode,
@@ -1306,20 +1398,25 @@ export function buildApp(
     judgeModelId,
     harnessId: config.harness,
     runtimeFallback: fallback,
+    ...(devGeminiRuntime ? { runtimeChoiceOverride: devGeminiRuntime } : {}),
     providerKeys,
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeys),
     runWaitMs: config.runWaitMs,
+    ...(privateTurnObservationOutbox ? { privateTurnObservationOutbox } : {}),
+    ...(scheduleAuthority ? { scheduleAuthority } : {}),
   });
   const slackCore = createSlackCoreClient({
     app,
     config: configStore,
     runtimeFallback: fallback,
+    ...(devGeminiRuntime ? { runtimeChoiceOverride: devGeminiRuntime } : {}),
     blobTransfer,
     deliveries,
     metrics,
     runs,
     turnStream,
     tasks,
+    ...(mcpAuthoritySigner ? { analyticsCardVerifier: mcpAuthoritySigner } : {}),
     ackPicks: ackEmojiPicks,
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
@@ -1425,6 +1522,7 @@ export function buildApp(
     idempotency,
     identity,
     run: (req) => app.turn(req),
+    ...(scheduleAuthority ? { runScheduled: (req, context) => app.turn(req, context) } : {}),
     leaderLease,
     directory,
     currentScopeMembers,
@@ -1509,6 +1607,7 @@ export function buildApp(
       sessions,
       orchestrator,
       leaseTtlMs,
+      ...(scheduleAuthority ? { scheduleAuthority } : {}),
       heartbeatIntervalMs: config.heartbeatIntervalMs,
       pollMs: 250,
       canClaim: () => drain.canClaim(),
@@ -1525,6 +1624,12 @@ export function buildApp(
   const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
+  const privateTurnObservationSweeper = privateTurnObservationOutbox
+    ? createSweeper(() => privateTurnObservationOutbox.sweep(), 1_000, {
+        label: "private-turn-observation-outbox",
+        immediate: true,
+      })
+    : null;
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
     .ensureExpiry?.(BLOB_TRANSFER_EXPIRY_DAYS)
@@ -1560,6 +1665,7 @@ export function buildApp(
       monitorPoller?.start(config.monitorPollMs);
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
+      privateTurnObservationSweeper?.start();
       idleSweeper?.start();
       deepIdleSweeper?.start();
       reachDeniedNotifier?.start(config.insightsIntervalMs);
@@ -1579,6 +1685,7 @@ export function buildApp(
       deepIdleSweeper?.stop();
       reachDeniedNotifier?.stop();
       blobSweeper.stop();
+      privateTurnObservationSweeper?.stop();
       wakeSweep.stop();
       orphanedSignalSweeper.stop();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
@@ -1592,6 +1699,8 @@ export function buildApp(
       void runActivity.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
+      await transactionalOutboxStorage?.close?.();
+      await scheduleAuthority?.close();
     },
   };
 
@@ -1664,6 +1773,8 @@ export function buildApp(
     uiState: artifactMap<PersistedUiState>("web_ui_state"),
     skillSyncEngine,
     slackCore,
+    ...(privateTurnObservationOutbox ? { privateTurnObservationOutbox } : {}),
+    ...(scheduleAuthority ? { scheduleAuthority } : {}),
   };
 }
 
@@ -1685,6 +1796,14 @@ export function serverDeps(
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
     config: built.config,
     ...(configuredModel ? { baseModelDefault: configuredModel } : {}),
+    ...(config.devGeminiProvider
+      ? {
+          runtimeChoiceOverride: {
+            harnessId: "pi" as const,
+            modelId: config.devGeminiProvider.spec.models[0]!.id,
+          },
+        }
+      : {}),
     ...(carriedModelAuth ? { harnessCarriedModelAuth: carriedModelAuth } : {}),
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
     providerKeys: providerKeysPresent(config),
@@ -1738,6 +1857,10 @@ export function serverDeps(
     memory: built.memory,
     blobTransfer: built.blobTransfer,
     sandboxBackend: built.sandbox.profile.backend,
+    sandboxImage: {
+      identifier: config.awsSandbox.imageIdentifier,
+      ...(config.awsSandbox.imageVersion ? { version: config.awsSandbox.imageVersion } : {}),
+    },
     egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
     egressEnforcement: effectiveEgressEnforcement(built.sandbox.profile, {
       signingSecret: config.signingSecret,

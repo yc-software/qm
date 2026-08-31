@@ -43,6 +43,17 @@ export const SESSION_ENTRIES_SEARCH_INDEX_SQL = `CREATE INDEX CONCURRENTLY IF NO
   ON session_entries USING GIN (search_tsv)
   WHERE type IN ('user', 'assistant', 'text')`;
 
+export const ENTRY_SEARCH_TEXT_FUNCTION_SQL = `CREATE OR REPLACE FUNCTION entry_search_text(payload text) RETURNS text
+  LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $entry_search_text$
+  DECLARE j json;
+  BEGIN
+    j := replace(payload, '\\u0000', '')::json;
+    RETURN CASE WHEN json_typeof(j -> 'text') = 'string' THEN j ->> 'text'
+                WHEN json_typeof(j) = 'string' THEN j #>> '{}'
+                ELSE NULL END;
+  EXCEPTION WHEN others THEN RETURN NULL;
+  END $entry_search_text$`;
+
 export function rowToSession(r: Record<string, unknown>): Session {
   return {
     id: r.id as string,
@@ -263,16 +274,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC)`,
     `CREATE INDEX IF NOT EXISTS session_entries_user_ts ON session_entries(created_at) WHERE type = 'user'`,
     `CREATE INDEX IF NOT EXISTS session_entries_session_created ON session_entries(session_id, created_at DESC)`,
-    `CREATE OR REPLACE FUNCTION entry_search_text(payload text) RETURNS text
-        LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $entry_search_text$
-        DECLARE j json;
-        BEGIN
-          j := replace(payload, '\\u0000', '')::json;
-          RETURN CASE WHEN json_typeof(j -> 'text') = 'string' THEN j ->> 'text'
-                      WHEN json_typeof(j) = 'string' THEN j #>> '{}'
-                      ELSE NULL END;
-        EXCEPTION WHEN others THEN RETURN NULL;
-        END $entry_search_text$`,
+    ENTRY_SEARCH_TEXT_FUNCTION_SQL,
     `ALTER TABLE session_entries ADD COLUMN IF NOT EXISTS search_tsv tsvector
         GENERATED ALWAYS AS (to_tsvector('simple', COALESCE(entry_search_text(payload), ''))) STORED`,
     SESSION_ENTRIES_SEARCH_INDEX_SQL,

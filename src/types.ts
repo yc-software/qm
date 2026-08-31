@@ -180,6 +180,27 @@ export interface Destination {
   debugFooter?: string;
 }
 
+export interface QmAnalyticsNativeCard {
+  version: 1;
+  renderer: "qm.analytics.card.v1";
+  receiptId: string;
+  fallbackText: string;
+  heading: string;
+  question: string;
+  findings: Array<{
+    source: "posthog" | "clarify" | "brain" | "calendar" | "human_receipt";
+    topic:
+      "usage" | "funnel" | "error" | "opportunity" | "meeting" | "recipient" | "commitment" | "pricing" | "history";
+    text: string;
+    confidence: "high" | "medium" | "low";
+  }>;
+  confidenceNotes: string[];
+  nextStep: string;
+  proposedActions: string[];
+}
+
+export type TrustedAnalyticsCard = string & { readonly __trustedAnalyticsCard: unique symbol };
+
 export interface CandidateDestination extends Destination {
   key: string;
   label: string;
@@ -218,6 +239,7 @@ export interface CronFireLogEntry {
 
 export interface Cron extends TriggerBase {
   schedule: CronSchedule;
+  scheduleAuthority?: import("./cron/schedule-authority.ts").CronScheduleAuthority;
   nextFireAt?: number;
   lastAttemptAt?: number;
   title?: string;
@@ -267,6 +289,7 @@ export interface Delivery {
   text: string;
   attachments?: OutgoingAttachment[];
   provenance?: DeliveryProvenance;
+  trustedAnalyticsCard?: TrustedAnalyticsCard;
   idempotencyKey: string;
   createdAt: number;
   deliveredAt: number | null;
@@ -323,6 +346,8 @@ export interface CommandRule {
   pattern: string;
   decision: CommandDecision;
   reason?: string;
+  approvalScope?: "rule" | "command";
+  subsumesToolApproval?: true;
 }
 
 type CommandPolicyMode = "denylist" | "allowlist";
@@ -389,6 +414,8 @@ export type TurnOrigin =
 
 export interface TurnRequest {
   surface: string;
+  trustedSlackTeamId?: string;
+  trustedSlackUserId?: string;
   scopeVersion?: string;
   deliveryTarget?: string;
   deliveryCandidates?: { target: string; label: string }[];

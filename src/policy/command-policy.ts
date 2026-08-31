@@ -43,7 +43,7 @@ export function parseCommandPolicy(input: unknown): { policy: CommandPolicy } | 
   const rules: CommandRule[] = [];
   for (const [i, raw] of b.rules.entries()) {
     if (typeof raw !== "object" || raw === null) return { error: `rules[${i}] must be an object` };
-    const r = raw as { pattern?: unknown; decision?: unknown; reason?: unknown };
+    const r = raw as { pattern?: unknown; decision?: unknown; reason?: unknown; approvalScope?: unknown };
     if (typeof r.pattern !== "string" || r.pattern.length === 0) {
       return { error: `rules[${i}].pattern must be a non-empty string` };
     }
@@ -58,7 +58,18 @@ export function parseCommandPolicy(input: unknown): { policy: CommandPolicy } | 
     if (r.reason !== undefined && typeof r.reason !== "string") {
       return { error: `rules[${i}].reason must be a string` };
     }
-    rules.push({ pattern: r.pattern, decision: r.decision, ...(r.reason !== undefined ? { reason: r.reason } : {}) });
+    if (r.approvalScope !== undefined && r.approvalScope !== "rule" && r.approvalScope !== "command") {
+      return { error: `rules[${i}].approvalScope must be "rule" or "command"` };
+    }
+    if (r.approvalScope === "command" && r.decision !== "require_approval") {
+      return { error: `rules[${i}].approvalScope "command" requires decision "require_approval"` };
+    }
+    rules.push({
+      pattern: r.pattern,
+      decision: r.decision,
+      ...(r.reason !== undefined ? { reason: r.reason } : {}),
+      ...(r.approvalScope !== undefined ? { approvalScope: r.approvalScope } : {}),
+    });
   }
   return { policy: { mode: b.mode, rules } };
 }
@@ -132,9 +143,13 @@ function unquoteBareWord(inner: string): string | undefined {
 
 export interface CommandEvaluation {
   decision: CommandDecision;
+  source?: "policy" | "layer" | "default";
   reason?: string;
   matched?: string;
   approvalKey?: string;
+  rulePattern?: string;
+  grantModes?: { session: boolean; always: boolean };
+  subsumesToolApproval?: true;
 }
 
 interface ShellScan {
@@ -861,7 +876,12 @@ function pipedSqlPayloads(input: string): string[] {
   return payloads;
 }
 
-function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEvaluation | null {
+function firstMatch(
+  scannable: string,
+  command: string,
+  rules: readonly CommandRule[],
+  source: "policy" | "layer",
+): CommandEvaluation | null {
   for (const rule of rules) {
     let re: RegExp;
     try {
@@ -874,11 +894,19 @@ function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEv
     }
     const hit = re.exec(scannable);
     if (hit) {
+      const rawExactMatch =
+        source === "layer" &&
+        rule.subsumesToolApproval === true &&
+        compileSafeRegex(rule.pattern).exec(command)?.[0] === command;
       return {
         decision: rule.decision,
+        source,
         ...(rule.reason ? { reason: rule.reason } : {}),
         matched: hit[0],
-        approvalKey: rule.pattern,
+        approvalKey: rule.approvalScope === "command" ? command : rule.pattern,
+        rulePattern: rule.pattern,
+        ...(rule.approvalScope === "command" ? { grantModes: { session: false, always: false } } : {}),
+        ...(rawExactMatch ? { subsumesToolApproval: true as const } : {}),
       };
     }
   }
@@ -886,12 +914,12 @@ function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEv
 }
 
 export function evaluateCommand(command: string, policy: CommandPolicy): CommandEvaluation {
-  const matched = firstMatch(scannableCommand(command), policy.rules);
+  const matched = firstMatch(scannableCommand(command), command, policy.rules, "policy");
   if (matched) return matched;
   if (policy.mode === "allowlist") {
-    return { decision: "deny", reason: "not in allowlist" };
+    return { decision: "deny", source: "default", reason: "not in allowlist" };
   }
-  return { decision: "allow" };
+  return { decision: "allow", source: "default" };
 }
 
 export function evaluateCommandWithLayer(
@@ -900,12 +928,16 @@ export function evaluateCommandWithLayer(
   layerRules: readonly CommandRule[],
 ): CommandEvaluation {
   const scannable = scannableCommand(command);
-  const scopeMatch = firstMatch(scannable, policy.rules);
-  if (scopeMatch) return scopeMatch;
-  if (policy.mode === "allowlist") {
-    return { decision: "deny", reason: "not in allowlist" };
+  const scopeMatch = firstMatch(scannable, command, policy.rules, "policy");
+  const layerMatch = firstMatch(scannable, command, layerRules, "layer");
+  if (scopeMatch) {
+    if (!layerMatch || scopeMatch.decision === "deny") return scopeMatch;
+    if (layerMatch.decision === "deny" || layerMatch.decision === "require_approval") return layerMatch;
+    return layerMatch.subsumesToolApproval ? { ...scopeMatch, subsumesToolApproval: true } : scopeMatch;
   }
-  const layerMatch = firstMatch(scannable, layerRules);
+  if (policy.mode === "allowlist") {
+    return { decision: "deny", source: "default", reason: "not in allowlist" };
+  }
   if (layerMatch) return layerMatch;
-  return { decision: "allow" };
+  return { decision: "allow", source: "default" };
 }

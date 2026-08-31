@@ -24,6 +24,100 @@ test("evaluateCommand surfaces the matched rule's identity (its pattern) as the 
   const r = evaluateCommand("run zz-tool now", p);
   assert.equal(r.decision, "require_approval");
   assert.equal(r.approvalKey, "\\bzz-tool\\b");
+  assert.equal(r.rulePattern, "\\bzz-tool\\b");
+  assert.equal(r.grantModes, undefined);
+});
+
+test("command-scoped approvals bind exact raw bytes and are once-only", () => {
+  const pattern = "^zz-tool alpha$";
+  const policy: CommandPolicy = {
+    mode: "allowlist",
+    rules: [{ pattern, decision: "require_approval", approvalScope: "command" }],
+  };
+  const raw = ["zz-tool alpha", "zz-tool 'alpha'", 'zz-tool "alpha"', "zz-tool al\\pha"];
+  assert.ok(raw.every((command) => scannableCommand(command) === "zz-tool alpha"));
+  for (const command of raw) {
+    const result = evaluateCommand(command, policy);
+    assert.equal(result.decision, "require_approval");
+    assert.equal(result.approvalKey, command);
+    assert.equal(result.rulePattern, pattern);
+    assert.deepEqual(result.grantModes, { session: false, always: false });
+  }
+  assert.equal(new Set(raw.map((command) => evaluateCommand(command, policy).approvalKey)).size, raw.length);
+});
+
+test("command policy validation preserves defaults and rejects invalid approval scopes", () => {
+  const base = { mode: "denylist", rules: [{ pattern: "x", decision: "require_approval" }] };
+  assert.deepEqual(parseCommandPolicy(base), { policy: base });
+  assert.deepEqual(
+    parseCommandPolicy({
+      mode: "denylist",
+      rules: [{ pattern: "x", decision: "require_approval", approvalScope: "command" }],
+    }),
+    {
+      policy: {
+        mode: "denylist",
+        rules: [{ pattern: "x", decision: "require_approval", approvalScope: "command" }],
+      },
+    },
+  );
+  const invalidDecision = parseCommandPolicy({
+    mode: "denylist",
+    rules: [{ pattern: "x", decision: "allow", approvalScope: "command" }],
+  });
+  assert.match("error" in invalidDecision ? invalidDecision.error : "", /requires decision/);
+  const invalidScope = parseCommandPolicy({
+    mode: "denylist",
+    rules: [{ pattern: "x", decision: "require_approval", approvalScope: "session" }],
+  });
+  assert.match("error" in invalidScope ? invalidScope.error : "", /approvalScope/);
+});
+
+test("stored policies cannot opt into Strict tool-approval subsumption", () => {
+  const parsed = parseCommandPolicy({
+    mode: "denylist",
+    rules: [{ pattern: "^safe-tool read$", decision: "allow", subsumesToolApproval: true }],
+  });
+  assert.ok("policy" in parsed);
+  assert.deepEqual(parsed.policy.rules, [{ pattern: "^safe-tool read$", decision: "allow" }]);
+  assert.equal(evaluateCommand("safe-tool read", parsed.policy).subsumesToolApproval, undefined);
+});
+
+test("descriptor write rules remain exact and once-only when organization policy drifts broader", () => {
+  const command = "safe-tool write --request work/safe-tool/a.json --request-sha256 " + "a".repeat(64);
+  const writePattern = "^safe-tool write --request work/safe-tool/[A-Za-z0-9]+\\.json --request-sha256 [a-f0-9]{64}$";
+  const layer: CommandRule[] = [
+    {
+      pattern: writePattern,
+      decision: "require_approval",
+      approvalScope: "command",
+      subsumesToolApproval: true,
+    },
+  ];
+  for (const policy of [
+    { mode: "denylist", rules: [{ pattern: "^safe-tool", decision: "allow" }] },
+    { mode: "denylist", rules: [{ pattern: "^safe-tool", decision: "require_approval" }] },
+  ] satisfies CommandPolicy[]) {
+    const result = evaluateCommandWithLayer(command, policy, layer);
+    assert.equal(result.source, "layer");
+    assert.equal(result.decision, "require_approval");
+    assert.equal(result.approvalKey, command);
+    assert.deepEqual(result.grantModes, { session: false, always: false });
+    assert.equal(result.subsumesToolApproval, true);
+  }
+  const denied = evaluateCommandWithLayer(
+    command,
+    { mode: "denylist", rules: [{ pattern: "^safe-tool", decision: "deny" }] },
+    layer,
+  );
+  assert.equal(denied.decision, "deny");
+  assert.equal(denied.subsumesToolApproval, undefined);
+  const omitted = evaluateCommandWithLayer(command, { mode: "allowlist", rules: [] }, layer);
+  assert.equal(omitted.decision, "deny");
+  assert.equal(omitted.subsumesToolApproval, undefined);
+  const quoted = evaluateCommandWithLayer(command.replace("write", "'write'"), { mode: "denylist", rules: [] }, layer);
+  assert.equal(quoted.decision, "require_approval");
+  assert.equal(quoted.subsumesToolApproval, undefined);
 });
 
 test("recursive delete is gated in every flag form and order", () => {
@@ -387,7 +481,7 @@ test("evaluateCommandWithLayer: layer rules apply only where the scope policy is
   assert.equal(evaluateCommandWithLayer("echo hi", dflt, layer).decision, "allow");
 });
 
-test("evaluateCommandWithLayer: a scope decision is final; the layer never widens it", () => {
+test("evaluateCommandWithLayer: an allowlist stays closed while layer rules may tighten a scope", () => {
   const layer: CommandRule[] = [{ pattern: "\\bkubectl\\b", decision: "require_approval" }];
   const allowlist: CommandPolicy = { mode: "allowlist", rules: [{ pattern: "^ls\\b", decision: "allow" }] };
   assert.equal(evaluateCommandWithLayer("kubectl get pods", allowlist, layer).decision, "deny");
@@ -398,11 +492,11 @@ test("evaluateCommandWithLayer: a scope decision is final; the layer never widen
   };
   const denyLayer: CommandRule[] = [{ pattern: "\\bdeploy\\b", decision: "deny", reason: "layer: deploy" }];
   const r = evaluateCommandWithLayer("deploy prod", scope, denyLayer);
-  assert.equal(r.decision, "require_approval");
-  assert.equal(r.reason, "scope: deploy");
+  assert.equal(r.decision, "deny");
+  assert.equal(r.reason, "layer: deploy");
 
   const carve: CommandPolicy = { mode: "denylist", rules: [{ pattern: "kubectl get", decision: "allow" }] };
-  assert.equal(evaluateCommandWithLayer("kubectl get pods", carve, layer).decision, "allow");
+  assert.equal(evaluateCommandWithLayer("kubectl get pods", carve, layer).decision, "require_approval");
 });
 
 test("evaluateCommandWithLayer with no layer rules matches evaluateCommand", () => {

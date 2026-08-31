@@ -21,6 +21,18 @@ test("id is the only hard-required field; the minimal descriptor parses", () => 
   assert.throws(() => parseToolDescriptor("[]", "t.json"), /must be a JSON object/);
 });
 
+test("selfCheck uses the same closed executable digest contract in CLI and core", () => {
+  const descriptor = {
+    id: "sample-tool",
+    selfCheck: { kind: "executable-sha256-v1" },
+  };
+  assert.deepEqual(P(descriptor).selfCheck, descriptor.selfCheck);
+  assert.deepEqual(P(descriptor), canonical.parseToolDescriptor(JSON.stringify(descriptor), "t.json"));
+  for (const selfCheck of [true, {}, { kind: "other" }, { kind: "executable-sha256-v1", argument: "self-check" }]) {
+    assert.throws(() => P({ id: "sample-tool", selfCheck }), /selfCheck/);
+  }
+});
+
 test("label / advertise / egress / install are shape-checked when present", () => {
   const d = P({
     id: "my-tool",
@@ -37,6 +49,22 @@ test("label / advertise / egress / install are shape-checked when present", () =
   assert.throws(() => P({ id: "x", egress: [1] }), /"egress" must be an array/);
   assert.throws(() => P({ id: "x", install: { binary: 5 } }), /"install.binary" must be a string/);
   assert.throws(() => P({ id: "x", label: 5 }), /"label" must be a string/);
+});
+
+test("requestWorkspace derives a bounded tool-owned staging directory in CLI and core", () => {
+  const descriptor = { id: "sample-tool", requestWorkspace: { maxBytes: 4096 } };
+  assert.deepEqual(P(descriptor), descriptor);
+  assert.deepEqual(P(descriptor), canonical.parseToolDescriptor(JSON.stringify(descriptor), "t.json"));
+  for (const requestWorkspace of [
+    true,
+    {},
+    { maxBytes: 0 },
+    { maxBytes: 20 * 1024 * 1024 + 1 },
+    { maxBytes: 1.5 },
+    { maxBytes: 1, prefix: "work/sample-tool" },
+  ]) {
+    assert.throws(() => P({ id: "sample-tool", requestWorkspace }), /requestWorkspace/);
+  }
 });
 
 test("install.binary is restricted to the inert charset (it lands in generated Dockerfile RUN/COPY lines)", () => {
@@ -218,19 +246,65 @@ test("approvals: command|pattern (exactly one), decision enum, reason optional",
       { command: "secrets set" },
       { command: "delete", decision: "deny" },
       { pattern: "\\bmy-tool\\b\\s+--force\\b" },
+      { command: "publish", approvalScope: "command" },
     ],
   });
-  assert.equal(d.approvals!.length, 4);
+  assert.equal(d.approvals!.length, 5);
   assert.deepEqual(d.approvals![0], { command: "deploy", reason: "ships to production" });
   assert.equal(d.approvals![2]!.decision, "deny");
+  assert.equal(d.approvals![4]!.approvalScope, "command");
   assert.throws(() => P({ id: "x", approvals: [{}] }), /needs a "command" or a "pattern"/);
   assert.throws(() => P({ id: "x", approvals: [{ command: "a", pattern: "b" }] }), /has both/);
   assert.throws(() => P({ id: "x", approvals: [{ command: "a", decision: "maybe" }] }), /decision must be/);
-  assert.throws(() => P({ id: "x", approvals: [{ command: "a", decision: "allow" }] }), /decision must be/);
+  assert.throws(() => P({ id: "x", approvals: [{ command: "a", decision: "allow" }] }), /requires subsumes/);
+  assert.throws(() => P({ id: "x", approvals: [{ command: "a", approvalScope: "session" }] }), /approvalScope/);
+  assert.throws(
+    () => P({ id: "x", approvals: [{ command: "a", decision: "deny", approvalScope: "command" }] }),
+    /requires decision require_approval/,
+  );
   assert.throws(() => P({ id: "x", approvals: {} }), /"approvals" must be an array/);
   assert.throws(() => P({ id: "gh", approvals: [{ pattern: "nightmare" }] }), /must refer to its own tool binary/);
   assert.throws(() => P({ id: "gh", approvals: [{ pattern: "\\bgh\\b|nightmare" }] }), /top-level alternative/);
   assert.doesNotThrow(() => P({ id: "gh", approvals: [{ pattern: "\\bgh\\b(?:\\s+repo|\\s+pr)" }] }));
+});
+
+test("subsumesToolApproval is closed to anchored single-command layer patterns", () => {
+  const read = {
+    pattern: "^my-tool read --request work/my-tool/[A-Za-z0-9]{1,64}\\.json$",
+    decision: "allow",
+    subsumesToolApproval: true,
+  } as const;
+  const write = {
+    pattern: "^my-tool write --request work/my-tool/[A-Za-z0-9]{1,64}\\.json --request-sha256 [a-f0-9]{64}$",
+    decision: "require_approval",
+    approvalScope: "command",
+    subsumesToolApproval: true,
+  } as const;
+  assert.deepEqual(P({ id: "my-tool", approvals: [read, write] }).approvals, [read, write]);
+  for (const approval of [
+    { command: "read", decision: "allow", subsumesToolApproval: true },
+    { ...read, subsumesToolApproval: false },
+    { ...read, decision: "deny" },
+    { ...write, approvalScope: "rule" },
+    { ...read, pattern: "\\bmy-tool\\b read" },
+    { ...read, pattern: "^my-tool (read|write)$" },
+    { ...read, pattern: "^my-tool .*$" },
+    { ...read, pattern: "^my-tool read.id$" },
+    { ...read, pattern: "^my-tool [.-z]{7}$" },
+    { ...read, pattern: "^my-tool [A-z]{7}$" },
+    { ...read, pattern: "^my-tool read+id$" },
+    { ...read, pattern: "^my-tool ~root$" },
+    { ...read, pattern: "^my-tool read;rm$" },
+    { ...read, pattern: "^my-tool read&id$" },
+    { ...read, pattern: "^my-tool read|id$" },
+    { ...read, pattern: "^my-tool $(id)$" },
+    { ...read, pattern: "^my-tool `id`$" },
+    { ...read, pattern: "^my-tool read\nid$" },
+    { ...read, pattern: "^my-tool read\\s+now$" },
+    { ...read, pattern: "^my-tool [A-Za-z0-9]{257}$" },
+  ]) {
+    assert.throws(() => P({ id: "my-tool", approvals: [approval] }));
+  }
 });
 
 test("compileApproval anchors a command to the binary and builds the regex; pattern is verbatim", () => {
@@ -249,6 +323,11 @@ test("compileApproval anchors a command to the binary and builds the regex; patt
   assert.deepEqual(compileApproval("my-tool", { pattern: "\\bmy-tool\\b\\s+--force\\b" }), {
     pattern: "\\bmy-tool\\b\\s+--force\\b",
     decision: "require_approval",
+  });
+  assert.deepEqual(compileApproval("my-tool", { command: "publish", approvalScope: "command" }), {
+    pattern: "\\bmy-tool\\s+publish(?:\\b|\\s|$)",
+    decision: "require_approval",
+    approvalScope: "command",
   });
   const { pattern } = compileApproval("my-tool", { command: "secrets set" });
   assert.ok(new RegExp(pattern).test("my-tool secrets set DB_URL=…"));
@@ -375,7 +454,13 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
       id: "t",
       auth: { check: "c", reauth: "r", credentialPaths: [credentialFile(".acme/token"), credentialFile(".acme/key")] },
     },
-    { id: "t", approvals: [{ command: "deploy" }, { pattern: "\\bt\\b\\s+--force\\b", decision: "deny" }] },
+    {
+      id: "t",
+      approvals: [
+        { command: "deploy", approvalScope: "command" },
+        { pattern: "\\bt\\b\\s+--force\\b", decision: "deny" },
+      ],
+    },
     {
       id: "t",
       auth: {
@@ -407,6 +492,10 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
       install: { binary: "tool-bin" },
       approvals: [{ command: "deploy" }, { pattern: "\\btool-bin\\b\\s+--force\\b" }],
     },
+    {
+      id: "t",
+      selfCheck: { kind: "executable-sha256-v1" },
+    },
   ];
   for (const v of valid) {
     assert.deepEqual(
@@ -431,6 +520,11 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
     '{"id":"x","auth":{"check":"a","reauth":"b","splitEnv":{"K":"{unknown}"}}}',
     '{"id":"x","approvals":[{}]}',
     '{"id":"x","approvals":[{"command":"a","decision":"allow"}]}',
+    '{"id":"x","approvals":[{"command":"a","approvalScope":"session"}]}',
+    '{"id":"x","approvals":[{"command":"a","decision":"deny","approvalScope":"command"}]}',
+    '{"id":"x","selfCheck":{}}',
+    '{"id":"x","selfCheck":{"kind":"other"}}',
+    '{"id":"x","selfCheck":{"kind":"executable-sha256-v1","argument":"self-check"}}',
     '{"id":"gh","approvals":[{"pattern":"nightmare"}]}',
     "not json",
     '{"id":"x","auth":{"check":"a","reauth":"b","credentialPaths":[{"path":"a//b","kind":"file"}]}}',

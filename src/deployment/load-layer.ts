@@ -20,6 +20,7 @@ export interface DeploymentLayerRuntime {
   credentialPaths: ToolCredentialPath[];
   splitEnvTemplates: Record<string, string>[];
   commandRules: CommandRule[];
+  requestWorkspaces: Array<{ prefix: string; maxBytes: number }>;
   brokeredTools: BrokeredLayerTool[];
 }
 
@@ -40,6 +41,7 @@ export function emptyDeploymentLayer(): DeploymentLayerRuntime {
     credentialPaths: [],
     splitEnvTemplates: [],
     commandRules: [],
+    requestWorkspaces: [],
     brokeredTools: [],
   };
 }
@@ -60,6 +62,12 @@ function assertDisjointCredentialLinks(tools: ToolDescriptor[]): void {
       );
     }
   }
+}
+
+function requestWorkspaceEntries(tools: ToolDescriptor[]): Array<{ prefix: string; maxBytes: number }> {
+  return tools.flatMap((tool) =>
+    tool.requestWorkspace ? [{ prefix: `work/${tool.id}`, maxBytes: tool.requestWorkspace.maxBytes }] : [],
+  );
 }
 
 function toolService(tool: ToolDescriptor, why: string): string {
@@ -103,6 +111,7 @@ export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): D
         ...(approval.reason ? { reason: approval.reason } : {}),
       })),
     ),
+    requestWorkspaces: requestWorkspaceEntries(tools),
     brokeredTools: brokered.map((t) => {
       const service = toolService(t, "a credential broker");
       return {
@@ -127,6 +136,7 @@ export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: D
     "credentialPaths",
     "splitEnvTemplates",
     "commandRules",
+    "requestWorkspaces",
     "brokeredTools",
   ] as const) {
     target[key].splice(0, target[key].length, ...(source[key] as never[]));

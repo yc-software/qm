@@ -27,6 +27,14 @@ interface CustomModelSpec {
   input?: number;
   /** USD per million output tokens. Defaults to 0. */
   output?: number;
+  compat?: {
+    supportsStore?: boolean;
+    supportsDeveloperRole?: boolean;
+    supportsReasoningEffort?: boolean;
+    supportsUsageInStreaming?: boolean;
+    supportsStrictMode?: boolean;
+    maxTokensField?: "max_completion_tokens" | "max_tokens";
+  };
 }
 
 export interface CustomProviderSpec {
@@ -73,6 +81,34 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
         throw new Error(`model "${m.id}": ${field} must be a non-negative number`);
       }
     }
+    if (m.compat !== undefined) {
+      if (!m.compat || typeof m.compat !== "object" || Array.isArray(m.compat)) {
+        throw new Error(`model "${m.id}": compat must be an object`);
+      }
+      const allowed = new Set([
+        "supportsStore",
+        "supportsDeveloperRole",
+        "supportsReasoningEffort",
+        "supportsUsageInStreaming",
+        "supportsStrictMode",
+        "maxTokensField",
+      ]);
+      const unknown = Object.keys(m.compat).find((key) => !allowed.has(key));
+      if (unknown) throw new Error(`model "${m.id}": unknown compat field "${unknown}"`);
+      for (const key of [...allowed].filter((key) => key !== "maxTokensField")) {
+        const value = m.compat[key as keyof typeof m.compat];
+        if (value !== undefined && typeof value !== "boolean") {
+          throw new Error(`model "${m.id}": compat.${key} must be boolean`);
+        }
+      }
+      if (
+        m.compat.maxTokensField !== undefined &&
+        m.compat.maxTokensField !== "max_tokens" &&
+        m.compat.maxTokensField !== "max_completion_tokens"
+      ) {
+        throw new Error(`model "${m.id}": compat.maxTokensField is invalid`);
+      }
+    }
   }
 }
 
@@ -92,6 +128,7 @@ export interface CustomRuntimeModel {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  compat?: CustomModelSpec["compat"];
 }
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -109,6 +146,7 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
     cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: m.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: m.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(m.compat ? { compat: { ...m.compat } } : {}),
   };
 }
 
@@ -174,6 +212,7 @@ export function customModelsJson(): { providers: Record<string, unknown> } | und
             contextWindow: m.contextWindow ?? 128_000,
             maxTokens: m.maxTokens ?? 8_192,
             cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
+            ...(m.compat ? { compat: { ...m.compat } } : {}),
           })),
         },
       ]),

@@ -120,8 +120,12 @@ class FakeSlackClient {
   };
   readonly filesById = new Map<string, any>();
   readonly fileInfoCalls: string[] = [];
+  readonly fileUploads: any[] = [];
   readonly files = {
-    uploadV2: async () => ({ ok: true }),
+    uploadV2: async (args: any) => {
+      this.fileUploads.push(args);
+      return { ok: true };
+    },
     info: async ({ file }: { file: string }) => {
       this.fileInfoCalls.push(file);
       return { file: this.filesById.get(file) ?? {} };
@@ -208,6 +212,21 @@ class FakeApp {
       await handler({ event, body: { event_id: eventId }, client: this.client, context: {} });
     }
   }
+
+  async emitAction(actionId: string, value: string, body: any): Promise<void> {
+    const registered = this.actionHandlers.find(({ pattern }) => {
+      if (typeof pattern === "string") return pattern === actionId;
+      pattern.lastIndex = 0;
+      return pattern.test(actionId);
+    });
+    assert.ok(registered, `no action handler for ${actionId}`);
+    await registered.handler({
+      ack: async () => {},
+      body,
+      action: { action_id: actionId, value },
+      client: this.client,
+    });
+  }
 }
 
 mock.module("@slack/bolt", { defaultExport: { App: FakeApp, LogLevel: { INFO: "info" } } });
@@ -226,9 +245,17 @@ class FakeCore implements SlackCoreClient {
   submitError: Error | undefined;
   activeRun: string | undefined;
   abortedRuns: string[] = [];
+  abortError: Error | undefined;
+  private abortGate: Promise<void> | undefined;
+  private releaseAbortGate: (() => void) | undefined;
+  private blobGate: Promise<void> | undefined;
+  private releaseBlobGate: (() => void) | undefined;
   queuedRunId: string | undefined;
   private heldRunClaimed = false;
   readonly polled: string[] = [];
+  blobReads = 0;
+  readonly deltasOnRelease: string[] = [];
+  readonly tasksOnRelease: any[] = [];
   private runGate: Promise<void> | undefined;
   private releaseRun: (() => void) | undefined;
   readonly modelChangeListeners: Array<(scope: any) => void> = [];
@@ -257,7 +284,9 @@ class FakeCore implements SlackCoreClient {
     return { blobId: "blob-1", sizeBytes: bytes.byteLength };
   }
   async readBlob(): Promise<Buffer> {
-    return Buffer.alloc(0);
+    this.blobReads++;
+    if (this.blobGate) await this.blobGate;
+    return Buffer.from("artifact");
   }
   async readFileArtifact(): Promise<Buffer> {
     return Buffer.alloc(0);
@@ -282,9 +311,11 @@ class FakeCore implements SlackCoreClient {
     }
     return this.result;
   }
-  async waitRun(runId: string): Promise<TurnResult | null> {
+  async waitRun(runId: string, hooks: any = {}): Promise<TurnResult | null> {
     this.polled.push(runId);
     if (this.runGate) await this.runGate;
+    for (const delta of this.deltasOnRelease) hooks.onDelta?.(delta);
+    if (this.tasksOnRelease.length) await hooks.onTasks?.(this.tasksOnRelease);
     return this.result;
   }
   /** Enqueue `runId` on the first submit and hold waitRun open; every later submit is a
@@ -303,6 +334,20 @@ class FakeCore implements SlackCoreClient {
   }
   async signalRunAbort(runId: string): Promise<void> {
     this.abortedRuns.push(runId);
+    if (this.abortGate) await this.abortGate;
+    if (this.abortError) throw this.abortError;
+  }
+  holdAbort(): void {
+    this.abortGate = new Promise<void>((resolve) => (this.releaseAbortGate = resolve));
+  }
+  releaseAbort(): void {
+    this.releaseAbortGate?.();
+  }
+  holdBlob(): void {
+    this.blobGate = new Promise<void>((resolve) => (this.releaseBlobGate = resolve));
+  }
+  releaseBlob(): void {
+    this.releaseBlobGate?.();
   }
   async ackRunDelivery(): Promise<void> {}
   async reportTurnMetrics(): Promise<void> {}
@@ -449,6 +494,8 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "100.1" });
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].text, "hello agent");
+    assert.equal(f.core.turns[0].trustedSlackTeamId, "T1");
+    assert.equal(f.core.turns[0].trustedSlackUserId, "U1");
     assert.equal(f.core.turns[0].conversation.kind, "dm");
     assert.equal(f.core.turns[0].conversation.threadRef, "dm:D1");
     assert.equal(f.core.turns[0].conversation.audience[0].externalId, "U1");
@@ -461,6 +508,475 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
     assert.ok((f.core.ackPicks[0]?.candidates.length ?? 0) > 0);
     assert.deepEqual(
       f.client.posts.map((p) => p.text),
+      ["agent reply"],
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a top-level DM uses the existing app's native agent session and stream when Slack supports it", async () => {
+  const f = await fixture();
+  const statusCalls: any[] = [];
+  const starts: any[] = [];
+  const stops: any[] = [];
+  (f.client as any).apiCall = async (method: string, args: any) => void statusCalls.push({ method, args });
+  (f.client.chat as any).startStream = async (args: any) => {
+    starts.push(args);
+    return { ts: "stream-1" };
+  };
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async (args: any) => void stops.push(args);
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "100.1" });
+    assert.equal(statusCalls[0].method, "agents.sessions.setStatus");
+    assert.equal(statusCalls[0].args.status, "processing");
+    assert.equal(starts[0].channel, "D1");
+    assert.equal(starts[0].thread_ts, "100.1");
+    assert.equal(stops[0].session_status, "active");
+    assert.equal(f.core.turns[0].conversation.threadRef, "dm:D1:100.1");
+    assert.equal(f.core.turns[0].deliveryTarget, "D1:100.1");
+    assert.equal(f.client.posts.length, 0);
+    assert.equal(f.core.ackPicks.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("native approval resumes processing and streams the result into the same agent session", async () => {
+  const f = await fixture();
+  const statusCalls: any[] = [];
+  const starts: any[] = [];
+  const stops: any[] = [];
+  (f.client as any).apiCall = async (method: string, args: any) => void statusCalls.push({ method, args });
+  (f.client.chat as any).startStream = async (args: any) => {
+    starts.push(args);
+    return { ts: "approval-stream" };
+  };
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async (args: any) => void stops.push(args);
+  f.core.result = {
+    status: "pending_approval",
+    pendingApprovals: [{ requestId: "approval-1", command: "send-email", reason: "external write" }],
+  };
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "send it", ts: "100.1" });
+    assert.deepEqual(
+      statusCalls.map((call) => call.args.status),
+      ["processing", "suspended"],
+    );
+
+    f.core.result = { status: "ok", reply: "The approved email was sent." };
+    await f.app.emitAction("hilo_allow_once", "approval-1", {
+      user: { id: "U1" },
+      channel: { id: "D1" },
+      message: { ts: "posted-1", thread_ts: "100.1" },
+    });
+
+    assert.deepEqual(
+      statusCalls.map((call) => call.args.status),
+      ["processing", "suspended", "processing"],
+    );
+    assert.equal(starts.length, 1);
+    assert.equal(starts[0].channel, "D1");
+    assert.equal(starts[0].thread_ts, "100.1");
+    assert.match(JSON.stringify(starts[0].chunks), /approved email was sent/);
+    assert.equal(stops.at(-1)?.session_status, "active");
+    assert.match(f.client.updates.at(-1)?.text ?? "", /Approved; ran/);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a transient approval continuation failure keeps a command-scoped card once-only", async () => {
+  const f = await fixture();
+  f.core.result = {
+    status: "pending_approval",
+    pendingApprovals: [
+      {
+        requestId: "approval-once-only",
+        command: "fixed-tool create --request work/fixed-tool/event.json --request-sha256 " + "a".repeat(64),
+        reason: "exact Google write",
+        grantModes: { session: false, always: false },
+      },
+    ],
+  };
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "schedule it", ts: "105.1" });
+    f.core.submitError = new Error("temporary core failure");
+    await f.app.emitAction("hilo_allow_once", "approval-once-only", {
+      user: { id: "U1" },
+      channel: { id: "D1" },
+      message: { ts: "posted-1", thread_ts: "105.1" },
+    });
+    const update = f.client.updates.at(-1);
+    const actionIds = (update?.blocks ?? [])
+      .filter((block: any) => block.type === "actions")
+      .flatMap((block: any) => block.elements.map((element: any) => element.action_id));
+    assert.deepEqual(actionIds, ["hilo_allow_once", "hilo_deny"]);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("stopping a native approval continuation aborts its exact run and suppresses the late result", async () => {
+  const f = await fixture();
+  const statuses: string[] = [];
+  const starts: any[] = [];
+  const stops: any[] = [];
+  (f.client as any).apiCall = async (_method: string, args: any) => void statuses.push(args.status);
+  (f.client.chat as any).startStream = async (args: any) => {
+    starts.push(args);
+    return { ts: "late-approval-stream" };
+  };
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async (args: any) => void stops.push(args);
+  f.core.result = {
+    status: "pending_approval",
+    pendingApprovals: [{ requestId: "approval-stop", command: "send-email", reason: "external write" }],
+  };
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "send it", ts: "110.1" });
+    f.core.holdRun("R-approval-stop");
+    const approval = f.app.emitAction("hilo_allow_once", "approval-stop", {
+      user: { id: "U1" },
+      channel: { id: "D1" },
+      message: { ts: "posted-1", thread_ts: "110.1" },
+    });
+    await waitFor(() => f.core.polled.includes("R-approval-stop"));
+    f.core.holdAbort();
+    const stop = f.app.emitEvent("agent_session_stopped", {
+      channel: "D1",
+      thread_ts: "110.1",
+      message_ts: "approval-stream-in-progress",
+      event_ts: "110.2",
+    });
+    await waitFor(() => f.core.abortedRuns.includes("R-approval-stop"));
+    f.core.deltasOnRelease.push("This post-stop delta must stay hidden. ".repeat(20));
+    f.core.tasksOnRelease.push({ id: "late-task", title: "Late task", status: "completed" });
+    f.core.finishRun({ status: "ok", reply: "This late result must never appear." });
+    await approval;
+    f.core.releaseAbort();
+    await stop;
+
+    assert.deepEqual(f.core.abortedRuns, ["R-approval-stop"]);
+    assert.equal(f.client.posts.filter((post) => post.text === "Stopped.").length, 1);
+    assert.deepEqual(stops, [{ channel: "D1", ts: "approval-stream-in-progress", session_status: "active" }]);
+    assert.equal(starts.length, 0, "the late result never starts a replacement stream");
+    assert.doesNotMatch(JSON.stringify([...f.client.posts, ...f.client.updates]), /late result/i);
+    assert.equal(statuses.at(-1), "active");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("an abort transport failure still suppresses the exact stopped run's late result", async () => {
+  const f = await fixture();
+  (f.client as any).apiCall = async () => ({ ok: true });
+  (f.client.chat as any).startStream = async () => ({ ts: "failed-abort-stream" });
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async () => ({ ok: true });
+  f.core.holdRun("R-abort-failure");
+  f.core.abortError = new Error("abort transport unavailable");
+  try {
+    const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "work", ts: "115.1" });
+    await waitFor(() => f.core.polled.includes("R-abort-failure"));
+    await f.app.emitEvent("agent_session_stopped", {
+      channel: "D1",
+      thread_ts: "115.1",
+      message_ts: "failed-abort-stream",
+      event_ts: "115.2",
+    });
+    f.core.finishRun({ status: "ok", reply: "Late even though abort transport failed." });
+    await turn;
+
+    assert.deepEqual(f.core.abortedRuns, ["R-abort-failure"]);
+    assert.equal(f.client.posts.filter((post) => /couldn't stop that work cleanly/.test(post.text)).length, 1);
+    assert.doesNotMatch(JSON.stringify([...f.client.posts, ...f.client.updates]), /Late even though/);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("Stop after core completion cancels a deferred attachment before any final Slack delivery", async () => {
+  const f = await fixture();
+  const starts: any[] = [];
+  (f.client as any).apiCall = async () => ({ ok: true });
+  (f.client.chat as any).startStream = async (args: any) => {
+    starts.push(args);
+    return { ts: "late-main-stream" };
+  };
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async () => ({ ok: true });
+  f.core.result = {
+    status: "ok",
+    reply: "This final answer must stay hidden.",
+    attachments: [{ name: "late.txt", mimetype: "text/plain", sizeBytes: 8, blobId: "blob-late" }],
+  };
+  f.core.holdBlob();
+  try {
+    const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "work", ts: "115.5" });
+    await waitFor(() => f.core.blobReads === 1);
+    await f.app.emitEvent("agent_session_stopped", {
+      channel: "D1",
+      thread_ts: "115.5",
+      message_ts: "main-stream-in-progress",
+      event_ts: "115.6",
+    });
+    f.core.releaseBlob();
+    await turn;
+
+    assert.equal(f.client.fileUploads.length, 0);
+    assert.equal(starts.length, 0);
+    assert.deepEqual(
+      f.client.posts.map((post) => post.text),
+      ["Stopped."],
+    );
+    assert.doesNotMatch(JSON.stringify([...f.client.posts, ...f.client.updates]), /final answer/i);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("Stop during approval finalization discards the late stream and skips attachments", async () => {
+  const f = await fixture();
+  let releaseLateStart: ((value: { ts: string }) => void) | undefined;
+  const starts: any[] = [];
+  (f.client as any).apiCall = async () => ({ ok: true });
+  (f.client.chat as any).startStream = async (args: any) => {
+    starts.push(args);
+    return new Promise<{ ts: string }>((resolve) => (releaseLateStart = resolve));
+  };
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async () => ({ ok: true });
+  f.core.result = {
+    status: "pending_approval",
+    pendingApprovals: [{ requestId: "approval-final-race", command: "send-email", reason: "external write" }],
+  };
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "send it", ts: "115.7" });
+    f.core.result = {
+      status: "ok",
+      reply: "This approved result must stay hidden.",
+      attachments: [{ name: "late.txt", mimetype: "text/plain", sizeBytes: 8, blobId: "blob-late" }],
+    };
+    const approval = f.app.emitAction("hilo_allow_once", "approval-final-race", {
+      user: { id: "U1" },
+      channel: { id: "D1" },
+      message: { ts: "posted-1", thread_ts: "115.7" },
+    });
+    await waitFor(() => !!releaseLateStart);
+    await f.app.emitEvent("agent_session_stopped", {
+      channel: "D1",
+      thread_ts: "115.7",
+      message_ts: "approval-final-in-progress",
+      event_ts: "115.8",
+    });
+    releaseLateStart!({ ts: "late-approval-final-stream" });
+    await approval;
+
+    assert.equal(starts.length, 1);
+    assert.equal(f.client.fileUploads.length, 0);
+    assert.ok(f.client.deletes.some((entry) => entry.ts === "late-approval-final-stream"));
+    assert.equal(f.client.updates.at(-1)?.text, "Canceled.");
+    assert.doesNotMatch(JSON.stringify([...f.client.posts, ...f.client.updates]), /approved result/i);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("Stop during a failed native approval begin never falls through to ordinary delivery", async () => {
+  const f = await fixture();
+  const starts: any[] = [];
+  let processingCalls = 0;
+  let rejectContinuationBegin: ((error: Error) => void) | undefined;
+  (f.client as any).apiCall = async (_method: string, args: any) => {
+    if (args.status === "processing" && ++processingCalls === 2) {
+      return new Promise((_resolve, reject) => {
+        rejectContinuationBegin = reject;
+      });
+    }
+    return { ok: true };
+  };
+  (f.client.chat as any).startStream = async (args: any) => {
+    starts.push(args);
+    return { ts: "unexpected-stream" };
+  };
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async () => ({ ok: true });
+  f.core.result = {
+    status: "pending_approval",
+    pendingApprovals: [{ requestId: "approval-begin-race", command: "send-email", reason: "external write" }],
+  };
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "send it", ts: "116.1" });
+    f.core.result = { status: "ok", reply: "This fallback result must stay hidden." };
+    const approval = f.app.emitAction("hilo_allow_once", "approval-begin-race", {
+      user: { id: "U1" },
+      channel: { id: "D1" },
+      message: { ts: "posted-1", thread_ts: "116.1" },
+    });
+    await waitFor(() => !!rejectContinuationBegin);
+    await f.app.emitEvent("agent_session_stopped", {
+      channel: "D1",
+      thread_ts: "116.1",
+      message_ts: "begin-race-stream",
+      event_ts: "116.2",
+    });
+    rejectContinuationBegin!(new Error("feature_disabled"));
+    await approval;
+
+    assert.equal(f.core.turns.length, 1, "Stop wins before the approval is submitted to core");
+    assert.equal(starts.length, 0);
+    assert.equal(f.client.posts.filter((post) => post.text === "Stopped.").length, 1);
+    assert.doesNotMatch(JSON.stringify([...f.client.posts, ...f.client.updates]), /fallback result/i);
+    assert.equal(f.client.updates.at(-1)?.text, "Canceled.");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a channel approval continuation keeps its recipient team on the same native session", async () => {
+  const f = await fixture();
+  const starts: any[] = [];
+  (f.client as any).apiCall = async () => ({ ok: true });
+  (f.client.chat as any).startStream = async (args: any) => {
+    starts.push(args);
+    return { ts: "channel-approval-stream" };
+  };
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async () => ({ ok: true });
+  f.core.result = {
+    status: "pending_approval",
+    pendingApprovals: [{ requestId: "approval-channel", command: "calendar-write", reason: "external write" }],
+  };
+  try {
+    await f.app.emitEvent("app_mention", {
+      channel: "C1",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@UBOT> schedule it",
+      ts: "120.1",
+    });
+    f.core.result = { status: "ok", reply: "The approved calendar event was created." };
+    await f.app.emitAction("hilo_allow_once", "approval-channel", {
+      user: { id: "U1" },
+      channel: { id: "DOPEN" },
+      message: { ts: "posted-1" },
+    });
+
+    assert.equal(starts.at(-1)?.channel, "C1");
+    assert.equal(starts.at(-1)?.thread_ts, "120.1");
+    assert.equal(starts.at(-1)?.recipient_user_id, "U1");
+    assert.equal(starts.at(-1)?.recipient_team_id, "T1");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("agent_session_stopped aborts the mapped run and clears native processing state", async () => {
+  const f = await fixture();
+  const statusCalls: any[] = [];
+  const stopCalls: any[] = [];
+  (f.client as any).apiCall = async (method: string, args: any) => void statusCalls.push({ method, args });
+  (f.client.chat as any).stopStream = async (args: any) => void stopCalls.push(args);
+  f.core.activeRun = "R-stop";
+  try {
+    await f.app.emitEvent("agent_session_stopped", {
+      channel_id: "D1",
+      thread_ts: "100.1",
+      message_ts: "stream-1",
+      event_ts: "100.2",
+    });
+    assert.deepEqual(f.core.abortedRuns, ["R-stop"]);
+    assert.equal(statusCalls[0].method, "agents.sessions.setStatus");
+    assert.equal(statusCalls[0].args.status, "active");
+    assert.deepEqual(stopCalls, [{ channel: "D1", ts: "stream-1", session_status: "active" }]);
+    assert.equal(f.client.posts.at(-1)?.text, "Stopped.");
+    assert.equal(f.client.posts.at(-1)?.thread_ts, "100.1");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a stopped native run posts one confirmation and suppresses its later result", async () => {
+  const f = await fixture();
+  const stopCalls: any[] = [];
+  (f.client as any).apiCall = async () => ({ ok: true });
+  (f.client.chat as any).startStream = async () => ({ ts: "stream-1" });
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async (args: any) => void stopCalls.push(args);
+  f.core.holdRun("R-stop");
+  try {
+    const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "work", ts: "100.1" });
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.activeRun = "R-stop";
+    await f.app.emitEvent("agent_session_stopped", {
+      channel: "D1",
+      thread_ts: "100.1",
+      message_ts: "stream-1",
+      event_ts: "100.2",
+    });
+    f.core.finishRun({ status: "ok", reply: "late result" });
+    await turn;
+    assert.deepEqual(f.core.abortedRuns, ["R-stop"]);
+    assert.deepEqual(stopCalls, [{ channel: "D1", ts: "stream-1", session_status: "active" }]);
+    assert.deepEqual(
+      f.client.posts.map((post) => post.text),
+      ["Stopped."],
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a stop event with no active run does not suppress the next turn in that thread", async () => {
+  const f = await fixture();
+  const stopCalls: any[] = [];
+  (f.client as any).apiCall = async () => ({ ok: true });
+  (f.client.chat as any).startStream = async () => ({ ts: "stream-1" });
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async (args: any) => void stopCalls.push(args);
+  try {
+    await f.app.emitEvent("agent_session_stopped", {
+      channel: "D1",
+      thread_ts: "100.1",
+      event_ts: "100.2",
+    });
+    await f.app.emitMessage({
+      channel: "D1",
+      channel_type: "im",
+      user: "U1",
+      text: "new work",
+      thread_ts: "100.1",
+      ts: "100.3",
+    });
+    assert.deepEqual(
+      f.client.posts.map((post) => post.text),
+      ["Stopped."],
+    );
+    assert.equal(stopCalls.length, 1);
+    assert.equal(stopCalls[0].session_status, "active");
+    assert.equal(f.core.turns.at(-1)?.text, "new work");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("native stream failure after core completion falls back once without failing the handler", async () => {
+  const f = await fixture();
+  const statuses: string[] = [];
+  (f.client as any).apiCall = async (_method: string, args: any) => void statuses.push(args.status);
+  (f.client.chat as any).startStream = async () => {
+    throw new Error("feature_disabled");
+  };
+  (f.client.chat as any).appendStream = async () => ({ ok: true });
+  (f.client.chat as any).stopStream = async () => ({ ok: true });
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "100.1" });
+    assert.deepEqual(statuses, ["processing", "active"]);
+    assert.deepEqual(
+      f.client.posts.map((post) => post.text),
       ["agent reply"],
     );
   } finally {

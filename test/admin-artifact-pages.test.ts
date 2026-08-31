@@ -131,6 +131,22 @@ test("an admin can edit and clear a cron destination inside the administered sco
     );
     assert.equal(invalid.status, 400, "admin destination edits stay limited to current destination shapes");
 
+    const forgedCard = await fetch(
+      `${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`,
+      {
+        method: "PUT",
+        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+        body: JSON.stringify({
+          destination: {
+            type: "slack",
+            target: "D1",
+            nativeCard: { renderer: "qm.analytics.card.v1", heading: "Invented" },
+          },
+        }),
+      },
+    );
+    assert.equal(forgedCard.status, 400);
+
     const outsideScope = await fetch(
       `${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=channel:C9`,
       {

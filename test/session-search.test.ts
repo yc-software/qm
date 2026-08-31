@@ -8,7 +8,10 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { SESSION_ENTRIES_SEARCH_INDEX_SQL } from "../src/sessions/postgres-session-store.ts";
+import {
+  ENTRY_SEARCH_TEXT_FUNCTION_SQL,
+  SESSION_ENTRIES_SEARCH_INDEX_SQL,
+} from "../src/sessions/postgres-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -29,6 +32,11 @@ async function seed(sessions: SessionStore, threadRef: string, principal: string
 
 test("Postgres builds the full-text index without blocking writes", () => {
   assert.match(SESSION_ENTRIES_SEARCH_INDEX_SQL, /^CREATE INDEX CONCURRENTLY IF NOT EXISTS/);
+});
+
+test("Postgres search fallback is never parallel-safe", () => {
+  assert.match(ENTRY_SEARCH_TEXT_FUNCTION_SQL, /LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE/);
+  assert.doesNotMatch(ENTRY_SEARCH_TEXT_FUNCTION_SQL, /PARALLEL SAFE/);
 });
 
 test("memory store: searchEntries matches user and assistant text, newest first", async () => {

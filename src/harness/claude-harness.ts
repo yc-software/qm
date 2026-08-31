@@ -541,7 +541,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                 queue.push(userMessage(steer));
               },
             },
-            { onError: (error) => swallow("claude signal poll", error) },
+            {
+              onError: (error) => swallow("claude signal poll", error),
+              discard: turn.acceptRunSignals === false,
+            },
           )
         : null;
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;

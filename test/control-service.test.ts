@@ -50,6 +50,58 @@ function setup(): { built: BuiltApp; control: ControlService } {
   return { built, control };
 }
 
+function signedScheduleAuthority() {
+  return {
+    contractVersion: 1 as const,
+    authorityRef: "qm:test:scheduler",
+    issuerRef: "qm:test",
+    keyId: "schedule-test-1",
+    profileRef: "profile:test:1",
+    profileSha256: "1".repeat(64),
+    scheduleDefinition: {
+      scheduleRef: "schedule-test",
+      cadence: "daily" as const,
+      timeZone: "America/Los_Angeles",
+      localTime: "09:00",
+      weeklyDay: null,
+      monthlyDay: null,
+      activeFrom: "2040-09-01",
+      activeUntil: "2040-09-30",
+    },
+    runRequestTemplateSha256: "2".repeat(64),
+    receiptLifetimeMs: 300_000,
+  };
+}
+
+test("capability manual fire rejects authority-managed crons before scheduler execution", async () => {
+  const { built } = setup();
+  const cron = await built.app.createCron({
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    action: "privileged scheduled work",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    unattendedGrants: ["admin.sessions.read"],
+    scheduleAuthority: signedScheduleAuthority(),
+  });
+  let schedulerCalls = 0;
+  const control = createControlService(
+    built.app,
+    {
+      async runNow() {
+        schedulerCalls += 1;
+      },
+    } as never,
+    built.admin,
+  );
+  assert.deepEqual(await control.runCron(cron.id, claims("U1")), {
+    ok: false,
+    code: "bad_request",
+    message: "authority-managed crons can run only at their signed schedule occurrence",
+  });
+  assert.equal(schedulerCalls, 0);
+});
+
 test("unattended cron grants require a live org-admin owner and protect later patches", async () => {
   const { control } = setup();
   const grant = ["admin.sessions.read"];

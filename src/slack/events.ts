@@ -37,7 +37,7 @@ export function registerSlackEvents(
   },
 ): void {
   const { handler, mirror, directory, ids, deduper } = deps;
-  const { dispatch, handleReactionEvent, botHasStakeInThread } = handler;
+  const { dispatch, handleReactionEvent, handleAgentSessionStopped, botHasStakeInThread } = handler;
   const { mirrorMessageEvent, pushSurfaceEvents } = mirror;
   const { syncForUnseenGroup, forceDirectorySync } = directory;
   const eventIdentity = async (
@@ -257,6 +257,20 @@ export function registerSlackEvents(
 
   app.event("assistant_thread_started", async () => {});
   app.event("assistant_thread_context_changed", async () => {});
+  app.event("agent_session_stopped", async ({ event, body, client }: any) => {
+    const e = event as { channel_id?: string; channel?: string; thread_ts?: string; event_ts?: string };
+    if (
+      deduper.seen(
+        dedupeKey({
+          event_id: (body as { event_id?: string })?.event_id,
+          channel: e.channel_id ?? e.channel,
+          ts: e.event_ts ?? e.thread_ts,
+        }),
+      )
+    )
+      return;
+    await handleAgentSessionStopped(e, client);
+  });
 
   app.event("reaction_added", async ({ event, body, client }: any) => {
     await handleReactionEvent(event as SlackReactionEvent, body as any, client, true);

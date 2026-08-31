@@ -14,7 +14,14 @@ import {
   writeState,
 } from "../lib/lease.ts";
 import { slotPorts, slotTokens, poolStore } from "../lib/pool.ts";
-import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEnvFromMain } from "../lib/envctx.ts";
+import {
+  assembleEnv,
+  completeDevSecuritySecrets,
+  currentBranch,
+  gitHead,
+  seedEnvFromMain,
+  withoutTransientProviderSecrets,
+} from "../lib/envctx.ts";
 import { ensureDeps } from "../lib/deps.ts";
 import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
@@ -26,6 +33,9 @@ import { buildChildSpecs, type SpecInputs } from "./specs.ts";
 import { Child } from "./children.ts";
 import type { BootPhaseEvent, BootResult, BootSpec, ChildName, SlackHealth, StatusReport } from "../lib/types.ts";
 import { CHILD_ORDER, EXIT } from "../lib/types.ts";
+import { resolveDevGeminiApiKey, takeDevGeminiApiKey } from "../../../src/model/dev-gemini-provider.ts";
+
+let currentTransientGeminiApiKey = takeDevGeminiApiKey(process.env);
 
 const HEALTH_INTERVAL_MS = 10_000;
 const HEALTH_FAIL_THRESHOLD = 3;
@@ -304,7 +314,7 @@ function persistState(): void {
   });
 }
 
-async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
+async function assembleAndPrepare(spec: BootSpec, transientGeminiApiKey?: string): Promise<SpecInputs> {
   phase("env", "start");
   seedEnvFromMain(worktree, log);
   const assembled = await assembleEnv({
@@ -312,12 +322,15 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     callerEnv: spec.callerEnv,
     allowMock: spec.callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
     log,
+    transientGeminiApiKey,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
   harness = assembled.harness;
   let harnessDetail = `live ${assembled.harness} turns (anthropic key from ${assembled.anthropicKeySource})`;
   if (assembled.harness === "mock") harnessDetail = "mock turns";
-  else if (assembled.harness === "codex") {
+  else if (assembled.geminiKeySource) {
+    harnessDetail = `live pi turns (gemini key from ${assembled.geminiKeySource})`;
+  } else if (assembled.harness === "codex") {
     harnessDetail = assembled.codexAuthSource
       ? "live codex turns (ChatGPT OAuth auth.json)"
       : `live codex turns (openai key from ${assembled.openaiKeySource || "the environment"})`;
@@ -402,6 +415,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     worktree,
     ports,
     baseEnv: assembled.env,
+    coreEnv: assembled.coreEnv,
     watch: spec.watch,
     webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/",
     ...(tokens ? { slack: { botToken: tokens.botToken, appToken: tokens.appToken } } : {}),
@@ -443,8 +457,8 @@ async function boot(): Promise<void> {
   try {
     writeLegacyMeta(true);
     persistState();
-    specInputs = await assembleAndPrepare(spec);
-    currentEnvSha = computeEnvSha(specInputs.baseEnv);
+    specInputs = await assembleAndPrepare(spec, currentTransientGeminiApiKey);
+    currentEnvSha = computeEnvSha({ ...specInputs.baseEnv, ...specInputs.coreEnv });
     currentGitSha = gitHead(worktree);
     const started = await startChildren(specInputs);
     if (!started.ok) {
@@ -670,7 +684,10 @@ async function readBody(req: import("node:http").IncomingMessage): Promise<Recor
 
 async function reload(body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const spec = readBootSpec();
-  const callerEnv = (body.callerEnv as Record<string, string> | undefined) ?? spec.callerEnv;
+  const callerEnv = withoutTransientProviderSecrets(
+    (body.callerEnv as Record<string, string> | undefined) ?? spec.callerEnv,
+  );
+  const transientGeminiApiKey = resolveDevGeminiApiKey(currentTransientGeminiApiKey, body.geminiApiKey);
   const force = body.force === true;
   const dryRun = body.dryRun === true;
   const freshCanary = slackOn(spec)
@@ -683,8 +700,9 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
       callerEnv,
       allowMock: callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
       log,
+      transientGeminiApiKey,
     });
-    const dryEnvSha = computeEnvSha(assembled.env);
+    const dryEnvSha = computeEnvSha({ ...assembled.env, ...assembled.coreEnv });
     const allHealthy =
       children.size === CHILD_ORDER.length && [...children.values()].every((c) => c.state === "healthy");
     return {
@@ -697,8 +715,9 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     };
   }
   writeFileSync(join(lock, "boot-spec.json"), JSON.stringify(newSpec, null, 2), { mode: 0o600 });
-  const inputs = await assembleAndPrepare(newSpec);
-  const newEnvSha = computeEnvSha(inputs.baseEnv);
+  const inputs = await assembleAndPrepare(newSpec, transientGeminiApiKey);
+  currentTransientGeminiApiKey = transientGeminiApiKey;
+  const newEnvSha = computeEnvSha({ ...inputs.baseEnv, ...inputs.coreEnv });
   const newGitSha = gitHead(worktree);
   const noopEligible =
     newEnvSha === currentEnvSha &&

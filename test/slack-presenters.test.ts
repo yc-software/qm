@@ -1,6 +1,164 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderTaskList, createTaskListPresenter, createAckPresenter, stripAckPrefix } from "../src/slack/lib.ts";
+import {
+  renderTaskList,
+  createTaskListPresenter,
+  createAckPresenter,
+  createNativeAgentPresenter,
+  stripAckPrefix,
+  stripReactionDirectives,
+} from "../src/slack/lib.ts";
+
+test("native agent presenter uses the current session endpoint, chunk streaming, and plan tasks", async () => {
+  const apiCalls: Array<{ method: string; args: any }> = [];
+  const starts: any[] = [];
+  const appends: any[] = [];
+  const stops: any[] = [];
+  const checkpoints: string[] = [];
+  const client = {
+    apiCall: async (method: string, args: any) => void apiCalls.push({ method, args }),
+    chat: {
+      startStream: async (args: any) => {
+        starts.push(args);
+        return { ts: "171.2" };
+      },
+      appendStream: async (args: any) => void appends.push(args),
+      stopStream: async (args: any) => void stops.push(args),
+    },
+  };
+  const presenter = createNativeAgentPresenter({
+    client,
+    channel: "C1",
+    threadTs: "170.1",
+    initiatorUserId: "U1",
+    recipientTeamId: "T1",
+    title: "Check today's calendar",
+    sanitize: stripReactionDirectives,
+    checkpoint: async (ts) => void checkpoints.push(ts),
+    onSurfacePosted: () => {},
+  });
+
+  assert.equal(await presenter.begin(), true);
+  presenter.onDelta("A".repeat(400));
+  await presenter.onTasks([{ id: "calendar", title: "Read calendar", status: "in_progress" }]);
+  presenter.onDelta("[[react: white_check_mark]]");
+  await presenter.finish("A".repeat(400));
+
+  assert.deepEqual(apiCalls, [
+    {
+      method: "agents.sessions.setStatus",
+      args: {
+        channel_id: "C1",
+        thread_ts: "170.1",
+        status: "processing",
+        initiator_user_id: "U1",
+        title: "Check today's calendar",
+      },
+    },
+  ]);
+  assert.equal(starts[0].task_display_mode, "plan");
+  assert.equal(starts[0].recipient_user_id, "U1");
+  assert.equal(starts[0].recipient_team_id, "T1");
+  assert.deepEqual(checkpoints, ["171.2"]);
+  assert.deepEqual(appends[0].chunks, [
+    { type: "task_update", id: "calendar", title: "Read calendar", status: "in_progress" },
+  ]);
+  assert.equal(stops[0].session_status, "active");
+  assert.equal(JSON.stringify([starts, appends, stops]).includes("[[react:"), false);
+});
+
+test("native agent presenter clears processing if stream startup fails", async () => {
+  const statuses: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    client: {
+      apiCall: async (_method: string, args: any) => void statuses.push(args.status),
+      chat: {
+        startStream: async () => {
+          throw new Error("feature_disabled");
+        },
+        appendStream: async () => {},
+        stopStream: async () => {},
+      },
+    },
+    channel: "D1",
+    threadTs: "170.1",
+    initiatorUserId: "U1",
+    title: "Hello",
+    sanitize: (text) => text,
+    checkpoint: async () => {},
+    onSurfacePosted: () => {},
+  });
+  assert.equal(await presenter.begin(), true);
+  presenter.onDelta("A".repeat(400));
+  await assert.rejects(() => presenter.finish("A".repeat(400)), /feature_disabled/);
+  assert.deepEqual(statuses, ["processing", "active"]);
+});
+
+test("native task-card delivery failure never interrupts core polling and settles on final fallback", async () => {
+  const statuses: string[] = [];
+  const presenter = createNativeAgentPresenter({
+    client: {
+      apiCall: async (_method: string, args: any) => void statuses.push(args.status),
+      chat: {
+        startStream: async () => {
+          throw new Error("feature_disabled");
+        },
+        appendStream: async () => {},
+        stopStream: async () => {},
+      },
+    },
+    channel: "C1",
+    threadTs: "170.1",
+    initiatorUserId: "U1",
+    recipientTeamId: "T1",
+    title: "Plan",
+    sanitize: (text) => text,
+    checkpoint: async () => {},
+    onSurfacePosted: () => {},
+  });
+  assert.equal(await presenter.begin(), true);
+  await presenter.onTasks([{ id: "a", title: "Read calendar", status: "in_progress" }]);
+  await assert.rejects(() => presenter.finish("Here is the result"), /feature_disabled/);
+  assert.deepEqual(statuses, ["processing", "active"]);
+});
+
+test("native agent presenter splits long Markdown without breaking surrogate pairs", async () => {
+  const starts: any[] = [];
+  const appends: any[] = [];
+  const stops: any[] = [];
+  const client = {
+    apiCall: async () => ({ ok: true }),
+    chat: {
+      startStream: async (args: any) => {
+        starts.push(args);
+        return { ts: "171.2" };
+      },
+      appendStream: async (args: any) => void appends.push(args),
+      stopStream: async (args: any) => void stops.push(args),
+    },
+  };
+  const presenter = createNativeAgentPresenter({
+    client,
+    channel: "D1",
+    threadTs: "170.1",
+    initiatorUserId: "U1",
+    title: "Long answer",
+    sanitize: (text) => text,
+    checkpoint: async () => {},
+    onSurfacePosted: () => {},
+  });
+  const reply = `${"a".repeat(11_999)}😀${"b".repeat(12_001)}`;
+
+  assert.equal(await presenter.begin(), true);
+  presenter.onDelta(reply);
+  await presenter.finish(reply);
+
+  const chunks = [starts[0], ...appends].flatMap((call) => call.chunks).map((chunk) => chunk.text);
+  assert.equal(chunks.join(""), reply);
+  assert.ok(chunks.every((chunk) => chunk.length <= 12_000));
+  assert.ok(chunks.every((chunk) => !/[\uD800-\uDBFF]$/.test(chunk) && !/^[\uDC00-\uDFFF]/.test(chunk)));
+  assert.equal(stops[0].session_status, "active");
+});
 
 test("renderTaskList renders every terminal state", () => {
   assert.equal(

@@ -8,6 +8,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>, outboxListing: string[]): Sandbox {
   return {
@@ -101,6 +102,33 @@ test("surface post rejects traversal before provisioning or staging any attachme
   const r = await tools!.post("hello", undefined, ["report.pdf", "../.ssh/id_ed25519"]);
   assert.equal(r.ok, false);
   assert.deepEqual(calls, { provision: 0, read: 0, put: 0, grant: 0 });
+});
+
+test("surface native-card delivery persists only its opaque token outside Destination", async () => {
+  const deliveries = createDeliveryStore();
+  const tools = createSurfaceToolDeps({
+    deps: { deliveries },
+    input: { surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "dm", channelRef: "D1", threadRef: "dm:D1:100.000001" },
+    session: { id: "S1" },
+    scopeId: "personal:U1",
+    defaultDestination: { type: "slack", target: "D1:100.000001" },
+    strictReadOnly: false,
+    blobTransfer: {},
+    fileRegistration: {},
+    provision: async () => handle,
+    postProvenance() {
+      return {};
+    },
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+
+  const result = await tools.postNativeCard!("sealed-card" as never, "mcp-card:receipt");
+  assert.equal(result.ok, true);
+  const [delivery] = await deliveries.pending("slack");
+  assert.equal(delivery?.trustedAnalyticsCard, "sealed-card");
+  assert.equal(JSON.stringify(delivery?.destination).includes("nativeCard"), false);
 });
 
 test("surface standing orders preserve and reset the stored ambient reply policy", async () => {

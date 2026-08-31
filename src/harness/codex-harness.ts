@@ -1182,7 +1182,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
                 await rt.server.request("turn/steer", { threadId, expectedTurnId: turnId, input: [userInput(text)] });
               },
             },
-            { onError: (error) => swallow("codex signal poll", error) },
+            {
+              onError: (error) => swallow("codex signal poll", error),
+              discard: turn.acceptRunSignals === false,
+            },
           )
         : null;
     let timer: NodeJS.Timeout | undefined;

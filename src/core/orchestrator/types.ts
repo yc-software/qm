@@ -37,6 +37,7 @@ import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type { ControlService } from "../../api/control-service.ts";
 import type { Harness } from "../../harness/harness.ts";
+import type { RuntimeChoice } from "../../harness/harness-router.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { MetricsSink } from "../../admin/metrics-sink.ts";
@@ -61,6 +62,7 @@ import type { DeployService } from "../../deploy/deploy-service.ts";
 import type { AclStore } from "../../acl/acl-store.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
+import type { CurrentScheduleRunInvocation } from "../../cron/postgres-schedule-authority.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -91,6 +93,7 @@ export interface OrchestratorInput extends Omit<
   queueMs?: number;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
+  scheduleAuthority?: CurrentScheduleRunInvocation;
 }
 
 export interface OrchestratorDeps {
@@ -99,6 +102,7 @@ export interface OrchestratorDeps {
   config?: ScopedConfigStore;
   /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
   defaultHarness?: string;
+  runtimeChoiceOverride?: RuntimeChoice;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;

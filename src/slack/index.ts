@@ -130,6 +130,8 @@ export async function startSlackPlugin(
   const threads = createThreadTracker();
 
   const bridge = createCoreBridge(core);
+  const activeNativeAgentSessions = new Map<string, string>();
+  const stoppedAgentSessions = new Map<string, string>();
   const ackEmoji = createAckEmojiPicker(core, { candidatesOverride: ackEmojiOverride });
   const directory = createDirectory({
     core,
@@ -146,7 +148,15 @@ export async function startSlackPlugin(
     externalParticipantsEnabled,
     ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
-  const approvals = createApprovals({ core, bridge, directory, threads, ids });
+  const approvals = createApprovals({
+    core,
+    bridge,
+    directory,
+    threads,
+    ids,
+    activeNativeAgentSessions,
+    stoppedAgentSessions,
+  });
   const ensureHeader = createSurfaceHeaderEnsurer({
     headerFacts: (scope) => core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0]),
     channelPinEnabled: (scope) =>
@@ -193,6 +203,8 @@ export async function startSlackPlugin(
     mirror,
     serializer,
     approvals,
+    activeNativeAgentSessions,
+    stoppedAgentSessions,
     ackEmoji,
     ackEmojiCandidates: ackEmojiOverride,
     ids,

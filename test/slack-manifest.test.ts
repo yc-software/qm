@@ -28,4 +28,5 @@ test("membership events invalidate the pushed authorization roster", async () =>
   const events = manifest.settings?.event_subscriptions?.bot_events ?? [];
   assert.ok(events.includes("member_joined_channel"));
   assert.ok(events.includes("member_left_channel"));
+  assert.ok(events.includes("agent_session_stopped"));
 });

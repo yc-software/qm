@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
+import { generateKeyPairSync } from "node:crypto";
 import { baseModelProviders, boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
+import { DEV_GEMINI_BASE_URL, DEV_GEMINI_MODEL } from "../src/model/dev-gemini-provider.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -51,6 +53,143 @@ test("store kinds default to memory and accept postgres", () => {
   assert.throws(
     () => loadConfig({ SESSION_STORE: "postgres" }),
     /missing or insecure required core secrets: DATABASE_URL/,
+  );
+});
+
+test("private-turn observer configuration is paired, signed, and HTTPS-only", () => {
+  const configured = loadConfig({
+    PRIVATE_TURN_OBSERVER_URL: "https://observer.example.test/v1/private-turns",
+    PRIVATE_TURN_OBSERVER_SIGNING_SECRET: "private-turn-observer-secret-0123456789",
+  });
+  assert.equal(configured.privateTurnObserverUrl, "https://observer.example.test/v1/private-turns");
+  assert.equal(configured.privateTurnObserverSigningSecret, "private-turn-observer-secret-0123456789");
+  assert.throws(
+    () => loadConfig({ PRIVATE_TURN_OBSERVER_URL: "https://observer.example.test/v1/private-turns" }),
+    /must be configured together/u,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        PRIVATE_TURN_OBSERVER_URL: "http://observer.example.test/v1/private-turns",
+        PRIVATE_TURN_OBSERVER_SIGNING_SECRET: "private-turn-observer-secret-0123456789",
+      }),
+    /must be an HTTPS URL/u,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        PRIVATE_TURN_OBSERVER_URL: "https://observer.example.test/v1/private-turns",
+        PRIVATE_TURN_OBSERVER_SIGNING_SECRET: "short",
+      }),
+    /at least 32 characters/u,
+  );
+});
+
+test("schedule signing authority is complete, Ed25519, and Postgres-only", () => {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const signingJwk = JSON.stringify(privateKey.export({ format: "jwk" }));
+  const authority = {
+    SCHEDULE_AUTHORITY_REF: "qm:test:scheduler",
+    SCHEDULE_AUTHORITY_ISSUER_REF: "qm:test",
+    SCHEDULE_AUTHORITY_KEY_ID: "schedule-test-1",
+    SCHEDULE_AUTHORITY_SIGNING_JWK: signingJwk,
+  };
+  const configured = loadConfig({
+    ...authority,
+    SESSION_STORE: "postgres",
+    RUN_STORE: "postgres",
+    DATABASE_URL: "postgres://test",
+  });
+  assert.equal(configured.scheduleAuthority?.authorityRef, authority.SCHEDULE_AUTHORITY_REF);
+  assert.equal(configured.scheduleAuthority?.signingJwk.kty, "OKP");
+  assert.throws(() => loadConfig({ SCHEDULE_AUTHORITY_REF: authority.SCHEDULE_AUTHORITY_REF }), /configured together/u);
+  assert.throws(() => loadConfig(authority), /requires DATABASE_URL/u);
+  assert.throws(
+    () =>
+      loadConfig({
+        ...authority,
+        SCHEDULE_AUTHORITY_SIGNING_JWK: JSON.stringify({ kty: "oct", k: "secret" }),
+        SESSION_STORE: "postgres",
+        RUN_STORE: "postgres",
+        DATABASE_URL: "postgres://test",
+      }),
+    /private Ed25519 JWK/u,
+  );
+});
+
+test("production private-turn observer signing authority is isolated from every configured credential", () => {
+  const shared = "shared-observer-authority-0123456789abcdef";
+  const authorityNames = [
+    "CORE_SIGNING_SECRET",
+    "CAPABILITY_SECRET",
+    "PORTAL_IDENTITY_SECRET",
+    "CONNECTOR_SECRET_KEY",
+    "SKILL_SIGNING_SECRET",
+    "DEPLOY_APPS_SESSION_SECRET",
+    "SECURITY_SCREEN_PROXY_TOKEN",
+    "AWS_DEPLOY_GATE_SECRET",
+    "FLY_API_TOKEN",
+    "FLY_DEPLOY_API_TOKEN",
+    "SPRITES_TOKEN",
+    "SMOLMACHINES_TOKEN",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "DATABASE_URL",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "SLACK_SIGNING_SECRET",
+    "SLACK_USER_TOKEN",
+    "SLACK_COPILOT_BOT_TOKEN",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "SLACK_OAUTH_CLIENT_SECRET",
+    "NOTION_OAUTH_CLIENT_SECRET",
+    "LINEAR_OAUTH_CLIENT_SECRET",
+    "DROPBOX_OAUTH_CLIENT_SECRET",
+    "GITHUB_OAUTH_CLIENT_SECRET",
+    "X_OAUTH_CLIENT_SECRET",
+    "CODEX_ACCESS_TOKEN",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "PORTAL_SESSION_SECRET",
+    "OIDC_CLIENT_SECRET",
+    "AUTH_CLIENT_SECRET",
+    "AUTH_TOKEN_SECRET",
+    "AUTH_SIGNING_JWK",
+    "RESEND_API_KEY",
+    "SMTP_PASSWORD",
+  ] as const;
+  for (const authorityName of authorityNames) {
+    const candidate = {
+      ...productionEnv,
+      PRIVATE_TURN_OBSERVER_URL: "https://observer.example.test/v1/private-turns",
+      PRIVATE_TURN_OBSERVER_SIGNING_SECRET: shared,
+      [authorityName]: shared,
+    };
+    assert.throws(
+      () => loadConfig(candidate),
+      new RegExp(`PRIVATE_TURN_OBSERVER_SIGNING_SECRET must differ from ${authorityName}$`, "u"),
+    );
+  }
+  assert.throws(
+    () =>
+      loadConfig({
+        ...productionEnv,
+        PRIVATE_TURN_OBSERVER_URL: "https://observer.example.test/v1/private-turns",
+        PRIVATE_TURN_OBSERVER_SIGNING_SECRET: shared,
+      }),
+    /production private-turn observer requires DATABASE_URL and RUN_STORE=postgres/u,
+  );
+  assert.doesNotThrow(() =>
+    loadConfig({
+      ...productionEnv,
+      DATABASE_URL: "postgres://qm:test@localhost/qm",
+      RUN_STORE: "postgres",
+      PRIVATE_TURN_OBSERVER_URL: "https://observer.example.test/v1/private-turns",
+      PRIVATE_TURN_OBSERVER_SIGNING_SECRET: shared,
+    }),
   );
 });
 
@@ -322,6 +461,31 @@ test("HARNESS=pi can boot before an admin configures a model provider", () => {
   assert.doesNotThrow(() => loadConfig({ HARNESS: "mock" }));
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi" }));
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi", ANTHROPIC_API_KEY: "sk-ant" }));
+});
+
+test("the dev Gemini provider is exact, transient, Pi-only, and forbidden in production", () => {
+  const env = {
+    DEV_INSTANCE_GEMINI_PROVIDER: "1",
+    GEMINI_API_KEY: "gemini-test-key",
+    HARNESS: "pi",
+  };
+  const config = loadConfig(env);
+  assert.equal(config.modelId, DEV_GEMINI_MODEL);
+  assert.equal(config.devGeminiProvider?.apiKey, "gemini-test-key");
+  assert.equal(config.devGeminiProvider?.spec.baseUrl, DEV_GEMINI_BASE_URL);
+  assert.deepEqual(
+    config.devGeminiProvider?.spec.models.map((model) => model.id),
+    [DEV_GEMINI_MODEL],
+  );
+  assert.throws(() => loadConfig({ ...productionEnv, ...env }), /forbidden in production/);
+  assert.throws(() => loadConfig({ ...env, HARNESS: "opencode" }), /requires HARNESS=pi/);
+  assert.throws(
+    () => loadConfig({ ...env, MODEL_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "anthropic-test-key" }),
+    /cannot be combined/,
+  );
+  assert.throws(() => loadConfig({ ...env, GEMINI_BASE_URL: "https://proxy.example/v1" }), /GEMINI_BASE_URL/);
+  assert.throws(() => loadConfig({ ...env, GEMINI_MODEL: "gemini-other" }), /GEMINI_MODEL/);
+  assert.throws(() => loadConfig({ ...env, PI_JUDGE_MODEL: "claude-opus-5" }), /PI_JUDGE_MODEL/);
 });
 
 test("HARNESS=codex requires OPENAI_API_KEY: its CLI cannot do browser OAuth in a container", () => {

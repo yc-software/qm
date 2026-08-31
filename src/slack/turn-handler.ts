@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { randomUUID } from "node:crypto";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import {
   type ActorAssertion,
@@ -7,6 +8,8 @@ import {
   type OverheardMessage,
   type ReactionTally,
   type RunTaskView,
+  type AckPresenter,
+  type NativeAgentPresenter,
   type SlackFile,
   type TaskListPresenter,
   DEFAULT_ACK_REACTIONS,
@@ -17,6 +20,8 @@ import {
   createAckPresenter,
   createDeduper,
   createTaskListPresenter,
+  createNativeAgentPresenter,
+  setNativeAgentSessionStatus,
   createThreadTracker,
   decodeSlackEntities,
   dedupeKey,
@@ -62,6 +67,7 @@ import {
   cleanAgentReplyForSlack,
   conversationPlaceLabel,
   slackSurfaceInstructions,
+  stripSlackDirectives,
 } from "./messaging.ts";
 
 interface Incoming {
@@ -99,10 +105,18 @@ export interface SlackReactionEvent {
   event_ts?: string;
 }
 
+interface SlackAgentSessionStoppedEvent {
+  channel_id?: string;
+  channel?: string;
+  thread_ts?: string;
+  message_ts?: string;
+}
+
 export interface TurnHandler {
   handleIncoming(inc: Incoming, client: any): Promise<void>;
   dispatch(key: string, inc: Incoming, client: any): Promise<void>;
   handleReactionEvent(evt: SlackReactionEvent, body: any, client: any, added: boolean): Promise<void>;
+  handleAgentSessionStopped(evt: SlackAgentSessionStoppedEvent, client: any): Promise<void>;
   botHasStakeInThread(client: any, channel: string, threadTs: string): Promise<boolean>;
 }
 
@@ -126,6 +140,8 @@ export function createTurnHandler(deps: {
   mirror: Mirror;
   serializer: ConversationSerializer;
   approvals: Approvals;
+  activeNativeAgentSessions: Map<string, string>;
+  stoppedAgentSessions: Map<string, string>;
   ackEmoji: AckEmojiPicker;
   ackEmojiCandidates?: () => readonly string[] | null;
   ids: BotIdentity;
@@ -149,6 +165,8 @@ export function createTurnHandler(deps: {
     mirror,
     serializer,
     approvals,
+    activeNativeAgentSessions,
+    stoppedAgentSessions,
     ackEmoji,
     ids,
     threads,
@@ -172,7 +190,6 @@ export function createTurnHandler(deps: {
   } = bridge;
 
   const reactionsInFlight = new Set<string>();
-
   async function botHasStakeInThread(client: any, channel: string, threadTs: string): Promise<boolean> {
     const cached = threads.get(channel, threadTs);
     if (cached !== undefined) return cached;
@@ -258,7 +275,9 @@ export function createTurnHandler(deps: {
     }
 
     let queuedRunId: string | undefined;
+    let ack: AckPresenter | undefined;
     let taskList: TaskListPresenter | undefined;
+    let nativeAgent: NativeAgentPresenter | undefined;
 
     if (inc.kind === "channel") {
       const membership = inc.prefetched
@@ -318,42 +337,6 @@ export function createTurnHandler(deps: {
       if (intercepted) return;
     }
 
-    const ack = inc.unprompted
-      ? undefined
-      : createAckPresenter({
-          postAck: async (text) => {
-            const rendered = toSlackMrkdwn(text);
-            if (await taskList?.addLead(rendered)) return;
-            const ts = await postReply(rendered);
-            if (ts) await taskList?.attach(ts, rendered);
-          },
-          addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
-          removeReaction: (name) =>
-            client.reactions.remove({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
-          emojiCandidates: (() => {
-            const override = deps.ackEmojiCandidates?.();
-            return override?.length ? [...override] : [...DEFAULT_ACK_REACTIONS];
-          })(),
-          emojiPick: ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), {
-            channel: inc.channel,
-            ts: inc.ts,
-          }),
-        });
-    if (!inc.unprompted) {
-      taskList = createTaskListPresenter({
-        post: (text, blocks) => postReply(text, blocks),
-        update: (ts, text, blocks) =>
-          client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {
-            mirrorSelfPost(inc.channel, ts, text, { sub: replyThreadTs, editedAt: Date.now() });
-          }),
-        checkpoint: async (ts) => {
-          if (queuedRunId) await checkpointRunEditRef(queuedRunId, ts);
-        },
-        remove: (ts) => client.chat.delete({ channel: inc.channel, ts }).then(() => {}),
-        onSurfacePosted: () => ack?.onSurfacePosted(),
-        onError: (error) => console.error("[slack-plugin] task-list update failed:", (error as Error).message),
-      });
-    }
     const settleAck = async (): Promise<void> => {
       await ack?.settle().catch(swallowAs("slack: ack settle", undefined));
     };
@@ -424,6 +407,8 @@ export function createTurnHandler(deps: {
     if (inc.unprompted && !text.trim() && attachments.length === 0) return;
 
     const turn: Omit<CoreTurnBody, "approval"> = {
+      trustedSlackTeamId: ids.ownTeamId,
+      trustedSlackUserId: inc.userId,
       actor,
       conversation: {
         kind: conversationKind,
@@ -460,6 +445,109 @@ export function createTurnHandler(deps: {
       ...(issues.length ? { inboundNotes: issues } : {}),
       ...(timezone ? { timezone } : {}),
     };
+    const nativeSessionKey = `${inc.channel}:${replyThreadTs ?? inc.ts}`;
+    let nativeRunToken: string | undefined;
+    const nativeRunWasStopped = (): boolean => {
+      const marker = queuedRunId ?? nativeRunToken;
+      return !!marker && stoppedAgentSessions.get(nativeSessionKey) === marker;
+    };
+    const clearActiveNativeRun = (): void => {
+      const marker = queuedRunId ?? nativeRunToken;
+      if (marker && activeNativeAgentSessions.get(nativeSessionKey) === marker)
+        activeNativeAgentSessions.delete(nativeSessionKey);
+    };
+    const consumeStoppedRun = (): boolean => {
+      const marker = queuedRunId ?? nativeRunToken;
+      if (!marker || !nativeRunWasStopped()) return false;
+      stoppedAgentSessions.delete(nativeSessionKey);
+      clearActiveNativeRun();
+      return true;
+    };
+    if (!inc.unprompted) {
+      const candidate = createNativeAgentPresenter({
+        client,
+        channel: inc.channel,
+        threadTs: replyThreadTs ?? inc.ts,
+        initiatorUserId: inc.userId,
+        recipientTeamId: ids.ownTeamId,
+        title: text,
+        sanitize: stripSlackDirectives,
+        checkpoint: async (ts) => {
+          if (queuedRunId) await checkpointRunEditRef(queuedRunId, ts);
+        },
+        onSurfacePosted: () => {},
+        isCancelled: nativeRunWasStopped,
+        onError: (error) => console.error("[slack-plugin] native agent presentation failed:", (error as Error).message),
+      });
+      nativeRunToken = `pending-native:${randomUUID()}`;
+      activeNativeAgentSessions.set(nativeSessionKey, nativeRunToken);
+      if (await candidate.begin()) {
+        nativeAgent = candidate;
+        if (inc.kind === "dm" && !inc.threadTs) {
+          replyThreadTs = inc.ts;
+          threadRef = dmThreadRef(inc.channel, inc.ts);
+          turn.conversation.threadRef = threadRef;
+          turn.deliveryTarget = encodeDeliveryTarget(inc.channel, replyThreadTs);
+          const candidates = deliveryCandidatesFor(conversationKind, inc.channel, replyThreadTs, channelName);
+          if (candidates) turn.deliveryCandidates = candidates;
+          turn.gatewayContext = {
+            ...turn.gatewayContext,
+            details: { ...turn.gatewayContext?.details, thread_ts: inc.ts },
+          };
+        }
+      } else {
+        const stoppedDuringBegin = stoppedAgentSessions.get(nativeSessionKey) === nativeRunToken;
+        if (activeNativeAgentSessions.get(nativeSessionKey) === nativeRunToken)
+          activeNativeAgentSessions.delete(nativeSessionKey);
+        if (!stoppedDuringBegin) nativeRunToken = undefined;
+      }
+      if (consumeStoppedRun()) return;
+    }
+    if (!inc.unprompted && !nativeAgent) {
+      ack = createAckPresenter({
+        postAck: async (ackText) => {
+          const rendered = toSlackMrkdwn(ackText);
+          if (await taskList?.addLead(rendered)) return;
+          const ts = await postReply(rendered);
+          if (ts) await taskList?.attach(ts, rendered);
+        },
+        addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
+        removeReaction: (name) =>
+          client.reactions.remove({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
+        emojiCandidates: (() => {
+          const override = deps.ackEmojiCandidates?.();
+          return override?.length ? [...override] : [...DEFAULT_ACK_REACTIONS];
+        })(),
+        emojiPick: ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), {
+          channel: inc.channel,
+          ts: inc.ts,
+        }),
+      });
+      taskList = createTaskListPresenter({
+        post: (taskText, blocks) => postReply(taskText, blocks),
+        update: (ts, taskText, blocks) =>
+          client.chat.update({ channel: inc.channel, ts, text: taskText, blocks, ...botIdentityArgs() }).then(() => {
+            mirrorSelfPost(inc.channel, ts, taskText, { sub: replyThreadTs, editedAt: Date.now() });
+          }),
+        checkpoint: async (ts) => {
+          if (queuedRunId) await checkpointRunEditRef(queuedRunId, ts);
+        },
+        remove: (ts) => client.chat.delete({ channel: inc.channel, ts }).then(() => {}),
+        onSurfacePosted: () => ack?.onSurfacePosted(),
+        onError: (error) => console.error("[slack-plugin] task-list update failed:", (error as Error).message),
+      });
+    }
+    const finishNative = async (nativeText: string, status: "active" | "suspended" = "active"): Promise<boolean> => {
+      if (!nativeAgent) return false;
+      if (nativeRunWasStopped()) return true;
+      try {
+        await nativeAgent.finish(nativeText, status);
+      } catch (error) {
+        console.error("[slack-plugin] native final delivery failed:", (error as Error).message);
+        if (nativeText && !nativeRunWasStopped()) await postReply(toSlackMrkdwn(nativeText));
+      }
+      return true;
+    };
     const tSubmit = performance.now();
     let result: TurnResult;
     try {
@@ -469,6 +557,13 @@ export function createTurnHandler(deps: {
           onQueued: (runId) => {
             queuedRunId = runId;
             inFlightRunByThread.set(threadRef, runId);
+            if (nativeAgent || nativeRunToken) {
+              activeNativeAgentSessions.set(nativeSessionKey, runId);
+              if (nativeRunToken && stoppedAgentSessions.get(nativeSessionKey) === nativeRunToken) {
+                stoppedAgentSessions.set(nativeSessionKey, runId);
+                void signalRunAbort(runId).catch(swallowAs("slack: abort pre-queued native run", undefined));
+              }
+            }
             inc.ackGate?.persisted();
           },
           // Folded into a live run: the envelope is durably accepted just the same, but the run
@@ -482,6 +577,13 @@ export function createTurnHandler(deps: {
                 onSurfacePosted: () => ack.onSurfacePosted(),
               }
             : {}),
+          ...(nativeAgent
+            ? {
+                onDelta: (delta: string) => {
+                  if (!nativeRunWasStopped()) nativeAgent?.onDelta(delta);
+                },
+              }
+            : {}),
           ...(taskList
             ? {
                 onTasks: async (tasks: RunTaskView[]) => {
@@ -490,189 +592,262 @@ export function createTurnHandler(deps: {
                 },
               }
             : {}),
+          ...(nativeAgent
+            ? {
+                onTasks: async (tasks: RunTaskView[]) => {
+                  if (!nativeRunWasStopped()) await nativeAgent?.onTasks(tasks);
+                },
+              }
+            : {}),
         },
       );
       await taskList?.settle();
     } catch (err) {
-      await settleAck();
-      if (inc.unprompted)
-        console.error(
-          `[slack-plugin] unprompted turn errored (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${(err as Error).message}`,
-        );
-      else if (ack?.postedAck()) await postReply(`⚠️ ${(err as Error).message}`);
-      else await ephemeralOrSay(`⚠️ ${(err as Error).message}`);
-      return;
+      try {
+        await settleAck();
+        const failureText = `⚠️ ${(err as Error).message}`;
+        if (inc.unprompted)
+          console.error(
+            `[slack-plugin] unprompted turn errored (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${(err as Error).message}`,
+          );
+        else if (nativeAgent && consumeStoppedRun()) {
+          return;
+        } else if (nativeAgent) {
+          await finishNative(failureText);
+        } else if (ack?.postedAck()) await postReply(failureText);
+        else await ephemeralOrSay(failureText);
+        return;
+      } finally {
+        clearActiveNativeRun();
+      }
     } finally {
       if (queuedRunId) inFlightRunByThread.clear(threadRef, queuedRunId);
     }
 
-    // This message was folded into a run that was already live. The handler that OWNS that run
-    // delivers its reply; delivering here too is how one answer got posted twice. Settle this
-    // trigger's own ack and stand down.
-    if (result.steered) {
-      await settleAck();
-      return;
-    }
-
-    if (result.status === "silent") {
-      if (inc.unprompted) console.error(`[slack-plugin] turn.silent (no reply) ch=${inc.channel} ts=${inc.ts}`);
-      await settleAck();
-      return;
-    }
-
-    if (result.status === "react") {
-      await settleAck();
-      const names = result.reactions ?? [];
-      if (names.length) await applyAndLogReactions(client, inc.channel, inc.ts, [{ names }]);
-      console.error(`[slack-plugin] turn.react (acknowledged) ch=${inc.channel} ts=${inc.ts} emoji=${names.join(",")}`);
-      return;
-    }
-
-    if (result.status === "ok") {
-      if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
-      const { text: replyBody, reactions, agentRequests } = cleanAgentReplyForSlack(result.reply ?? "");
-      const actionableAgentRequests = inc.kind === "channel" ? agentRequests : [];
-      const hasNonText = !!(
-        result.attachments?.length ||
-        reactions.length ||
-        actionableAgentRequests.length ||
-        result.pendingApprovals?.length
-      );
-      let reply = "(no response)";
-      if (replyBody) reply = toSlackMrkdwn(replyBody);
-      else if (hasNonText) reply = "";
-      const postText = reply;
-      const tDeliverStart = performance.now();
-      let finalizedTaskList = false;
-      if (result.attachments?.length) {
-        let uploadError: unknown;
-        try {
-          await uploadAttachments(
-            client,
-            inc.channel,
-            replyThreadTs,
-            result.attachments,
-            fetchBlobFromCore,
-            fetchFileArtifactFromCore,
-          );
-        } catch (err) {
-          uploadError = err;
-          console.error("[slack-plugin] file upload failed:", (err as Error).message);
-        }
+    try {
+      // This message was folded into a run that was already live. The handler that OWNS that run
+      // delivers its reply; delivering here too is how one answer got posted twice. Settle this
+      // trigger's own ack and stand down.
+      if (result.steered) {
         await settleAck();
-        if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
-        if (uploadError) await postReply(uploadFailureNote(uploadError));
-      } else {
-        await settleAck();
-        if (postText) finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
-        if (postText && !finalizedTaskList) await postReply(postText);
-      }
-      if (queuedRunId) {
-        reportTurnMetrics(queuedRunId, {
-          deliverMs: Math.round(performance.now() - tDeliverStart),
-          ...(slackInflightMs !== undefined ? { slackInflightMs } : {}),
-        });
-      }
-      const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
-      if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
-      await applyAndLogReactions(client, inc.channel, inc.ts, directives);
-      if (actionableAgentRequests.length) {
-        await approvals.postAgentRequests(
-          client,
-          {
-            requesterId: inc.userId,
-            channel: inc.channel,
-            ...(replyThreadTs ? { replyThreadTs } : {}),
-            threadOnly: true,
-            kind: conversationKind,
-            ...(channelName ? { channelName } : {}),
-            audience,
-            ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
-          },
-          actionableAgentRequests,
-        );
-      }
-      if (result.pendingApprovals?.length) {
-        await approvals.postApprovalButtons(
-          client,
-          {
-            requesterId: inc.userId,
-            channel: inc.channel,
-            ...(replyThreadTs ? { replyThreadTs } : {}),
-            triggerTs: inc.ts,
-            threadOnly: inc.kind === "channel",
-            turn,
-            ...(allowedTs.size ? { allowedTs } : {}),
-            ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
-            ...(ack?.postedAck() ? { ackedFirstBlock: ack.postedAck() } : {}),
-          },
-          result.pendingApprovals,
-        );
-      }
-    } else if (result.status === "pending_approval") {
-      const pendingApprovals = result.pendingApprovals ?? [];
-      const baseCtx = {
-        requesterId: inc.userId,
-        channel: inc.channel,
-        ...(replyThreadTs ? { replyThreadTs } : {}),
-        triggerTs: inc.ts,
-        threadOnly: inc.kind === "channel",
-        turn,
-        ...(allowedTs.size ? { allowedTs } : {}),
-        ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
-        ...(ack?.postedAck() ? { ackedFirstBlock: ack.postedAck() } : {}),
-      };
-      await settleAck();
-      if (inc.kind === "channel") {
-        await approvals.postApprovalButtons(client, baseCtx, pendingApprovals);
-      } else {
-        approvals.rememberSlackApprovals(pendingApprovals, { ...baseCtx, approvalChannel: inc.channel });
-        const msg = approvalMessage(pendingApprovals);
-        await client.chat.postMessage({
-          ...slackReplyArgs(inc.channel, msg.text, replyThreadTs, { threadOnly: false }),
-          blocks: msg.blocks,
-        });
-      }
-    } else {
-      await settleAck();
-      const delivery = refusalDelivery(result, inc.unprompted === true);
-      if (delivery === "thread") {
-        if (queuedRunId) {
-          const runId = queuedRunId;
-          const text = refusalNote(result, inc.kind);
-          const post = async () => {
-            const posted = await postWithVerify(
-              client,
-              {
-                ...slackReplyArgs(inc.channel, text, replyThreadTs, {
-                  threadOnly: inc.kind === "channel",
-                  unfurlLinks: false,
-                }),
-              },
-              `run:${runId}`,
-            );
-            mirrorSelfPost(inc.channel, posted.ts, text, { sub: replyThreadTs });
-          };
-          await postThenAckRunDelivery({
-            post,
-            ack: () => ackRunDeliveryWithRetry(runId),
-            release: () => inFlightRuns.delete(runId),
-          });
-        } else {
-          await postReply(refusalNote(result, inc.kind));
-        }
         return;
       }
-      if (delivery === "silent") {
-        if (queuedRunId && result.refusalKind === "security_quarantine") inFlightRuns.delete(queuedRunId);
+
+      if (nativeAgent && consumeStoppedRun()) {
+        await settleAck();
+        return;
+      }
+
+      if (result.status === "silent") {
+        if (inc.unprompted) console.error(`[slack-plugin] turn.silent (no reply) ch=${inc.channel} ts=${inc.ts}`);
+        await settleAck();
+        if (nativeAgent && consumeStoppedRun()) return;
+        await finishNative("");
+        return;
+      }
+
+      if (result.status === "react") {
+        await settleAck();
+        if (nativeAgent && consumeStoppedRun()) return;
+        await finishNative("");
+        if (nativeAgent && consumeStoppedRun()) return;
+        const names = result.reactions ?? [];
+        if (names.length) await applyAndLogReactions(client, inc.channel, inc.ts, [{ names }]);
         console.error(
-          `[slack-plugin] unprompted turn ${result.status} (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${result.reason ?? "refused"}`,
+          `[slack-plugin] turn.react (acknowledged) ch=${inc.channel} ts=${inc.ts} emoji=${names.join(",")}`,
         );
         return;
       }
-      if (ack?.postedAck()) await postReply(refusalNote(result, inc.kind));
-      else await ephemeralOrSay(refusalNote(result, inc.kind));
+
+      if (result.status === "ok") {
+        if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
+        const { text: replyBody, reactions, agentRequests } = cleanAgentReplyForSlack(result.reply ?? "");
+        const actionableAgentRequests = inc.kind === "channel" ? agentRequests : [];
+        const hasNonText = !!(
+          result.attachments?.length ||
+          reactions.length ||
+          actionableAgentRequests.length ||
+          result.pendingApprovals?.length
+        );
+        let reply = "(no response)";
+        if (replyBody) reply = toSlackMrkdwn(replyBody);
+        else if (hasNonText) reply = "";
+        const postText = reply;
+        const tDeliverStart = performance.now();
+        let finalizedTaskList = false;
+        if (nativeAgent && consumeStoppedRun()) return;
+        if (result.attachments?.length) {
+          let uploadError: unknown;
+          try {
+            await uploadAttachments(
+              client,
+              inc.channel,
+              replyThreadTs,
+              result.attachments,
+              fetchBlobFromCore,
+              fetchFileArtifactFromCore,
+              { isCancelled: nativeRunWasStopped },
+            );
+          } catch (err) {
+            uploadError = err;
+            console.error("[slack-plugin] file upload failed:", (err as Error).message);
+          }
+          if (nativeAgent && consumeStoppedRun()) {
+            await settleAck();
+            return;
+          }
+          await settleAck();
+          if (postText && nativeAgent) {
+            await finishNative(replyBody, result.pendingApprovals?.length ? "suspended" : "active");
+          } else if (postText) {
+            finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
+            if (!finalizedTaskList) await postReply(postText);
+          } else if (nativeAgent) {
+            await finishNative("", result.pendingApprovals?.length ? "suspended" : "active");
+          }
+          if (uploadError && !nativeRunWasStopped()) await postReply(uploadFailureNote(uploadError));
+        } else {
+          await settleAck();
+          if (nativeAgent && consumeStoppedRun()) return;
+          if (postText && nativeAgent) {
+            await finishNative(replyBody, result.pendingApprovals?.length ? "suspended" : "active");
+          } else if (postText) {
+            finalizedTaskList = (await taskList?.finalize(postText)) ?? false;
+            if (!finalizedTaskList) await postReply(postText);
+          } else if (nativeAgent) {
+            await finishNative("", result.pendingApprovals?.length ? "suspended" : "active");
+          }
+        }
+        if (nativeAgent && consumeStoppedRun()) return;
+        if (queuedRunId) {
+          reportTurnMetrics(queuedRunId, {
+            deliverMs: Math.round(performance.now() - tDeliverStart),
+            ...(slackInflightMs !== undefined ? { slackInflightMs } : {}),
+          });
+        }
+        const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
+        if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
+        if (nativeAgent && consumeStoppedRun()) return;
+        await applyAndLogReactions(client, inc.channel, inc.ts, directives);
+        if (nativeAgent && consumeStoppedRun()) return;
+        if (actionableAgentRequests.length) {
+          await approvals.postAgentRequests(
+            client,
+            {
+              requesterId: inc.userId,
+              channel: inc.channel,
+              ...(replyThreadTs ? { replyThreadTs } : {}),
+              threadOnly: true,
+              kind: conversationKind,
+              ...(channelName ? { channelName } : {}),
+              audience,
+              ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
+            },
+            actionableAgentRequests,
+          );
+        }
+        if (nativeAgent && consumeStoppedRun()) return;
+        if (result.pendingApprovals?.length) {
+          await approvals.postApprovalButtons(
+            client,
+            {
+              requesterId: inc.userId,
+              channel: inc.channel,
+              ...(replyThreadTs ? { replyThreadTs } : {}),
+              triggerTs: inc.ts,
+              threadOnly: inc.kind === "channel",
+              turn,
+              ...(allowedTs.size ? { allowedTs } : {}),
+              ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
+              ...(ack?.postedAck() ? { ackedFirstBlock: ack.postedAck() } : {}),
+              ...(nativeAgent
+                ? { nativeAgentSession: { channel: inc.channel, threadTs: replyThreadTs ?? inc.ts } }
+                : {}),
+            },
+            result.pendingApprovals,
+          );
+        }
+      } else if (result.status === "pending_approval") {
+        const pendingApprovals = result.pendingApprovals ?? [];
+        const baseCtx = {
+          requesterId: inc.userId,
+          channel: inc.channel,
+          ...(replyThreadTs ? { replyThreadTs } : {}),
+          triggerTs: inc.ts,
+          threadOnly: inc.kind === "channel",
+          turn,
+          ...(allowedTs.size ? { allowedTs } : {}),
+          ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
+          ...(ack?.postedAck() ? { ackedFirstBlock: ack.postedAck() } : {}),
+          ...(nativeAgent ? { nativeAgentSession: { channel: inc.channel, threadTs: replyThreadTs ?? inc.ts } } : {}),
+        };
+        await settleAck();
+        if (nativeAgent && consumeStoppedRun()) return;
+        await finishNative("", "suspended");
+        if (nativeAgent && consumeStoppedRun()) return;
+        if (inc.kind === "channel") {
+          await approvals.postApprovalButtons(client, baseCtx, pendingApprovals);
+        } else {
+          approvals.rememberSlackApprovals(pendingApprovals, { ...baseCtx, approvalChannel: inc.channel });
+          const msg = approvalMessage(pendingApprovals);
+          await client.chat.postMessage({
+            ...slackReplyArgs(inc.channel, msg.text, replyThreadTs, { threadOnly: false }),
+            blocks: msg.blocks,
+          });
+        }
+      } else {
+        await settleAck();
+        if (nativeAgent && consumeStoppedRun()) return;
+        const delivery = refusalDelivery(result, inc.unprompted === true);
+        if (delivery === "thread") {
+          if (nativeAgent) {
+            await finishNative(refusalNote(result, inc.kind));
+            if (consumeStoppedRun()) return;
+            return;
+          }
+          if (queuedRunId) {
+            const runId = queuedRunId;
+            const text = refusalNote(result, inc.kind);
+            const post = async () => {
+              const posted = await postWithVerify(
+                client,
+                {
+                  ...slackReplyArgs(inc.channel, text, replyThreadTs, {
+                    threadOnly: inc.kind === "channel",
+                    unfurlLinks: false,
+                  }),
+                },
+                `run:${runId}`,
+              );
+              mirrorSelfPost(inc.channel, posted.ts, text, { sub: replyThreadTs });
+            };
+            await postThenAckRunDelivery({
+              post,
+              ack: () => ackRunDeliveryWithRetry(runId),
+              release: () => inFlightRuns.delete(runId),
+            });
+          } else {
+            await postReply(refusalNote(result, inc.kind));
+          }
+          return;
+        }
+        if (delivery === "silent") {
+          await finishNative("");
+          if (nativeAgent && consumeStoppedRun()) return;
+          if (queuedRunId && result.refusalKind === "security_quarantine") inFlightRuns.delete(queuedRunId);
+          console.error(
+            `[slack-plugin] unprompted turn ${result.status} (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${result.reason ?? "refused"}`,
+          );
+          return;
+        }
+        if (nativeAgent) {
+          await finishNative(refusalNote(result, inc.kind));
+          if (consumeStoppedRun()) return;
+        } else if (ack?.postedAck()) await postReply(refusalNote(result, inc.kind));
+        else await ephemeralOrSay(refusalNote(result, inc.kind));
+      }
+    } finally {
+      clearActiveNativeRun();
     }
   }
 
@@ -813,5 +988,55 @@ export function createTurnHandler(deps: {
     }
   }
 
-  return { handleIncoming, dispatch, handleReactionEvent, botHasStakeInThread };
+  async function handleAgentSessionStopped(evt: SlackAgentSessionStoppedEvent, client: any): Promise<void> {
+    const channel = evt.channel_id ?? evt.channel;
+    const threadTs = evt.thread_ts;
+    if (!channel || !threadTs) return;
+    const sessionKey = `${channel}:${threadTs}`;
+    const refs = channel.startsWith("D")
+      ? [dmThreadRef(channel, threadTs), dmThreadRef(channel, undefined)]
+      : [`ch:${channel}:${threadTs}`, `grp:${channel}:${threadTs}`];
+    let runId: string | undefined;
+    for (const ref of refs) {
+      runId = inFlightRunByThread.get(ref) ?? (await fetchActiveRunForThread(ref).catch(() => undefined));
+      if (runId) break;
+    }
+    const activeMarker = activeNativeAgentSessions.get(sessionKey);
+    if (!runId && activeMarker && !activeMarker.startsWith("pending-native:")) runId = activeMarker;
+    let abortError: unknown;
+    if (runId) {
+      stoppedAgentSessions.set(sessionKey, runId);
+      try {
+        await signalRunAbort(runId);
+      } catch (error) {
+        abortError = error;
+      }
+    } else if (activeMarker) {
+      stoppedAgentSessions.set(sessionKey, activeMarker);
+    }
+    if (evt.message_ts && typeof client?.chat?.stopStream === "function") {
+      await client.chat
+        .stopStream({ channel, ts: evt.message_ts, session_status: "active" })
+        .catch(swallowAs("slack: stop agent stream", undefined));
+    }
+    await setNativeAgentSessionStatus(client, {
+      channel_id: channel,
+      thread_ts: threadTs,
+      status: "active",
+      ...botIdentityArgs(),
+    }).catch(swallowAs("slack: agent session status", undefined));
+    const text = abortError ? "⚠️ I couldn't stop that work cleanly. Please try again." : "Stopped.";
+    const posted = await client.chat.postMessage({
+      channel,
+      thread_ts: threadTs,
+      reply_broadcast: false,
+      text,
+      unfurl_links: false,
+      unfurl_media: false,
+      ...botIdentityArgs(),
+    });
+    mirrorSelfPost(channel, posted?.ts, text, { sub: threadTs });
+  }
+
+  return { handleIncoming, dispatch, handleReactionEvent, handleAgentSessionStopped, botHasStakeInThread };
 }

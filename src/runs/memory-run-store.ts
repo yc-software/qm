@@ -3,13 +3,17 @@ import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
 import { isTerminal, leaseLapsed } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
+import type { TransactionalOutboxPublisher } from "../persistence/transactional-outbox.ts";
 
 export interface MemoryRuntime {
   runs: RunStore;
   ledger: ToolLedger;
 }
 
-export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRuntime {
+export function createMemoryRunStore(opts?: {
+  maxClaims?: number;
+  transactionalOutbox?: TransactionalOutboxPublisher;
+}): MemoryRuntime {
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
   const runs = new Map<string, Run>();
   const byKey = new Map<string, string>();
@@ -34,17 +38,32 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   const store: RunStore = {
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
-    async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
+    async enqueue({
+      sessionId,
+      durableSessionId,
+      request,
+      dedupKey,
+      maxAttempts = 3,
+      acceptanceOutbox,
+    }: EnqueueInput): Promise<EnqueueResult> {
       if (dedupKey) {
         const existingId = byKey.get(dedupKey);
         if (existingId) {
           const existing = runs.get(existingId);
-          if (existing) return { run: existing, deduped: true };
+          if (existing) {
+            const entry = acceptanceOutbox?.({ runId: existing.id, acceptedAt: existing.createdAt });
+            if (entry) {
+              if (!opts?.transactionalOutbox) throw new Error("run acceptance outbox is unavailable");
+              opts.transactionalOutbox.publish(entry);
+            }
+            return { run: existing, deduped: true };
+          }
         }
       }
       const run: Run = {
         id: randomUUID(),
         sessionId,
+        durableSessionId: durableSessionId ?? null,
         status: "pending",
         request,
         result: null,
@@ -60,6 +79,11 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         startedAt: null,
         finishedAt: null,
       };
+      const entry = acceptanceOutbox?.({ runId: run.id, acceptedAt: run.createdAt });
+      if (entry) {
+        if (!opts?.transactionalOutbox) throw new Error("run acceptance outbox is unavailable");
+        opts.transactionalOutbox.publish(entry);
+      }
       runs.set(run.id, run);
       if (dedupKey) byKey.set(dedupKey, run.id);
       return { run, deduped: false };

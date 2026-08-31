@@ -10,6 +10,8 @@ requiredCapabilities:
 
 # Google Drive / Docs / Sheets / Slides
 
+If trusted system or deployment guidance advertises a fixed Google execution tool, immediately read and use the named deployment-specific Google skill. Its commands and permission/approval UX replace every command and approval instruction below: show the exact preview, then attempt its sealed write so QM can pause on the native once-only approval. Do not ask a separate conversational yes/no question. Do not invoke direct HTTP examples or token variables alongside it.
+
 Use this skill when the user asks about Drive files, Google Docs, Google Sheets, Google
 Slides, sharing/access problems, or reading/editing any of that content.
 

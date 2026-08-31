@@ -12,6 +12,9 @@ interface FakeBody {
   state: MicrovmLifecycleState;
   createdAtMs: number;
   fs: Map<string, Uint8Array>;
+  imageArn: string;
+  imageVersion?: string;
+  executionRoleArn?: string;
 }
 
 const enc = (s: string) => Buffer.from(s, "utf8");
@@ -23,6 +26,13 @@ export interface FakeMicrovm {
   bodies: Map<string, FakeBody>;
   s3store: Map<string, Uint8Array>;
   commands: string[];
+  runInputs: Array<{
+    imageIdentifier: string;
+    imageVersion?: string;
+    egressNetworkConnectors: string[];
+    executionRoleArn?: string;
+    clientToken?: string;
+  }>;
   runCount: number;
   killBody(id: string): void;
 }
@@ -31,7 +41,7 @@ export function installFakeMicrovm(): FakeMicrovm {
   const bodies = new Map<string, FakeBody>();
   const s3store = new Map<string, Uint8Array>();
   let n = 0;
-  const self = { runCount: 0 } as FakeMicrovm;
+  const self = { runCount: 0, runInputs: [] } as unknown as FakeMicrovm;
 
   const byEndpoint = (endpoint: string): FakeBody | undefined =>
     [...bodies.values()].find((b) => b.endpoint === endpoint);
@@ -54,20 +64,59 @@ export function installFakeMicrovm(): FakeMicrovm {
     async updateImage({ imageIdentifier }): Promise<MicrovmImageSummary> {
       return { name: imageIdentifier, imageArn: imageIdentifier, state: "UPDATED", latestActiveImageVersion: "1.0" };
     },
-    async runMicrovm(): Promise<MicrovmDescription> {
+    async runMicrovm(input): Promise<MicrovmDescription> {
+      self.runInputs.push({
+        imageIdentifier: input.imageIdentifier,
+        ...(input.imageVersion ? { imageVersion: input.imageVersion } : {}),
+        egressNetworkConnectors: [...input.egressNetworkConnectors],
+        ...(input.executionRoleArn ? { executionRoleArn: input.executionRoleArn } : {}),
+        ...(input.clientToken ? { clientToken: input.clientToken } : {}),
+      });
       const id = `mvm-${++n}`;
-      bodies.set(id, { id, endpoint: `${id}.fake.on.aws`, state: "RUNNING", createdAtMs: Date.now(), fs: new Map() });
+      bodies.set(id, {
+        id,
+        endpoint: `${id}.fake.on.aws`,
+        state: "RUNNING",
+        createdAtMs: Date.now(),
+        fs: new Map(),
+        imageArn: input.imageIdentifier,
+        ...(input.imageVersion ? { imageVersion: input.imageVersion } : {}),
+        ...(input.executionRoleArn ? { executionRoleArn: input.executionRoleArn } : {}),
+      });
       self.runCount++;
-      return { microvmId: id, endpoint: `${id}.fake.on.aws`, state: "RUNNING" };
+      return {
+        microvmId: id,
+        endpoint: `${id}.fake.on.aws`,
+        state: "RUNNING",
+        imageArn: input.imageIdentifier,
+        ...(input.imageVersion ? { imageVersion: input.imageVersion } : {}),
+        ...(input.executionRoleArn ? { executionRoleArn: input.executionRoleArn } : {}),
+      };
     },
     async getMicrovm(id): Promise<MicrovmDescription> {
       const b = bodies.get(id);
       if (!b) throw new AwsApiError(`not found: ${id}`, 404);
-      return { microvmId: id, endpoint: b.endpoint, state: b.state };
+      return {
+        microvmId: id,
+        endpoint: b.endpoint,
+        state: b.state,
+        imageArn: b.imageArn,
+        ...(b.imageVersion ? { imageVersion: b.imageVersion } : {}),
+        ...(b.executionRoleArn ? { executionRoleArn: b.executionRoleArn } : {}),
+      };
     },
     async tryGetMicrovm(id) {
       const b = bodies.get(id);
-      return b ? { microvmId: id, endpoint: b.endpoint, state: b.state } : null;
+      return b
+        ? {
+            microvmId: id,
+            endpoint: b.endpoint,
+            state: b.state,
+            imageArn: b.imageArn,
+            ...(b.imageVersion ? { imageVersion: b.imageVersion } : {}),
+            ...(b.executionRoleArn ? { executionRoleArn: b.executionRoleArn } : {}),
+          }
+        : null;
     },
     async createAuthToken(id) {
       return `tok-${id}`;
@@ -88,7 +137,14 @@ export function installFakeMicrovm(): FakeMicrovm {
       const b = bodies.get(id);
       if (!b) throw new AwsApiError(`not found: ${id}`, 404);
       if (target === "RUNNING" && b.state === "SUSPENDED") b.state = "RUNNING";
-      return { microvmId: id, endpoint: b.endpoint, state: b.state };
+      return {
+        microvmId: id,
+        endpoint: b.endpoint,
+        state: b.state,
+        imageArn: b.imageArn,
+        ...(b.imageVersion ? { imageVersion: b.imageVersion } : {}),
+        ...(b.executionRoleArn ? { executionRoleArn: b.executionRoleArn } : {}),
+      };
     },
   };
 
@@ -146,6 +202,14 @@ export function installFakeMicrovm(): FakeMicrovm {
     if (u.pathname === "/read") {
       const v = body.fs.get(String(payload.path));
       return v ? json(200, { b64: Buffer.from(v).toString("base64") }) : json(404, { error: "not found" });
+    }
+    if (u.pathname === "/attest-executable") {
+      const binary = String(payload.binary ?? "");
+      if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(binary)) return json(400, { error: "invalid binary" });
+      const v = body.fs.get(`/usr/local/bin/${binary}`);
+      return v
+        ? json(200, { b64: Buffer.from(v).toString("base64"), size: v.byteLength, mode: 0o755 })
+        : json(404, { error: "not found" });
     }
     return json(404, { error: "no route" });
   }) as unknown as typeof fetch;

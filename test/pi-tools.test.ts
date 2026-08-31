@@ -1,9 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPiTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/pi-tools.ts";
+import {
+  createPiTools,
+  pauseStampAfterToolCall,
+  WORKFLOW_ARTIFACT_SEND_GUIDANCE,
+  type ToolContextRef,
+} from "../src/harness/pi-tools.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
 import type { EntryType, SessionEntry } from "../src/types.ts";
+
+test("workflow artifact producer guidance names the renderable file contract and keeps approvals native", () => {
+  assert.match(WORKFLOW_ARTIFACT_SEND_GUIDANCE, /\*\.workflow\.json/);
+  assert.match(WORKFLOW_ARTIFACT_SEND_GUIDANCE, /qm\.card\.v1/);
+  assert.match(WORKFLOW_ARTIFACT_SEND_GUIDANCE, /real approval\/tool flow/);
+});
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -1372,6 +1383,170 @@ test("no emit sink → tools still run, nothing logged (unit path)", async () =>
   const [execute] = createPiTools({ current: fakeToolContext() });
   const r = await call(execute, { command: "echo ok" });
   assert.ok(r);
+});
+
+test("MCP approvals and progress expose only the configured human presentation", async () => {
+  const emitted: Emitted[] = [];
+  const pending: NonNullable<ToolContextRef["pendingApprovals"]> = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    async callMcpTool() {
+      return "result";
+    },
+  };
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (entry) => {
+      emitted.push(entry as Emitted);
+    },
+    scopeLabel: "personal:U1",
+    pendingApprovals: pending,
+    toolApprovalGate: () => false,
+  };
+  const descriptor = {
+    name: "kb_record_search",
+    serverId: "kb",
+    remoteName: "record_search",
+    label: "Search Knowledge Base",
+    status: "Searching Knowledge Base",
+    description: "Search approved records.",
+    inputSchema: { type: "object", properties: { query: { type: "string" } } },
+    readOnly: true,
+    remoteReadOnlyHint: true,
+    remoteDestructiveHint: false,
+    serverUpdatedAt: 1,
+    serverContractSha256: "a".repeat(64),
+  };
+  const tool = createPiTools(ref, { mcpTools: () => [descriptor] }).find(
+    (candidate) => candidate.name === descriptor.name,
+  );
+
+  assert.equal(tool?.label, descriptor.label);
+  await call(tool, { query: "private search terms" });
+
+  assert.deepEqual(pending, [
+    {
+      command: descriptor.label,
+      reason: "strict posture: this tool call requires human approval",
+      purpose: descriptor.status,
+      kind: "approval",
+      approvalKey: `tool:mcp:${descriptor.serverContractSha256}:${descriptor.name}`,
+    },
+  ]);
+  const persisted = JSON.stringify(emitted);
+  assert.match(persisted, /Search Knowledge Base/);
+  assert.match(persisted, /Searching Knowledge Base/);
+  assert.doesNotMatch(persisted, /kb_record_search/);
+  assert.doesNotMatch(persisted, /private search terms/);
+});
+
+test("MCP output screening receives only the configured human presentation", async () => {
+  const seen: Array<{ tool: string; source: string }> = [];
+  const descriptor = {
+    name: "kb_raw_tool",
+    serverId: "kb_raw_server",
+    remoteName: "raw_tool",
+    label: "Search Knowledge Base",
+    status: "Searching Knowledge Base",
+    description: "Search approved records.",
+    inputSchema: { type: "object", properties: {} },
+    readOnly: true,
+    remoteReadOnlyHint: true,
+    remoteDestructiveHint: false,
+    serverUpdatedAt: 1,
+    serverContractSha256: "b".repeat(64),
+  };
+  const tool = createPiTools(
+    {
+      current: {
+        ...fakeToolContext(),
+        async callMcpTool() {
+          return "untrusted output";
+        },
+      },
+      scopeLabel: "personal:U1",
+      async screenExternalContent({ tool: screenedTool, source }) {
+        seen.push({ tool: screenedTool, source });
+        return { decision: "strict", reason: "screen_verdict" };
+      },
+    },
+    { mcpTools: () => [descriptor] },
+  ).find((candidate) => candidate.name === descriptor.name);
+  const output = (await call(tool, {})) as { content: Array<{ text?: string }> };
+  assert.deepEqual(seen, [{ tool: descriptor.label, source: "configured external connector" }]);
+  assert.match(output.content[0]?.text ?? "", /blocked untrusted configured external connector/);
+  assert.doesNotMatch(JSON.stringify({ seen, output }), /kb_raw_tool|kb_raw_server|raw_tool/);
+});
+
+test("MCP standing approvals do not survive a connector contract rotation", async () => {
+  const oldContract = "c".repeat(64);
+  const currentContract = "d".repeat(64);
+  const name = "kb_record_search";
+  const pending: NonNullable<ToolContextRef["pendingApprovals"]> = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async callMcpTool() {
+        return "result";
+      },
+    },
+    pendingApprovals: pending,
+    toolApprovalGate: (tool) => tool === `mcp:${oldContract}:${name}`,
+  };
+  const descriptor = {
+    name,
+    serverId: "kb",
+    remoteName: "record_search",
+    label: "Search Knowledge Base",
+    status: "Searching Knowledge Base",
+    description: "Search approved records.",
+    inputSchema: { type: "object", properties: {} },
+    readOnly: true,
+    remoteReadOnlyHint: true,
+    remoteDestructiveHint: false,
+    serverUpdatedAt: 2,
+    serverContractSha256: currentContract,
+  };
+  const tool = createPiTools(ref, { mcpTools: () => [descriptor] }).find((candidate) => candidate.name === name);
+  await call(tool, {});
+  assert.equal(pending[0]?.approvalKey, `tool:mcp:${currentContract}:${name}`);
+});
+
+test("MCP failures expose only the configured human label", async () => {
+  const emitted: Emitted[] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    async callMcpTool() {
+      throw new Error("kb_raw_tool leaked remote content");
+    },
+  };
+  const descriptor = {
+    name: "kb_raw_tool",
+    serverId: "kb",
+    remoteName: "raw_tool",
+    label: "Search Knowledge Base",
+    status: "Searching Knowledge Base",
+    description: "Search approved records.",
+    inputSchema: { type: "object", properties: {} },
+    readOnly: true,
+    remoteReadOnlyHint: true,
+    remoteDestructiveHint: false,
+    serverUpdatedAt: 1,
+    serverContractSha256: "a".repeat(64),
+  };
+  const tool = createPiTools(
+    {
+      current: tc,
+      emit: (entry) => {
+        emitted.push(entry as Emitted);
+      },
+      scopeLabel: "personal:U1",
+    },
+    { mcpTools: () => [descriptor] },
+  ).find((candidate) => candidate.name === descriptor.name);
+  const result = (await call(tool, {})) as { content: Array<{ text?: string }> };
+  assert.equal(result.content[0]?.text, "[error] Search Knowledge Base failed");
+  assert.doesNotMatch(JSON.stringify(emitted), /kb_raw_tool|raw_tool|leaked remote content/);
 });
 
 test("execute forwards the agent's timeout_seconds into tc.execute; omitting it sends no opts", async () => {

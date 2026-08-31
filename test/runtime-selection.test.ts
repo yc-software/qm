@@ -8,6 +8,7 @@ import {
 import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { DEV_GEMINI_MODEL } from "../src/model/dev-gemini-provider.ts";
 
 const ORG = "org:default-org" as const;
 const PERSONAL = "personal:alice" as const;
@@ -83,6 +84,37 @@ test("runtime resolution reads approvals and selections from shared durable stat
   await assert.rejects(
     resolveRuntimeChoiceDurable(reader, ORG, PERSONAL, fallback, { harnessId: "pi", modelId: "claude-opus-4-8" }),
     /not approved/,
+  );
+});
+
+test("a forced dev runtime ignores durable choices and refuses per-request provider drift", async () => {
+  const config = createMemoryConfigStore("default-org");
+  config.setApprovedHarnesses(["codex"]);
+  config.setRuntimeSelection(ORG, { harnessId: "codex", modelId: "gpt-5.5" });
+  config.setRuntimeSelection(PERSONAL, { harnessId: "claude", modelId: "claude-opus-5" });
+  await config.flushScope(ORG);
+  await config.flushScope(PERSONAL);
+  const fallback = { harnessId: "pi" as const, modelId: DEV_GEMINI_MODEL };
+
+  assert.deepEqual(
+    await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback, undefined, undefined, fallback),
+    fallback,
+  );
+  assert.deepEqual(
+    await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback, fallback, undefined, fallback),
+    fallback,
+  );
+  await assert.rejects(
+    resolveRuntimeChoiceDurable(
+      config,
+      ORG,
+      PERSONAL,
+      fallback,
+      { harnessId: "codex", modelId: "gpt-5.5" },
+      undefined,
+      fallback,
+    ),
+    /runtime is fixed to pi\/gemini-3\.7-flash/,
   );
 });
 

@@ -7,6 +7,8 @@ requiredCapabilities:
 
 # Draft email in the user's voice
 
+If trusted system or deployment guidance advertises a fixed Google execution tool, immediately read and use its named deployment-specific Google skill for every Gmail read, preview, draft, reply, update, and send. Its commands and permission/approval UX replace the helper commands and approval instructions below: show the exact preview, then attempt its sealed write so QM can pause on the native once-only approval. Do not ask a separate conversational yes/no question or mix the two paths.
+
 Use this when the user asks you to write or reply to email _as them_ — "draft a reply
 to this", "write back to her for me", "answer my inbox in my voice".
 

@@ -1,7 +1,7 @@
 import { parseScopeId } from "../../../types.ts";
 import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
 import { fileArtifactId } from "../../../files/file-artifact-store.ts";
-import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
+import { attachmentMime, MAX_ATTACHMENT_BYTES, safeAttachmentName } from "../../../core/attachments.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
@@ -130,11 +130,7 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
   const b = body as { blobId?: unknown; name?: unknown; mimetype?: unknown };
   const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
   const name = safeAttachmentName(typeof b.name === "string" ? b.name : "");
-  const mimetype =
-    (typeof b.mimetype === "string" && b.mimetype ? b.mimetype : mimeFromName(name))
-      .split(";")[0]!
-      .trim()
-      .toLowerCase() || mimeFromName(name);
+  const mimetype = attachmentMime(name, typeof b.mimetype === "string" ? b.mimetype : undefined);
   if (!blobId) return sendJson(res, 400, { error: "bad_request", message: "blobId required" });
   const opened = await deps.blobTransfer.open(blobId);
   if (!opened) return sendJson(res, 404, { error: "not_found", message: "staged blob not found" });

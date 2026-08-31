@@ -99,6 +99,7 @@ test("approvalMessage renders the plain-English summary alongside the raw comman
       command: "rm -rf build",
       reason: "recursive delete",
       summary: "Deletes the entire build/ directory and everything inside it.",
+      grantModes: { session: false, always: false },
     },
   ]);
   const section = msg.blocks.find((b) => b.type === "section") as any;
@@ -121,6 +122,7 @@ test("recoveredApprovalContext carries the durable summary through a restart", (
       command: "rm -rf build",
       reason: "recursive delete",
       summary: "Deletes the entire build/ directory and everything inside it.",
+      grantModes: { session: false, always: false },
       request: {
         surface: "slack",
         actor: { externalId: "U2" },
@@ -132,6 +134,7 @@ test("recoveredApprovalContext carries the durable summary through a restart", (
   );
   assert.ok(ctx);
   assert.equal(ctx!.summary, "Deletes the entire build/ directory and everything inside it.");
+  assert.deepEqual(ctx!.grantModes, { session: false, always: false });
 });
 
 test("approvalCardDestination DMs the requester for a channel turn and stays in place for a DM", () => {
@@ -165,6 +168,7 @@ test("recoveredApprovalContext rebuilds a button context from core's durable rec
   assert.equal(ctx!.requesterId, "U1");
   assert.equal(ctx!.channel, "C1", "origin channel comes from the record, not the DM click");
   assert.equal(ctx!.replyThreadTs, "t1", "origin thread comes from the record's deliveryTarget");
+  assert.deepEqual(ctx!.nativeAgentSession, { channel: "C1", threadTs: "t1" });
   assert.equal(ctx!.approvalChannel, "D9", "the card lives where the click landed (the DM)");
   assert.equal(ctx!.threadOnly, true, "channel kind replies thread-only, like the original turn");
   assert.equal(ctx!.command, "git push --force origin main");

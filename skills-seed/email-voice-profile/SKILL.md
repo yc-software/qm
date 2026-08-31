@@ -7,6 +7,8 @@ requiredCapabilities:
 
 # Email voice profile
 
+If trusted system or deployment guidance advertises a fixed Google execution tool, immediately read and use its named deployment-specific Google skill to search and read sent Gmail. Its commands and permission/approval UX replace the corpus-fetch command and any approval instructions below; start authorized reads in the same turn and do not ask a redundant conversational yes/no question. Do not mix the two paths.
+
 Use this when the user asks you to learn how they write email — "learn my voice",
 "build my email voice profile", "study my sent mail so you can draft for me" — or when
 `email-draft-in-voice` needs a profile that doesn't exist yet.

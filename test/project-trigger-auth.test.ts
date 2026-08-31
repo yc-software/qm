@@ -90,6 +90,34 @@ test("Project trigger access follows current membership while Slack-group owner 
     action: "public task",
     schedule: { everyMs: 60_000 },
   });
+  const authorityCron = await built.app.createCron({
+    ownerScopeId: slackScope,
+    owner: "member",
+    createdBy: "member",
+    action: "signed privileged task",
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    unattendedGrants: ["admin.sessions.read"],
+    scheduleAuthority: {
+      contractVersion: 1,
+      authorityRef: "qm:test:scheduler",
+      issuerRef: "qm:test",
+      keyId: "schedule-test-1",
+      profileRef: "profile:test:1",
+      profileSha256: "1".repeat(64),
+      scheduleDefinition: {
+        scheduleRef: "schedule-test",
+        cadence: "daily",
+        timeZone: "America/Los_Angeles",
+        localTime: "09:00",
+        weeklyDay: null,
+        monthlyDay: null,
+        activeFrom: "2040-09-01",
+        activeUntil: "2040-09-30",
+      },
+      runRequestTemplateSha256: "2".repeat(64),
+      receiptLifetimeMs: 300_000,
+    },
+  });
   const projectWebhook = await built.app.createWebhook({
     ownerScopeId: project.scopeId,
     owner: "member",
@@ -204,6 +232,16 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.equal((await fetch(`${base}${publicGetPath}`, { headers: signed("GET", publicGetPath) })).status, 200);
   const publicRunsPath = `/v1/crons/${publicCron.id}/runs?principalId=member`;
   assert.equal((await fetch(`${base}${publicRunsPath}`, { headers: signed("GET", publicRunsPath) })).status, 404);
+  const authorityRunPath = `/v1/crons/${authorityCron.id}/run?principalId=member`;
+  const authorityRun = await fetch(`${base}${authorityRunPath}`, {
+    method: "POST",
+    headers: signed("POST", authorityRunPath),
+  });
+  assert.equal(authorityRun.status, 400);
+  assert.deepEqual(await authorityRun.json(), {
+    error: "bad_request",
+    message: "authority-managed crons can run only at their signed schedule occurrence",
+  });
 
   const webhookListPath = "/v1/webhooks?viewer=member";
   const webhookList = await fetch(`${base}${webhookListPath}`, { headers: signed("GET", webhookListPath) });

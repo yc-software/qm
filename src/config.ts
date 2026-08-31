@@ -1,4 +1,5 @@
 import { existsSync, readdirSync } from "node:fs";
+import type { JsonWebKey } from "node:crypto";
 import { providerBaseUrlsFromEnv, type ProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import {
@@ -23,6 +24,9 @@ import {
   type ModelProvider,
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
+import { isStrongSigningSecret } from "./auth/source-auth.ts";
+import { DEV_GEMINI_MODEL, devGeminiProviderFromEnv, type DevGeminiProvider } from "./model/dev-gemini-provider.ts";
+import { mcpAuthoritySignerConfigFromEnv, type McpAuthoritySignerConfig } from "./mcp/mcp-authority.ts";
 
 export interface Config {
   production: boolean;
@@ -61,6 +65,7 @@ export interface Config {
   openaiApiKey?: string;
   openrouterApiKey?: string;
   modelProvider?: ModelProvider;
+  devGeminiProvider?: DevGeminiProvider;
   providerBaseUrls: ProviderBaseUrls;
   piCaptureRequests: boolean;
   piSystemCacheSplit: boolean;
@@ -89,6 +94,14 @@ export interface Config {
   skillSyncPollMs: number;
   monitorHeartbeatMs: number;
   signingSecret?: string;
+  privateTurnObserverUrl?: string;
+  privateTurnObserverSigningSecret?: string;
+  scheduleAuthority?: {
+    authorityRef: string;
+    issuerRef: string;
+    keyId: string;
+    signingJwk: JsonWebKey;
+  };
   capabilitySecret?: string;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
@@ -156,6 +169,7 @@ export interface Config {
   smolmachinesSandbox: SmolmachinesSandboxEnv;
   awsDeploy: AwsDeployEnv;
   flyDeploy: FlyDeployEnv;
+  mcpAuthoritySigner?: McpAuthoritySignerConfig;
 }
 
 export function configuredModelForHarness(config: Config, harness: string): string | undefined {
@@ -510,6 +524,15 @@ export function numEnv(value: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function canonicalBase64Url(value: unknown, length: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length === length &&
+    /^[A-Za-z0-9_-]+$/u.test(value) &&
+    Buffer.from(value, "base64url").toString("base64url") === value
+  );
+}
+
 function boolEnvStrict(name: string, value: string | undefined): boolean | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const parsed = boolEnv(value);
@@ -630,6 +653,18 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
+const AUTHORITY_ENV_NAME = /_(?:SECRET|TOKEN|PASSWORD|API_KEY|SECRET_KEY|ACCESS_KEY|PRIVATE_KEY|SIGNING_JWK)$/u;
+
+function privateTurnObserverAuthorityReuse(env: NodeJS.ProcessEnv, observerSecret: string): string | undefined {
+  return Object.keys(env)
+    .sort()
+    .find((name) => {
+      if (name === "PRIVATE_TURN_OBSERVER_SIGNING_SECRET") return false;
+      if (name !== "DATABASE_URL" && !AUTHORITY_ENV_NAME.test(name)) return false;
+      return env[name]?.trim() === observerSecret;
+    });
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const harness = harnessEnvStrict(env.HARNESS);
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
@@ -644,6 +679,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (missingSecrets.length) {
     throw new Error(`missing or insecure required core secrets: ${missingSecrets.join(", ")}`);
   }
+  const privateTurnObserverUrl = env.PRIVATE_TURN_OBSERVER_URL?.trim();
+  const privateTurnObserverSigningSecret = env.PRIVATE_TURN_OBSERVER_SIGNING_SECRET?.trim();
+  if (Boolean(privateTurnObserverUrl) !== Boolean(privateTurnObserverSigningSecret)) {
+    throw new Error("PRIVATE_TURN_OBSERVER_URL and PRIVATE_TURN_OBSERVER_SIGNING_SECRET must be configured together");
+  }
+  if (privateTurnObserverUrl) {
+    try {
+      const url = new URL(privateTurnObserverUrl);
+      if (url.protocol !== "https:" || url.username || url.password || url.hash || url.hostname.endsWith(".")) {
+        throw new Error("endpoint");
+      }
+    } catch {
+      throw new Error(
+        "PRIVATE_TURN_OBSERVER_URL must be an HTTPS URL without credentials, a fragment, or a trailing hostname dot",
+      );
+    }
+  }
+  if (privateTurnObserverSigningSecret && !isStrongSigningSecret(privateTurnObserverSigningSecret)) {
+    throw new Error("PRIVATE_TURN_OBSERVER_SIGNING_SECRET must contain at least 32 characters");
+  }
+  const reusedObserverAuthority =
+    env.NODE_ENV === "production" && privateTurnObserverSigningSecret
+      ? privateTurnObserverAuthorityReuse(env, privateTurnObserverSigningSecret)
+      : undefined;
+  if (reusedObserverAuthority) {
+    throw new Error(`PRIVATE_TURN_OBSERVER_SIGNING_SECRET must differ from ${reusedObserverAuthority}`);
+  }
   if (harness === "codex" && !env.OPENAI_API_KEY?.trim() && !codexOAuthConfigured && !codexAuthCredential) {
     throw new Error(
       "HARNESS=codex needs OPENAI_API_KEY, a keychain credential via CODEX_AUTH_CREDENTIAL, or a readable ChatGPT OAuth auth.json via CODEX_AUTH_FILE (or ~/.codex/auth.json)",
@@ -655,6 +717,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const modelProvider = modelProviderEnvStrict(env);
+  const devGeminiProvider = devGeminiProviderFromEnv(env);
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
     if (env[key] === "sqlite") {
       throw new Error(
@@ -740,6 +803,47 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
   if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
+  if (env.NODE_ENV === "production" && privateTurnObserverUrl && (!env.DATABASE_URL || runStore !== "postgres")) {
+    throw new Error("production private-turn observer requires DATABASE_URL and RUN_STORE=postgres");
+  }
+  const scheduleAuthorityValues = [
+    env.SCHEDULE_AUTHORITY_REF?.trim(),
+    env.SCHEDULE_AUTHORITY_ISSUER_REF?.trim(),
+    env.SCHEDULE_AUTHORITY_KEY_ID?.trim(),
+    env.SCHEDULE_AUTHORITY_SIGNING_JWK?.trim(),
+  ];
+  const configuredScheduleAuthorityValues = scheduleAuthorityValues.filter(Boolean);
+  if (configuredScheduleAuthorityValues.length !== 0 && configuredScheduleAuthorityValues.length !== 4) {
+    throw new Error(
+      "SCHEDULE_AUTHORITY_REF, SCHEDULE_AUTHORITY_ISSUER_REF, SCHEDULE_AUTHORITY_KEY_ID, and SCHEDULE_AUTHORITY_SIGNING_JWK must be configured together",
+    );
+  }
+  let scheduleAuthority: Config["scheduleAuthority"];
+  if (configuredScheduleAuthorityValues.length === 4) {
+    if (!env.DATABASE_URL || env.SESSION_STORE !== "postgres" || runStore !== "postgres") {
+      throw new Error("schedule authority requires DATABASE_URL, SESSION_STORE=postgres, and RUN_STORE=postgres");
+    }
+    let signingJwk: JsonWebKey;
+    try {
+      signingJwk = JSON.parse(scheduleAuthorityValues[3]!) as JsonWebKey;
+    } catch {
+      throw new Error("SCHEDULE_AUTHORITY_SIGNING_JWK must be a valid private Ed25519 JWK");
+    }
+    if (
+      signingJwk.kty !== "OKP" ||
+      signingJwk.crv !== "Ed25519" ||
+      !canonicalBase64Url(signingJwk.x, 43) ||
+      !canonicalBase64Url(signingJwk.d, 43)
+    ) {
+      throw new Error("SCHEDULE_AUTHORITY_SIGNING_JWK must be a valid private Ed25519 JWK");
+    }
+    scheduleAuthority = {
+      authorityRef: scheduleAuthorityValues[0]!,
+      issuerRef: scheduleAuthorityValues[1]!,
+      keyId: scheduleAuthorityValues[2]!,
+      signingJwk,
+    };
+  }
   const codexEnv = { ...env };
   if (codexOAuthConfigured && codexAuthCandidate) codexEnv.CODEX_AUTH_FILE = codexAuthCandidate;
   else delete codexEnv.CODEX_AUTH_FILE;
@@ -790,12 +894,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     numEnvStrict("RUN_MAX_AGE_MS", env.RUN_MAX_AGE_MS) ??
     (turnWallClockMs > 0 ? 2 * turnWallClockMs : CONFIG_DEFAULTS.runMaxAgeMs);
   const slack = slackPluginConfigFromEnv(env);
+  const mcpAuthoritySigner = mcpAuthoritySignerConfigFromEnv(env);
   return {
     production: env.NODE_ENV === "production",
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
+    ...(mcpAuthoritySigner ? { mcpAuthoritySigner } : {}),
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
@@ -824,7 +930,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     ...(orgBrandingFromEnv(env) ? { brandingDefault: orgBrandingFromEnv(env) } : {}),
-    ...(env.PI_MODEL ? { modelId: env.PI_MODEL } : {}),
+    ...(env.PI_MODEL || devGeminiProvider ? { modelId: env.PI_MODEL || DEV_GEMINI_MODEL } : {}),
     ...(env.OPENCODE_MODEL || env.PI_MODEL ? { opencodeModel: env.OPENCODE_MODEL || env.PI_MODEL } : {}),
     ...(env.CODEX_MODEL ? { codexModel: env.CODEX_MODEL } : {}),
     ...(env.CODEX_BIN ? { codexBinPath: env.CODEX_BIN } : {}),
@@ -842,6 +948,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
     ...(modelProvider ? { modelProvider } : {}),
+    ...(devGeminiProvider ? { devGeminiProvider } : {}),
     providerBaseUrls,
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     ...(env.AUTH_ALLOWED_EMAILS
@@ -899,6 +1006,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     monitorHeartbeatMs:
       (numEnvStrict("MONITOR_HEARTBEAT_SEC", env.MONITOR_HEARTBEAT_SEC) ?? CONFIG_DEFAULTS.monitorHeartbeatSec) * 1000,
     ...(env.CORE_SIGNING_SECRET ? { signingSecret: env.CORE_SIGNING_SECRET } : {}),
+    ...(privateTurnObserverUrl ? { privateTurnObserverUrl } : {}),
+    ...(privateTurnObserverSigningSecret ? { privateTurnObserverSigningSecret } : {}),
+    ...(scheduleAuthority ? { scheduleAuthority } : {}),
     ...((env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET)
       ? { capabilitySecret: env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET }
       : {}),

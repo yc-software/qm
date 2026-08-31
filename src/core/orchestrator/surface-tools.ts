@@ -35,6 +35,7 @@ import { errMessage } from "../../util/errors.ts";
 import { orgId } from "../../config.ts";
 import { headLooksLikeText, replaceThreadSegment } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import { sanitizeDestination } from "../../delivery/destination.ts";
 
 const SURFACE_READ_DEFAULT = 100;
 const SURFACE_READ_MAX = 200;
@@ -149,9 +150,10 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     destination: Destination,
     postText: string,
     attachments?: OutgoingAttachment[],
+    exactIdempotencyKey?: string,
   ): Promise<SurfacePostResult> => {
     try {
-      const idempotencyKey = `post:${session.id}:${randomUUID()}`;
+      const idempotencyKey = exactIdempotencyKey ?? `post:${session.id}:${randomUUID()}`;
       const delivery = await reachEnqueue({
         deliveries,
         destination,
@@ -206,6 +208,23 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     return { ok: true, attachments: r.attachments };
   };
   return {
+    postNativeCard: async (trustedAnalyticsCard, idempotencyKey) => {
+      if (currentDestination.type !== "slack") return { ok: false, message: "native cards require Slack" };
+      try {
+        const delivery = await deliveries.enqueue({
+          destination: sanitizeDestination(currentDestination),
+          text: "Analytics result",
+          trustedAnalyticsCard,
+          idempotencyKey,
+          provenance: postProvenance(idempotencyKey),
+        });
+        spine.surfaceOutboundCount += 1;
+        if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+        return { ok: true, deliveryId: delivery.id };
+      } catch (error) {
+        return { ok: false, message: errMessage(error) };
+      }
+    },
     post: async (postText, opts, files) => {
       let destination = currentDestination;
       if (opts?.ts && destination.type !== "principal") {

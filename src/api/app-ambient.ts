@@ -14,7 +14,7 @@ import {
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import { errMessage } from "../util/errors.ts";
 import { buildWakeEnvelope } from "../core/wake-envelope.ts";
-import { isTerminal } from "../runs/run-store.ts";
+import { isSignedScheduledRun, isTerminal } from "../runs/run-store.ts";
 import { unscreenedNotice } from "../security/security-posture.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 
@@ -304,7 +304,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const liveRef = activeIds.find((id) => id.startsWith(prefix) && id !== req.conversation.threadRef);
     if (!liveRef) return false;
     const live = await deps.runs.activeForThread(liveRef);
-    if (!live || isTerminal(live.status)) return false;
+    if (!live || isTerminal(live.status) || isSignedScheduledRun(live)) return false;
     const session = await deps.sessions.getByThread(liveRef).catch(() => null);
     const decision = await deps.orchestrator
       .screenSecuritySteer({

@@ -15,6 +15,7 @@ import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import type { ScheduledTurnContext } from "./schedule-authority.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
 const CRON_FIRE_REPLY_MAX_CHARS = 2000;
@@ -33,6 +34,7 @@ export interface SchedulerDeps {
   idempotency: IdempotencyStore;
   identity: IdentityService;
   run: (req: TurnRequest) => Promise<TurnResult>;
+  runScheduled?: (req: TurnRequest, context: ScheduledTurnContext) => Promise<TurnResult>;
   currentScopeMembers?: CurrentScopeMembers;
   now?: () => number;
   maxFiresPerTick?: number;
@@ -113,9 +115,29 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
 
-  async function fire(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<{ authzFailed: boolean }> {
+  async function fire(
+    cron: Cron,
+    t: number,
+    fireKey: string,
+    scheduledAt?: number,
+  ): Promise<{ authzFailed: boolean; disabled?: boolean; skipped?: boolean }> {
     const threadRef = cronFireThreadRef(cron.id, fireKey);
     const mentionRoster = await cronMentionRoster(deps, cron).catch(() => undefined);
+    let scheduleClaim: "enqueued" | "deduped" | "disabled" | "skipped" | undefined;
+    const run =
+      cron.scheduleAuthority && scheduledAt !== undefined
+        ? (req: TurnRequest) => {
+            if (!deps.runScheduled) throw new Error("scheduled run authority is unavailable");
+            return deps.runScheduled(req, {
+              cronId: cron.id,
+              scheduledAt,
+              ownerScopeId: cron.ownerScopeId,
+              onClaim: (status) => {
+                scheduleClaim = status;
+              },
+            });
+          }
+        : deps.run;
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       outcome = await runTrigger(
@@ -123,7 +145,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           deliveries: deps.deliveries,
           idempotency: deps.idempotency,
           identity: deps.identity,
-          run: deps.run,
+          run,
           ...(deps.directory ? { directory: deps.directory } : {}),
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
@@ -142,6 +164,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(cron.members ? { members: cron.members } : {}),
           ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
           recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
+          ...(cron.scheduleAuthority && scheduledAt !== undefined ? { runIdempotency: true } : {}),
         },
       );
     } catch (e) {
@@ -155,6 +178,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       });
       throw e;
     }
+    if (scheduleClaim === "disabled") return { authzFailed: false, disabled: true };
+    if (scheduleClaim === "skipped") return { authzFailed: false, skipped: true };
     if (outcome.ran || outcome.authzFailed) {
       await deps.crons.recordFire(cron.id, {
         fireKey,
@@ -195,7 +220,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     for (const cron of batch) {
       try {
         const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
-        if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+        if (!authzFailed && !cron.scheduleAuthority) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
       } catch (e) {
         console.error("[scheduler] fire failed:", errMessage(e));
       }
@@ -237,16 +262,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       await deps.jobQueue!.enqueueFire(job);
       return;
     }
-    if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
+    const authorityClaimsSlot = cron.scheduleAuthority !== undefined;
+    if (!authorityClaimsSlot && !(await deps.crons.claimSlot(job.cronId, slot, t))) return;
     try {
-      const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
+      const { authzFailed, disabled } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
+      if (disabled) return;
       if (authzFailed) {
-        await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+        if (!authorityClaimsSlot) await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
         return;
       }
     } catch (e) {
       console.error("[scheduler] fire failed:", errMessage(e));
-      await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+      if (!authorityClaimsSlot) await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
       return;
     }
     await enqueueNext(job.cronId);
@@ -284,7 +311,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     tick,
     async runNow(cronId) {
       const cron = await deps.crons.get(cronId);
-      if (!cron || cron.archived || !cron.enabled) return;
+      if (!cron) return;
+      if (cron.scheduleAuthority) throw new Error("authority-managed crons cannot be fired manually");
+      if (cron.archived || !cron.enabled) return;
       await fire(cron, now(), `cron:${cron.id}:manual:${randomUUID()}`);
     },
     notifyChanged(cronId) {

@@ -1,18 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { TurnResult } from "../types.ts";
-import type { Orchestrator } from "../core/orchestrator.ts";
+import type { Orchestrator, OrchestratorInput } from "../core/orchestrator.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import type { CurrentScheduleRunInvocation, PostgresScheduleAuthority } from "../cron/postgres-schedule-authority.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
   orchestrator: Orchestrator;
   leaseTtlMs: number;
   heartbeatIntervalMs?: number;
+  scheduleAuthority?: Pick<PostgresScheduleAuthority, "current" | "assertCurrent">;
 }
 
 export const LEASE_LOST_CONSECUTIVE = 3;
@@ -57,7 +59,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
   };
   try {
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
-    const result = await deps.orchestrator.handleTurn({
+    const turnInput: OrchestratorInput = {
       ...run.request,
       origin: resolveTurnOrigin(run.request),
       runId: run.id,
@@ -66,7 +68,34 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
       background: opts?.background ?? false,
       cancel: cancel.signal,
       ...(queueMs !== undefined ? { queueMs } : {}),
-    });
+    };
+    delete turnInput.scheduleAuthority;
+    let scheduleAuthority: CurrentScheduleRunInvocation | undefined;
+    if (run.durableSessionId) {
+      if (!deps.scheduleAuthority) throw new NonRetryableTurnError("scheduled run authority is unavailable");
+      const invocation = turnInput;
+      let authority = await deps.scheduleAuthority.current({ runId: run.id, leaseToken: token, invocation });
+      scheduleAuthority = Object.freeze(
+        Object.defineProperties(
+          {},
+          {
+            authority: { enumerable: true, get: () => authority },
+            assertCurrent: {
+              enumerable: true,
+              value: async (handler: object) => {
+                authority = await deps.scheduleAuthority!.current({ runId: run.id, leaseToken: token, invocation });
+                const trusted = await deps.scheduleAuthority!.assertCurrent(authority, handler);
+                authority = trusted.authority;
+                return trusted;
+              },
+            },
+          },
+        ) as CurrentScheduleRunInvocation,
+      );
+      Object.defineProperty(turnInput, "scheduleAuthority", { enumerable: true, value: scheduleAuthority });
+    }
+    const result = await deps.orchestrator.handleTurn(turnInput);
+    await scheduleAuthority?.assertCurrent(turnInput);
     stopBeat();
     if (!(await deps.runs.complete(run.id, token, result))) {
       throw new Error(`run ${run.id} lost its lease before completion`);

@@ -8,7 +8,7 @@ import {
   validateCustomProviderSpec,
 } from "../src/model/custom-providers.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
-import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
+import { createCustomProviderStore, withTransientCustomProvider } from "../src/model/custom-provider-store.ts";
 import { modelSupportedByHarness, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { StoredCustomProvider } from "../src/model/custom-provider-store.ts";
@@ -87,6 +87,14 @@ test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, baseUrl: "https://x?y=1" }), /query/);
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, models: [] }), /at least one model/);
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a" }, { id: "a" }] }), /duplicate/);
+  assert.throws(
+    () => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a", compat: { supportsStore: "yes" } as any }] }),
+    /compat.supportsStore must be boolean/,
+  );
+  assert.throws(
+    () => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a", compat: { proxyUrl: "https://x" } as any }] }),
+    /unknown compat field/,
+  );
 });
 
 test("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", async () => {
@@ -123,6 +131,33 @@ test("store validates specs on upsert", async () => {
     keyMaterial: "k",
   });
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
+});
+
+test("a transient provider participates in the registry contract without entering durable storage", async () => {
+  const backing = createMemoryMap<StoredCustomProvider>();
+  const base = createCustomProviderStore({ backing, keyMaterial: "k" });
+  const store = withTransientCustomProvider(base, {
+    spec: GATEWAY,
+    apiKey: "transient-secret",
+    updatedBy: "system:dev-instance",
+  });
+  assert.deepEqual(await store.enabled(), [GATEWAY]);
+  assert.equal(await store.resolveKey(GATEWAY.id), "transient-secret");
+  const statuses = await store.statuses();
+  assert.equal(statuses[0]?.hasKey, true);
+  assert.equal(JSON.stringify(statuses).includes("transient-secret"), false);
+  assert.equal(await backing.get(GATEWAY.id), null);
+  assert.equal(await store.delete(GATEWAY.id, "admin@example.com"), false);
+  await assert.rejects(store.upsert(GATEWAY, "replacement", "admin@example.com"), /conflicts with transient/);
+  await assert.rejects(
+    store.upsert(
+      { ...GATEWAY, id: "other-gateway", models: [{ id: "acme-large" }] },
+      "replacement",
+      "admin@example.com",
+    ),
+    /conflicts with transient/,
+  );
+  assert.equal(await backing.get(GATEWAY.id), null);
 });
 
 test("registered models surface in the catalog and vanish on unregister", () => {

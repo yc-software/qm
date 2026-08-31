@@ -61,6 +61,7 @@ export interface CodexTurnAuth {
 export interface HarnessTurnInput {
   session: Session;
   runId?: string;
+  acceptRunSignals?: boolean;
   cancel?: AbortSignal;
   input: string;
   triggerTs?: string;
@@ -89,7 +90,7 @@ export interface HarnessTurnInput {
     tool: string;
     source: string;
   }): Promise<SecurityScreenVerdict | undefined>;
-  toolApprovalGate?(tool: string): boolean;
+  toolApprovalGate?(tool: string, input?: unknown): boolean;
   emit(entry: NewEntry): Promise<SessionEntry>;
   tape?(rec: NewTapeRecord): Promise<unknown>;
   tapeRows?: TapeRecord[];
@@ -121,6 +122,7 @@ export interface HarnessTurnResult {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;
   modelCalls?: number;

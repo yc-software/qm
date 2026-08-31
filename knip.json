@@ -6,6 +6,8 @@
   "ignoreIssues": {
     "scripts/migrate-principals-to-email.d.mts": ["files"],
     "plugins/chassis/src/source-auth-sign.ts": ["exports"],
+    "src/cron/postgres-schedule-authority.ts": ["types"],
+    "src/cron/schedule-authority.ts": ["exports", "types"],
     "src/slack/lib.ts": ["exports", "types"]
   },
   "workspaces": {

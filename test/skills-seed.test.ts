@@ -208,6 +208,16 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   assert.match(drive.reply ?? "", /sheets\.googleapis\.com/);
 });
 
+test("Google Workspace reads start directly and defer any extra permission to QM's native approval UI", () => {
+  const skill = readFileSync(join("skills-seed", "google-workspace", "SKILL.md"), "utf8");
+  assert.match(skill, /start that read\s+in the same turn/i);
+  assert.match(skill, /Do not ask a second conversational yes\/no question/i);
+  assert.match(skill, /QM's native command-approval UI is\s+the only additional approval step/i);
+  assert.match(skill, /return either the actual result or a clear connection\/permission error/i);
+  assert.match(skill, /This does not authorize a write/i);
+  assert.match(skill, /Every write still follows the separate exact-preview\s+and explicit-approval rules/i);
+});
+
 function fakeSandbox() {
   const files = new Map<string, string>();
   const sandbox = {

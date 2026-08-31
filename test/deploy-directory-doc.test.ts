@@ -23,7 +23,12 @@ test("every ENFORCED deployment-contract clause names a verifier and its impleme
       ["../src/api/routes/deployment-layer.ts", /PUT.*\/v1\/deployment-layer/],
     ],
     "sandbox.approvals-tighten": [
-      ["../src/deployment/deployment-layer.ts", /ApprovalDecision\s*=\s*"require_approval"\s*\|\s*"deny"/],
+      [
+        "../src/deployment/deployment-layer.ts",
+        /ApprovalDecision\s*=\s*"allow"\s*\|\s*"require_approval"\s*\|\s*"deny"/,
+      ],
+      ["../src/deployment/deployment-layer.ts", /decision allow requires subsumesToolApproval/],
+      ["../cli/src/sandbox-layer.ts", /decision allow requires subsumesToolApproval/],
       ["../src/policy/command-policy.ts", /function evaluateCommand/],
     ],
     "runtime.layer-resolved": [

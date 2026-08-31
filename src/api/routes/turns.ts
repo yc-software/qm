@@ -3,6 +3,7 @@ import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { sanitizeDestination } from "../../delivery/destination.ts";
 
 function isTurnRequest(body: unknown): body is TurnRequest {
   return isObj(body) && typeof body.text === "string" && isObj(body.actor) && isObj(body.conversation);
@@ -11,7 +12,7 @@ function isTurnRequest(body: unknown): body is TurnRequest {
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;
   const { useOwnerKeychain: _internalOnly, ...safe } = origin;
-  return safe;
+  return safe.destination ? { ...safe, destination: sanitizeDestination(safe.destination) } : safe;
 }
 
 function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: string } {
@@ -38,12 +39,17 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
     ownerKeychainUnion: _ownerKeychainUnion,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
+    trustedSlackTeamId: _trustedSlackTeamId,
+    trustedSlackUserId: _trustedSlackUserId,
     ...safeBody
   } = body;
-  const resolvedOrigin = publicTurnOrigin(safeBody);
+  const publicBody = safeBody.triggerDestination
+    ? { ...safeBody, triggerDestination: sanitizeDestination(safeBody.triggerDestination) }
+    : safeBody;
+  const resolvedOrigin = publicTurnOrigin(publicBody);
   if (resolvedOrigin.error) return sendJson(res, 400, { error: "bad_request", message: resolvedOrigin.error });
   const origin = resolvedOrigin.origin;
-  const result = await app.turn({ ...safeBody, ...(origin ? { origin } : {}), async: wantAsync });
+  const result = await app.turn({ ...publicBody, ...(origin ? { origin } : {}), async: wantAsync });
   if (result.status === "queued") return sendJson(res, 202, result);
   const status = result.status === "refused" ? 403 : 200;
   return sendJson(res, status, result);

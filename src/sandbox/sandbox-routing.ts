@@ -116,6 +116,12 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     readFile(handle, relPath) {
       return forHandle(handle).readFile(handle, relPath);
     },
+    readInstalledExecutable(handle, binary) {
+      return requireCap(forHandle(handle), "readInstalledExecutable", handle.scopeId).readInstalledExecutable(
+        handle,
+        binary,
+      );
+    },
     writeFile(handle, relPath, data) {
       return forHandle(handle).writeFile(handle, relPath, data);
     },

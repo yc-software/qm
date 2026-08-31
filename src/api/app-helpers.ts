@@ -10,7 +10,7 @@ import type {
 import { orgId as orgIdOf } from "../config.ts";
 import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
-import type { Run } from "../runs/run-store.ts";
+import { isSignedScheduledRun, type Run } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
 import { processRun } from "../runs/worker.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
@@ -190,7 +190,15 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const claimed = await deps.runs.claimById(runId, "inline", deps.leaseTtlMs);
     if (claimed) {
       return withAdminLink(
-        await processRun({ runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs }, claimed),
+        await processRun(
+          {
+            runs: deps.runs,
+            orchestrator: deps.orchestrator,
+            leaseTtlMs: deps.leaseTtlMs,
+            ...(deps.scheduleAuthority ? { scheduleAuthority: deps.scheduleAuthority } : {}),
+          },
+          claimed,
+        ),
       );
     }
     const finished = await deps.runs.waitFor(runId, deps.runWaitMs);
@@ -560,14 +568,17 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   async function replayOrphanedRunSignals(runId: string): Promise<Array<{ signal: RunSignal; replayRunId?: string }>> {
     if (!deps.signals) return [];
+    const sourceRun = await deps.runs.get(runId);
+    const pending = await deps.signals.takePending(runId);
+    if (!sourceRun || isSignedScheduledRun(sourceRun)) return pending.map((signal) => ({ signal }));
     const drained: Array<{ signal: RunSignal; replayRunId?: string }> = [];
-    for (const signal of await deps.signals.takePending(runId)) {
+    for (const signal of pending) {
       if (signal.kind === "abort") continue;
       if (!signal.request) {
         // A steer sent through /v1/runs/:id/signal carries no TurnRequest. Its text is
         // still a real user message — re-enqueue it on the run's own request instead of
         // dropping it, so a steer that raced the run's end is never silently lost.
-        const orphanRun = signal.text?.trim() ? await deps.runs.get(runId) : null;
+        const orphanRun = signal.text?.trim() ? sourceRun : null;
         if (orphanRun) {
           try {
             const { displayText: _d, attachments: _a, approval: _ap, ...base } = orphanRun.request;

@@ -10,6 +10,7 @@ interface CoreCallHooks {
   /** The turn was folded into a run that was ALREADY live (a mid-turn steer), so this handler
    *  owns nothing: the envelope is durably accepted, but the reply belongs to the run's owner. */
   onSteered?: (runId: string) => void;
+  onDelta?: (delta: string) => void;
   onFirstBlock?: (text: string) => void;
   onSurfacePosted?: () => void;
   onTasks?: (tasks: RunTaskView[]) => void;
@@ -140,6 +141,7 @@ export function createCoreBridge(core: SlackCoreClient): CoreBridge {
     let result: TurnResult | null;
     try {
       result = await core.waitRun(runId, {
+        ...(hooks.onDelta ? { onDelta: hooks.onDelta } : {}),
         ...(hooks.onFirstBlock ? { onFirstBlock: hooks.onFirstBlock } : {}),
         ...(hooks.onSurfacePosted ? { onSurfacePosted: hooks.onSurfacePosted } : {}),
         ...(hooks.onTasks ? { onTasks: hooks.onTasks } : {}),

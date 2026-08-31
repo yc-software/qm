@@ -9,6 +9,9 @@ export interface SandboxHandle {
   scratch?: boolean;
   backend?: string;
   scopeId?: string;
+  imageIdentifier?: string;
+  imageVersion?: string;
+  executionAuthority?: "none";
 }
 
 export function hasParentPathSegment(path: string): boolean {
@@ -67,6 +70,7 @@ export interface ProvisionOptions {
   scratch?: { key: string };
   routeScopeId?: string;
   onStatus?: (text: string) => void;
+  executionAuthority?: "none";
 }
 
 export interface ExecResult {
@@ -142,6 +146,7 @@ export interface Sandbox {
   writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void>;
   writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void>;
   readFileBytes(handle: SandboxHandle, relPath: string): Promise<Uint8Array | null>;
+  readInstalledExecutable?(handle: SandboxHandle, binary: string): Promise<Uint8Array | null>;
   stageIn?(handle: SandboxHandle, destRelPath: string, blobId: string): Promise<void>;
   stageOut?(handle: SandboxHandle, srcRelPath: string): Promise<string>;
   extractFiles?(handle: SandboxHandle, entries: ReadonlyArray<{ path: string; data: Uint8Array }>): Promise<void>;

@@ -290,6 +290,7 @@ const WRITES = new Map<string, string[]>([
   ["slack-installation", ["PUT", "DELETE"]],
   ["model-providers", ["PUT", "DELETE"]],
   ["custom-providers", ["PUT", "DELETE"]],
+  ["mcp-servers", ["PUT", "DELETE"]],
 ]);
 
 const READS = [
@@ -316,6 +317,7 @@ const READS = [
   "slack-emoji",
   "model-providers",
   "custom-providers",
+  "mcp-servers",
 ];
 
 const server = createServer((req, res) => {
@@ -446,6 +448,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return json(res, 401, { error: "signed_out" });
     }
     return uploadFileFromRequest(req, res, principal, url.searchParams.get("scope") ?? "");
+  }
+
+  const runtimeSelfCheck = pathname.match(/^\/api\/runtime\/tools\/([a-z0-9][a-z0-9-]{0,63})\/self-check$/);
+  if (method === "POST" && runtimeSelfCheck) {
+    if (!principal) return json(res, 401, { error: "signed_out" });
+    const toolId = runtimeSelfCheck[1]!;
+    return forward(req, res, principal, "POST", `/v1/admin/runtime/tools/${toolId}/self-check`, await readBody(req));
   }
 
   if (WRITES.get(first)?.includes(method)) {

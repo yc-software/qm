@@ -2,14 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import {
+  createPostgresTransactionalOutbox,
+  createTransactionalOutboxEntry,
+} from "../src/persistence/transactional-outbox.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-const until = async (cond: () => boolean, ms = 3_000): Promise<void> => {
+const until = async (cond: () => boolean | Promise<boolean>, ms = 3_000): Promise<void> => {
   const deadline = Date.now() + ms;
-  while (!cond()) {
+  while (!(await cond())) {
     if (Date.now() > deadline) throw new Error("timed out waiting for condition");
     await sleep(20);
   }
@@ -109,6 +113,41 @@ test("startSignalPoll: a legacy durable followUp row is dispatched as a steer du
   } finally {
     await stop();
   }
+});
+
+test("startSignalPoll: discard mode drains pending and live signals without invoking handlers", async () => {
+  const store = createMemoryRunSignalStore();
+  const handled: string[] = [];
+  const request = {
+    surface: "slack",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "signed-run" },
+    text: "provider write",
+    ownerKeychainUnion: true,
+    unattendedGrants: ["admin.sessions.read"],
+  };
+  await store.send("signed-run", { kind: "steer", text: "pending requestless" });
+  await store.send("signed-run", { kind: "steer", text: "pending request-bearing", request });
+  await store.send("signed-run", { kind: "abort" });
+  const stop = startSignalPoll(
+    store,
+    "signed-run",
+    {
+      onSteer: async (text) => {
+        handled.push(text);
+      },
+      onAbort: async () => {
+        handled.push("abort");
+      },
+    },
+    { intervalMs: 60_000, discard: true },
+  );
+  await until(async () => !(await store.pendingRunIds()).includes("signed-run"));
+  await store.send("signed-run", { kind: "steer", text: "live request-bearing", request });
+  await until(async () => (await store.pendingRunIds()).length === 0);
+  await stop();
+  assert.deepEqual(handled, []);
+  assert.deepEqual(await store.takePending("signed-run"), []);
 });
 
 test("startSignalPoll: a doorbell during a slow drain queues one re-drain (no signal stranded)", async () => {
@@ -222,6 +261,52 @@ test("pg store: a signal round-trips ts and request intact", { skip }, async () 
     assert.deepEqual(taken!.request, request, "the stored surface request survives for orphan replay");
   } finally {
     await store.close?.();
+  }
+});
+
+test("pg signal send commits or rolls back its acceptance outbox atomically", { skip }, async () => {
+  const store = createPostgresRunSignalStore(URL!);
+  const outbox = createPostgresTransactionalOutbox(URL!);
+  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const runId = `atomic-signal-${nonce}`;
+  const accepted = createTransactionalOutboxEntry({
+    id: `accept-signal-${nonce}`,
+    topic: "test.signal.accepted",
+    payloadJson: JSON.stringify({ accepted: true }),
+    createdAt: Date.now(),
+  });
+  try {
+    await store.send(runId, { kind: "steer", text: "accepted" }, accepted);
+    assert.equal((await outbox.get(accepted.id))?.state, "pending");
+    assert.equal((await store.takePending(runId)).length, 1);
+
+    const collisionId = `accept-signal-collision-${nonce}`;
+    await outbox.stage(
+      createTransactionalOutboxEntry({
+        id: collisionId,
+        topic: "test.signal.accepted",
+        payloadJson: JSON.stringify({ version: 1 }),
+        createdAt: Date.now(),
+      }),
+    );
+    const failedRunId = `atomic-signal-rollback-${nonce}`;
+    await assert.rejects(
+      store.send(
+        failedRunId,
+        { kind: "steer", text: "must roll back" },
+        createTransactionalOutboxEntry({
+          id: collisionId,
+          topic: "test.signal.accepted",
+          payloadJson: JSON.stringify({ version: 2 }),
+          createdAt: Date.now(),
+        }),
+      ),
+      /identity is already bound/u,
+    );
+    assert.deepEqual(await store.takePending(failedRunId), []);
+  } finally {
+    await store.close?.();
+    await outbox.close?.();
   }
 });
 

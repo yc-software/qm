@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
+import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, TrustedAnalyticsCard } from "../types.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
+import { sanitizeDestination } from "./destination.ts";
 
 export interface DeliveryStore {
   enqueue(input: {
@@ -8,6 +9,7 @@ export interface DeliveryStore {
     text: string;
     attachments?: OutgoingAttachment[];
     provenance?: DeliveryProvenance;
+    trustedAnalyticsCard?: TrustedAnalyticsCard;
     idempotencyKey: string;
     shadow?: boolean;
   }): Promise<Delivery>;
@@ -38,10 +40,11 @@ export function createDeliveryStore(): DeliveryStore {
       if (existingId) return deliveries.get(existingId)!;
       const delivery: Delivery = {
         id: randomUUID(),
-        destination: input.destination,
+        destination: sanitizeDestination(input.destination),
         text: input.text,
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(input.provenance ? { provenance: input.provenance } : {}),
+        ...(input.trustedAnalyticsCard ? { trustedAnalyticsCard: input.trustedAnalyticsCard } : {}),
         idempotencyKey: input.idempotencyKey,
         createdAt: Date.now(),
         deliveredAt: null,

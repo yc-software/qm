@@ -13,6 +13,7 @@ import {
   MAX_ATTACHMENTS_PER_TURN,
   type SlackFile,
 } from "../src/slack/lib.ts";
+import { WORKFLOW_ARTIFACT_MIME } from "../plugins/chassis/src/workflow-artifact.ts";
 
 function fakeFetch(opts: {
   ok?: boolean;
@@ -412,6 +413,149 @@ test("uploadAttachments waits for the file's channel share to commit before reso
     fetchBlob,
   );
   assert.ok(infoCalls >= 3, `expected polling until the share committed, got ${infoCalls}`);
+});
+
+test("uploadAttachments renders a valid workflow artifact as Block Kit instead of raw JSON", async () => {
+  const posts: any[] = [];
+  const uploads: any[] = [];
+  const client = {
+    chat: {
+      postMessage: async (args: any) => {
+        posts.push(args);
+        return { ts: "171.2" };
+      },
+    },
+    files: {
+      uploadV2: async (args: any) => void uploads.push(args),
+      info: async () => ({ file: { shares: {} } }),
+    },
+  };
+  const artifact = Buffer.from(
+    JSON.stringify({
+      version: 1,
+      renderer: "qm.card.v1",
+      fallbackText: "Calendar ready",
+      payload: {
+        heading: "Today's calendar",
+        summary: "Two meetings with <@U999>",
+        status: { label: "Ready", tone: "success" },
+        sections: [
+          {
+            key: "events",
+            label: "Events",
+            items: [{ label: "10:00", value: "Planning", href: "https://calendar.example.com/event/1" }],
+          },
+        ],
+        links: [{ label: "Open calendar", href: "https://calendar.example.com" }],
+      },
+    }),
+  );
+
+  const result = await uploadAttachments(
+    client,
+    "C1",
+    "170.1",
+    [{ name: "calendar.workflow.json", mimetype: WORKFLOW_ARTIFACT_MIME, sizeBytes: artifact.length, blobId: "B1" }],
+    async () => artifact,
+  );
+
+  assert.deepEqual(result, { uploaded: true, messageTs: "171.2" });
+  assert.equal(uploads.length, 0);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].text, "Calendar ready");
+  assert.equal(posts[0].thread_ts, "170.1");
+  assert.equal(posts[0].blocks[0].type, "header");
+  assert.equal(JSON.stringify(posts[0].blocks).includes("&lt;@U999&gt;"), true);
+  assert.equal(JSON.stringify(posts[0].blocks).includes("calendar.example.com/event/1"), true);
+});
+
+test("uploadAttachments deletes a workflow card whose Slack post finishes after cancellation", async () => {
+  let cancelled = false;
+  let releasePost: ((value: { ts: string }) => void) | undefined;
+  const deletes: any[] = [];
+  const client = {
+    chat: {
+      postMessage: async () => new Promise<{ ts: string }>((resolve) => (releasePost = resolve)),
+      delete: async (args: any) => void deletes.push(args),
+    },
+    files: {
+      uploadV2: async () => ({ ok: true }),
+      info: async () => ({ file: { shares: {} } }),
+    },
+  };
+  const artifact = Buffer.from(
+    JSON.stringify({
+      version: 1,
+      renderer: "qm.card.v1",
+      fallbackText: "Late card",
+      payload: { heading: "Late card", sections: [] },
+    }),
+  );
+  const delivery = uploadAttachments(
+    client,
+    "C1",
+    "170.1",
+    [{ name: "late.workflow.json", mimetype: WORKFLOW_ARTIFACT_MIME, sizeBytes: artifact.length, blobId: "B1" }],
+    async () => artifact,
+    undefined,
+    { isCancelled: () => cancelled },
+  );
+  while (!releasePost) await new Promise((resolve) => setImmediate(resolve));
+  cancelled = true;
+  releasePost({ ts: "late-card-ts" });
+
+  assert.deepEqual(await delivery, { uploaded: false });
+  assert.deepEqual(deletes, [{ channel: "C1", ts: "late-card-ts" }]);
+});
+
+test("uploadAttachments deletes files whose Slack upload finishes after cancellation", async () => {
+  let cancelled = false;
+  let releaseUpload: ((value: { files: Array<{ id: string }> }) => void) | undefined;
+  const deletes: any[] = [];
+  const client = {
+    files: {
+      uploadV2: async () => new Promise<{ files: Array<{ id: string }> }>((resolve) => (releaseUpload = resolve)),
+      info: async () => ({ file: { shares: {} } }),
+      delete: async (args: any) => void deletes.push(args),
+    },
+  };
+  const delivery = uploadAttachments(
+    client,
+    "C1",
+    "170.1",
+    [{ name: "late.txt", mimetype: "text/plain", sizeBytes: 4, blobId: "B1" }],
+    async () => Buffer.from("late"),
+    undefined,
+    { isCancelled: () => cancelled },
+  );
+  while (!releaseUpload) await new Promise((resolve) => setImmediate(resolve));
+  cancelled = true;
+  releaseUpload({ files: [{ id: "F-late" }] });
+
+  assert.deepEqual(await delivery, { uploaded: false });
+  assert.deepEqual(deletes, [{ file: "F-late" }]);
+});
+
+test("uploadAttachments falls back to a normal file for malformed workflow artifacts", async () => {
+  const posts: any[] = [];
+  const uploads: any[] = [];
+  const client = {
+    chat: { postMessage: async (args: any) => void posts.push(args) },
+    files: {
+      uploadV2: async (args: any) => void uploads.push(args),
+      info: async () => ({ file: { shares: {} } }),
+    },
+  };
+  await uploadAttachments(
+    client,
+    "D1",
+    undefined,
+    [{ name: "broken.workflow.json", mimetype: WORKFLOW_ARTIFACT_MIME, sizeBytes: 1, blobId: "B1" }],
+    async () => Buffer.from("{"),
+  );
+  assert.equal(posts.length, 0);
+  assert.equal(uploads.length, 1);
+  assert.equal(uploads[0].file_uploads[0].filename, "broken.workflow.json");
 });
 
 test("uploadFailureNote blames files:write only for permission-class errors", () => {

@@ -50,7 +50,9 @@ export interface MicrovmDescription {
   endpoint?: string;
   state: MicrovmLifecycleState;
   startedAt?: number;
+  imageArn?: string;
   imageVersion?: string;
+  executionRoleArn?: string;
   stateReason?: string;
 }
 

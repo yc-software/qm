@@ -44,6 +44,8 @@ import { fileArtifactId, isArtifactPath, type FileArtifactStore } from "../files
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
 import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import type { McpHumanCallContext } from "../mcp/mcp-authority.ts";
+import type { TrustedAnalyticsCard } from "../types.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
   ControlService,
@@ -114,7 +116,15 @@ export class NeedsApproval extends Error {
   kind: "approval";
   matched?: string;
   approvalKey?: string;
-  constructor(command: string, reason: string, kind: "approval" = "approval", matched?: string, approvalKey?: string) {
+  grantModes?: { session: boolean; always: boolean };
+  constructor(
+    command: string,
+    reason: string,
+    kind: "approval" = "approval",
+    matched?: string,
+    approvalKey?: string,
+    grantModes?: { session: boolean; always: boolean },
+  ) {
     super(`command requires approval: ${command}`);
     this.name = "NeedsApproval";
     this.command = command;
@@ -122,6 +132,7 @@ export class NeedsApproval extends Error {
     this.kind = kind;
     this.matched = matched;
     this.approvalKey = approvalKey;
+    this.grantModes = grantModes;
   }
 }
 
@@ -357,6 +368,7 @@ export interface SurfaceToolDeps {
     ambientEnabled?: boolean | null,
   ): Promise<SurfaceStandingOrderResult>;
   staySilent(reason: string): Promise<{ ok: true; message: string }>;
+  postNativeCard?(card: TrustedAnalyticsCard, idempotencyKey: string): Promise<SurfacePostResult>;
 }
 
 export interface ControlUnavailable {
@@ -372,6 +384,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 
 export interface ToolContextDeps {
   sandbox: Sandbox;
+  assertEffectCurrent?: () => Promise<void>;
   credentialExecServices?: readonly { service: string; binary: string }[];
   credentialExec?: ToolContext["credentialExec"];
   provision: () => Promise<SandboxHandle>;
@@ -409,6 +422,7 @@ export interface ToolContextDeps {
   memoryScopeId?: ScopeId;
   memoryAccess?: { write?: ScopeId; read: ScopeId[] };
   mcp?: McpToolService;
+  mcpCallContext?: McpHumanCallContext;
   sessionHistory?: { search(q: string, limit?: number): Promise<string[]> };
   actingSlackUserId?: string;
   layerAuth?: {
@@ -428,6 +442,27 @@ export interface ToolContextDeps {
   controlClaims?: CapabilityClaims;
   webhookPublicUrl?: string;
   surface?: SurfaceToolDeps;
+}
+
+const EFFECT_AUTHORIZATION_EXEMPT = new Set<PropertyKey>(["mcpToolDefs", "soulRead", "staySilent"]);
+
+function guardToolContext(context: ToolContext, assertEffectCurrent?: () => Promise<void>): ToolContext {
+  if (!assertEffectCurrent) return context;
+  const guarded = new Map<PropertyKey, (...args: unknown[]) => Promise<unknown>>();
+  return new Proxy(context, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver) as unknown;
+      if (typeof value !== "function" || EFFECT_AUTHORIZATION_EXEMPT.has(property)) return value;
+      const prior = guarded.get(property);
+      if (prior) return prior;
+      const method = async (...args: unknown[]) => {
+        await assertEffectCurrent();
+        return Reflect.apply(value, target, args) as unknown;
+      };
+      guarded.set(property, method);
+      return method;
+    },
+  });
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
@@ -518,7 +553,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     return Buffer.concat(chunks);
   }
 
-  return {
+  const context: ToolContext = {
     ...(deps.credentialExecServices ? { credentialExecServices: deps.credentialExecServices } : {}),
     ...(deps.credentialExec ? { credentialExec: deps.credentialExec } : {}),
     async computerStatus(): Promise<ComputerStatus> {
@@ -568,7 +603,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         if (target.kind === "error") throw new Error(target.message);
         reached = { scopeId: target.scopeId, label: `#${target.channelName}` };
       }
-      const { decision, reason, matched, approvalKey } = evaluateCommandWithLayer(
+      const { decision, reason, matched, approvalKey, grantModes } = evaluateCommandWithLayer(
         command,
         deps.commandPolicy(),
         deps.layerCommandRules?.() ?? [],
@@ -577,7 +612,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         throw new CommandDenied(command, reason ?? "denied by policy");
       }
       if (decision === "require_approval" && !deps.authorizeCommand(command, approvalKey)) {
-        throw new NeedsApproval(command, reason ?? "requires approval", "approval", matched, approvalKey);
+        throw new NeedsApproval(command, reason ?? "requires approval", "approval", matched, approvalKey, grantModes);
       }
       let handle;
       if (reached) handle = await deps.reach!.provisionFor(reached.scopeId);
@@ -905,20 +940,31 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy);
+      const result = await deps.mcp.callWithContext(name, args, deps.mcpCallContext, deps.createdBy);
+      if (result.trustedAnalyticsCard) {
+        if (!deps.surface?.postNativeCard || !result.nativeCardIdempotencyKey) {
+          throw new Error("MCP native card delivery is unavailable on this turn");
+        }
+        const delivered = await deps.surface.postNativeCard(
+          result.trustedAnalyticsCard,
+          result.nativeCardIdempotencyKey,
+        );
+        if (!delivered.ok) throw new Error("MCP native card delivery failed");
+      }
+      return result.text;
     },
 
     async backgroundStart(command: string, opts?: { ttlSeconds?: number }): Promise<BackgroundStartResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = await deps.provision();
-      const { decision, reason, matched, approvalKey } = evaluateCommandWithLayer(
+      const { decision, reason, matched, approvalKey, grantModes } = evaluateCommandWithLayer(
         command,
         deps.commandPolicy(),
         deps.layerCommandRules?.() ?? [],
       );
       if (decision === "deny") throw new CommandDenied(command, reason ?? "denied by policy");
       if (decision === "require_approval" && !deps.authorizeCommand(command, approvalKey)) {
-        throw new NeedsApproval(command, reason ?? "requires approval", "approval", matched, approvalKey);
+        throw new NeedsApproval(command, reason ?? "requires approval", "approval", matched, approvalKey, grantModes);
       }
       if (deps.ensureSkillTree) {
         for (const skillDir of skillTreeDirsInCommand(command)) await deps.ensureSkillTree(skillDir);
@@ -1087,6 +1133,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ? deps.surface.staySilent(reason)
         : Promise.resolve({ ok: true as const, message: "[staying silent]" }),
   };
+  return guardToolContext(context, deps.assertEffectCurrent);
 }
 
 const SURFACE_UNAVAILABLE_MESSAGE =

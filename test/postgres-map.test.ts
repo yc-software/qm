@@ -12,6 +12,12 @@ import {
   type KeychainGrant,
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
+import { createPrivateTurnObservationOutbox } from "../src/api/private-turn-observation-outbox.ts";
+import type { PrivateTurnObservation } from "../src/api/private-turn-observer.ts";
+import {
+  createPostgresTransactionalOutbox,
+  createTransactionalOutboxEntry,
+} from "../src/persistence/transactional-outbox.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -21,7 +27,7 @@ before(async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query(
-    "DROP TABLE IF EXISTS map_widgets, map_crons, map_cron_fires, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_widgets, map_crons, map_cron_fires, map_keychain_creds, map_keychain_grants, map_keychain_asks, map_private_turn_observations, process_sessions, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -250,6 +256,77 @@ test("pg map: update transforms a row under a lock", { skip }, async () => {
   const after = await m.get("upd");
   assert.equal(after?.nested.n, 5);
   assert.equal(after?.tags.length, 5);
+});
+
+test("pg map: private-turn outbox recovers an unconfirmed delivery across instances", { skip }, async () => {
+  let now = Date.parse("2026-08-27T12:00:00.000Z");
+  const storage = createPostgresTransactionalOutbox(URL!);
+  const observation: PrivateTurnObservation = {
+    source: "web_chat",
+    eventRef: `qm-private-turn:${"a".repeat(64)}`,
+    conversationRef: "web:postgres:recovery",
+    principalRef: "internal:owner",
+    audienceRef: "personal:internal:owner",
+    workspaceRef: "org:default-org",
+    observedAt: "2026-08-27T12:00:00.000Z",
+    inputSha256: "b".repeat(64),
+  };
+  const first = createPrivateTurnObservationOutbox({
+    storage,
+    downstream: { observe: async () => Promise.reject(new Error("transport unavailable")) },
+    timeoutMs: 10,
+    retryBaseMs: 10,
+    now: () => now,
+  });
+  assert.equal(await first.observe(observation), "unconfirmed");
+
+  now += 10;
+  let delivered = 0;
+  const restarted = createPrivateTurnObservationOutbox({
+    storage: createPostgresTransactionalOutbox(URL!),
+    downstream: {
+      observe: async () => {
+        delivered += 1;
+        return "accepted";
+      },
+    },
+    timeoutMs: 10,
+    retryBaseMs: 10,
+    now: () => now,
+  });
+  assert.deepEqual(await restarted.sweep(), { attempted: 1, delivered: 1, pending: 0 });
+  assert.equal(await restarted.observe(observation), "duplicate");
+  assert.equal(delivered, 1);
+});
+
+test("pg transactional outbox claims bounded disjoint batches across instances", { skip }, async () => {
+  const first = createPostgresTransactionalOutbox(URL!);
+  const second = createPostgresTransactionalOutbox(URL!);
+  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const topic = `test.claim.${Math.random().toString(36).slice(2)}`;
+  try {
+    for (let index = 0; index < 7; index += 1) {
+      await first.stage(
+        createTransactionalOutboxEntry({
+          id: `claim-${nonce}-${index}`,
+          topic,
+          payloadJson: JSON.stringify({ index }),
+          createdAt: Date.now() - 1_000,
+        }),
+      );
+    }
+    const [left, right] = await Promise.all([
+      first.claim(topic, 3, `left-${nonce}`, 60_000, Date.now()),
+      second.claim(topic, 3, `right-${nonce}`, 60_000, Date.now()),
+    ]);
+    assert.equal(left.length, 3);
+    assert.equal(right.length, 3);
+    assert.equal(new Set([...left, ...right].map((claim) => claim.id)).size, 6);
+    assert.equal((await first.claim(topic, 3, `tail-${nonce}`, 60_000, Date.now())).length, 1);
+  } finally {
+    await first.close?.();
+    await second.close?.();
+  }
 });
 
 test("pg map: concurrent keychain instances claim a once grant exactly once", { skip }, async () => {

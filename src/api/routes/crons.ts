@@ -321,6 +321,11 @@ async function runCronNow(ctx: ApiCtx): Promise<void> {
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
+  if (cron.scheduleAuthority)
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "authority-managed crons can run only at their signed schedule occurrence",
+    });
   if (!deps.scheduler) return sendJson(res, 404, { error: "not_found", message: "scheduler not wired" });
   if (cron.archived || !cron.enabled)
     return sendJson(res, 400, {

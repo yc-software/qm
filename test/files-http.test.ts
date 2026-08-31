@@ -221,6 +221,21 @@ test("uploadFileForViewer stores a personal inbound file", async () => {
   assert.deepEqual(await drain((await app.openFileForViewer(file!.id, "U1"))!.stream), Buffer.from("hello"));
 });
 
+test("uploadFileForViewer preserves workflow artifact MIME parameters", async () => {
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const app = makeUploadApp(files, createAclStore());
+  const file = await app.uploadFileForViewer("U1", {
+    name: "summary.workflow.json",
+    mimetype: "application/vnd.qm.workflow-artifact+json;v=1; charset=utf-8",
+    data: chunks(Buffer.from('{"version":1}')),
+  });
+  assert.ok(file);
+  assert.equal(
+    (await app.openFileForViewer(file!.id, "U1"))?.mimetype,
+    "application/vnd.qm.workflow-artifact+json;v=1",
+  );
+});
+
 test("uploadFileForViewer to a shared context is visible to another context member", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const acl = createAclStore();

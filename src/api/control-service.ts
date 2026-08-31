@@ -648,6 +648,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId, capability.scopeId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
+      if (cron.scheduleAuthority)
+        return {
+          ok: false,
+          code: "bad_request",
+          message: "authority-managed crons can run only at their signed schedule occurrence",
+        };
       if ((cron.unattendedGrants?.length ?? 0) > 0) {
         const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal };

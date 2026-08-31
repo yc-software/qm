@@ -4,6 +4,10 @@ import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgr
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId, type Principal, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import {
+  createPostgresTransactionalOutbox,
+  createTransactionalOutboxEntry,
+} from "../src/persistence/transactional-outbox.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -38,6 +42,60 @@ test("pg session row mapping ignores incomplete fork provenance", () => {
   });
   assert.equal(session.forkedFrom, undefined);
   assert.equal(session.forkBoundarySeq, undefined);
+});
+
+test("pg run enqueue commits or rolls back its acceptance outbox atomically", { skip }, async () => {
+  const runtime = createPostgresRunStore(URL!);
+  const outbox = createPostgresTransactionalOutbox(URL!);
+  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const accepted = createTransactionalOutboxEntry({
+    id: `accept-run-${nonce}`,
+    topic: "test.run.accepted",
+    payloadJson: JSON.stringify({ accepted: true }),
+    createdAt: Date.now(),
+  });
+  try {
+    const result = await runtime.runs.enqueue({
+      sessionId: `atomic-success-${nonce}`,
+      request: turn("atomic success"),
+      acceptanceOutbox: () => accepted,
+    });
+    assert.equal((await outbox.get(accepted.id))?.state, "pending");
+    assert.equal((await runtime.runs.get(result.run.id))?.id, result.run.id);
+    assert.equal(await runtime.runs.withdraw(result.run.id), true);
+
+    const collisionId = `accept-run-collision-${nonce}`;
+    await outbox.stage(
+      createTransactionalOutboxEntry({
+        id: collisionId,
+        topic: "test.run.accepted",
+        payloadJson: JSON.stringify({ version: 1 }),
+        createdAt: Date.now(),
+      }),
+    );
+    const failedSession = `atomic-rollback-${nonce}`;
+    await assert.rejects(
+      runtime.runs.enqueue({
+        sessionId: failedSession,
+        request: turn("must roll back"),
+        acceptanceOutbox: () =>
+          createTransactionalOutboxEntry({
+            id: collisionId,
+            topic: "test.run.accepted",
+            payloadJson: JSON.stringify({ version: 2 }),
+            createdAt: Date.now(),
+          }),
+      }),
+      /identity is already bound/u,
+    );
+    assert.equal(
+      (await runtime.runs.list()).some((run) => run.sessionId === failedSession),
+      false,
+    );
+  } finally {
+    await runtime.close();
+    await outbox.close?.();
+  }
 });
 
 test("pg session store: fork provenance survives a store restart", { skip }, async () => {
@@ -593,7 +651,7 @@ test("pg sessions table indexes scoped activity pages", { skip }, async () => {
   }
 });
 
-test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => {
+test("pg JSON fallback functions are repaired to parallel-unsafe", { skip }, async () => {
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -602,6 +660,7 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
     await raw.query(`CREATE OR REPLACE FUNCTION safe_jsonb(t text) RETURNS jsonb
       LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $safe_jsonb$
       BEGIN RETURN t::jsonb; EXCEPTION WHEN others THEN RETURN NULL; END $safe_jsonb$`);
+    await raw.query("ALTER FUNCTION entry_search_text(text) PARALLEL SAFE");
     await raw.query("CREATE INDEX safe_jsonb_parallel_repair_test ON session_entries ((safe_jsonb(payload) ->> 'ts'))");
 
     const s = createPostgresSessionStore(URL!);
@@ -610,13 +669,18 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
     const result = await raw.query(
       `SELECT proname, proparallel
          FROM pg_proc
-        WHERE oid IN ('safe_json(text)'::regprocedure, 'safe_jsonb(text)'::regprocedure)`,
+        WHERE oid IN (
+          'safe_json(text)'::regprocedure,
+          'safe_jsonb(text)'::regprocedure,
+          'entry_search_text(text)'::regprocedure
+        )`,
     );
     assert.deepEqual(
       new Map(result.rows.map((row) => [row.proname as string, row.proparallel as string])),
       new Map([
         ["safe_json", "u"],
         ["safe_jsonb", "u"],
+        ["entry_search_text", "u"],
       ]),
     );
     assert.equal(
@@ -1027,15 +1091,70 @@ test("pg run store: reaper cannot clobber a run that completed or renewed its le
     assert.ok(!retiredSessions.includes("sweepDone"), "a completed run's session is never released by the sweep");
 
     const renewed = (await runs.enqueue({ sessionId: "sweepAlive", request: turn("y") })).run;
-    const claimedAlive = await runs.claimById(renewed.id, "w2", 1);
+    const claimedAlive = await runs.claimById(renewed.id, "w2", 60_000);
     assert.ok(claimedAlive?.leaseToken);
-    await new Promise((res) => setTimeout(res, 20));
     assert.equal(await runs.heartbeat(renewed.id, claimedAlive!.leaseToken!, 60_000), true);
     await runs.reapExpired(collect);
     assert.equal((await runs.get(renewed.id))?.status, "running", "renewed lease survives the sweep");
     assert.ok(!retiredSessions.includes("sweepAlive"), "a renewed run's session is never released by the sweep");
   } finally {
     await close();
+  }
+});
+
+test("pg run store: heartbeat cannot resurrect a lease at or past the database-time boundary", { skip }, async () => {
+  const runtime = createPostgresRunStore(URL!);
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const queued = (await runtime.runs.enqueue({ sessionId: "expired-heartbeat", request: turn("x") })).run;
+  const running = await runtime.runs.claimById(queued.id, "expired-worker", 60_000);
+  assert.ok(running?.leaseToken);
+  try {
+    await raw.query(
+      `UPDATE runs
+       SET lease_expires_at=floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint
+       WHERE id=$1`,
+      [queued.id],
+    );
+    assert.equal(await runtime.runs.heartbeat(queued.id, running.leaseToken, 60_000), false);
+    await raw.query(
+      `UPDATE runs
+       SET lease_expires_at=floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint-1
+       WHERE id=$1`,
+      [queued.id],
+    );
+    assert.equal(await runtime.runs.heartbeat(queued.id, running.leaseToken, 60_000), false);
+  } finally {
+    await runtime.runs.releaseLease(queued.id, running.leaseToken);
+    await raw.end();
+    await runtime.close();
+  }
+});
+
+test("pg run store: reaper uses the database lease clock despite process clock skew", { skip }, async (t) => {
+  const runtime = createPostgresRunStore(URL!);
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const queued = (await runtime.runs.enqueue({ sessionId: "db-clock-reaper", request: turn("x") })).run;
+  const running = await runtime.runs.claimById(queued.id, "db-clock-worker", 60_000);
+  assert.ok(running?.leaseToken);
+  let processClock = Date.parse("2100-01-01T00:00:00.000Z");
+  t.mock.method(Date, "now", () => processClock);
+  try {
+    assert.deepEqual(await runtime.runs.reapExpired(), { requeued: 0, parked: 0 });
+    assert.equal((await runtime.runs.get(queued.id))?.status, "running");
+    await raw.query(
+      `UPDATE runs
+       SET lease_expires_at=floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint-1
+       WHERE id=$1`,
+      [queued.id],
+    );
+    processClock = Date.parse("2000-01-01T00:00:00.000Z");
+    assert.deepEqual(await runtime.runs.reapExpired(), { requeued: 1, parked: 0 });
+    assert.equal((await runtime.runs.get(queued.id))?.status, "pending");
+  } finally {
+    await raw.end();
+    await runtime.close();
   }
 });
 

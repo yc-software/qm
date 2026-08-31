@@ -21,6 +21,17 @@ test("accumulates deltas per run and isolates runs", () => {
   assert.equal(s.snapshot("r2"), "world");
 });
 
+test("subscribers receive accepted text deltas and block boundaries in order", () => {
+  const s = createTurnStream({ maxChars: 8 });
+  const deltas: string[] = [];
+  s.subscribe("r1", { onDelta: (delta) => deltas.push(delta) });
+  s.publish("r1", "abc");
+  s.publishBlockStart("r1");
+  s.publish("r1", "defgh");
+  assert.deepEqual(deltas, ["abc", "\n\n", "def"]);
+  assert.equal(s.snapshot("r1"), "abc\n\ndef");
+});
+
 test("ignores empty deltas", () => {
   const s = createTurnStream();
   s.publish("r1", "");

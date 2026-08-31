@@ -1,6 +1,7 @@
 import type { Destination, RecipientConsent, ScopeId, TriggerBase } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { samePerson } from "../directory/person.ts";
+import { sanitizeDestination } from "../delivery/destination.ts";
 
 export interface CreateTriggerInput {
   ownerScopeId: ScopeId;
@@ -78,7 +79,7 @@ export function buildTriggerBase(input: CreateTriggerInput, id: string, createdA
     createdBy: input.createdBy,
     enabled: true,
     createdAt,
-    ...(input.destination ? { destination: input.destination } : {}),
+    ...(input.destination ? { destination: sanitizeDestination(input.destination) } : {}),
     ...(input.ownerConsentedAt ? { ownerConsentedAt: input.ownerConsentedAt } : {}),
     ...(input.recipientConsent ? { recipientConsent: input.recipientConsent } : {}),
   };

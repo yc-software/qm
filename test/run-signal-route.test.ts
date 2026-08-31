@@ -53,6 +53,15 @@ async function coreSignal(runId: string, body: unknown): Promise<{ status: numbe
   return { status: r.status, json: (await r.json()) as Record<string, unknown> };
 }
 
+async function coreWithdraw(runId: string): Promise<{ status: number; json: Record<string, unknown> }> {
+  const path = `/v1/runs/${encodeURIComponent(runId)}/withdraw`;
+  const r = await fetch(`${coreBase}${path}`, {
+    method: "POST",
+    headers: signedHeaders(SECRET, "POST", path, ""),
+  });
+  return { status: r.status, json: (await r.json()) as Record<string, unknown> };
+}
+
 function asUser(user: string, init: RequestInit = {}): RequestInit {
   return {
     ...init,
@@ -97,6 +106,27 @@ test("core route: a terminal run rejects signals with reason=terminal", async ()
   const r = await coreSignal(run.id, { kind: "abort" });
   assert.equal(r.status, 409);
   assert.deepEqual(r.json, { accepted: false, reason: "terminal" });
+});
+
+test("core route: a signed scheduled run rejects signals and withdrawal", async () => {
+  const { run } = await built.runs.enqueue({
+    sessionId: "t-signed-control",
+    durableSessionId: "scheduled-session-control",
+    request: {
+      ...request("scheduled provider action", "t-signed-control"),
+      origin: { kind: "automation", useOwnerKeychain: true },
+      unattendedGrants: ["admin.sessions.read"],
+      surfaceTools: true,
+    },
+  });
+
+  const signal = await coreSignal(run.id, { kind: "abort" });
+  assert.equal(signal.status, 409);
+  assert.deepEqual(signal.json, { accepted: false, reason: "scheduled_run" });
+  const withdraw = await coreWithdraw(run.id);
+  assert.equal(withdraw.status, 409);
+  assert.deepEqual(withdraw.json, { withdrawn: false, reason: "scheduled_run" });
+  assert.ok(await built.runs.get(run.id));
 });
 
 test("web proxy: the submitting user can signal their run; others (and token-less strangers) cannot", async () => {

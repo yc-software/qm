@@ -1,16 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
+import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, TrustedAnalyticsCard } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import { LEGACY_CRON_ID_PATTERN, STABLE_CRON_ID_PATTERN } from "../sessions/session-store.ts";
+import { sanitizeDestination } from "./destination.ts";
 
 function rowToDelivery(r: Record<string, unknown>): Delivery {
   return {
     id: r.id as string,
-    destination: r.destination as Destination,
+    destination: sanitizeDestination(r.destination as Destination),
     text: r.text as string,
     ...(r.attachments != null ? { attachments: r.attachments as OutgoingAttachment[] } : {}),
     ...(r.provenance != null ? { provenance: r.provenance as DeliveryProvenance } : {}),
+    ...(r.trusted_analytics_card != null
+      ? { trustedAnalyticsCard: r.trusted_analytics_card as TrustedAnalyticsCard }
+      : {}),
     idempotencyKey: r.idempotency_key as string,
     createdAt: Number(r.created_at),
     deliveredAt: r.delivered_at === null ? null : Number(r.delivered_at),
@@ -35,6 +39,7 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
         ON deliveries ((destination->>'type'), created_at) WHERE delivered_at IS NULL`,
     `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS attachments JSONB`,
     `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS provenance JSONB`,
+    `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS trusted_analytics_card TEXT`,
     `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS recipient_thread_ref TEXT`,
     `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS shadow BOOLEAN NOT NULL DEFAULT FALSE`,
     `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS deliver_latency_ms INT`,
@@ -55,17 +60,18 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
   return {
     async enqueue(input) {
       const inserted = await q(
-        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, trusted_analytics_card, created_at, shadow)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (idempotency_key) DO NOTHING
          RETURNING *`,
         [
           randomUUID(),
           input.idempotencyKey,
-          JSON.stringify(input.destination),
+          JSON.stringify(sanitizeDestination(input.destination)),
           input.text,
           input.attachments?.length ? JSON.stringify(input.attachments) : null,
           input.provenance ? JSON.stringify(input.provenance) : null,
+          input.trustedAnalyticsCard ?? null,
           Date.now(),
           input.shadow === true,
         ],

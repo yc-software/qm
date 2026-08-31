@@ -12,6 +12,7 @@ import { isPollSurface, isSilentPollReply } from "../src/triggers/run-trigger.ts
 import { createDirectoryStore, type DirectoryStore } from "../src/directory/directory-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Cron } from "../src/types.ts";
+import type { ScheduledTurnContext } from "../src/cron/schedule-authority.ts";
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
   return {
@@ -51,6 +52,68 @@ function harness(
 }
 
 const member = (id: string) => ({ id, type: "internal" as const });
+
+test("signed scheduled runs delegate slot advancement and reject privileged manual fire", async (t) => {
+  const createdAt = Date.parse("2040-08-31T20:00:00.000Z");
+  const scheduledAt = Date.parse("2040-09-01T16:00:00.000Z");
+  t.mock.method(Date, "now", () => createdAt);
+  const crons = createCronStore();
+  const calls: TurnRequest[] = [];
+  const signed: ScheduledTurnContext[] = [];
+  const run = async (req: TurnRequest): Promise<TurnResult> => {
+    calls.push(req);
+    return { status: "ok", reply: "done" };
+  };
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run,
+    runScheduled: async (req, context) => {
+      signed.push(context);
+      context.onClaim("enqueued");
+      return run(req);
+    },
+  });
+  const cron = await crons.create({
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    action: "create scheduled artifact",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    unattendedGrants: ["admin.sessions.read"],
+    scheduleAuthority: {
+      contractVersion: 1,
+      authorityRef: "qm:test:scheduler",
+      issuerRef: "qm:test",
+      keyId: "schedule-test-1",
+      profileRef: "profile:test:1",
+      profileSha256: "1".repeat(64),
+      scheduleDefinition: {
+        scheduleRef: "schedule-test",
+        cadence: "daily",
+        timeZone: "America/Los_Angeles",
+        localTime: "09:00",
+        weeklyDay: null,
+        monthlyDay: null,
+        activeFrom: "2040-09-01",
+        activeUntil: "2040-09-30",
+      },
+      runRequestTemplateSha256: "2".repeat(64),
+      receiptLifetimeMs: 300_000,
+    },
+  });
+  await assert.rejects(scheduler.runNow(cron.id), /authority-managed crons cannot be fired manually/u);
+  assert.equal(signed.length, 0);
+  assert.equal(calls.length, 0);
+  await scheduler.tick(scheduledAt + 1_000);
+  assert.equal(signed.length, 1);
+  assert.equal(signed[0]?.scheduledAt, scheduledAt);
+  assert.equal(calls.length, 1);
+  assert.equal((await crons.get(cron.id))?.nextFireAt, scheduledAt);
+  scheduler.stop();
+});
 
 test("scheduler threads stored unattended grants into owner-mode turns", async () => {
   const { crons, calls, scheduler } = harness();
@@ -1018,6 +1081,61 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
 
   await onFire!({ cronId: cron.id, scheduledAt: 1 });
   assert.equal(calls.length, 1, "a duplicate job for a claimed slot does not run the turn");
+  scheduler.stop();
+});
+
+test("schedule authority retries a slot that was skipped before the durable run boundary", async (t) => {
+  const createdAt = Date.parse("2040-08-31T20:00:00.000Z");
+  const scheduledAt = Date.parse("2040-09-01T16:00:00.000Z");
+  t.mock.method(Date, "now", () => createdAt);
+  const crons = createCronStore();
+  let members: ReturnType<typeof member>[] = [];
+  let claims = 0;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async () => ({ status: "ok" }),
+    currentScopeMembers: async () => members,
+    runScheduled: async (_req, context) => {
+      claims += 1;
+      context.onClaim("enqueued");
+      return { status: "ok" };
+    },
+  });
+  await crons.create({
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    action: "create scheduled artifact",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    scheduleAuthority: {
+      contractVersion: 1,
+      authorityRef: "qm:test:scheduler",
+      issuerRef: "qm:test",
+      keyId: "schedule-test-1",
+      profileRef: "profile:test:1",
+      profileSha256: "1".repeat(64),
+      scheduleDefinition: {
+        scheduleRef: "schedule-test-retry",
+        cadence: "daily",
+        timeZone: "America/Los_Angeles",
+        localTime: "09:00",
+        weeklyDay: null,
+        monthlyDay: null,
+        activeFrom: "2040-09-01",
+        activeUntil: "2040-09-30",
+      },
+      runRequestTemplateSha256: "2".repeat(64),
+      receiptLifetimeMs: 300_000,
+    },
+  });
+  await scheduler.tick(scheduledAt + 1_000);
+  assert.equal(claims, 0);
+  members = [member("U1")];
+  await scheduler.tick(scheduledAt + 2_000);
+  assert.equal(claims, 1);
   scheduler.stop();
 });
 
