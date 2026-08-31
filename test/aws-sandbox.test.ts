@@ -151,3 +151,56 @@ test("concurrent provisions for one scope launch a single body", async () => {
   assert.equal(a.id, b.id);
   assert.equal(fake.runCount, 1);
 });
+
+test("a hydrate failure right after launch does not orphan the freshly launched microVM", async () => {
+  const fake = installFakeMicrovm();
+
+  let failNextHomeTarWrite = false;
+  const baseFetch = fake.fetchImpl;
+  const flakyFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = new URL(String(url));
+    if (u.pathname === "/write" && failNextHomeTarWrite) {
+      const payload = init?.body ? (JSON.parse(String(init.body)) as { path?: string }) : {};
+      if (payload.path === "/tmp/agent-home.tar") {
+        failNextHomeTarWrite = false;
+        return new Response(JSON.stringify({ error: "Bad Gateway" }), {
+          status: 502,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+    return baseFetch(url, init);
+  }) as unknown as typeof fetch;
+
+  const terminateCalls: string[] = [];
+  const api = {
+    ...fake.api,
+    async terminate(id: string) {
+      terminateCalls.push(id);
+      return fake.api.terminate(id);
+    },
+  };
+
+  const sb = makeSandbox(fake, { snapshotIntervalMs: 0, api, fetchImpl: flakyFetch });
+  const layers = rw(scopeId("personal", "U8"));
+
+  const h1 = await sb.provision(layers);
+  await sb.writeFile(h1, "keep.txt", "v1");
+  await sb.teardown(h1);
+  fake.killBody(h1.id);
+
+  const idsBefore = new Set(fake.bodies.keys());
+  failNextHomeTarWrite = true;
+  await assert.rejects(() => sb.provision(layers));
+
+  const newIds = [...fake.bodies.keys()].filter((id) => !idsBefore.has(id));
+  assert.equal(newIds.length, 1);
+  const orphanId = newIds[0]!;
+
+  assert.ok(terminateCalls.includes(orphanId), "orphan terminated");
+  assert.equal(fake.bodies.get(orphanId)!.state, "TERMINATED");
+
+  const h3 = await sb.provision(layers);
+  assert.notEqual(h3.id, orphanId);
+  assert.equal(await sb.readFile(h3, "keep.txt"), "v1");
+});
