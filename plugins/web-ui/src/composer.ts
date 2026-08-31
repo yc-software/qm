@@ -301,30 +301,33 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return modelOptionFor(picked ?? defaultModelValue(scopeKey()), scopeKey());
   }
 
-  async function refreshRuntimeSelection(scopeId: string | null, agent?: Agent): Promise<void> {
+  async function refreshRuntimeSelection(scopeId: string | null, agent?: Agent): Promise<boolean> {
     const request = ++runtimeRequest;
     const scopeKey = runtimeScopeKey(scopeId);
     const seeded = scopeKey !== null && seededRuntime?.scopeId === scopeKey ? seededRuntime.config : null;
-    if (seeded) {
-      applySelectedRuntime(seeded, agent);
-      return;
-    }
+    if (seeded) return applySelectedRuntime(seeded, agent);
     activeRuntimeConfig = null;
     composerState.error = "";
     ctx.chat.drawActiveChat(agent);
     const config = await fetchRuntimeConfig(scopeId);
-    if (request !== runtimeRequest) return;
+    if (request !== runtimeRequest) return false;
     if (!config) {
       composerState.error = "Could not load runtime settings.";
       ctx.chat.drawActiveChat(agent);
-      return;
+      return false;
     }
-    applySelectedRuntime(config, agent);
+    return applySelectedRuntime(config, agent);
   }
 
-  function applySelectedRuntime(config: RuntimeConfig, agent?: Agent): void {
+  function applySelectedRuntime(config: RuntimeConfig, agent?: Agent): boolean {
     activeRuntimeConfig = config;
     composerState.error = "";
+    if (!config.approvedHarnesses.length) {
+      composerState.error = "No approved harness has an available model.";
+      ctx.chat.drawActiveChat(agent);
+      if (pendingComposerFocus) focusComposerEnd();
+      return false;
+    }
     setFastModeModelIds(scopeKey(), config.fastModeModelIds);
     orgFastModeDefault = config.interactiveFastMode === true;
     applyRuntimeOptions(
@@ -342,6 +345,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       agent.state.model = currentModelOption().model;
     ctx.chat.drawActiveChat(agent);
     if (pendingComposerFocus) focusComposerEnd();
+    return true;
   }
 
   async function changeScopeRuntime(
@@ -380,6 +384,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     if (fastAvailable) fastTitle = fastOn ? "Fast mode active" : "Fast mode";
     const approvalPauses = ctx.chat.activePendingApprovals();
     const runtimePending = activeRuntimeConfig === null;
+    const runtimeUnavailable = activeRuntimeConfig?.approvedHarnesses.length === 0;
     const effectiveEffort =
       (activeRuntimeConfig?.effective.effortLevel as EffortLevel | undefined) ??
       defaultEffortForModel(selectedModel.model);
@@ -389,10 +394,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       (selectedModel.value !== defaultModelValue(scopeKey()) ||
         composerState.effortLevel !== effectiveEffort ||
         fastOn !== effectiveFast);
-    const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0 || approvalPauses.length > 0;
+    const inputBlocked =
+      runtimePending || runtimeUnavailable || ctx.chat.state.resolvingApprovals.size > 0 || approvalPauses.length > 0;
     const attachingDisabled = inputBlocked;
     let placeholder = "Ask anything";
-    if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
+    if (runtimePending) placeholder = "Loading runtime…";
+    else if (runtimeUnavailable) placeholder = "No compatible runtime available";
+    else if (inputBlocked) placeholder = "Approve or deny to continue";
     else if (agent.state.isStreaming) placeholder = "Queue a message for after this turn…";
     let composerNotice: TemplateResult | typeof nothing = nothing;
     if (composerState.processingFiles) {
@@ -410,7 +418,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       composerNotice = html`<div class="composer-error">${composerState.error}</div>`;
     }
     let runtimeControls: TemplateResult | typeof nothing = nothing;
-    if (!appState.me?.individualModelAuth) {
+    if (!runtimeUnavailable) {
       runtimeControls = ctx.pane
         ? settingsControl(agent, selectedModel, inputBlocked)
         : html`
@@ -696,7 +704,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         ${icon(ArrowUp, 17)}
       </button>`;
     }
-    const canQueue = Boolean(composerState.draft.trim());
+    const canQueue = Boolean(composerState.draft.trim()) && Boolean(activeRuntimeConfig?.approvedHarnesses.length);
     return html`
       <button class="stop-btn" type="button" title="Stop" aria-label="Stop" @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
@@ -1193,6 +1201,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       Boolean(composerState.draft.trim() || composerState.attachments.length) &&
       !composerState.processingFiles &&
       activeRuntimeConfig !== null &&
+      activeRuntimeConfig.approvedHarnesses.length > 0 &&
       ctx.chat.state.resolvingApprovals.size === 0 &&
       !ctx.chat.hasUnresolvedApproval()
     );
@@ -1260,6 +1269,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   async function queueDraft(agent: Agent): Promise<void> {
+    if (!activeRuntimeConfig?.approvedHarnesses.length) return;
     const threadRef = ctx.chat.state.threadRef;
     const text = composerState.draft.trim();
     if (!text || !threadRef) return;
@@ -1390,7 +1400,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   async function sendPrompt(agent: Agent): Promise<void> {
     if (composerState.processingFiles) return;
-    if (!activeRuntimeConfig && !agent.state.isStreaming) return;
+    if (!activeRuntimeConfig?.approvedHarnesses.length) return;
     if (composerState.pasteView) closePasteView(agent);
     if (ctx.chat.state.resolvingApprovals.size > 0) return;
     if (ctx.chat.hasUnresolvedApproval()) return;

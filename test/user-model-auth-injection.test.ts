@@ -10,9 +10,14 @@ import { createUserModelCredentialStore } from "../src/model/user-model-credenti
 import { readFileSync } from "node:fs";
 import { prepareCodexHome } from "../src/harness/codex-harness.ts";
 import { codexOAuthAuthFromValue } from "../src/harness/codex-auth-store.ts";
-import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
+import {
+  individualAuthModelServiceable,
+  individualAuthProviderAvailability,
+  resolveIndividualAuthRouting,
+} from "../src/core/individual-auth-routing.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
+import { setCustomProviders } from "../src/model/custom-providers.ts";
 
 const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
   provider,
@@ -170,6 +175,59 @@ test("routing: openai OAuth login -> codex harness (not pi)", () => {
 test("routing: requested model provider wins when that provider is connected", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
   assert.equal(r?.harness, "codex");
+});
+
+test("routing: subscription logins preserve requested models", () => {
+  assert.equal(resolveIndividualAuthRouting(oauth("anthropic"), null, "claude-sonnet-5")?.model, "claude-sonnet-5");
+  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "gpt-5.6-terra", "codex")?.model, "gpt-5.6-terra");
+});
+
+test("individual auth availability follows credential and harness compatibility", () => {
+  const connections = [
+    { provider: "anthropic" as const, kind: "apikey" as const },
+    { provider: "openai" as const, kind: "oauth" as const },
+  ];
+  assert.deepEqual(individualAuthProviderAvailability("pi", connections), {
+    anthropic: true,
+    openai: true,
+    openrouter: false,
+  });
+  assert.deepEqual(individualAuthProviderAvailability("claude", connections), {
+    anthropic: false,
+    openai: false,
+    openrouter: false,
+  });
+  assert.deepEqual(individualAuthProviderAvailability("codex", connections), {
+    anthropic: false,
+    openai: true,
+    openrouter: false,
+  });
+  assert.deepEqual(individualAuthProviderAvailability("opencode", connections), {
+    anthropic: false,
+    openai: false,
+    openrouter: false,
+  });
+});
+
+test("individual auth rejects unavailable requested providers instead of silently changing models", () => {
+  const connections = [{ provider: "openai" as const, kind: "oauth" as const }];
+  setCustomProviders([
+    {
+      id: "acme-gateway",
+      name: "Acme Gateway",
+      protocol: "openai",
+      baseUrl: "https://llm.acme.test/v1",
+      models: [{ id: "acme-large" }],
+    },
+  ]);
+  try {
+    assert.equal(individualAuthModelServiceable("acme-large", "pi", connections), false);
+    assert.equal(individualAuthModelServiceable("acme-large", "opencode", connections), false);
+    assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "acme-large"), null);
+    assert.equal(resolveIndividualAuthRouting(oauth("anthropic"), null, "gpt-5.6-sol"), null);
+  } finally {
+    setCustomProviders([]);
+  }
 });
 
 test("routing: openai OAuth + pi org -> pi harness on the Codex subscription provider", () => {

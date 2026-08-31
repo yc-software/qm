@@ -144,6 +144,11 @@ export function contextModelSection(scopeId: string): TemplateResult | typeof no
       <h2 class="context-panel-title" id="context-model-title">Model</h2>
       <span class="context-model-status error" aria-live="polite">${contextModelState.notice}</span>
     </section>`;
+  if (!config.approvedHarnesses.length)
+    return html`<section class="context-panel context-model" aria-labelledby="context-model-title">
+      <h2 class="context-panel-title" id="context-model-title">Model</h2>
+      <span class="context-model-status error" aria-live="polite"> No approved harness has an available model. </span>
+    </section>`;
   const options = optionsFor(config);
   const multiHarness = new Set(options.map((o) => o.harnessId)).size > 1;
   const selected = contextModelState.pending ?? selectedValue(config);

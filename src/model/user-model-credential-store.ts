@@ -20,7 +20,7 @@ export interface UserModelCredential {
   updatedAt: number;
 }
 
-interface UserCredentialConnection {
+export interface UserCredentialConnection {
   provider: ModelProvider;
   kind: UserCredentialKind;
 }

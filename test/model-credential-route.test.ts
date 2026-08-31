@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
+import { setCustomProviders } from "../src/model/custom-providers.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -32,6 +33,7 @@ function start(
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
+    userModelCredentials: built.userModelCredentials,
     modelCredentialFetch,
     harnessId: config.harness ?? "pi",
     ...(harnessCarriedModelAuth(appConfig) ? { harnessCarriedModelAuth: harnessCarriedModelAuth(appConfig) } : {}),
@@ -335,6 +337,199 @@ test("managed Pi keys do not advertise unsupported OpenCode or browser credentia
     assert.ok(!data.modelsByHarness.opencode!.some((model) => model.id === "gpt-5.6-sol"));
   } finally {
     await srv.close();
+  }
+});
+
+test("individual model auth exposes and carries only compatible runtime choices", async () => {
+  const srv = start();
+  try {
+    srv.built.config.setApprovedHarnesses(["pi", "opencode", "codex", "claude"]);
+    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-5", "gpt-5.6-terra"]);
+    srv.built.config.setIndividualModelAuth(true);
+    await srv.built.config.flushScope("org:default-org");
+    await srv.built.userModelCredentials.setOAuth("alice", "anthropic", { accessToken: "anthropic-access" });
+    await srv.built.userModelCredentials.setOAuth("alice", "openai", { accessToken: "openai-access" });
+
+    const response = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+    assert.equal(response.status, 200);
+    const runtime = (await response.json()) as {
+      approvedHarnesses: string[];
+      modelsByHarness: Record<string, string[]>;
+    };
+    assert.deepEqual(runtime.approvedHarnesses, ["pi", "codex", "claude"]);
+    assert.deepEqual(runtime.modelsByHarness.pi, ["gpt-5.6-terra"]);
+    assert.deepEqual(runtime.modelsByHarness.opencode, []);
+    assert.deepEqual(runtime.modelsByHarness.codex, ["gpt-5.6-terra"]);
+    assert.deepEqual(runtime.modelsByHarness.claude, ["claude-sonnet-5"]);
+
+    const accepted = await srv.built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:individual-runtime" },
+      text: "hello",
+      harness: "codex",
+      model: "gpt-5.6-terra",
+      async: true,
+    });
+    assert.equal(accepted.status, "queued");
+    const run = accepted.runId ? await srv.built.runs.get(accepted.runId) : null;
+    assert.equal(run?.request.harness, "codex");
+    assert.equal(run?.request.model, "gpt-5.6-terra");
+
+    const refused = await srv.built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:individual-opencode" },
+      text: "hello",
+      harness: "opencode",
+      model: "gpt-5.6-terra",
+      async: true,
+    });
+    assert.equal(refused.status, "refused");
+    assert.match(refused.reason ?? "", /connected AI account/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("individual model auth resolves incompatible defaults and reports when no approved runtime is available", async () => {
+  const srv = start();
+  try {
+    srv.built.config.setApprovedHarnesses(["pi", "claude", "codex"]);
+    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-5", "gpt-5.6-terra"]);
+    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-sonnet-5" });
+    srv.built.config.setRuntimeSelection("personal:alice", { harnessId: "claude", modelId: "claude-sonnet-5" });
+    srv.built.config.setIndividualModelAuth(true);
+    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.flushScope("personal:alice");
+    await srv.built.userModelCredentials.setOAuth("alice", "openai", { accessToken: "openai-access" });
+
+    const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`;
+    const runtime = (await fetch(url).then((response) => response.json())) as {
+      approvedHarnesses: string[];
+      orgDefault: { harnessId: string; modelId: string };
+      scopeOverride: unknown;
+      effective: { harnessId: string; modelId: string };
+    };
+    assert.deepEqual(runtime.approvedHarnesses, ["pi", "codex"]);
+    assert.deepEqual(runtime.orgDefault, { harnessId: "pi", modelId: "gpt-5.6-terra", revision: 1 });
+    assert.equal(runtime.scopeOverride, null);
+    assert.deepEqual(runtime.effective, { harnessId: "pi", modelId: "gpt-5.6-terra" });
+
+    const unavailable = await fetch(`${srv.base}/v1/runtime-config`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        principalId: "alice",
+        scopeId: "personal:alice",
+        harnessId: "claude",
+        modelId: "claude-sonnet-5",
+      }),
+    });
+    assert.equal(unavailable.status, 400);
+    assert.equal(((await unavailable.json()) as { error: string }).error, "model_not_available");
+
+    srv.built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
+    srv.built.config.setRuntimeSelection("personal:alice", { harnessId: "codex", modelId: "gpt-5.6-terra" });
+    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.flushScope("personal:alice");
+    const retired = (await fetch(url).then((response) => response.json())) as {
+      scopeOverride: unknown;
+      effective: { harnessId: string; modelId: string };
+    };
+    assert.equal(retired.scopeOverride, null);
+    assert.deepEqual(retired.effective, { harnessId: "pi", modelId: "gpt-5.6-sol" });
+
+    srv.built.config.setApprovedHarnesses(["claude"]);
+    await srv.built.config.flushScope("org:default-org");
+    const blocked = (await fetch(url).then((response) => response.json())) as { approvedHarnesses: string[] };
+    assert.deepEqual(blocked.approvedHarnesses, []);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("web turns carry the complete resolved scoped runtime when overrides are partial or omitted", async () => {
+  const srv = start();
+  try {
+    srv.built.config.setApprovedHarnesses(["pi", "codex"]);
+    srv.built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "codex", modelId: "gpt-5.6-sol" });
+    srv.built.config.setRuntimeSelection("personal:alice", { harnessId: "pi", modelId: "gpt-5.6-terra" });
+    srv.built.config.setIndividualModelAuth(true);
+    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.flushScope("personal:alice");
+    await srv.built.userModelCredentials.setOAuth("alice", "openai", { accessToken: "openai-access" });
+
+    const turn = (threadRef: string, overrides: { model?: string } = {}) =>
+      srv.built.app.turn({
+        surface: "web",
+        actor: { externalId: "alice" },
+        conversation: { kind: "dm", threadRef },
+        text: "hello",
+        async: true,
+        ...overrides,
+      });
+    const resolved = await turn("web:alice:resolved-runtime");
+    assert.equal(resolved.status, "queued");
+    const resolvedRun = resolved.runId ? await srv.built.runs.get(resolved.runId) : null;
+    assert.equal(resolvedRun?.request.harness, "pi");
+    assert.equal(resolvedRun?.request.model, "gpt-5.6-terra");
+
+    const partial = await turn("web:alice:partial-runtime", { model: "gpt-5.6-luna" });
+    assert.equal(partial.status, "queued");
+    const partialRun = partial.runId ? await srv.built.runs.get(partial.runId) : null;
+    assert.equal(partialRun?.request.harness, "pi");
+    assert.equal(partialRun?.request.model, "gpt-5.6-luna");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("individual model auth excludes custom-provider models", async () => {
+  const srv = start();
+  const providers: Parameters<typeof setCustomProviders>[0] = [
+    {
+      id: "acme-gateway",
+      name: "Acme Gateway",
+      protocol: "openai",
+      baseUrl: "https://llm.acme.test/v1",
+      models: [{ id: "acme-large" }],
+    },
+  ];
+  setCustomProviders(providers);
+  try {
+    srv.built.config.setApprovedHarnesses(["pi", "opencode"]);
+    srv.built.config.setWebuiModels("org:default-org", ["acme-large"]);
+    srv.built.config.setIndividualModelAuth(true);
+    await srv.built.config.flushScope("org:default-org");
+    await srv.built.userModelCredentials.setOAuth("alice", "openai", { accessToken: "openai-access" });
+
+    const runtime = (await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`).then(
+      (response) => response.json(),
+    )) as {
+      approvedHarnesses: string[];
+      modelsByHarness: Record<string, string[]>;
+    };
+    assert.deepEqual(runtime.approvedHarnesses, []);
+    assert.deepEqual(runtime.modelsByHarness.pi, []);
+    assert.deepEqual(runtime.modelsByHarness.opencode, []);
+
+    setCustomProviders(providers);
+    const turn = await srv.built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:individual-custom" },
+      text: "hello",
+      harness: "pi",
+      model: "acme-large",
+      async: true,
+    });
+    assert.equal(turn.status, "refused");
+    assert.match(turn.reason ?? "", /connected AI account/);
+  } finally {
+    await srv.close();
+    setCustomProviders([]);
   }
 });
 

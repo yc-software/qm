@@ -5,6 +5,7 @@ import test from "node:test";
 const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
+const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 
 test("boot hands its runtime config to the composer instead of dropping it", () => {
   assert.match(shell, /const personalScope = `personal:\$\{appState\.me\.user\}`;/);
@@ -26,7 +27,7 @@ test("the first mount in the seeded scope renders from it — no blanking, no se
   assert.ok(seedRead > 0, "the seeded config must be consulted");
   assert.ok(seedRead < blank, "consult the seed BEFORE blanking the composer");
   assert.ok(seedRead < fetchCall, "consult the seed BEFORE refetching");
-  assert.match(fn, /if \(seeded\) \{\s*applySelectedRuntime\(seeded, agent\);\s*return;\s*\}/);
+  assert.match(fn, /if \(seeded\) return applySelectedRuntime\(seeded, agent\);/);
   assert.match(fn, /seededRuntime\?\.scopeId === scopeKey \? seededRuntime\.config : null/);
   assert.match(fn, /const scopeKey = runtimeScopeKey\(scopeId\);/);
   assert.doesNotMatch(fn, /seededRuntime = null;/, "every pane booting on the seeded scope may read the seed");
@@ -36,6 +37,19 @@ test("the first mount in the seeded scope renders from it — no blanking, no se
     /seededRuntime = null;/,
     "changing the scope default is what retires the boot seed",
   );
+});
+
+test("a proactive opener waits for a usable runtime", () => {
+  assert.match(chat, /const runtimeReady = ctx\.composer\.refreshRuntimeSelection\(scopeId, agent\);/);
+  assert.match(chat, /runtimeReady\.then\(\(runtimeAvailable\) =>/);
+  assert.match(chat, /if \(runtimeAvailable\)\s*startProactiveOpenerIfNew/);
+});
+
+test("an existing run resumes without waiting for runtime settings", () => {
+  const resumeAt = chat.indexOf("void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);");
+  const runtimeWaitAt = chat.indexOf("void runtimeReady.then((runtimeAvailable) =>");
+  assert.ok(resumeAt > 0 && resumeAt < runtimeWaitAt);
+  assert.doesNotMatch(chat.slice(runtimeWaitAt, chat.indexOf("consumeBackgroundPanelRequest();")), /resumeTrackedRun/);
 });
 
 test("a still-loading composer is not painted as a failure", () => {
