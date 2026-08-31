@@ -39,13 +39,13 @@ export function memorableInject(
   bin: string,
   scopeId: string,
   task: string,
-  opts: { apiKey?: string; env?: NodeJS.ProcessEnv } = {},
+  opts?: { env: NodeJS.ProcessEnv; apiKey?: string },
 ): Promise<string | null> {
   return new Promise((resolve) => {
     const [cmd = "memorable", ...preArgs] = bin.split(" ").filter(Boolean);
     const child = spawn(cmd, [...preArgs, "inject", "--scope", scopeId], {
       stdio: ["pipe", "pipe", "ignore"],
-      ...(opts.env ? { env: { ...opts.env, ...(opts.apiKey ? { MEMORABLE_API_KEY: opts.apiKey } : {}) } } : {}),
+      ...(opts ? { env: { ...opts.env, ...(opts.apiKey ? { MEMORABLE_API_KEY: opts.apiKey } : {}) } } : {}),
     });
     child.unref();
     let chunks: Buffer[] = [];

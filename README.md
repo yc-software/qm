@@ -188,12 +188,15 @@ hook and passes no dependency, and the orchestrator's one added check short-circ
 work outside the QM process, writes only to scopes explicitly consented `read-write`, and
 stores into QM's own `DATABASE_URL` Postgres rather than a second store.
 
-Setup is `npm i -g memorable-cli` and `MEMORABLE=1`. From there, each person connects
-their own Memorable account: `POST /v1/memorable/connect` starts a browser sign-in, QM
-hands them a URL, and the key that comes back is stored encrypted against their scope, so
-their procedures land in their own organization rather than a shared one. A scope with no
-account of its own falls back to the org's, and then to a single `MEMORABLE_API_KEY` in
-the server's environment, which is all a deployment that connects nobody ever needs.
+Setup is `npm i -g memorable-cli` and `MEMORABLE=1`. From there, each person can connect
+their own Memorable account: `POST /v1/memorable/connect` starts a browser sign-in for
+their own scope, and the key that comes back is stored encrypted against it, so their
+procedures land in their own organization. A sign-in can only ever be started for the
+caller, because whoever opens the URL is whoever the key belongs to. Anything with no
+account of its own, a shared channel included, uses the single `MEMORABLE_API_KEY` in the
+server's environment, which is all a deployment that connects nobody ever needs.
+Connecting is not consent: nothing is captured for a scope until someone sets it to
+`read-write` through `POST /v1/memorable/consent`.
 
 Five `memorable_*` tables appear in the database `DATABASE_URL` already points at, three
 created by the CLI and two by QM's own `artifactMap`. QM ships no migration for any of

@@ -141,3 +141,25 @@ test("relayRecord passes the environment it was given and nothing else", async (
   }
   assert.equal(readFileSync(marker, "utf8"), "<unset>");
 });
+
+test("relayRecord reports a consent refusal instead of swallowing it", async () => {
+  const { bin } = stub(
+    `import { readFileSync } from "node:fs";\nreadFileSync(0, "utf8");\nprocess.stdout.write(JSON.stringify({ ok: false, error: "memorable_write_denied", mode: "unset", scope: "personal:U1" }) + "\\n");\nprocess.exit(3);\n`,
+  );
+  const outcome = await relayRecord(bin, capture, undefined, { env: { PATH: process.env.PATH } });
+  assert.deepEqual(outcome, { ok: false, reason: "memorable_write_denied (consent unset)" });
+});
+
+test("relayRecord reports a plain non-zero exit when there is no refusal to read", async () => {
+  const { bin } = stub(`import { readFileSync } from "node:fs";\nreadFileSync(0, "utf8");\nprocess.exit(9);\n`);
+  assert.deepEqual(await relayRecord(bin, capture, undefined, { env: { PATH: process.env.PATH } }), {
+    ok: false,
+    reason: "exit 9",
+  });
+});
+
+test("relayRecord reports success on a clean exit, and on nothing to offer", async () => {
+  const { bin } = stub(`import { readFileSync } from "node:fs";\nreadFileSync(0, "utf8");\n`);
+  assert.deepEqual(await relayRecord(bin, capture, undefined, { env: { PATH: process.env.PATH } }), { ok: true });
+  assert.deepEqual(await relayRecord(bin, { ...capture, workflows: [] }), { ok: true });
+});

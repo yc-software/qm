@@ -10,6 +10,7 @@ const START_TIMEOUT_MS = 10_000;
 const POLL_TIMEOUT_MS = 10_000;
 const MIN_POLL_INTERVAL_MS = 2_000;
 const MAX_FIELD_CHARS = 200;
+const MAX_API_KEY_CHARS = 512;
 
 export interface MemorableAccount {
   scopeId: ScopeId;
@@ -77,13 +78,7 @@ function str(value: unknown, max = MAX_FIELD_CHARS): string {
 export function createMemorableAccounts(
   accounts: DurableMap<MemorableAccount>,
   pending: DurableMap<PendingConnect>,
-  opts: {
-    apiUrl?: string;
-    orgScopeId: ScopeId;
-    keyMaterial: string | Buffer;
-    now?: () => number;
-    fetchImpl?: typeof fetch;
-  },
+  opts: { apiUrl?: string; keyMaterial: string | Buffer; now?: () => number; fetchImpl?: typeof fetch },
 ): MemorableAccounts {
   const apiUrl = (opts.apiUrl || DEFAULT_MEMORABLE_API_URL).replace(/\/$/, "");
   const clock = opts.now ?? (() => Date.now());
@@ -91,6 +86,13 @@ export function createMemorableAccounts(
   const secretKey = deriveConnectorKey(opts.keyMaterial, "memorable-accounts");
   const key = (scope: ScopeId) => scopeStorageKey(scope);
   const label = (scope: ScopeId) => `qm ${parseScopeId(scope).kind ?? "scope"} ${hashId([scope], 8)}`;
+  const claim = async (scope: ScopeId): Promise<boolean> => (await pending.take(key(scope))) !== null;
+  const settledElsewhere = async (scope: ScopeId): Promise<PollResult> => {
+    const existing = await accounts.get(key(scope));
+    return existing
+      ? { status: "connected", orgId: existing.orgId, orgName: existing.orgName, keyId: existing.keyId }
+      : { status: "expired" };
+  };
   const readKey = (account: MemorableAccount): string | null => {
     try {
       return decryptSecret(account.apiKeyEnc, secretKey);
@@ -103,6 +105,18 @@ export function createMemorableAccounts(
     async start(scope, startOpts = {}) {
       const existing = await accounts.get(key(scope));
       if (existing && !startOpts.force) return { status: "already_connected", orgName: existing.orgName };
+
+      const live = await pending.get(key(scope));
+      if (live && clock() < live.expiresAt && !startOpts.force) {
+        return {
+          status: "started",
+          userCode: live.userCode,
+          verificationUri: live.verificationUri,
+          verificationUriComplete: live.verificationUriComplete,
+          intervalMs: live.intervalMs,
+          expiresAt: live.expiresAt,
+        };
+      }
 
       let body: DeviceStartBody;
       try {
@@ -143,6 +157,7 @@ export function createMemorableAccounts(
         userCode,
         verificationUri: record.verificationUri,
         verificationUriComplete,
+        intervalMs: record.intervalMs,
         expiresAt: record.expiresAt,
       };
     },
@@ -163,12 +178,13 @@ export function createMemorableAccounts(
           body: JSON.stringify({ device_code: record.deviceCode }),
           signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
         });
-        if (!response.ok)
-          return {
-            status: "pending",
-            userCode: record.userCode,
-            verificationUriComplete: record.verificationUriComplete,
-          };
+        if (response.status >= 500 || response.status === 429) {
+          return { status: "unavailable", detail: `the sign-in service answered ${response.status}` };
+        }
+        if (!response.ok) {
+          await pending.delete(key(scope));
+          return { status: "expired" };
+        }
         body = (await response.json()) as DevicePollBody;
       } catch (e) {
         return { status: "unavailable", detail: (e as Error).message.slice(0, 200) };
@@ -187,15 +203,15 @@ export function createMemorableAccounts(
         return { status: "denied" };
       }
       if (status !== "approved") {
-        await pending.delete(key(scope));
-        return { status: "expired" };
+        return (await claim(scope)) ? { status: "expired" } : await settledElsewhere(scope);
       }
 
-      const apiKey = str(body.api_key);
-      if (!apiKey) {
+      const apiKey = typeof body.api_key === "string" ? body.api_key : "";
+      if (!apiKey || apiKey.length > MAX_API_KEY_CHARS) {
         await pending.delete(key(scope));
-        return { status: "unavailable", detail: "the sign-in was approved but no key came back" };
+        return { status: "unavailable", detail: "the sign-in was approved but the key it returned is unusable" };
       }
+      if (!(await claim(scope))) return await settledElsewhere(scope);
       const account: MemorableAccount = {
         scopeId: scope,
         apiKeyEnc: encryptSecret(apiKey, secretKey),
@@ -205,16 +221,12 @@ export function createMemorableAccounts(
         connectedAt: clock(),
       };
       await accounts.put(key(scope), account);
-      await pending.delete(key(scope));
       return { status: "connected", orgId: account.orgId, orgName: account.orgName, keyId: account.keyId };
     },
 
     async keyFor(scope) {
       const exact = await accounts.get(key(scope));
-      if (exact) return readKey(exact);
-      if (scope === opts.orgScopeId) return null;
-      const org = await accounts.get(key(opts.orgScopeId));
-      return org ? readKey(org) : null;
+      return exact ? readKey(exact) : null;
     },
 
     async disconnect(scope) {

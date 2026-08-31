@@ -27,7 +27,6 @@ function harness(responses: Array<{ status?: number; body: unknown } | Error>, o
   const pending = createMemoryMap<PendingConnect>();
   const store = createMemorableAccounts(accounts, pending, {
     apiUrl: "https://api.test",
-    orgScopeId: ORG,
     keyMaterial: "test-key-material-0123456789abcdef",
     fetchImpl,
     ...(opts.now ? { now: opts.now } : {}),
@@ -126,13 +125,48 @@ test("a denied sign-in clears the pending code and leaves no key", async () => {
   assert.deepEqual(await pending.all(), []);
 });
 
-test("a transient error from the token endpoint does not discard an approved code", async () => {
+test("a service outage is reported as unavailable and keeps the code alive", async () => {
   const { store, pending } = harness([{ body: started }, { status: 502, body: {} }, { body: approved }]);
   await store.start(ME);
-  assert.equal((await store.poll(ME)).status, "pending");
+  const outage = await store.poll(ME);
+  assert.equal(outage.status, "unavailable");
   assert.equal((await pending.all()).length, 1);
   assert.equal((await store.poll(ME)).status, "connected");
   assert.equal(await store.keyFor(ME), "mk_secret");
+});
+
+test("a rate limit is an outage, not a dead code", async () => {
+  const { store, pending } = harness([{ body: started }, { status: 429, body: {} }]);
+  await store.start(ME);
+  assert.equal((await store.poll(ME)).status, "unavailable");
+  assert.equal((await pending.all()).length, 1);
+});
+
+test("a request the service will never accept is retired, not polled forever", async () => {
+  const { store, pending } = harness([{ body: started }, { status: 400, body: { error: "invalid_request" } }]);
+  await store.start(ME);
+  assert.equal((await store.poll(ME)).status, "expired");
+  assert.deepEqual(await pending.all(), []);
+});
+
+test("a network failure while polling keeps the code alive", async () => {
+  const { store, pending } = harness([{ body: started }, new Error("ECONNRESET")]);
+  await store.start(ME);
+  const result = await store.poll(ME);
+  assert.equal(result.status, "unavailable");
+  assert.equal((await pending.all()).length, 1);
+});
+
+test("an approval with no usable key stores nothing", async () => {
+  for (const bad of [
+    { ...approved, api_key: "" },
+    { ...approved, api_key: "m".repeat(600) },
+  ]) {
+    const { store } = harness([{ body: started }, { body: bad }]);
+    await store.start(ME);
+    assert.equal((await store.poll(ME)).status, "unavailable");
+    assert.equal(await store.keyFor(ME), null);
+  }
 });
 
 test("an expired window is cleared locally without asking the service", async () => {
@@ -150,33 +184,14 @@ test("polling a scope that never started reports nothing rather than an error", 
   assert.equal((await store.poll(ME)).status, "none");
 });
 
-test("a scope with no key of its own falls back to the org's", async () => {
+test("a key is used only by the scope that connected it", async () => {
   const { store } = harness([{ body: started }, { body: approved }]);
-  await store.start(ORG);
-  await store.poll(ORG);
-  assert.equal(await store.keyFor("personal:U9"), "mk_secret");
-  assert.equal(await store.keyFor("channel:C1"), "mk_secret");
-});
-
-test("a scope's own key wins over the org's", async () => {
-  const { store } = harness([
-    { body: started },
-    { body: approved },
-    { body: started },
-    { body: { ...approved, api_key: "mk_mine", org_name: "Mine" } },
-  ]);
-  await store.start(ORG);
-  await store.poll(ORG);
   await store.start(ME);
   await store.poll(ME);
-  assert.equal(await store.keyFor(ME), "mk_mine");
-  assert.equal(await store.keyFor("personal:U9"), "mk_secret");
-});
-
-test("nothing connected anywhere resolves to no key at all", async () => {
-  const { store } = harness([]);
-  assert.equal(await store.keyFor(ME), null);
-  assert.equal(await store.keyFor(ORG), null);
+  assert.equal(await store.keyFor(ME), "mk_secret");
+  for (const other of ["personal:U9", "channel:C1", ORG]) {
+    assert.equal(await store.keyFor(other), null, `${other} borrowed another scope's key`);
+  }
 });
 
 test("disconnect removes the key and any authorization still in flight", async () => {
@@ -224,4 +239,65 @@ test("a row written under different key material reads as no key, not a crash", 
   assert.ok(id && row);
   await accounts.put(id, { ...row, apiKeyEnc: "v2:aaaa:bbbb:cccc" });
   assert.equal(await store.keyFor(ME), null);
+});
+
+test("a disconnect during an in-flight approval does not leave a live key behind", async () => {
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((r) => {
+    release = r;
+  });
+  let polls = 0;
+  const fetchImpl = (async (url: string | URL) => {
+    if (String(url).endsWith("/v1/device/code")) {
+      return { ok: true, status: 200, json: async () => started } as Response;
+    }
+    if (++polls === 1) await held;
+    return { ok: true, status: 200, json: async () => approved } as Response;
+  }) as unknown as typeof fetch;
+
+  const store = createMemorableAccounts(createMemoryMap(), createMemoryMap(), {
+    apiUrl: "https://api.test",
+    keyMaterial: "test-key-material-0123456789abcdef",
+    fetchImpl,
+  });
+
+  await store.start(ME);
+  const inFlight = store.poll(ME);
+  await store.disconnect(ME);
+  release?.();
+  const result = await inFlight;
+
+  assert.equal(result.status, "expired");
+  assert.equal(await store.keyFor(ME), null);
+});
+
+test("of two concurrent polls, the one that loses the claim still reports the truth", async () => {
+  const { store } = harness([{ body: started }, { body: approved }, { body: approved }]);
+  await store.start(ME);
+  const [a, b] = await Promise.all([store.poll(ME), store.poll(ME)]);
+  assert.deepEqual([a.status, b.status].sort(), ["connected", "connected"]);
+  assert.equal(await store.keyFor(ME), "mk_secret");
+});
+
+test("starting again hands back the code the person is already looking at", async () => {
+  const { store, calls } = harness([{ body: started }]);
+  const first = await store.start(ME);
+  const second = await store.start(ME);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(first, second);
+});
+
+test("two scope ids that are not storage-safe stay distinct", async () => {
+  const { store } = harness([
+    { body: started },
+    { body: approved },
+    { body: started },
+    { body: { ...approved, api_key: "mk_two" } },
+  ]);
+  await store.start("channel:C/1 one");
+  await store.poll("channel:C/1 one");
+  await store.start("channel:C/1 two");
+  await store.poll("channel:C/1 two");
+  assert.equal(await store.keyFor("channel:C/1 one"), "mk_secret");
+  assert.equal(await store.keyFor("channel:C/1 two"), "mk_two");
 });

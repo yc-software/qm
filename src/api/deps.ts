@@ -76,6 +76,8 @@ export interface ServerDeps {
   resolveClient?: OAuthClientResolver;
   consentLinks?: ConsentLinkStore;
   memorableAccounts?: MemorableAccounts;
+  memorableBin?: string;
+  memorableProcessEnv?: NodeJS.ProcessEnv;
   apiBaseUrl?: string;
   publicUrl?: string;
   portalUrl?: string;

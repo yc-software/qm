@@ -59,12 +59,22 @@ anyone's behalf.
 POST   /v1/memorable/connect     start a device authorization; returns a URL and a code
 GET    /v1/memorable/connect     poll it; `connected` once the human has approved
 DELETE /v1/memorable/connect     forget the key and any authorization still in flight
+POST   /v1/memorable/consent     set this scope's consent; nothing is captured until you do
 GET    /v1/memorable/accounts    what is connected, admin-only, never with keys
 ```
 
-All four default to the caller's own `personal:<actorId>` scope. Naming any other scope,
-including the org's, requires an admin grant, because binding the org scope points every
-channel under it at one organization.
+**These act on the caller's own `personal:<actorId>` scope and nothing else.** Naming any
+other scope is refused, with no admin override, for the same reason
+`src/api/routes/connectors.ts` refuses it: whoever opens the URL is whoever the key
+belongs to, so binding it to a channel would file the first person who clicked under
+everyone else's name, and binding it to another person's scope would let an admin route
+their transcripts to an organization they do not control. Post the URL where only that
+person sees it.
+
+A consequence to plan around: a session in a shared channel runs under `channel:<id>`,
+which nobody can connect, so it uses the deployment's own key. Per-person accounts cover
+personal-scope sessions. That is the conservative reading of who a channel's procedures
+belong to, and it is deliberate rather than an oversight.
 
 The flow is: `POST` the connect, show the human `verificationUriComplete`, and `GET`
 until the status stops being `pending`. The window is ten minutes. A `503` means the
@@ -77,13 +87,10 @@ approved.
 | Order | Source                                   |
 | ----- | ---------------------------------------- |
 | 1     | the scope's own connected account        |
-| 2     | the org scope's connected account        |
-| 3     | `MEMORABLE_API_KEY` from the environment |
+| 2     | `MEMORABLE_API_KEY` from the environment |
 
-So an operator who connects the org scope once answers for every channel under it, and a
-team that connects its own scope overrides that for itself. This is the same shape the
-CLI already uses to resolve consent. A deployment that connects nothing keeps working
-exactly as before on the single environment key.
+A key is never borrowed by a scope that did not connect it. A deployment where nobody has
+connected keeps working exactly as before on the single environment key.
 
 To get that environment key by hand instead, run `memorable login` once on a machine with
 a browser (`--code` on a container or CI runner) and copy the `api_key` out of
@@ -124,7 +131,9 @@ CREATE TABLE IF NOT EXISTS memorable_device_codes (...);
 with `deriveConnectorKey(CONNECTOR_SECRET_KEY, "memorable-accounts")`, the same AES-256-GCM
 path `model_credentials` uses; nothing in the row is the key in the clear, and a row that
 will not decrypt reads as no key rather than throwing. `memorable_device_codes` holds
-in-flight authorizations for ten minutes each and carries no key at all.
+in-flight authorizations, one row per scope, and carries no key. A row is replaced when
+the same scope starts again and cleared when it is polled after expiry; a scope that
+starts a sign-in and never polls again leaves its row until it does. There is no sweeper.
 
 Removing the integration leaves all five behind; drop them if you want the data gone.
 
@@ -186,9 +195,18 @@ never the whole process environment:
 
 ```
 PATH TMPDIR LANG LC_ALL SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS
-HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY HOME DATABASE_URL
+HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY HOME
 MEMORABLE_BACKEND MEMORABLE_DB_URL MEMORABLE_API_URL MEMORABLE_API_KEY MEMORABLE_HOME
 ```
+
+`MEMORABLE_BACKEND` defaults to `qm` and `MEMORABLE_DB_URL` to `DATABASE_URL`, so the CLI
+writes into this deployment's Postgres without the operator having to know that; an
+explicit value for either wins. `DATABASE_URL` itself is deliberately **not** forwarded:
+the child gets the connection string under the one name that is meant for it.
+
+The relay honours QM's own memory policy. With `MEMORABLE_CAPTURE=off` no session-end
+relay is registered, and with recall off no injection is attempted, so procedural memory
+cannot outlive the switch operators already use.
 
 This mirrors what `codexProcessEnv` and `claudeProcessEnv` already do for the harnesses.
 When the scope has a connected account, its key replaces `MEMORABLE_API_KEY` for that one

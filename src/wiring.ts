@@ -773,11 +773,7 @@ export function buildApp(
       ? createMemorableAccounts(
           artifactMap<MemorableAccount>("memorable_accounts"),
           artifactMap<PendingConnect>("memorable_device_codes"),
-          {
-            apiUrl: config.memorableApiUrl,
-            orgScopeId: scopeId("org", config.orgId),
-            keyMaterial: keychainKeyMaterial,
-          },
+          { apiUrl: config.memorableApiUrl, keyMaterial: keychainKeyMaterial },
         )
       : undefined;
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
@@ -1146,7 +1142,7 @@ export function buildApp(
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
     memoryStrategy,
-    ...(config.memorableEnabled
+    ...(config.memorableEnabled && config.memoryRecall !== "off"
       ? {
           memorable: async (scopeId: ScopeId, task: string) => {
             const apiKey = (await memorableAccounts?.keyFor(scopeId).catch(() => null)) ?? undefined;
@@ -1387,7 +1383,7 @@ export function buildApp(
       });
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
-  if (config.memorableEnabled) {
+  if (config.memorableEnabled && config.memoryCapture !== "off") {
     runs.onTerminal((run) => {
       void (async () => {
         if (await runs.activeForThread(run.sessionId)) return;
@@ -1397,10 +1393,19 @@ export function buildApp(
         const capture = captureSession(session.id, entries);
         if (!capture.scope_id) capture.scope_id = session.scopeId;
         const apiKey = (await memorableAccounts?.keyFor(capture.scope_id).catch(() => null)) ?? undefined;
-        await relayRecord(config.memorableBin, capture, undefined, {
+        const outcome = await relayRecord(config.memorableBin, capture, undefined, {
           env: config.memorableProcessEnv,
           ...(apiKey ? { apiKey } : {}),
         });
+        if (!outcome.ok) {
+          errors.record({
+            category: "memory",
+            code: "memorable_relay_refused",
+            message: outcome.reason,
+            scopeLabel: capture.scope_id,
+            sessionId: session.id,
+          });
+        }
       })().catch(swallowAs("memorable: record relay", undefined));
     });
   }
@@ -1756,6 +1761,9 @@ export function serverDeps(
     resolveClient: built.resolveClient,
     consentLinks: built.consentLinks,
     memorableAccounts: built.memorableAccounts,
+    ...(config.memorableEnabled
+      ? { memorableBin: config.memorableBin, memorableProcessEnv: config.memorableProcessEnv }
+      : {}),
     secretDrops: built.secretDrops,
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),

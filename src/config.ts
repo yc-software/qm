@@ -801,7 +801,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "NO_PROXY",
       "ALL_PROXY",
       "HOME",
-      "DATABASE_URL",
       "MEMORABLE_BACKEND",
       "MEMORABLE_DB_URL",
       "MEMORABLE_API_URL",
@@ -809,6 +808,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "MEMORABLE_HOME",
     ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
   ) as NodeJS.ProcessEnv;
+  memorableProcessEnv.MEMORABLE_BACKEND = env.MEMORABLE_BACKEND?.trim() || "qm";
+  if (!memorableProcessEnv.MEMORABLE_DB_URL && env.DATABASE_URL)
+    memorableProcessEnv.MEMORABLE_DB_URL = env.DATABASE_URL;
   if (providerBaseUrls.openai) codexProcessEnv.OPENAI_BASE_URL = providerBaseUrls.openai;
   if (providerBaseUrls.anthropic) claudeProcessEnv.ANTHROPIC_BASE_URL = providerBaseUrls.anthropic;
   const turnWallClockMs =

@@ -53,9 +53,10 @@ const FAMILIES: AgentApiFamily[] = [
   {
     match: (m, p) =>
       (p === "/v1/memorable/connect" && (m === "POST" || m === "GET" || m === "DELETE")) ||
+      (p === "/v1/memorable/consent" && m === "POST") ||
       (p === "/v1/memorable/accounts" && m === "GET"),
     guidance:
-      "Procedural memory stores a scope's procedures in that scope's own Memorable organization. Connecting is a person signing in themselves: start it, give them the URL, and poll until the status stops being pending. Never connect a scope other than your own caller's without being asked by an admin.",
+      "Procedural memory stores a scope's procedures in that scope's own Memorable organization. Connecting is a person signing in themselves: start it, give them the URL, and poll until the status stops being pending. Connecting is not consent: capture stays off until someone sets consent to read-write, and asking for that is a separate question you put to the person, never a default you pick for them. These act on your caller's own scope only, and naming any other scope is refused, because whoever opens the URL is whoever the key belongs to. Post the URL where only that person will see it.",
     routes: [
       {
         method: "POST",
@@ -72,6 +73,12 @@ const FAMILIES: AgentApiFamily[] = [
         method: "DELETE",
         path: "/v1/memorable/connect",
         summary: "forget this scope's stored key and any sign-in still in flight",
+      },
+      {
+        method: "POST",
+        path: "/v1/memorable/consent",
+        summary:
+          'set this scope\'s consent with {mode}: "read-write" turns capture on, "read-only" keeps recall but stores nothing new, "deny" turns both off. Nothing is ever captured until someone chooses read-write',
       },
       {
         method: "GET",
