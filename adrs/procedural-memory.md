@@ -41,5 +41,19 @@ enforced by the binary and therefore taken on trust, are separated explicitly in
 `docs/procedural-memory.md`, because that is the line we would want drawn if we were
 reviewing it.
 
+One account per deployment was the obvious first shape and it is the wrong one. QM is
+multi-tenant; a single key means every scope's procedures land in one organization, and
+whoever holds that key can read all of them. So each scope can connect its own account
+instead, through a device authorization: QM asks the sign-in service for a code, hands the
+human a URL, and stores whatever key comes back, encrypted under the same key material the
+keychain already uses. QM never sees a password, and it cannot create an account for
+someone who has not signed in themselves.
+
+That does add the one outbound call this integration otherwise avoids, to two endpoints
+that carry a scope label and an opaque code and nothing else. We think that is the right
+trade against a shared credential, but it is the part of this change most obviously open
+to argument, so it is called out here rather than buried. A deployment that connects
+nobody keeps the single-key behavior and makes no such call.
+
 Happy to cut it down, split it, or move any of it out of core if the answer is that it
 does not belong here.

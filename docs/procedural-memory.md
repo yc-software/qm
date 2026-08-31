@@ -25,15 +25,17 @@ matches badly against a later prompt about one of them.
 ## What QM enforces
 
 All of the following is in `src/config.ts`, `src/wiring.ts`, `src/core/orchestrator.ts`,
-and the three files under `src/memorable/`.
+`src/api/routes/memorable.ts`, and the four files under `src/memorable/`.
 
 ### The switch
 
-| Variable        | Default     | Effect                                                                                                                                                                                                      |
-| --------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MEMORABLE`     | unset (off) | `1`/`true`/`yes`/`on` enables both capture and recall. Parsed by `boolEnvStrict`, so an unrecognized value is a startup error rather than a silent default.                                                 |
-| `QM_MEMORABLE`  | unset       | Any false value (`0`/`false`/`no`/`off`/`none`, case and padding insensitive) forces the integration off even when `MEMORABLE=1`. Same `boolEnvStrict` parser, so an unrecognized value is a startup error. |
-| `MEMORABLE_BIN` | `memorable` | The binary to spawn. Split on spaces, so `npx memorable` works. Spawned without a shell.                                                                                                                    |
+| Variable               | Default            | Effect                                                                                                                                                                                                      |
+| ---------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MEMORABLE`            | unset (off)        | `1`/`true`/`yes`/`on` enables both capture and recall. Parsed by `boolEnvStrict`, so an unrecognized value is a startup error rather than a silent default.                                                 |
+| `QM_MEMORABLE`         | unset              | Any false value (`0`/`false`/`no`/`off`/`none`, case and padding insensitive) forces the integration off even when `MEMORABLE=1`. Same `boolEnvStrict` parser, so an unrecognized value is a startup error. |
+| `MEMORABLE_BIN`        | `memorable`        | The binary to spawn. Split on spaces, so `npx memorable` works. Spawned without a shell.                                                                                                                    |
+| `MEMORABLE_API_URL`    | the public service | Where device sign-in is performed. Point it at your own deployment of the extraction service to keep sign-in inside your perimeter.                                                                         |
+| `CONNECTOR_SECRET_KEY` | unset              | Already required for the keychain. Without it, per-scope accounts are off and only the single `MEMORABLE_API_KEY` is used, because there would be nothing to encrypt a stored key with.                     |
 
 ### The binary
 
@@ -45,24 +47,47 @@ npm i -g memorable-cli     # provides `memorable`
 npm i pg                   # the qm backend's Postgres driver; it is not bundled
 ```
 
-#### Getting a key
+#### Accounts
 
-There is no key to request and no form to fill in. Run this once, on a machine with a
-browser:
+Each scope can hold its own Memorable account, so a person's procedures land in their own
+organization rather than in a shared one. There is no form to fill in and no key to
+request: QM starts a device authorization (RFC 8628), hands the human a URL, and collects
+whatever key comes back. QM never sees a password and never creates an account on
+anyone's behalf.
 
 ```
-memorable login
+POST   /v1/memorable/connect     start a device authorization; returns a URL and a code
+GET    /v1/memorable/connect     poll it; `connected` once the human has approved
+DELETE /v1/memorable/connect     forget the key and any authorization still in flight
+GET    /v1/memorable/accounts    what is connected, admin-only, never with keys
 ```
 
-It opens a loopback listener and your browser at the Memorable sign-in page; signing in
-creates the account if you do not have one and writes the issued key to
-`~/.memorable/config.json` (mode 0600). On a container, an SSH session or a CI runner,
-`memorable login --code` prints a short code and a URL to approve it from somewhere else.
+All four default to the caller's own `personal:<actorId>` scope. Naming any other scope,
+including the org's, requires an admin grant, because binding the org scope points every
+channel under it at one organization.
 
-A QM server process has no browser and no home directory to read, so copy the `api_key`
-value out of that file and set it as `MEMORABLE_API_KEY` in the server's environment.
-That is the only manual step. Everything the environment does not supply falls back to
-the config file, and an explicit environment variable always wins.
+The flow is: `POST` the connect, show the human `verificationUriComplete`, and `GET`
+until the status stops being `pending`. The window is ten minutes. A `503` means the
+sign-in service could not be reached and nothing was stored. A transient failure while
+polling reports `pending` rather than discarding a code the human may already have
+approved.
+
+#### Which key a spawn uses
+
+| Order | Source                                   |
+| ----- | ---------------------------------------- |
+| 1     | the scope's own connected account        |
+| 2     | the org scope's connected account        |
+| 3     | `MEMORABLE_API_KEY` from the environment |
+
+So an operator who connects the org scope once answers for every channel under it, and a
+team that connects its own scope overrides that for itself. This is the same shape the
+CLI already uses to resolve consent. A deployment that connects nothing keeps working
+exactly as before on the single environment key.
+
+To get that environment key by hand instead, run `memorable login` once on a machine with
+a browser (`--code` on a container or CI runner) and copy the `api_key` out of
+`~/.memorable/config.json`.
 
 #### What the CLI reads from QM's environment
 
@@ -71,22 +96,37 @@ the config file, and an explicit environment variable always wins.
 | `MEMORABLE_BACKEND` | `qm` — store in QM's Postgres rather than on this machine |
 | `MEMORABLE_DB_URL`  | Where. Falls back to `DATABASE_URL`, which is QM's own    |
 | `MEMORABLE_API_URL` | The extraction service                                    |
-| `MEMORABLE_API_KEY` | The key `memorable login` issued, above                   |
+| `MEMORABLE_API_KEY` | The connected scope's key, or the deployment's; see above |
 
 #### What lands in your database
 
-QM ships no migration for this and the schema is not QM's. The CLI creates three tables
-on first write, in the database `MEMORABLE_DB_URL` (or `DATABASE_URL`) already points at:
+Five tables, all on QM's DurableMap row shape (`id TEXT PRIMARY KEY, json JSONB NOT NULL`),
+all in the database `DATABASE_URL` already points at. No new database is created.
+
+Three are the CLI's, created on first write. QM ships no migration for these and the
+schema is not QM's:
 
 ```sql
-CREATE TABLE IF NOT EXISTS memorable_procedures (id TEXT PRIMARY KEY, json JSONB NOT NULL);
-CREATE TABLE IF NOT EXISTS memorable_mode       (id TEXT PRIMARY KEY, json JSONB NOT NULL);
-CREATE TABLE IF NOT EXISTS memorable_stats      (id TEXT PRIMARY KEY, json JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS memorable_procedures (...);
+CREATE TABLE IF NOT EXISTS memorable_mode       (...);
+CREATE TABLE IF NOT EXISTS memorable_stats      (...);
 ```
 
-They use QM's own DurableMap row shape, so QM can adopt them natively later. No new
-database is created. Removing the integration leaves these three tables behind; drop them
-if you want the data gone.
+Two are QM's own, created lazily by `artifactMap` exactly as `consent_links` and
+`secret_drops` are, so there is no migration for these either:
+
+```sql
+CREATE TABLE IF NOT EXISTS memorable_accounts     (...);
+CREATE TABLE IF NOT EXISTS memorable_device_codes (...);
+```
+
+`memorable_accounts` holds one row per connected scope. **The key is encrypted at rest**
+with `deriveConnectorKey(CONNECTOR_SECRET_KEY, "memorable-accounts")`, the same AES-256-GCM
+path `model_credentials` uses; nothing in the row is the key in the clear, and a row that
+will not decrypt reads as no key rather than throwing. `memorable_device_codes` holds
+in-flight authorizations for ten minutes each and carries no key at all.
+
+Removing the integration leaves all five behind; drop them if you want the data gone.
 
 QM calls exactly two of its subcommands:
 
@@ -116,16 +156,43 @@ to `getIndividualModelAuthDurable`, and we will move to it.
 
 ### Egress
 
-QM adds no network call of its own. Verify it:
+QM makes exactly one class of outbound call of its own, and only to sign someone in.
+`src/memorable/accounts.ts` posts to two endpoints and nothing else:
+
+| Endpoint                     | When                     | Carries                                                                                             |
+| ---------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------- |
+| `POST <api>/v1/device/code`  | someone starts a connect | a label like `qm channel a1b2c3d4`: the scope kind plus a truncated hash, never the scope id itself |
+| `POST <api>/v1/device/token` | polling that connect     | the opaque device code                                                                              |
+
+Neither carries a prompt, a tool call, a file, or a transcript. `<api>` is
+`MEMORABLE_API_URL`. The `fetch` is injected through `createMemorableAccounts`, so no
+test in this repository reaches the network.
+
+Everything on the recall and capture paths is still spawn-only: a `spawn` of a local
+binary for recall, and a detached `spawn` of the same binary at run end for capture. Any
+network traffic carrying your data originates from that binary, on the machine QM is
+running on, after its own consent checks. Verify the split:
 
 ```
-git diff origin/main...HEAD -- src/ | grep -E '^\+' | grep -E 'fetch\(|https?://|new URL|node:https?|net\.|WebSocket'
+grep -rnE 'fetch\(|https?://|node:https?|net\.|WebSocket' src/memorable/
 ```
 
-This returns nothing. The two new behaviors are a `spawn` of a local binary for recall
-and a detached `spawn` of the same binary at run end for capture. Any network traffic
-originates from that binary, on the machine QM is running on, after its own consent
-checks.
+Only `accounts.ts` answers.
+
+### The child's environment
+
+Spawned children get an allow-list, built once in `loadConfig` as `memorableProcessEnv`,
+never the whole process environment:
+
+```
+PATH TMPDIR LANG LC_ALL SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS
+HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY HOME DATABASE_URL
+MEMORABLE_BACKEND MEMORABLE_DB_URL MEMORABLE_API_URL MEMORABLE_API_KEY MEMORABLE_HOME
+```
+
+This mirrors what `codexProcessEnv` and `claudeProcessEnv` already do for the harnesses.
+When the scope has a connected account, its key replaces `MEMORABLE_API_KEY` for that one
+spawn; nothing else about the environment changes.
 
 ### What the injected block may contain
 

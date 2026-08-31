@@ -107,3 +107,37 @@ test("a session of certain refusals does not grow the offer as it grows", async 
     assert.equal(existsSync(marker), false, `the relay spent a call on turn ${prompt}`);
   }
 });
+
+const readsKey = `import { writeFileSync } from "node:fs";\nwriteFileSync(MARKER, process.env.MEMORABLE_API_KEY ?? "<unset>");\n`;
+
+test("relayRecord hands the child the scope's own key", async () => {
+  const { bin, marker } = stub(readsKey);
+  await relayRecord(bin, capture, undefined, {
+    env: { PATH: process.env.PATH, MEMORABLE_API_KEY: "mk_deployment" },
+    apiKey: "mk_scope",
+  });
+  assert.equal(readFileSync(marker, "utf8"), "mk_scope");
+});
+
+test("relayRecord falls back to the deployment key when the scope has none", async () => {
+  const { bin, marker } = stub(readsKey);
+  await relayRecord(bin, capture, undefined, {
+    env: { PATH: process.env.PATH, MEMORABLE_API_KEY: "mk_deployment" },
+  });
+  assert.equal(readFileSync(marker, "utf8"), "mk_deployment");
+});
+
+test("relayRecord passes the environment it was given and nothing else", async () => {
+  const { bin, marker } = stub(
+    `import { writeFileSync } from "node:fs";\nwriteFileSync(MARKER, process.env.QM_SECRET ?? "<unset>");\n`,
+  );
+  const before = process.env.QM_SECRET;
+  process.env.QM_SECRET = "leaked";
+  try {
+    await relayRecord(bin, capture, undefined, { env: { PATH: process.env.PATH } });
+  } finally {
+    if (before === undefined) delete process.env.QM_SECRET;
+    else process.env.QM_SECRET = before;
+  }
+  assert.equal(readFileSync(marker, "utf8"), "<unset>");
+});

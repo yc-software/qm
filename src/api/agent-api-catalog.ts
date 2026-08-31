@@ -51,6 +51,36 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    match: (m, p) =>
+      (p === "/v1/memorable/connect" && (m === "POST" || m === "GET" || m === "DELETE")) ||
+      (p === "/v1/memorable/accounts" && m === "GET"),
+    guidance:
+      "Procedural memory stores a scope's procedures in that scope's own Memorable organization. Connecting is a person signing in themselves: start it, give them the URL, and poll until the status stops being pending. Never connect a scope other than your own caller's without being asked by an admin.",
+    routes: [
+      {
+        method: "POST",
+        path: "/v1/memorable/connect",
+        summary:
+          "start a browser sign-in for this scope; returns verificationUriComplete and userCode to show the person, or already_connected",
+      },
+      {
+        method: "GET",
+        path: "/v1/memorable/connect",
+        summary: "poll the sign-in: pending, connected, denied, expired, or none",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/memorable/connect",
+        summary: "forget this scope's stored key and any sign-in still in flight",
+      },
+      {
+        method: "GET",
+        path: "/v1/memorable/accounts",
+        summary: "org admins only: which scopes have connected an account, never the keys",
+      },
+    ],
+  },
+  {
     match: (m, p) => p === "/v1/channel-header-pin" && (m === "GET" || m === "PUT"),
     guidance:
       "The pinned Slack header (a small pinned message naming the model in use) follows an org-wide default (off unless an admin turned it on). Only override it for a channel scope when someone in that channel asks.",

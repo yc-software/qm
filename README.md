@@ -188,11 +188,16 @@ hook and passes no dependency, and the orchestrator's one added check short-circ
 work outside the QM process, writes only to scopes explicitly consented `read-write`, and
 stores into QM's own `DATABASE_URL` Postgres rather than a second store.
 
-Setup is `npm i -g memorable-cli`, then `memorable login` once on a machine with a browser
-(this creates the Memorable account and issues the key), then `MEMORABLE=1` plus that key
-as `MEMORABLE_API_KEY` in the server's environment. The CLI creates three
-`memorable_*` tables in the database `DATABASE_URL` already points at; QM ships no
-migration for them.
+Setup is `npm i -g memorable-cli` and `MEMORABLE=1`. From there, each person connects
+their own Memorable account: `POST /v1/memorable/connect` starts a browser sign-in, QM
+hands them a URL, and the key that comes back is stored encrypted against their scope, so
+their procedures land in their own organization rather than a shared one. A scope with no
+account of its own falls back to the org's, and then to a single `MEMORABLE_API_KEY` in
+the server's environment, which is all a deployment that connects nobody ever needs.
+
+Five `memorable_*` tables appear in the database `DATABASE_URL` already points at, three
+created by the CLI and two by QM's own `artifactMap`. QM ships no migration for any of
+them.
 
 [`docs/procedural-memory.md`](./docs/procedural-memory.md) has the rest: exactly which
 guarantees are enforced by code in this repository and which are enforced by the binary,

@@ -203,6 +203,12 @@ import { createMemoryStrategy } from "./memory/strategy.ts";
 import { captureSession } from "./memorable/capture.ts";
 import { memorableInject } from "./memorable/inject.ts";
 import { relayRecord } from "./memorable/relay.ts";
+import {
+  createMemorableAccounts,
+  type MemorableAccount,
+  type MemorableAccounts,
+  type PendingConnect,
+} from "./memorable/accounts.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, EGRESS_PROXY_AUD } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
@@ -346,6 +352,7 @@ export interface BuiltApp {
   slackInstallation: SlackInstallationStore;
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
+  memorableAccounts: MemorableAccounts | undefined;
   secretDrops: SecretDropStore;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
@@ -761,6 +768,18 @@ export function buildApp(
     : undefined;
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
+  const memorableAccounts: MemorableAccounts | undefined =
+    config.memorableEnabled && keychainKeyMaterial
+      ? createMemorableAccounts(
+          artifactMap<MemorableAccount>("memorable_accounts"),
+          artifactMap<PendingConnect>("memorable_device_codes"),
+          {
+            apiUrl: config.memorableApiUrl,
+            orgScopeId: scopeId("org", config.orgId),
+            keyMaterial: keychainKeyMaterial,
+          },
+        )
+      : undefined;
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
   const modelGateway = createModelGateway();
 
@@ -1128,7 +1147,15 @@ export function buildApp(
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
     memoryStrategy,
     ...(config.memorableEnabled
-      ? { memorable: (scopeId: ScopeId, task: string) => memorableInject(config.memorableBin, scopeId, task) }
+      ? {
+          memorable: async (scopeId: ScopeId, task: string) => {
+            const apiKey = (await memorableAccounts?.keyFor(scopeId).catch(() => null)) ?? undefined;
+            return memorableInject(config.memorableBin, scopeId, task, {
+              env: config.memorableProcessEnv,
+              ...(apiKey ? { apiKey } : {}),
+            });
+          },
+        }
       : {}),
     skills,
     skillBundles,
@@ -1369,7 +1396,11 @@ export function buildApp(
         const entries = await sessions.getEntries(session.id, { limit: MEMORABLE_RELAY_ENTRY_WINDOW });
         const capture = captureSession(session.id, entries);
         if (!capture.scope_id) capture.scope_id = session.scopeId;
-        await relayRecord(config.memorableBin, capture);
+        const apiKey = (await memorableAccounts?.keyFor(capture.scope_id).catch(() => null)) ?? undefined;
+        await relayRecord(config.memorableBin, capture, undefined, {
+          env: config.memorableProcessEnv,
+          ...(apiKey ? { apiKey } : {}),
+        });
       })().catch(swallowAs("memorable: record relay", undefined));
     });
   }
@@ -1634,6 +1665,7 @@ export function buildApp(
     slackInstallation,
     resolveClient,
     consentLinks,
+    memorableAccounts,
     secretDrops,
     modelGateway,
     modelCredentials,
@@ -1723,6 +1755,7 @@ export function serverDeps(
     ...(slackEnvBotToken ? { slackEnvBotToken } : {}),
     resolveClient: built.resolveClient,
     consentLinks: built.consentLinks,
+    memorableAccounts: built.memorableAccounts,
     secretDrops: built.secretDrops,
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),

@@ -8,6 +8,7 @@ import {
   type MemoryRecallMode,
 } from "./memory/policy.ts";
 import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
+import { DEFAULT_MEMORABLE_API_URL } from "./memorable/accounts.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
@@ -148,6 +149,8 @@ export interface Config {
   scratchExecEnabled: boolean;
   memorableEnabled: boolean;
   memorableBin: string;
+  memorableApiUrl: string;
+  memorableProcessEnv: NodeJS.ProcessEnv;
   reachExecEnabled: boolean;
   sharedOwnerAuthIsolation: boolean;
   surfaceDebugFooter: boolean;
@@ -784,6 +787,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "CLAUDE_CODE_OAUTH_TOKEN",
     ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
   ) as NodeJS.ProcessEnv;
+  const memorableProcessEnv = Object.fromEntries(
+    [
+      "PATH",
+      "TMPDIR",
+      "LANG",
+      "LC_ALL",
+      "SSL_CERT_FILE",
+      "SSL_CERT_DIR",
+      "NODE_EXTRA_CA_CERTS",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "NO_PROXY",
+      "ALL_PROXY",
+      "HOME",
+      "DATABASE_URL",
+      "MEMORABLE_BACKEND",
+      "MEMORABLE_DB_URL",
+      "MEMORABLE_API_URL",
+      "MEMORABLE_API_KEY",
+      "MEMORABLE_HOME",
+    ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
+  ) as NodeJS.ProcessEnv;
   if (providerBaseUrls.openai) codexProcessEnv.OPENAI_BASE_URL = providerBaseUrls.openai;
   if (providerBaseUrls.anthropic) claudeProcessEnv.ANTHROPIC_BASE_URL = providerBaseUrls.anthropic;
   const turnWallClockMs =
@@ -974,6 +999,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     memorableEnabled:
       (boolEnvStrict("MEMORABLE", env.MEMORABLE) ?? false) && (boolEnvStrict("QM_MEMORABLE", env.QM_MEMORABLE) ?? true),
     memorableBin: env.MEMORABLE_BIN?.trim() || "memorable",
+    memorableApiUrl: env.MEMORABLE_API_URL?.trim() || DEFAULT_MEMORABLE_API_URL,
+    memorableProcessEnv,
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     sharedOwnerAuthIsolation: boolEnvStrict("SHARED_OWNER_AUTH_ISOLATION", env.SHARED_OWNER_AUTH_ISOLATION) ?? false,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
