@@ -29,17 +29,22 @@ and the three files under `src/memorable/`.
 
 ### The switch
 
-| Variable        | Default     | Effect                                                                                                                                                      |
-| --------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MEMORABLE`     | unset (off) | `1`/`true`/`yes`/`on` enables both capture and recall. Parsed by `boolEnvStrict`, so an unrecognized value is a startup error rather than a silent default. |
-| `QM_MEMORABLE`  | unset       | The literal value `0` forces the integration off even when `MEMORABLE=1`.                                                                                   |
-| `MEMORABLE_BIN` | `memorable` | The binary to spawn. Split on spaces, so `npx memorable` works. Spawned without a shell.                                                                    |
+| Variable        | Default     | Effect                                                                                                                                                                                                      |
+| --------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MEMORABLE`     | unset (off) | `1`/`true`/`yes`/`on` enables both capture and recall. Parsed by `boolEnvStrict`, so an unrecognized value is a startup error rather than a silent default.                                                 |
+| `QM_MEMORABLE`  | unset       | Any false value (`0`/`false`/`no`/`off`/`none`, case and padding insensitive) forces the integration off even when `MEMORABLE=1`. Same `boolEnvStrict` parser, so an unrecognized value is a startup error. |
+| `MEMORABLE_BIN` | `memorable` | The binary to spawn. Split on spaces, so `npx memorable` works. Spawned without a shell.                                                                                                                    |
 
 With the flag off, `buildApp` registers no `onTerminal` hook and passes no `memorable`
 dependency to the orchestrator. The single check added to the turn path is
 `useMemory && deps.memorable && input.text.trim()`, which short-circuits on an undefined
 dependency before any work happens. The three modules under `src/memorable/` are imported
-at boot either way; they are 155 lines that never run.
+at boot either way; they are 221 lines that never run.
+
+Both variables are read once, by `loadConfig` at startup. Setting `QM_MEMORABLE=0` in a
+running process does nothing until the process restarts. If you want a gate that answers
+mid-session, say so: the idiom is already here in `src/resolution/config-store.ts`, next
+to `getIndividualModelAuthDurable`, and we will move to it.
 
 ### Egress
 

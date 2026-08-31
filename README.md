@@ -180,10 +180,11 @@ verified the work, in what order, with the real exit codes. A later prompt that 
 them already answers gets a short pointer injected into the system prompt.
 
 `MEMORABLE=1` turns it on; unset, empty, or any false value means off, and
-`QM_MEMORABLE=0` forces off even when `MEMORABLE=1`. With it off, `buildApp` installs no
+any false value of `QM_MEMORABLE` forces off even when `MEMORABLE=1`. Both are read once at
+startup, so a change takes effect on restart. With it off, `buildApp` installs no
 hook and passes no dependency, and the orchestrator's one added check short-circuits on
 `undefined`. QM itself opens no socket and makes no HTTP call for this: it spawns the
-[Memorable](https://github.com/NIkhil-cmd-cmd/memorable-qm) CLI, which does the network
+[Memorable](https://memorable.sh) CLI, which does the network
 work outside the QM process, writes only to scopes explicitly consented `read-write`, and
 stores into QM's own `DATABASE_URL` Postgres rather than a second store.
 
