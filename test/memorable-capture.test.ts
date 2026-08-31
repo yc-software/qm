@@ -213,3 +213,22 @@ test("a tool call carrying a whole file is capped before it leaves the process",
   assert.equal((capture.workflows[0]!.tool_calls[0]!.input.data as string).length, 32_000);
   assert.equal(capture.workflows[0]!.tool_calls[1]!.input.command, "./verify.sh");
 });
+
+test("the prompt cap never cuts a surrogate pair in half", () => {
+  const entries: SessionEntry[] = [entry("user", { text: `${"y".repeat(15_999)}\u{1F600}tail` }, 1), ...work(2, "s")];
+  const prompt = captureSession("s1", entries).workflows[0]!.prompt;
+  const last = prompt.charCodeAt(prompt.length - 1);
+  assert.ok(!(last >= 0xd800 && last <= 0xdbff), `prompt ends in a lone high surrogate: ${last.toString(16)}`);
+  assert.equal(JSON.stringify({ prompt }).includes("\\ud83d"), false);
+});
+
+test("the tool-input cap never cuts a surrogate pair in half", () => {
+  const entries: SessionEntry[] = [
+    entry("user", { text: "write it" }, 1),
+    entry("tool_call", { tool: "write", callId: "c1", path: "big.bin", data: `${"z".repeat(31_999)}\u{1F600}z` }, 2),
+    entry("tool_call", { tool: "execute", callId: "c2", command: "./verify.sh" }, 3),
+  ];
+  const data = captureSession("s1", entries).workflows[0]!.tool_calls[0]!.input.data as string;
+  const last = data.charCodeAt(data.length - 1);
+  assert.ok(!(last >= 0xd800 && last <= 0xdbff), `input ends in a lone high surrogate: ${last.toString(16)}`);
+});

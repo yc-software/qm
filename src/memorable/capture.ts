@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SessionEntry } from "../types.ts";
-import { stripTerminalControl } from "./inject.ts";
+import { clampChars, stripTerminalControl } from "./inject.ts";
 
 export interface MemorableToolCall {
   name: string;
@@ -38,7 +38,7 @@ function workflowId(sessionId: string, seq: number): string {
 
 function cleanPrompt(text: string): string {
   const clean = stripTerminalControl(text).trim();
-  return clean.length > MAX_PROMPT_CHARS ? clean.slice(0, MAX_PROMPT_CHARS).trimEnd() : clean;
+  return clean.length > MAX_PROMPT_CHARS ? clampChars(clean, MAX_PROMPT_CHARS).trimEnd() : clean;
 }
 
 function capInput(input: Record<string, unknown>): Record<string, unknown> {
@@ -46,7 +46,7 @@ function capInput(input: Record<string, unknown>): Record<string, unknown> {
   for (const [key, value] of Object.entries(input)) {
     if (typeof value === "string" && value.length > MAX_TOOL_INPUT_CHARS) {
       capped ??= { ...input };
-      capped[key] = value.slice(0, MAX_TOOL_INPUT_CHARS);
+      capped[key] = clampChars(value, MAX_TOOL_INPUT_CHARS);
     }
   }
   return capped ?? input;
