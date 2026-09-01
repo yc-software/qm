@@ -7,6 +7,7 @@
  */
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CornerDownLeft, Search } from "lucide";
+import { brandName } from "./brand.ts";
 import { api, type CoreSession } from "./core-bridge";
 import { mainConversation } from "./conversations";
 import { recencyGroup } from "./session-list";
@@ -256,7 +257,7 @@ function resultRows(): TemplateResult[] {
         }}
       >
         <span class="chat-search-who ${hit.entryType === "user" ? "user" : "agent"}"
-          >${(hit.entryType === "user" ? (hit.author ?? "You") : "QM").slice(0, 1).toUpperCase()}</span
+          >${(hit.entryType === "user" ? (hit.author ?? "You") : brandName()).slice(0, 1).toUpperCase()}</span
         >
         <span class="chat-search-text">
           <span class="chat-search-snippet">${highlight(hit.snippet)}</span>
@@ -287,8 +288,10 @@ function askRow(): TemplateResult {
     >
       <span class="chat-search-who ask">+</span>
       <span class="chat-search-text">
-        <span class="chat-search-snippet">Ask QM to find it: <b>“${searchState.query.trim()}”</b></span>
-        <span class="chat-search-meta">starts a new chat where QM hunts down the matching session and links it</span>
+        <span class="chat-search-snippet">Ask ${brandName()} to find it: <b>“${searchState.query.trim()}”</b></span>
+        <span class="chat-search-meta"
+          >starts a new chat where ${brandName()} hunts down the matching session and links it</span
+        >
       </span>
       <span class="chat-search-kbd">${isMac ? "⌘" : "Ctrl"}${icon(CornerDownLeft, 11)}</span>
     </button>
@@ -337,7 +340,7 @@ function paletteTpl(): TemplateResult {
         <div class="chat-search-foot">
           <span><span class="chat-search-kbd">↑↓</span> navigate</span>
           <span><span class="chat-search-kbd">↵</span> open chat</span>
-          <span><span class="chat-search-kbd">${isMac ? "⌘↵" : "Ctrl+↵"}</span> ask QM in a new chat</span>
+          <span><span class="chat-search-kbd">${isMac ? "⌘↵" : "Ctrl+↵"}</span> ask ${brandName()} in a new chat</span>
         </div>
       </div>
     </div>

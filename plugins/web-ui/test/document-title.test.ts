@@ -21,6 +21,21 @@ test("chat and non-chat views have useful fallbacks", () => {
   assert.equal(documentTitle("keychain"), `Keychain · ${PRODUCT_TITLE}`);
 });
 
+test("page titles follow the server-injected deployment label", () => {
+  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: new JSDOM('<meta name="brand-self-label" content="Acme">').window.document,
+  });
+  try {
+    assert.equal(documentTitle("chats", "Quarterly planning", true), "Quarterly planning · Acme · Web");
+    assert.equal(documentTitle("contexts"), "Projects · Acme · Web");
+  } finally {
+    if (documentDescriptor) Object.defineProperty(globalThis, "document", documentDescriptor);
+    else delete (globalThis as { document?: Document }).document;
+  }
+});
+
 test("active session selection follows conversation switches and title updates", () => {
   const sessions = [
     { id: "old", threadRef: "old-thread", title: "Old title" },
