@@ -267,8 +267,8 @@ import {
   modelProviderAvailabilityFor,
   type HarnessId,
 } from "./model/pi-models.ts";
-import { createAdminService, bootAdminGrantSeed, type AdminService } from "./admin/admin-service.ts";
-import { createAdminGrantStore, createMapAdminGrantPersistence, type AdminGrant } from "./admin/admin-grant-store.ts";
+import { createAdminService, bootAdminGrants, type AdminService } from "./admin/admin-service.ts";
+import { createAdminGrantStore, createMemoryAdminGrantPersistence } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
 import { createErrorLog, type ErrorLog } from "./admin/error-log.ts";
@@ -986,9 +986,9 @@ export function buildApp(
   const approvals = artifactMap<PendingApprovalRecord>("approvals");
   const adminGrantPersist = config.databaseUrl
     ? createPostgresAdminGrantStore(config.databaseUrl)
-    : createMapAdminGrantPersistence(createMemoryMap<AdminGrant>());
+    : createMemoryAdminGrantPersistence();
   const adminGrantStore = createAdminGrantStore(adminGrantPersist, {
-    seed: bootAdminGrantSeed(config.adminGrants, config.orgId, !!config.databaseUrl),
+    bootstrap: bootAdminGrants(config.adminGrants, config.orgId, !!config.databaseUrl),
   });
   const admin = createAdminService(adminGrantStore);
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {

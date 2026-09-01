@@ -8,6 +8,7 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 const config = loadConfig();
 
 const built = buildApp(config);
+await built.admin.ready();
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;
 const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN);

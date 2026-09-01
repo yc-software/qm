@@ -46,9 +46,9 @@ Env: `CORE_API_URL` (default `http://localhost:8080`), `CORE_ORG_ID` (default `a
 portal also supplies a short-lived `x-portal-identity` token, which this surface forwards to core.
 There is **no** `ADMIN_PRINCIPALS` — admin identity + role + scope live solely in the core's
 durable, mutable `admin_grants` store, and this surface derives admin status from it via
-`/api/whoami`. `ADMIN_GRANTS` (env) is now only the **one-time seed** for an empty store; after
-that, admins are promoted/revoked at runtime through the Users tab (a redeploy never clobbers
-runtime grants).
+`/api/whoami`. `ADMIN_GRANTS` (env) is the declarative bootstrap set reconciled before core becomes
+ready. A redeploy adds configured bootstrap admins and removes stale bootstrap-owned rows, while
+admins promoted through the Users tab remain durable and are never removed by bootstrap changes.
 
 ## How it stays safe
 

@@ -31,6 +31,7 @@ export function adminStatusFromGrants(grants: readonly AdminGrant[], principalId
 }
 
 export interface AdminService {
+  ready(): Promise<void>;
   resolveActor(header: string | undefined): Principal | null;
   canAdminister(principal: Principal, target: ScopeId): Promise<boolean>;
   adminStatusOf(principal: Principal): Promise<AdminStatus>;
@@ -62,7 +63,7 @@ function defaultAdminGrants(orgId: string): AdminGrant[] {
   ];
 }
 
-export function bootAdminGrantSeed(rawAdminGrants: string | undefined, orgId: string, durable: boolean): AdminGrant[] {
+export function bootAdminGrants(rawAdminGrants: string | undefined, orgId: string, durable: boolean): AdminGrant[] {
   return parseAdminGrants(rawAdminGrants, orgId) ?? (durable ? [] : defaultAdminGrants(orgId));
 }
 
@@ -73,7 +74,7 @@ export interface AdminServiceOptions {
 export function createAdminService(store?: AdminGrantStore, opts: AdminServiceOptions = {}): AdminService {
   const orgId = configOrgId();
   const grants: AdminGrantStore =
-    store ?? createAdminGrantStore(createMemoryAdminGrantPersistence(), { seed: defaultAdminGrants(orgId) });
+    store ?? createAdminGrantStore(createMemoryAdminGrantPersistence(), { bootstrap: defaultAdminGrants(orgId) });
   const now = opts.now ?? (() => Date.now());
 
   async function isOrgAdmin(actor: Principal): Promise<boolean> {
@@ -81,6 +82,9 @@ export function createAdminService(store?: AdminGrantStore, opts: AdminServiceOp
   }
 
   return {
+    ready() {
+      return grants.ready();
+    },
     resolveActor(header) {
       if (!header) return null;
       const at = header.lastIndexOf("@");

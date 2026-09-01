@@ -11,7 +11,7 @@ export interface SpecInputs {
   sessionStore: string;
   runStore: string;
   databaseUrl: string;
-  adminGrantsSeed: string;
+  adminGrantsBootstrap: string;
   coreSigningSecret: string;
   portalSessionSecret: string;
   portalDevPrincipal: string;
@@ -39,7 +39,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         RUN_STORE: i.runStore,
         PORT: String(i.ports.core),
         ...(i.databaseUrl ? { DATABASE_URL: i.databaseUrl } : {}),
-        ...(i.adminGrantsSeed ? { ADMIN_GRANTS: i.adminGrantsSeed } : {}),
+        ...(i.adminGrantsBootstrap ? { ADMIN_GRANTS: i.adminGrantsBootstrap } : {}),
         PUBLIC_WEB_URL: `http://localhost:${i.ports.portal}`,
         ...(i.slack
           ? {

@@ -18,24 +18,82 @@ test("grant store: add / list / revoke round-trip on (principal, scope, role)", 
   assert.ok(!list.some((g) => g.principalId === "U1"));
 });
 
-test("grant store: seed applies only when empty and never undoes a revoke", async () => {
+test("grant store: configured bootstrap grants apply at each boot", async () => {
   const persist = createMemoryAdminGrantPersistence();
-  const seed = [{ principalId: "A", scopeId: "org:default-org", role: "org_admin" as const }];
-  const store = createAdminGrantStore(persist, { seed });
+  const bootstrap = [{ principalId: "A", scopeId: "org:default-org", role: "org_admin" as const }];
+  const store = createAdminGrantStore(persist, { bootstrap });
   assert.equal((await store.list()).length, 1);
   await store.revoke("A", "org:default-org", "org_admin");
   assert.equal((await store.list()).length, 0);
 
-  await persist.put({ principalId: "B", scopeId: "org:default-org", role: "org_admin" });
-  const store2 = createAdminGrantStore(persist, { seed });
+  const store2 = createAdminGrantStore(persist, { bootstrap });
   assert.deepEqual(
     (await store2.list()).map((g) => g.principalId),
-    ["B"],
+    ["A"],
   );
 });
 
-test("grant store: an empty seed grants no admins (deliberate lock-out)", async () => {
-  const store = createAdminGrantStore(createMemoryAdminGrantPersistence(), { seed: [] });
+test("grant store: changed bootstrap grants replace stale bootstrap rows without touching durable grants", async () => {
+  const persist = createMemoryAdminGrantPersistence();
+  const oldBootstrap = [{ principalId: "old-admin@example.test", scopeId: "org:acme", role: "org_admin" as const }];
+  const firstBoot = createAdminGrantStore(persist, { bootstrap: oldBootstrap });
+  await firstBoot.list();
+  await firstBoot.add({
+    principalId: "operator-admin@example.test",
+    scopeId: "org:acme",
+    role: "org_admin",
+    grantedBy: "owner@example.test",
+    createdAt: 1,
+  });
+  await persist.put({ principalId: "legacy-admin@example.test", scopeId: "org:acme", role: "org_admin" });
+
+  const secondBoot = createAdminGrantStore(persist, {
+    bootstrap: [{ principalId: "new-admin@example.test", scopeId: "org:acme", role: "org_admin" }],
+  });
+
+  assert.deepEqual((await secondBoot.list()).map((g) => g.principalId).sort(), [
+    "legacy-admin@example.test",
+    "new-admin@example.test",
+    "operator-admin@example.test",
+  ]);
+  assert.deepEqual(
+    (await secondBoot.list()).find((g) => g.principalId === "new-admin@example.test"),
+    {
+      principalId: "new-admin@example.test",
+      scopeId: "org:acme",
+      role: "org_admin",
+      grantedBy: "system",
+      createdAt: 0,
+    },
+  );
+
+  const unchangedBoot = createAdminGrantStore(persist, {
+    bootstrap: [{ principalId: "new-admin@example.test", scopeId: "org:acme", role: "org_admin" }],
+  });
+  assert.deepEqual(await unchangedBoot.list(), await secondBoot.list());
+
+  const removedConfigBoot = createAdminGrantStore(persist, { bootstrap: [] });
+  assert.deepEqual((await removedConfigBoot.list()).map((g) => g.principalId).sort(), [
+    "legacy-admin@example.test",
+    "operator-admin@example.test",
+  ]);
+});
+
+test("grant store: an operator-owned replacement of a bootstrap row survives config removal", async () => {
+  const persist = createMemoryAdminGrantPersistence();
+  const bootstrap = [{ principalId: "admin@example.test", scopeId: "org:acme", role: "org_admin" as const }];
+  const firstBoot = createAdminGrantStore(persist, { bootstrap });
+  await firstBoot.list();
+  await firstBoot.add({ ...bootstrap[0]!, grantedBy: "owner@example.test", createdAt: 10 });
+
+  const removedConfigBoot = createAdminGrantStore(persist, { bootstrap: [] });
+  assert.deepEqual(await removedConfigBoot.list(), [
+    { ...bootstrap[0]!, grantedBy: "owner@example.test", createdAt: 10 },
+  ]);
+});
+
+test("grant store: an empty bootstrap grants no admins (deliberate lock-out)", async () => {
+  const store = createAdminGrantStore(createMemoryAdminGrantPersistence(), { bootstrap: [] });
   assert.deepEqual(await store.list(), []);
 });
 

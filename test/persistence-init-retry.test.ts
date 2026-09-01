@@ -31,16 +31,19 @@ test("pg map: a failed table-create is retried on the next call (rejection not c
   assert.deepEqual(await m.all(), [{ n: 1 }], "second call re-runs the table create and proceeds to the query");
 });
 
-test("admin grants: a failed seed is retried on the next call (rejection not cached)", async () => {
+test("admin grants: a failed bootstrap reconciliation is retried on the next call", async () => {
   let failures = 1;
   const rows: AdminGrant[] = [];
   const persist: AdminGrantPersistence = {
     async all() {
+      return [...rows];
+    },
+    async reconcileBootstrap(grants) {
       if (failures > 0) {
         failures--;
         throw new Error("transient pg failure");
       }
-      return [...rows];
+      rows.push(...grants);
     },
     async put(g) {
       rows.push(g);
@@ -48,7 +51,7 @@ test("admin grants: a failed seed is retried on the next call (rejection not cac
     async remove() {},
   };
   const store = createAdminGrantStore(persist, {
-    seed: [{ principalId: "p", scopeId: scopeId("personal", "p"), role: "org_admin" }],
+    bootstrap: [{ principalId: "p", scopeId: scopeId("personal", "p"), role: "org_admin" }],
   });
   await assert.rejects(() => store.list(), /transient pg failure/);
   const listed = await store.list();
