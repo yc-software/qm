@@ -5,6 +5,8 @@ import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-p
 import type { MemoryProviderConfig, McpMemoryOperationConfig } from "./provider-config.ts";
 import { createRoutedMemoryService } from "./provider-router.ts";
 import type { MemoryService } from "./memory-service.ts";
+import { createMemorableMemoryProvider, type MemorableProviderDeps } from "./memorable/provider.ts";
+import { createSecretValueMasker } from "../security/secret-masking.ts";
 
 function operation(
   url: string,
@@ -37,11 +39,25 @@ export function createConfiguredMemoryService(opts: {
   defaultMemory: MemoryService;
   config?: MemoryProviderConfig;
   fetchImpl?: McpFetch;
+  /** Required when any provider has type "memorable": how it reads a session's entries and redacts secrets. */
+  memorable?: Pick<MemorableProviderDeps, "loadEntries">;
   onError?: (error: unknown, provider: string, operation: "recall" | "query") => void;
 }): MemoryService {
   if (!opts.config) return opts.defaultMemory;
   const providers: Record<string, MemoryService> = { default: opts.defaultMemory };
   for (const provider of opts.config.providers) {
+    if (provider.type === "memorable") {
+      if (!opts.memorable) throw new Error(`memory provider ${provider.id} needs session access to record procedures`);
+      providers[provider.id] = createMemorableMemoryProvider({
+        bin: provider.bin,
+        env: provider.env,
+        injectTimeoutMs: provider.injectTimeoutMs,
+        recordTimeoutMs: provider.recordTimeoutMs,
+        mask: createSecretValueMasker(provider.redactValues),
+        ...opts.memorable,
+      });
+      continue;
+    }
     providers[provider.id] = createMcpMemoryProvider({
       read: operation(provider.url, provider.read, provider.timeoutMs, opts.fetchImpl),
       ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs, opts.fetchImpl) } : {}),

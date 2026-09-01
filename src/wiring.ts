@@ -397,6 +397,8 @@ export interface BuiltApp {
   slackCore: SlackCoreClient;
 }
 
+const MEMORABLE_CAPTURE_ENTRY_WINDOW = 2_000;
+
 export function buildApp(
   config: Config,
   overrides: {
@@ -599,9 +601,17 @@ export function buildApp(
   const defaultMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
+  // Session storage is built further down; procedural providers only read it after the first turn.
+  const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = createConfiguredMemoryService({
     defaultMemory,
     config: config.memoryProviderConfig,
+    memorable: {
+      loadEntries: (sessionId) => {
+        if (!memorySessions.store) throw new Error("session store is not ready");
+        return memorySessions.store.getEntries(sessionId, { limit: MEMORABLE_CAPTURE_ENTRY_WINDOW });
+      },
+    },
   });
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const mcpToolService = createMcpToolService({ servers: mcpServers, audit: auditLog });
@@ -772,6 +782,7 @@ export function buildApp(
     config.sessionStore === "postgres"
       ? createPostgresSessionStore(requireDbUrl("SESSION_STORE"))
       : createMemorySessionStore();
+  memorySessions.store = sessions;
   const runStoreKind = config.runStore;
   const runSignals: RunSignalStore =
     runStoreKind === "postgres"

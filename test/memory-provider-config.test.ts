@@ -25,8 +25,11 @@ test("provider config resolves MCP credentials and scope routes", () => {
     BRAIN_RW_CLIENT_ID: "rw",
     BRAIN_RW_CLIENT_SECRET: "rw-secret",
   });
-  assert.equal(config?.providers[0]?.read.auth.clientId, "ro");
-  assert.equal(config?.providers[0]?.write?.auth.clientId, "rw");
+  const brain = config?.providers[0];
+  assert.equal(brain?.type, "mcp");
+  if (brain?.type !== "mcp") throw new Error("expected mcp provider");
+  assert.equal(brain.read.auth.clientId, "ro");
+  assert.equal(brain.write?.auth.clientId, "rw");
   assert.deepEqual(
     config?.routes.map(({ provider, scopes, capture }) => ({ provider, scopes, capture })),
     [
@@ -54,5 +57,42 @@ test("provider config rejects unknown providers and public cleartext MCP URLs", 
         BRAIN_RW_CLIENT_SECRET: "x",
       }),
     /HTTPS or a recognized private HTTP host/,
+  );
+});
+
+test("provider config accepts a memorable provider with an allow-listed child environment", () => {
+  const config = parseMemoryProviderConfig(
+    JSON.stringify({
+      providers: [{ id: "procedures", type: "memorable", bin: "node /opt/memorable/cli.js", injectTimeoutMs: 5000 }],
+      routes: [{ provider: "procedures", scopes: ["personal"], capture: "automatic", manage: false }],
+    }),
+    { DATABASE_URL: "postgres://qm", PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-never", MEMORABLE_API_KEY: "mk" },
+  );
+  const provider = config?.providers[0];
+  if (provider?.type !== "memorable") throw new Error("expected memorable provider");
+  assert.equal(provider.bin, "node /opt/memorable/cli.js");
+  assert.equal(provider.injectTimeoutMs, 5000);
+  assert.equal(provider.recordTimeoutMs, 120_000);
+  assert.deepEqual(provider.env, {
+    PATH: "/usr/bin",
+    MEMORABLE_API_KEY: "mk",
+    MEMORABLE_BACKEND: "qm",
+    MEMORABLE_DB_URL: "postgres://qm",
+  });
+  assert.equal(provider.redactValues.ANTHROPIC_API_KEY, "sk-never");
+  assert.equal(config?.routes[0]?.manage, false);
+});
+
+test("provider config rejects explicit capture on a memorable route", () => {
+  assert.throws(
+    () =>
+      parseMemoryProviderConfig(
+        JSON.stringify({
+          providers: [{ id: "procedures", type: "memorable" }],
+          routes: [{ provider: "procedures", scopes: ["personal"], capture: "explicit" }],
+        }),
+        {},
+      ),
+    /records procedures automatically/,
   );
 });
