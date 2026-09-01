@@ -198,7 +198,7 @@ export function clearSkillsCache(): void {
   skillsCache = null;
 }
 
-const SLASH_TOKEN = /(^|\s)\/([a-zA-Z0-9_-]*)$/;
+const SLASH_TOKEN = /(^|[\s\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af])\/([a-zA-Z0-9_-]*)$/;
 
 export function slashQuery(draft: string): string | null {
   const m = SLASH_TOKEN.exec(draft);
