@@ -22,6 +22,19 @@ const onPath = (m: string, p: string) => (method: string, pathname: string) => m
 
 const FAMILIES: AgentApiFamily[] = [
   {
+    match: onPath("POST", "/v1/search"),
+    guidance:
+      "Search uses this conversation's complete principal set as its visibility floor. Shared conversations without a complete roster fail closed.",
+    routes: [
+      {
+        method: "POST",
+        path: "/v1/search",
+        summary:
+          "search configured knowledge backends with {query, limit?}; results are visible to every person in this conversation",
+      },
+    ],
+  },
+  {
     match: onPath("GET", "/v1/apis"),
     routes: [
       {

@@ -3,6 +3,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
   Permission,
+  Principal,
   ScopeId,
   Session,
   SessionEntry,
@@ -96,6 +97,7 @@ import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../harness/harness-router.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectStore } from "../projects/project-store.ts";
+import type { SearchBackend, SearchHit } from "../search/core-search.ts";
 
 interface DeploymentVersionView {
   version: number;
@@ -287,6 +289,11 @@ export interface App {
   ): Promise<{ entry: SessionEntry } | null>;
   listSessions(principalId: string): Promise<Session[]>;
   searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
+  search(
+    query: string,
+    principals: readonly Principal[],
+    limit?: number,
+  ): Promise<{ hits: SearchHit[]; failedBackends: string[] }>;
   sessionBackground(sessionId: string, viewer: string): Promise<SessionBackgroundView | null>;
   readSessionBackgroundOutput(
     sessionId: string,
@@ -564,6 +571,7 @@ export interface AppDeps {
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   runtimeFallback?: RuntimeChoice;
+  searchBackends?: readonly SearchBackend[];
 }
 
 export interface ContextSummary {

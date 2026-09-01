@@ -6,6 +6,7 @@ import { createSessionMethods } from "./app-sessions.ts";
 import { createMessagingMethods } from "./app-messaging.ts";
 import { createDeploymentMethods } from "./app-deployments.ts";
 import { createSkillMethods } from "./app-skills.ts";
+import { createSearchMethods } from "./app-search.ts";
 
 export type { App, AppDeps, ContextSummary, ProjectView, VisibleCron } from "./app-types.ts";
 export { deploymentView, STALE_LEASE_GRACE_MS } from "./app-types.ts";
@@ -15,12 +16,13 @@ export function createApp(deps: AppDeps): App {
   const app = {} as App;
   const helpers = createAppHelpers(deps, app);
   const ambient = createAmbientHelpers(deps, app);
-  const methods: App = {
+  const methods = {
     ...createTurnMethods(deps, helpers, ambient),
     ...createSessionMethods(deps, helpers),
     ...createMessagingMethods(deps, helpers, ambient),
     ...createDeploymentMethods(deps, helpers),
     ...createSkillMethods(deps, helpers),
   };
-  return Object.assign(app, methods);
+  Object.assign(app, methods);
+  return Object.assign(app, createSearchMethods(deps, app));
 }
