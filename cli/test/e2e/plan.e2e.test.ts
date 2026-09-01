@@ -128,7 +128,7 @@ test("plan honors a host port base from the config", () => {
     writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"], basePort: 31080 });
     const r = runCli(["plan"], { cwd: dir, env: { QM_BASE_PORT: undefined } });
     assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /core: image .*\(host :31080\)/);
+    assert.match(r.out, /core: image .*\(publish 127\.0\.0\.1:31080:8080\)/);
   } finally {
     rmDir(dir);
   }
@@ -140,7 +140,7 @@ test("plan honors QM_BASE_PORT over the config", () => {
     writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"], basePort: 31080 });
     const r = runCli(["plan"], { cwd: dir, env: { QM_BASE_PORT: "32099" } });
     assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /\(host :32099\)/);
+    assert.match(r.out, /\(publish 127\.0\.0\.1:32099:8080\)/);
   } finally {
     rmDir(dir);
   }

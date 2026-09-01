@@ -7,6 +7,11 @@ data/
 *.env
 .env.local
 *.env.local
+*.local
+secrets/
+*.pem
+*.key
+id_rsa*
 *.tfstate
 *.tfstate.*
 .terraform/

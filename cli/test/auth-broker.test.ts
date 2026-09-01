@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { CONFIG_FILENAME, loadConfigAt, validatePortalTrust, type QmConfig } from "../src/config.ts";
 import { derivedTomlFor } from "../src/backends/fly.ts";
 import { serviceEnvironment } from "../src/backends/aws.ts";
-import { dockerServiceEnv } from "../src/backends/docker.ts";
+import { dockerPublishedPort, dockerServiceEnv } from "../src/backends/docker.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../src/secrets.ts";
 import { stageFlyEmailAllowlist } from "../src/backends/fly.ts";
 import { isReservedContainerName, SERVICE_NAMES, serviceDef } from "../src/services.ts";
@@ -52,6 +52,19 @@ test("the auth service is a first-class, privately addressed service with its ow
     "the broker never gets a public IP",
   );
   assert.equal(def.fly?.flycast, true);
+});
+
+test("docker publishes only the loopback core and authenticated portal when the portal fronts surfaces", () => {
+  const config = configWith(configText());
+  assert.equal(dockerPublishedPort(config, "core"), "127.0.0.1:8080:8080");
+  assert.equal(dockerPublishedPort(config, "portal"), "127.0.0.1:8081:8080");
+  assert.equal(dockerPublishedPort(config, "web-ui"), undefined);
+  assert.equal(dockerPublishedPort(config, "admin"), undefined);
+  assert.equal(dockerPublishedPort(config, "auth"), undefined);
+
+  const direct = configWith(configText({ services: '["core", "web-ui"]', env: "{}" }));
+  assert.equal(dockerPublishedPort(direct, "core"), "127.0.0.1:8080:8080");
+  assert.equal(dockerPublishedPort(direct, "web-ui"), "127.0.0.1:8082:8080");
 });
 
 test("fly derives the portal's whole OIDC block from the broker, over the private network", () => {

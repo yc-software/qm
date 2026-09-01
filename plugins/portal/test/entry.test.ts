@@ -188,3 +188,41 @@ test("production accepts cleartext OIDC only on private-network hosts, and only 
   assert.notEqual(externalCleartext.status, 0, "the relaxation is for the built-in broker only");
   assert.match(externalCleartext.stderr, /OIDC endpoint must be https unless it is the built-in broker/);
 });
+
+test("production permits cleartext browser routes only on one true loopback origin", () => {
+  const command = "import('./src/index.ts').then(m => m.bootChecks())";
+  const boot = (publicUrl: string, authEndpoint = `${publicUrl}/idp/authorize`) =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", command], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        PORTAL_PUBLIC_URL: publicUrl,
+        PORTAL_SESSION_SECRET: "portal-session-secret",
+        CORE_SIGNING_SECRET: "core-signing-secret",
+        OIDC_CLIENT_ID: "qm-portal",
+        OIDC_CLIENT_SECRET: "client-secret",
+        OIDC_ISSUER: `${publicUrl}/idp`,
+        OIDC_AUTH_ENDPOINT: authEndpoint,
+        OIDC_TOKEN_ENDPOINT: "http://auth.internal:8080/token",
+        OIDC_USERINFO_ENDPOINT: "http://auth.internal:8080/userinfo",
+        OIDC_JWKS_URI: "http://auth.internal:8080/.well-known/jwks.json",
+        OIDC_ALLOWED_EMAILS: "admin@example.com",
+        AUTH_BROKER_UPSTREAM: "http://auth.internal:8080",
+      },
+      encoding: "utf8",
+    });
+
+  for (const origin of ["http://localhost:8081", "http://127.0.0.1:8081", "http://[::1]:8081"]) {
+    const accepted = boot(origin);
+    assert.equal(accepted.status, 0, accepted.stderr);
+  }
+  for (const origin of ["http://0.0.0.0:8081", "http://192.168.1.20:8081", "http://agent.local:8081"]) {
+    const refused = boot(origin);
+    assert.notEqual(refused.status, 0, origin);
+    assert.match(refused.stderr, /PORTAL_PUBLIC_URL must be https in production unless it is loopback-only/);
+  }
+  const crossOrigin = boot("http://127.0.0.1:8081", "http://localhost:8081/idp/authorize");
+  assert.notEqual(crossOrigin.status, 0);
+  assert.match(crossOrigin.stderr, /OIDC_AUTH_ENDPOINT must be https/);
+});

@@ -58,6 +58,49 @@ test("production refuses cleartext endpoints and cleartext SMTP", () => {
   assert.equal(bootProblems(readConfig(testEnv({ AUTH_ISSUER: "http://localhost:8099" })), false).join(" | "), "");
 });
 
+test("production permits cleartext only for true loopback browser endpoints", () => {
+  const signing = { CORE_SIGNING_SECRET: "a".repeat(48) };
+  for (const origin of ["http://localhost:8099", "http://127.0.0.1:8099", "http://[::1]:8099"]) {
+    assert.equal(
+      problemsFor({ ...signing, AUTH_ISSUER: `${origin}/idp`, AUTH_REDIRECT_URI: `${origin}/auth/callback` }),
+      "",
+    );
+  }
+  for (const origin of ["http://0.0.0.0:8099", "http://192.168.1.20:8099", "http://agent.local:8099"]) {
+    assert.match(
+      problemsFor({ ...signing, AUTH_ISSUER: `${origin}/idp`, AUTH_REDIRECT_URI: `${origin}/auth/callback` }),
+      /must be https in production/,
+    );
+  }
+});
+
+test("production rejects mixed cleartext browser endpoint topology", () => {
+  const signing = { CORE_SIGNING_SECRET: "a".repeat(48) };
+  for (const endpoints of [
+    {
+      AUTH_ISSUER: "http://127.0.0.1:8099/idp",
+      AUTH_REDIRECT_URI: "https://127.0.0.1:8099/auth/callback",
+    },
+    {
+      AUTH_ISSUER: "https://127.0.0.1:8099/idp",
+      AUTH_REDIRECT_URI: "http://127.0.0.1:8099/auth/callback",
+    },
+    {
+      AUTH_ISSUER: "http://localhost:8099/idp",
+      AUTH_REDIRECT_URI: "http://127.0.0.1:8099/auth/callback",
+    },
+    {
+      AUTH_ISSUER: "http://127.0.0.1:8099/idp",
+      AUTH_REDIRECT_URI: "http://127.0.0.1:8100/auth/callback",
+    },
+  ]) {
+    assert.match(
+      problemsFor({ ...signing, ...endpoints }),
+      /must both use loopback HTTP on the same origin when either uses HTTP/,
+    );
+  }
+});
+
 test("production requires the core signing secret that makes links single-use", () => {
   assert.match(problemsFor({}), /CORE_SIGNING_SECRET is required/);
   assert.equal(problemsFor({ CORE_SIGNING_SECRET: "a".repeat(48) }), "");

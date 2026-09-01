@@ -46,6 +46,13 @@ const ORG_LABEL_KEY = "qm.org";
 const orgLabelArgs = (ctx: DockerCtx): string[] => ["--label", `${ORG_LABEL_KEY}=${ctx.config.orgId}`];
 const baseHostPort = (ctx: DockerCtx): number => dockerBasePort(ctx.config);
 
+export function dockerPublishedPort(config: QmConfig, service: ServiceName): string | undefined {
+  const def = serviceDef(service);
+  if (def.docker.hostPortOffset === undefined) return undefined;
+  if (config.services.includes("portal") && service !== "core" && service !== "portal") return undefined;
+  return `127.0.0.1:${dockerBasePort(config) + def.docker.hostPortOffset}:${def.docker.internalPort}`;
+}
+
 interface DockerCtx {
   config: QmConfig;
   configDir: string;
@@ -466,7 +473,6 @@ function pushEnvArgs(args: string[], env: Record<string, string>, secretKeys: Se
 }
 
 function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: string[]; cleanup: () => void } {
-  const def = serviceDef(service);
   const args = [
     "run",
     "-d",
@@ -493,9 +499,8 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
       if (socket.gid) args.push("--group-add", socket.gid);
     }
   }
-  if (def.docker.hostPortOffset !== undefined) {
-    args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
-  }
+  const publishedPort = dockerPublishedPort(ctx.config, service);
+  if (publishedPort) args.push("-p", publishedPort);
   args.push(image);
   return { args, cleanup };
 }
@@ -641,8 +646,8 @@ export async function dockerUp(
     step(`network: ${ctx.network}`);
     if (resolvedLocalImage) step(`sandbox: local image ${resolvedLocalImage}`);
     for (const def of ordered(runnableServices(config.services))) {
-      const ports =
-        def.docker.hostPortOffset !== undefined ? ` (host :${baseHostPort(ctx) + def.docker.hostPortOffset})` : "";
+      const publishedPort = dockerPublishedPort(config, def.name);
+      const ports = publishedPort ? ` (publish ${publishedPort})` : "";
       step(
         `${def.name}: image ${ctx.buildFrom ? `build deploy/${def.name}/Dockerfile` : imageRef(ctx, def.name)}${ports}`,
       );
@@ -742,8 +747,8 @@ function printUrls(ctx: DockerCtx): void {
   if (has("portal")) note(`   portal : ${url("portal")}  (public front door)`);
   if (has("auth"))
     note(`   auth   : ${url("portal")}/idp/authorize  (sign-in broker, published only through the portal)`);
-  if (has("web-ui")) note(`   web-ui : ${url("web-ui")}`);
-  if (has("admin")) note(`   admin  : ${url("admin")}/admin`);
+  if (has("web-ui") && !has("portal")) note(`   web-ui : ${url("web-ui")}`);
+  if (has("admin")) note(`   admin  : ${has("portal") ? `${url("portal")}/admin` : `${url("admin")}/admin`}`);
   note(`   core   : ${url("core")}`);
   note(`   status : qm status   ·   logs: qm logs core   ·   stop: qm down`);
 }

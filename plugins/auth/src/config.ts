@@ -130,6 +130,13 @@ export function validEmail(value: string): boolean {
   return value.length <= 254 && /^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(value);
 }
 
+function isLoopbackHttpUrl(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  return (
+    url.protocol === "http:" && (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]")
+  );
+}
+
 function httpsUrlProblem(label: string, value: string, requireHttps: boolean): string | null {
   if (isMissingOrPlaceholder(value)) return `${label} is required and may not be a placeholder`;
   let url: URL;
@@ -138,9 +145,28 @@ function httpsUrlProblem(label: string, value: string, requireHttps: boolean): s
   } catch {
     return `${label} must be an absolute URL`;
   }
-  if (requireHttps && url.protocol !== "https:") return `${label} must be https in production`;
+  if (requireHttps && url.protocol !== "https:" && !isLoopbackHttpUrl(url)) {
+    return `${label} must be https in production`;
+  }
   if (url.search || url.hash) return `${label} must not carry a query string or fragment`;
   return null;
+}
+
+function browserEndpointTopologyProblem(issuer: string, redirectUri: string, requireHttps: boolean): string | null {
+  if (!requireHttps) return null;
+  let issuerUrl: URL;
+  let redirectUrl: URL;
+  try {
+    issuerUrl = new URL(issuer);
+    redirectUrl = new URL(redirectUri);
+  } catch {
+    return null;
+  }
+  if (issuerUrl.protocol !== "http:" && redirectUrl.protocol !== "http:") return null;
+  if (isLoopbackHttpUrl(issuerUrl) && isLoopbackHttpUrl(redirectUrl) && issuerUrl.origin === redirectUrl.origin) {
+    return null;
+  }
+  return "AUTH_ISSUER and AUTH_REDIRECT_URI must both use loopback HTTP on the same origin when either uses HTTP";
 }
 
 export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
@@ -151,6 +177,7 @@ export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
 
   push(httpsUrlProblem("AUTH_ISSUER", cfg.issuer, isProd));
   push(httpsUrlProblem("AUTH_REDIRECT_URI", cfg.redirectUri, isProd));
+  push(browserEndpointTopologyProblem(cfg.issuer, cfg.redirectUri, isProd));
   if (isMissingOrPlaceholder(cfg.clientId)) problems.push("AUTH_CLIENT_ID is required and may not be a placeholder");
   if (isMissingOrPlaceholder(cfg.clientSecret))
     problems.push("AUTH_CLIENT_SECRET is required and may not be a placeholder");
