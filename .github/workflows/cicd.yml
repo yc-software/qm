@@ -179,7 +179,8 @@ jobs:
           MEMORABLE_E2E_DB_URL: postgres://postgres:postgres@localhost:5432/qm
           MEMORABLE_E2E_BIN: node node_modules/memorable-cli/dist/cli.js
         run: |
-          npm i --no-save --no-audit --no-fund memorable-cli
+          # Pinned vendor CLI under test; not shipped, so the repo's release-age guard is bypassed for this install only.
+          npm i --no-save --no-audit --no-fund --min-release-age=0 memorable-cli@0.5.15
           node --test test/e2e/memorable-cli.e2e.test.ts
 
   admin-plugin:

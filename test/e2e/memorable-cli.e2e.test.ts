@@ -17,7 +17,7 @@ const CLI = process.env.MEMORABLE_E2E_BIN;
 
 function skipReason(): string | false {
   if (!DB) return "set MEMORABLE_E2E_DB_URL";
-  if (!CLI) return "set MEMORABLE_E2E_BIN (e.g. `node node_modules/memorable-cli/dist/cli.js`)";
+  if (!CLI) return "set MEMORABLE_E2E_BIN (e.g. `node node_modules/memorable-cli/dist/cli.js`, memorable-cli >= 0.5)";
   return false;
 }
 
