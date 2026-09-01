@@ -857,8 +857,10 @@ class PaneContent implements IContentRenderer {
 
   private syncDensity(): void {
     const next = paneDensity(this.element);
-    if (!next || next === this.density) return;
+    if (!next) return;
+    const changed = next !== this.density;
     this.element.dataset.density = this.density = next;
+    if (!changed) return;
     for (const handler of this.redrawOnResize) handler();
   }
 
