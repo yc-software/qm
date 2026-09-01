@@ -121,19 +121,64 @@ function ensureLocalSandboxImage(config: QmConfig): string {
   return image;
 }
 
-function hostDockerSocket(): { path: string; gid?: string } {
-  const configured = process.env.DOCKER_HOST?.trim();
+export function dockerSocketCandidates(
+  dockerHost: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const configured = dockerHost?.trim();
   if (configured && !configured.startsWith("unix://")) {
     throw new CliError('sandbox.backend "local" requires a Unix Docker socket');
   }
-  const path = configured?.slice("unix://".length) || "/var/run/docker.sock";
-  let gid: string | undefined;
-  try {
-    gid = capture("stat", ["-c", "%g", path]).trim() || undefined;
-  } catch {
-    throw new CliError(`sandbox.backend "local" cannot read the Docker socket at ${path}`);
+  const path = configured?.slice("unix://".length);
+  if (configured && !path) throw new CliError('sandbox.backend "local" requires a Unix Docker socket path');
+  if (path?.includes(",")) throw new CliError(`Docker socket path cannot contain a comma: ${path}`);
+  if (!path) return ["/var/run/docker.sock"];
+  if (platform === "darwin" || /[/\\]\.docker[/\\]desktop[/\\]docker\.sock$/.test(path)) {
+    return [...new Set(["/var/run/docker.sock", path])];
   }
-  return { path, ...(gid ? { gid } : {}) };
+  return [path];
+}
+
+export function dockerSocketProbeArgs(path: string, image: string): string[] {
+  if (path.includes(",")) throw new CliError(`Docker socket path cannot contain a comma: ${path}`);
+  return [
+    "run",
+    "--rm",
+    "--entrypoint",
+    "/bin/stat",
+    "--mount",
+    `type=bind,source=${path},target=/var/run/docker.sock,readonly`,
+    image,
+    "-c",
+    "%g",
+    "/var/run/docker.sock",
+  ];
+}
+
+export function dockerSocketMountArgs(socket: { path: string; gid: string }): string[] {
+  if (socket.path.includes(",")) throw new CliError(`Docker socket path cannot contain a comma: ${socket.path}`);
+  return ["--mount", `type=bind,source=${socket.path},target=/var/run/docker.sock`, "--group-add", socket.gid];
+}
+
+export function resolveDockerSocket(
+  image: string,
+  dockerHost: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+  probe: (args: string[]) => string = (args) => docker(args, undefined, 5_000),
+): { path: string; gid: string } {
+  for (const path of dockerSocketCandidates(dockerHost, platform)) {
+    try {
+      const gid = probe(dockerSocketProbeArgs(path, image)).trim();
+      if (/^\d+$/.test(gid)) return { path, gid };
+    } catch {
+      continue;
+    }
+  }
+  throw new CliError(`sandbox.backend "local" cannot mount the Docker daemon socket`);
+}
+
+function hostDockerSocket(image: string): { path: string; gid: string } {
+  return resolveDockerSocket(image, process.env.DOCKER_HOST);
 }
 
 function requireDocker(): void {
@@ -145,9 +190,9 @@ function requireDocker(): void {
   }
 }
 
-function docker(args: string[], allow?: RegExp): string {
+function docker(args: string[], allow?: RegExp, timeoutMs?: number): string {
   try {
-    return capture("docker", args, allow ? { allow } : {});
+    return capture("docker", args, { ...(allow ? { allow } : {}), ...(timeoutMs ? { timeoutMs } : {}) });
   } catch (e) {
     throw dockerError(args, errMessage(e));
   }
@@ -494,9 +539,8 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     for (const m of layerMounts(ctx)) args.push("-v", m);
     for (const m of skillMounts(ctx)) args.push("-v", m);
     if (localSandboxActive(ctx.config)) {
-      const socket = hostDockerSocket();
-      args.push("-v", `${socket.path}:/var/run/docker.sock`);
-      if (socket.gid) args.push("--group-add", socket.gid);
+      const socket = hostDockerSocket(image);
+      args.push(...dockerSocketMountArgs(socket));
     }
   }
   const publishedPort = dockerPublishedPort(ctx.config, service);
