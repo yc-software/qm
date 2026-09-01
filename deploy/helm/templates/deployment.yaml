@@ -1,0 +1,97 @@
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if $svc.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "qm.fullname" $root }}-{{ $name }}
+  labels:
+    {{- include "qm.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ $svc.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "qm.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret-env: {{ include (print $root.Template.BasePath "/secret.yaml") $root | sha256sum }}
+      labels:
+        {{- include "qm.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ $name }}
+          image: "{{ $root.Values.image.repository }}-{{ $svc.image }}:{{ $svc.tag | default $root.Values.image.tag | default $root.Chart.AppVersion }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          {{- with $svc.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: {{ ternary "http" "proxy" (eq $svc.type "web") }}
+              containerPort: {{ $svc.port }}
+          {{- $wired := dict }}
+          {{- if $root.Values.publicUrl }}
+          {{- if eq $name "core" }}{{- $_ := set $wired "AGENT_API_URL" $root.Values.publicUrl }}{{- end }}
+          {{- if eq $name "portal" }}{{- $_ := set $wired "PORTAL_PUBLIC_URL" $root.Values.publicUrl }}{{- end }}
+          {{- end }}
+          {{- if or $wired $root.Values.env $svc.env }}
+          env:
+            {{- range $k, $v := $wired }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- range $k, $v := $root.Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- range $k, $v := $svc.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if or (include "qm.hasSecretEnv" $root) $root.Values.envFrom }}
+          envFrom:
+            {{- if include "qm.hasSecretEnv" $root }}
+            - secretRef:
+                name: {{ include "qm.fullname" $root }}-env
+            {{- end }}
+            {{- with $root.Values.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- if $svc.healthPath }}
+          readinessProbe:
+            httpGet:
+              path: {{ $svc.healthPath }}
+              port: {{ $svc.port }}
+          livenessProbe:
+            httpGet:
+              path: {{ $svc.healthPath }}
+              port: {{ $svc.port }}
+          {{- else }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ $svc.port }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ $svc.port }}
+          {{- end }}
+          {{- with $svc.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $svc.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
+{{- end }}

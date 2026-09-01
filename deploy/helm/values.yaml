@@ -1,0 +1,151 @@
+image:
+  repository: ghcr.io/porter-dev/qm
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+publicUrl: ""
+
+env: {}
+
+envFrom: []
+
+secretEnv:
+  CORE_SIGNING_SECRET: ""
+  CAPABILITY_SECRET: ""
+  PORTAL_IDENTITY_SECRET: ""
+  CONNECTOR_SECRET_KEY: ""
+  SKILL_SIGNING_SECRET: ""
+  ANTHROPIC_API_KEY: ""
+  DATABASE_URL: ""
+  PUBLIC_API_URL: ""
+  ADMIN_GRANTS: ""
+  SANDBOX_BACKEND: ""
+  DEPLOY_PROVIDER: ""
+  PORTER_DEPLOY_API_TOKEN: ""
+  PORTER_DEPLOY_URL: ""
+  PORTER_DEPLOY_PROJECT_ID: ""
+  PORTER_DEPLOY_CLUSTER_ID: ""
+  PORTER_SANDBOX_IMAGE: "ghcr.io/porter-dev/qm-sandbox:latest"
+  PORTER_DEPLOY_RUNNER_IMAGE: "ghcr.io/porter-dev/qm-app-runner:latest"
+  PORTER_DEPLOY_APPS_DOMAIN: ""
+  AUTH_ALLOWED_EMAILS: ""
+  AUTH_CLIENT_ID: ""
+  AUTH_CLIENT_SECRET: ""
+  OIDC_CLIENT_ID: ""
+  OIDC_CLIENT_SECRET: ""
+  AUTH_TOKEN_SECRET: ""
+  AUTH_SIGNING_JWK: ""
+  AUTH_EMAIL_FROM: ""
+  RESEND_API_KEY: ""
+  PORTAL_SESSION_SECRET: ""
+
+ingress:
+  enabled: false
+  service: portal
+  className: nginx
+  hosts: []
+  tls: true
+  clusterIssuer: letsencrypt-prod
+  tlsSecretName: ""
+  annotations: {}
+
+services:
+  core:
+    enabled: true
+    image: core
+    type: web
+    port: 8080
+    replicas: 1
+    command: ["node", "src/index.ts"]
+    healthPath: /healthz
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        memory: 2Gi
+    env: {}
+
+  auth:
+    enabled: true
+    image: auth
+    type: web
+    port: 8080
+    replicas: 1
+    command: ["node", "src/index.ts"]
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+    env: {}
+
+  web-ui:
+    enabled: true
+    image: web-ui
+    type: web
+    port: 8080
+    replicas: 1
+    command: ["node", "server/index.ts"]
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+    env: {}
+
+  admin:
+    enabled: true
+    image: admin
+    type: web
+    port: 8080
+    replicas: 1
+    command: ["node", "src/index.ts"]
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+    env:
+      ADMIN_BASE_PATH: /admin
+
+  portal:
+    enabled: true
+    image: portal
+    type: web
+    port: 8080
+    replicas: 1
+    command: ["node", "src/index.ts"]
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+    env: {}
+
+  egress-proxy:
+    enabled: true
+    image: egress-proxy
+    type: worker
+    port: 48080
+    replicas: 1
+    command: ["/app/start.sh"]
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN"]
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+    env: {}

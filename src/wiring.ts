@@ -85,6 +85,7 @@ import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider } from "./deploy/fly-deploy-provider.ts";
+import { createPorterDeployProvider, type StoredPorterDeployBody } from "./deploy/porter-deploy-provider.ts";
 import type { DeployProvider } from "./deploy/deploy-provider.ts";
 import { createDeployService } from "./deploy/deploy-service.ts";
 import {
@@ -120,6 +121,7 @@ import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
+import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import {
   createSandboxRouter,
   ROUTE_CACHE_TTL_MS,
@@ -653,11 +655,24 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
+  const buildPorter = (): Sandbox =>
+    createPorterSandbox(workspace, {
+      ...config.porterSandbox,
+      advisoryLock,
+      blobTransfer,
+      extraTools: deploymentLayer.advertisedTools,
+      credentialPaths: deploymentLayer.credentialPaths,
+      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      onError: sandboxOnError,
+    });
   const buildBackend: Record<Config["sandboxBackend"], () => Sandbox> = {
     local: buildLocal,
     sprites: buildSprites,
     smolmachines: buildSmolmachines,
     aws: buildAws,
+    porter: buildPorter,
   };
   const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
     [config.sandboxBackend]: buildBackend[config.sandboxBackend](),
@@ -970,19 +985,25 @@ export function buildApp(
         : {}),
     },
   });
-  const deployProvider: DeployProvider = ((): DeployProvider => {
-    if (config.deployProvider === "aws")
-      return createAwsDeployProvider({
-        ...config.awsDeploy,
-        ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket
-          ? { dataBucket: config.awsSandbox.s3Bucket }
-          : {}),
+  const buildAwsDeploy = (): DeployProvider =>
+    createAwsDeployProvider({
+      ...config.awsDeploy,
+      ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket ? { dataBucket: config.awsSandbox.s3Bucket } : {}),
+      advisoryLock,
+      store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
+    });
+  const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
+    aws: buildAwsDeploy,
+    docker: createDockerDeployProvider,
+    fly: () => createFlyDeployProvider(config.flyDeploy),
+    porter: () =>
+      createPorterDeployProvider({
+        ...config.porterDeploy,
         advisoryLock,
-        store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
-      });
-    if (config.deployProvider === "fly") return createFlyDeployProvider(config.flyDeploy);
-    return createDockerDeployProvider();
-  })();
+        store: artifactMap<StoredPorterDeployBody>("porter_deploy_bodies"),
+      }),
+  };
+  const deployProvider: DeployProvider = buildDeployProvider[config.deployProvider]();
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
     console.warn(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",

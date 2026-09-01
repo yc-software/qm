@@ -37,9 +37,9 @@ export interface Config {
   databaseCaCertFile?: string;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
-  sandboxBackend: "aws" | "local" | "sprites" | "smolmachines";
-  sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines";
-  deployProvider: "docker" | "aws" | "fly";
+  sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "porter";
+  sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "porter";
+  deployProvider: "docker" | "aws" | "fly" | "porter";
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
@@ -156,6 +156,8 @@ export interface Config {
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
+  porterSandbox: PorterSandboxEnv;
+  porterDeploy: PorterDeployEnv;
   awsDeploy: AwsDeployEnv;
   flyDeploy: FlyDeployEnv;
 }
@@ -308,6 +310,84 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
     ...(env.SPRITES_BASE_URL ? { baseUrl: env.SPRITES_BASE_URL } : {}),
     ...(env.SPRITES_NAME_PREFIX ? { namePrefix: env.SPRITES_NAME_PREFIX } : {}),
     ...(env.SPRITES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SPRITES_EGRESS_PROXY_URL } : {}),
+    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
+      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
+      : {}),
+  };
+}
+
+interface PorterSandboxEnv {
+  image?: string;
+  token?: string;
+  baseUrl?: string;
+  namePrefix?: string;
+  homeDir?: string;
+  ttlSec?: number;
+  egressProxyUrl?: string;
+  defaultTimeoutSec?: number;
+}
+
+interface PorterDeployEnv {
+  token?: string;
+  baseUrl?: string;
+  runnerImage?: string;
+  appsDomain?: string;
+  visibility?: "public" | "private";
+  namePrefix?: string;
+  ttlSec?: number;
+}
+
+function porterApiBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
+  const deployProjectId = numEnvStrict("PORTER_DEPLOY_PROJECT_ID", env.PORTER_DEPLOY_PROJECT_ID);
+  const deployClusterId = numEnvStrict("PORTER_DEPLOY_CLUSTER_ID", env.PORTER_DEPLOY_CLUSTER_ID);
+  const derived =
+    deployProjectId !== undefined && deployClusterId !== undefined
+      ? `${(env.PORTER_DEPLOY_URL ?? "https://dashboard.porter.run").replace(/\/+$/, "")}/api/v2/alpha/projects/${deployProjectId}/clusters/${deployClusterId}`
+      : undefined;
+  return env.PORTER_SANDBOX_BASE_URL ?? derived;
+}
+
+const porterLocatorPresent = (env: NodeJS.ProcessEnv): boolean =>
+  Boolean(porterApiBaseUrl(env) || env.PORTER_CLUSTER_ID || env.KUBERNETES_SERVICE_HOST);
+
+function porterDeployVisibilityStrict(value: string | undefined): PorterDeployEnv["visibility"] {
+  if (value === undefined || value.trim() === "") return undefined;
+  const visibility = value.trim();
+  if (visibility === "public" || visibility === "private") return visibility;
+  throw new Error(
+    `PORTER_DEPLOY_VISIBILITY=${JSON.stringify(value)} is not recognized — use public or private, or unset it.`,
+  );
+}
+
+function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
+  const token = env.PORTER_DEPLOY_API_TOKEN;
+  const baseUrl = porterApiBaseUrl(env);
+  const visibility = porterDeployVisibilityStrict(env.PORTER_DEPLOY_VISIBILITY);
+  const ttlSec = numEnvStrict("PORTER_DEPLOY_TTL_SEC", env.PORTER_DEPLOY_TTL_SEC);
+  const runnerImage = env.PORTER_DEPLOY_RUNNER_IMAGE ?? env.PORTER_SANDBOX_IMAGE;
+  return {
+    ...(token ? { token } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(runnerImage ? { runnerImage } : {}),
+    ...(env.PORTER_DEPLOY_APPS_DOMAIN ? { appsDomain: env.PORTER_DEPLOY_APPS_DOMAIN } : {}),
+    ...(visibility ? { visibility } : {}),
+    ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
+    ...(ttlSec !== undefined ? { ttlSec } : {}),
+  };
+}
+
+function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
+  const token = env.PORTER_DEPLOY_API_TOKEN;
+  const baseUrl = porterApiBaseUrl(env);
+  const ttlSec = numEnvStrict("PORTER_SANDBOX_TTL_SEC", env.PORTER_SANDBOX_TTL_SEC);
+  return {
+    ...(env.PORTER_SANDBOX_IMAGE ? { image: env.PORTER_SANDBOX_IMAGE } : {}),
+    ...(token ? { token } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
+    ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
+    ...(ttlSec !== undefined ? { ttlSec } : {}),
+    ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
@@ -554,9 +634,16 @@ function harnessEnvStrict(value: string | undefined): Config["harness"] {
 function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): Config["sandboxBackend"] {
   if (value === undefined || value.trim() === "") return "local";
   const backend = value.trim();
-  if (backend === "aws" || backend === "local" || backend === "sprites" || backend === "smolmachines") return backend;
+  if (
+    backend === "aws" ||
+    backend === "local" ||
+    backend === "sprites" ||
+    backend === "smolmachines" ||
+    backend === "porter"
+  )
+    return backend;
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, or smolmachines, or unset it.`,
+    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, or porter, or unset it.`,
   );
 }
 
@@ -677,8 +764,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const dataDir = resolve(env.DATA_DIR ?? "./data");
+  const porterSandboxSelected = env.SANDBOX_BACKEND === "porter" || env.SANDBOX_SECONDARY_BACKEND === "porter";
+  if (porterSandboxSelected && !env.PORTER_SANDBOX_EGRESS_PROXY_URL) {
+    console.warn(
+      "[config] SANDBOX_BACKEND=porter without PORTER_SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set PORTER_SANDBOX_EGRESS_PROXY_URL to the egress proxy to force sandbox traffic through it.",
+    );
+  }
+  for (const [selected, label] of [
+    [porterSandboxSelected, "SANDBOX_BACKEND=porter"],
+    [env.DEPLOY_PROVIDER === "porter", "DEPLOY_PROVIDER=porter"],
+  ] as const) {
+    if (selected && !porterLocatorPresent(env)) {
+      throw new Error(
+        `${label} requires PORTER_DEPLOY_PROJECT_ID and PORTER_DEPLOY_CLUSTER_ID (or PORTER_SANDBOX_BASE_URL, or PORTER_CLUSTER_ID) to locate the Porter sandbox API.`,
+      );
+    }
+  }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
-    throw new Error("SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, aws, or local.");
+    throw new Error(
+      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, porter, aws, or local.",
+    );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
   const secondaryRaw = env.SANDBOX_SECONDARY_BACKEND?.trim();
@@ -735,9 +840,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL ?? publicApiUrl;
   const deployProvider = env.DEPLOY_PROVIDER ?? "docker";
-  if (deployProvider !== "aws" && deployProvider !== "docker" && deployProvider !== "fly") {
+  if (
+    deployProvider !== "aws" &&
+    deployProvider !== "docker" &&
+    deployProvider !== "fly" &&
+    deployProvider !== "porter"
+  ) {
     throw new Error(
-      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, or fly)`,
+      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, fly, or porter)`,
     );
   }
   let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
@@ -981,6 +1091,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
+    porterSandbox: porterSandboxEnv(env),
+    porterDeploy: porterDeployEnv(env),
     awsDeploy: awsDeployEnv(env),
     flyDeploy: flyDeployEnv(env),
   };

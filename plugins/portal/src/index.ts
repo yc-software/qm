@@ -1204,6 +1204,11 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
 
 export function bootChecks(): void {
   const problems: string[] = [];
+  if (!AUTH_BROKER_UPSTREAM && originOf(OIDC.authEndpoint) && originOf(OIDC.authEndpoint) === originOf(PUBLIC_URL)) {
+    problems.push(
+      "OIDC_AUTH_ENDPOINT is on the portal's own origin but AUTH_BROKER_UPSTREAM is unset — every sign-in would redirect from /auth/login back into the portal forever; wire AUTH_BROKER_UPSTREAM to the auth service or point OIDC_AUTH_ENDPOINT at a real identity provider",
+    );
+  }
   if (LOCAL_AUTH_BYPASS_REQUESTED && IS_PROD) {
     problems.push("PORTAL_LOCAL_AUTH_BYPASS may not be enabled in production");
   }

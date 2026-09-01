@@ -1,0 +1,91 @@
+version: v2
+name: qm-core
+build:
+  method: docker
+  context: .
+  dockerfile: ./deploy/core/Dockerfile
+services:
+  - name: core
+    type: web
+    run: node src/index.ts
+    instances: 1
+    cpuCores: 1
+    ramMegabytes: 2048
+    port: 8080
+    healthCheck:
+      enabled: true
+      httpPath: /healthz
+---
+version: v2
+name: qm-auth
+build:
+  method: docker
+  context: .
+  dockerfile: ./deploy/auth/Dockerfile
+services:
+  - name: auth
+    type: web
+    run: node src/index.ts
+    instances: 1
+    cpuCores: 0.25
+    ramMegabytes: 512
+    port: 8080
+---
+version: v2
+name: qm-web-ui
+build:
+  method: docker
+  context: .
+  dockerfile: ./deploy/web-ui/Dockerfile
+services:
+  - name: web-ui
+    type: web
+    run: node server/index.ts
+    instances: 1
+    cpuCores: 0.25
+    ramMegabytes: 512
+    port: 8080
+---
+version: v2
+name: qm-admin
+build:
+  method: docker
+  context: .
+  dockerfile: ./deploy/admin/Dockerfile
+services:
+  - name: admin
+    type: web
+    run: node src/index.ts
+    instances: 1
+    cpuCores: 0.25
+    ramMegabytes: 512
+    port: 8080
+---
+version: v2
+name: qm-portal
+build:
+  method: docker
+  context: .
+  dockerfile: ./deploy/portal/Dockerfile
+services:
+  - name: portal
+    type: web
+    run: node src/index.ts
+    instances: 1
+    cpuCores: 0.25
+    ramMegabytes: 512
+    port: 8080
+---
+version: v2
+name: qm-egress-proxy
+build:
+  method: docker
+  context: .
+  dockerfile: ./deploy/egress-proxy/Dockerfile
+services:
+  - name: egress-proxy
+    type: worker
+    run: /app/start.sh
+    instances: 1
+    cpuCores: 0.25
+    ramMegabytes: 512

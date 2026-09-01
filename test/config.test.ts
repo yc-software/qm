@@ -426,3 +426,91 @@ test("baseModelProviders constrains the base model only when a provider is decla
     "with no declaration the shipped default stands, so upgrading never moves a deployment's model or its billing",
   );
 });
+
+test("DEPLOY_PROVIDER=porter selects the Porter deploy provider and reads its env", () => {
+  const config = loadConfig({
+    DEPLOY_PROVIDER: "porter",
+    PORTER_DEPLOY_PROJECT_ID: "7",
+    PORTER_DEPLOY_CLUSTER_ID: "9",
+    PORTER_DEPLOY_API_TOKEN: "tok",
+    PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com",
+    PORTER_DEPLOY_RUNNER_IMAGE: "ghcr.io/x/runner:1",
+    PORTER_DEPLOY_VISIBILITY: "private",
+    PORTER_DEPLOY_TTL_SEC: "3600",
+  });
+  assert.equal(config.deployProvider, "porter");
+  assert.deepEqual(config.porterDeploy, {
+    token: "tok",
+    baseUrl: "https://dashboard.porter.run/api/v2/alpha/projects/7/clusters/9",
+    runnerImage: "ghcr.io/x/runner:1",
+    appsDomain: "apps.example.com",
+    visibility: "private",
+    ttlSec: 3600,
+  });
+});
+
+test("the deploy runner image falls back to the sandbox image", () => {
+  const config = loadConfig({
+    DEPLOY_PROVIDER: "porter",
+    PORTER_DEPLOY_PROJECT_ID: "7",
+    PORTER_DEPLOY_CLUSTER_ID: "9",
+    PORTER_DEPLOY_API_TOKEN: "tok",
+    PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com",
+    PORTER_SANDBOX_IMAGE: "localhost:5000/qm-sandbox:latest",
+  });
+  assert.equal(config.porterDeploy.runnerImage, "localhost:5000/qm-sandbox:latest");
+});
+
+test("DEPLOY_PROVIDER=porter refuses to boot without a cluster and tolerates a missing apps domain", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        DEPLOY_PROVIDER: "porter",
+        PORTER_DEPLOY_API_TOKEN: "tok",
+        PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com",
+      }),
+    /PORTER_DEPLOY_PROJECT_ID/,
+  );
+  assert.equal(
+    loadConfig({
+      DEPLOY_PROVIDER: "porter",
+      PORTER_DEPLOY_API_TOKEN: "tok",
+      PORTER_DEPLOY_PROJECT_ID: "7",
+      PORTER_DEPLOY_CLUSTER_ID: "9",
+    }).porterDeploy.appsDomain,
+    undefined,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        DEPLOY_PROVIDER: "porter",
+        PORTER_DEPLOY_API_TOKEN: "tok",
+        PORTER_DEPLOY_PROJECT_ID: "7",
+        PORTER_DEPLOY_CLUSTER_ID: "9",
+        PORTER_DEPLOY_APPS_DOMAIN: "a.b",
+        PORTER_DEPLOY_VISIBILITY: "hidden",
+      }),
+    /PORTER_DEPLOY_VISIBILITY/,
+  );
+});
+
+test("an unknown DEPLOY_PROVIDER still falls back to docker", () => {
+  assert.equal(loadConfig({ DEPLOY_PROVIDER: "nope" }).deployProvider, "docker");
+});
+
+test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
+  assert.throws(
+    () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
+    /PORTER_DEPLOY_PROJECT_ID/,
+  );
+  const inCluster = loadConfig({
+    SANDBOX_BACKEND: "porter",
+    DEPLOY_PROVIDER: "porter",
+    PORTER_DEPLOY_API_TOKEN: "tok",
+    PORTER_CLUSTER_ID: "3",
+    PORTER_SANDBOX_TTL_SEC: "120",
+  });
+  assert.equal(inCluster.porterSandbox.token, "tok");
+  assert.equal(inCluster.porterSandbox.ttlSec, 120);
+  assert.equal(inCluster.porterDeploy.token, "tok");
+});
