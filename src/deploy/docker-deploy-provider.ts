@@ -10,11 +10,13 @@ export interface DockerDeployProviderOptions {
   docker?: string;
   basePort?: number;
   dockerExec?: DockerExec;
+  network?: string;
 }
 
 export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {}): DeployProvider {
   const docker = opts.docker ?? "docker";
   const image = opts.image ?? "node:24-alpine";
+  const sharedNetwork = opts.network;
   let nextPort = opts.basePort ?? 9200;
   const ports = new Map<string, number>();
   const freed: number[] = [];
@@ -80,31 +82,41 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     }
   };
 
+  const containerPresent = async (container: string): Promise<boolean> => {
+    const r = await dexec(["inspect", "--format", "{{.Id}}", container]);
+    if (r.code === 0) return true;
+    if (/no such (?:object|container)|not found/i.test(r.stderr)) return false;
+    throw new Error(`docker inspect ${container} failed: ${r.stderr.trim()}`);
+  };
+
   return {
     profile: { managedScaleToZero: false },
 
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
-      const net = await ensureNetwork(network(d));
-      await dexec(["rm", "-f", name(d)]);
-      const hostPort = allocPort(name(d));
+      const container = name(d);
+      const net = sharedNetwork ?? (await ensureNetwork(network(d)));
+      await dexec(["rm", "-f", container]);
+      const hostPort = sharedNetwork ? undefined : allocPort(container);
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-      const r = await dexec([
-        "run",
-        "-d",
+      const cleanup = async (): Promise<void> => {
+        await dexec(["rm", "-f", container]);
+        if (!sharedNetwork) await dexec(["network", "rm", net]);
+        if (hostPort !== undefined) freePort(container);
+      };
+      const create = await dexec([
+        "create",
         "--name",
-        name(d),
+        container,
         "--network",
         net,
+        ...(sharedNetwork ? ["--network-alias", container] : []),
         "--memory",
         "512m",
         "--cpus",
         "1",
         "--pids-limit",
         "256",
-        "-p",
-        `127.0.0.1:${hostPort}:${APP_PORT}`,
-        "-v",
-        `${version.snapshotDir}:/app:ro`,
+        ...(hostPort !== undefined ? ["-p", `127.0.0.1:${hostPort}:${APP_PORT}`] : []),
         "-w",
         "/app",
         "-e",
@@ -115,30 +127,47 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
         "-c",
         version.entrypoint,
       ]);
-      if (r.code !== 0) {
-        await dexec(["rm", "-f", name(d)]);
-        await dexec(["network", "rm", net]);
-        freePort(name(d));
-        throw new Error(`deploy run failed: ${r.stderr.trim()}`);
+      if (create.code !== 0) {
+        await cleanup();
+        throw new Error(`deploy create failed: ${create.stderr.trim()}`);
       }
-      return { host: "127.0.0.1", port: hostPort };
+      const copy = await dexec(["cp", `${version.snapshotDir}/.`, `${container}:/app`], 600_000);
+      if (copy.code !== 0) {
+        await cleanup();
+        throw new Error(`deploy snapshot copy failed: ${copy.stderr.trim()}`);
+      }
+      const start = await dexec(["start", container]);
+      if (start.code !== 0) {
+        await cleanup();
+        throw new Error(`deploy start failed: ${start.stderr.trim()}`);
+      }
+      return sharedNetwork ? { host: container, port: APP_PORT } : { host: "127.0.0.1", port: hostPort! };
     },
 
-    async logs(d: Deployment, opts: { tailLines: number }): Promise<string | null> {
-      if (!(await migrateTarget(name(d)))) return null;
-      const lines = Math.max(1, Math.min(2000, Math.floor(opts.tailLines)));
-      const r = await dexec(["logs", "--tail", String(lines), name(d)]);
+    async logs(d: Deployment, logOpts: { tailLines: number }): Promise<string | null> {
+      const container = name(d);
+      const ready = sharedNetwork
+        ? await containerPresent(container).catch(() => false)
+        : await migrateTarget(container);
+      if (!ready) return null;
+      const lines = Math.max(1, Math.min(2000, Math.floor(logOpts.tailLines)));
+      const r = await dexec(["logs", "--tail", String(lines), container]);
       if (r.code !== 0) return null;
       return `${r.stdout}${r.stderr}`;
     },
 
     async destroy(d: Deployment): Promise<void> {
-      await dexec(["rm", "-f", name(d)]);
-      await dexec(["network", "rm", network(d)]);
-      freePort(name(d));
+      const container = name(d);
+      await dexec(["rm", "-f", container]);
+      if (!sharedNetwork) await dexec(["network", "rm", network(d)]);
+      freePort(container);
     },
 
     async resolveEndpoint(d): Promise<DeployEndpoint | null> {
+      if (sharedNetwork) {
+        if (d.endpoint?.host === "127.0.0.1") return null;
+        return (await containerPresent(name(d))) ? d.endpoint : null;
+      }
       return (await migrateTarget(name(d))) ? d.endpoint : null;
     },
   };

@@ -143,7 +143,9 @@ test("docker local wires the host daemon coordinates only into core", () => {
   );
   assert.equal(dockerServiceEnv(local, "core").DOCKER_HOST, "unix:///var/run/docker.sock");
   assert.equal(dockerServiceEnv(local, "core").QM_CORE_CONTAINER, "qm-acme-core");
+  assert.equal(dockerServiceEnv(local, "core").DEPLOY_DOCKER_NETWORK, "qm-acme");
   assert.equal(dockerServiceEnv(local, "portal").DOCKER_HOST, undefined);
+  assert.equal(dockerServiceEnv(local, "portal").DEPLOY_DOCKER_NETWORK, undefined);
 });
 
 test("the broker's generated secrets reach both sides under the right names", () => {

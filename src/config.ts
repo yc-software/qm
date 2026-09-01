@@ -115,6 +115,7 @@ export interface Config {
   s3Prefix?: string;
   deployIdleTtlMs?: number;
   deployGitDir: string;
+  deployDockerNetwork?: string;
   deployDialTimeoutMs: number;
   deployAppsSessionSecret?: string;
   deployAppsLoginUrl?: string;
@@ -945,6 +946,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { deployIdleTtlMs: numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) }
       : {}),
     deployGitDir: env.DEPLOY_GIT_DIR ? resolve(env.DEPLOY_GIT_DIR) : join(dataDir, "deploy-git"),
+    ...(env.DEPLOY_DOCKER_NETWORK ? { deployDockerNetwork: env.DEPLOY_DOCKER_NETWORK } : {}),
     deployDialTimeoutMs:
       numEnvStrict("DEPLOY_DIAL_TIMEOUT_MS", env.DEPLOY_DIAL_TIMEOUT_MS) ?? CONFIG_DEFAULTS.deployDialTimeoutMs,
     ...deployAppsEnv(env),

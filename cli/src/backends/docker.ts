@@ -346,6 +346,15 @@ function secretValues(ctx: DockerCtx, service: string): Record<string, string> {
   return out;
 }
 
+export function localDockerEnv(config: QmConfig, prefix: string): Record<string, string> {
+  if (!localSandboxActive(config)) return {};
+  return {
+    DOCKER_HOST: "unix:///var/run/docker.sock",
+    QM_CORE_CONTAINER: `${prefix}-core`,
+    DEPLOY_DOCKER_NETWORK: prefix,
+  };
+}
+
 export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record<string, string> {
   const def = serviceDef(service);
   const out: Record<string, string> = {
@@ -353,10 +362,7 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
     CORE_API_URL: "http://core:8080",
     ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
   };
-  if (service === "core" && localSandboxActive(config)) {
-    out.DOCKER_HOST = "unix:///var/run/docker.sock";
-    out.QM_CORE_CONTAINER = `${dockerPrefix(config)}-core`;
-  }
+  if (service === "core") Object.assign(out, localDockerEnv(config, dockerPrefix(config)));
   if (service === "portal") {
     if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
     if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://admin:8080";
@@ -395,10 +401,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     const layerSubs = existingLayerSubdirs(ctx);
     if (layerSubs.length) out.DEPLOYMENT_LAYER = "/layer";
     Object.assign(out, ctx.sandboxEnv);
-    if (localSandboxActive(config)) {
-      out.DOCKER_HOST = "unix:///var/run/docker.sock";
-      out.QM_CORE_CONTAINER = `${ctx.prefix}-core`;
-    }
+    Object.assign(out, localDockerEnv(config, ctx.prefix));
   } else {
     Object.assign(out, dockerServiceEnv(config, service));
   }
