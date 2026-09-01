@@ -72,7 +72,11 @@ either direction.
 
 Options: `bin` (default `memorable`; may include arguments, e.g. `node /opt/memorable/cli.js`),
 `injectTimeoutMs` (default 15000) and `recordTimeoutMs` (default 120000). The CLI is not bundled:
-install it with `npm i -g memorable-cli`. It sees only an allow-listed environment —
+install it with `npm i -g memorable-cli` (its `qm` backend also needs the `pg` package resolvable
+from QM's working directory). Recording calls the Memorable extraction service, so set both
+`MEMORABLE_API_URL` and `MEMORABLE_API_KEY`; recall is local. Consent is the CLI's own act, per
+scope: nothing is recorded for a scope until `memorable enable --scope <scope-id>` has been run
+with the same `MEMORABLE_BACKEND=qm` and `MEMORABLE_DB_URL`. It sees only an allow-listed environment —
 `MEMORABLE_*`, `PATH`, `HOME`, proxy and TLS variables — with `MEMORABLE_BACKEND` defaulting to
 `qm` and the database reachable solely as `MEMORABLE_DB_URL`. Routes to this provider accept
 `capture: "automatic"` or `"off"`; explicit `remember` writes are facts, not procedures, and are
