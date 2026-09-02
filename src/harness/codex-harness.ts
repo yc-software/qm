@@ -23,7 +23,7 @@ import {
 } from "./codex-auth-store.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
 import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
-import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import { mcpToolsForTurn, type McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
 
 export interface CodexHarnessOptions {
@@ -317,11 +317,12 @@ async function transitionTask(
 }
 
 function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
+  const mcpTools = mcpToolsForTurn(turn?.mcpToolDefs, opts.mcpTools);
   return {
     scratchExec: opts.scratchExec,
     ownerAuthExec: opts.ownerAuthExec,
     reachExec: opts.reachExec,
-    ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
+    ...(mcpTools ? { mcpTools } : {}),
     controlTools: opts.controlTools,
     execTimeoutMs: opts.execTimeoutMs,
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,

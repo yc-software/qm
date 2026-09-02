@@ -369,6 +369,33 @@ test("miniapp is offered only on the web surface", () => {
   );
 });
 
+test("MCP tool failures do not disclose their error text to the model", async () => {
+  const marker = "ephemeral-authorization-secret";
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async callMcpTool() {
+        throw new Error(marker);
+      },
+    },
+  };
+  const tool = createPiTools(ref, {
+    mcpTools: () => [
+      {
+        name: "crm_query",
+        serverId: "crm",
+        remoteName: "query",
+        description: "Query records",
+        inputSchema: { type: "object" },
+        readOnly: true,
+      },
+    ],
+  }).find((candidate) => candidate.name === "crm_query");
+  const result = await call(tool, {});
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(marker));
+  assert.match(JSON.stringify(result), /MCP tool call failed/);
+});
+
 test("each pi tool emits a tool_call then a tool_result", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {

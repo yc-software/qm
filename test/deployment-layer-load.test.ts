@@ -1,9 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { emptyDeploymentLayer, loadDeploymentLayer, replaceDeploymentLayer } from "../src/deployment/load-layer.ts";
+import {
+  emptyDeploymentLayer,
+  loadDeploymentLayer,
+  loadMcpLayerAuthorizer,
+  replaceDeploymentLayer,
+} from "../src/deployment/load-layer.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { parseToolDescriptor } from "../src/deployment/deployment-layer.ts";
@@ -59,6 +65,87 @@ test("loadDeploymentLayer derives the runtime shapes from tool descriptors", () 
   assert.deepEqual(layer.splitEnvTemplates, [
     { ACMECLI_ACTING_SLACK_USER_ID: "{actingSlackUserId}", ACMECLI_PLATFORM: "slack" },
   ]);
+});
+
+test("a trusted deployment layer can supply a scoped MCP authorizer", async () => {
+  const dir = layerDir({ helper: { id: "helper" } });
+  writeFileSync(
+    join(dir, "mcp-policy.mjs"),
+    'export async function authorizeMcp(context, target) { return { allowed: context.scopeId === "project:west" && target.action === "discover" }; }',
+  );
+  const authorize = await loadMcpLayerAuthorizer(dir);
+  assert.ok(authorize);
+  assert.deepEqual(
+    await authorize!(
+      { principalId: "person-1", scopeId: "project:west", runId: "run-1" },
+      { action: "discover", serverId: "crm", toolName: "query" },
+    ),
+    { allowed: true },
+  );
+  assert.deepEqual(
+    await authorize!(
+      { principalId: "person-1", scopeId: "project:east", runId: "run-1" },
+      { action: "discover", serverId: "crm", toolName: "query" },
+    ),
+    { allowed: false },
+  );
+});
+
+test("a deployment layer MCP authorizer cannot be a symlink", async () => {
+  const dir = layerDir({ helper: { id: "helper" } });
+  const outside = join(dir, "outside.mjs");
+  writeFileSync(outside, "export async function authorizeMcp() { return { allowed: true }; }");
+  symlinkSync(outside, join(dir, "mcp-policy.mjs"));
+  await assert.rejects(() => loadMcpLayerAuthorizer(dir), /must be a regular file/);
+});
+
+test("buildApp applies the layer MCP authorizer before exposing tool schemas", async () => {
+  const dir = layerDir({ helper: { id: "helper" } });
+  writeFileSync(
+    join(dir, "mcp-policy.mjs"),
+    'export async function authorizeMcp(context) { return { allowed: context.scopeId === "project:west" }; }',
+  );
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const message = JSON.parse(body) as { id: number; method: string };
+      const result =
+        message.method === "tools/list"
+          ? { tools: [{ name: "read", description: "read", inputSchema: { type: "object" } }] }
+          : { content: [{ type: "text", text: "ok" }] };
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const built = buildApp(testConfig({ deploymentLayerDir: dir }));
+    await built.deploymentLayerReady;
+    await built.mcpServers.put({
+      id: "records",
+      name: "Records",
+      url: `http://127.0.0.1:${address.port}/mcp`,
+      auth: "none",
+      readOnly: true,
+      enabled: true,
+      updatedAt: 0,
+      updatedBy: "internal:admin",
+    });
+    await built.mcpToolService.refresh();
+    assert.deepEqual(
+      (await built.mcpToolService.toolDefs({ principalId: "person-1", scopeId: "project:west" })).map(
+        (tool) => tool.name,
+      ),
+      ["records_read"],
+    );
+    assert.deepEqual(await built.mcpToolService.toolDefs({ principalId: "person-1", scopeId: "project:east" }), []);
+    built.mcpToolService.close();
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
 });
 
 test("brokered tools resolve to service, binary, and quarantine roots", () => {

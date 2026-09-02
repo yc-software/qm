@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   compileApproval,
   parseToolDescriptor,
@@ -10,6 +11,12 @@ import {
 import { credentialServiceForPath } from "../credentials/resident-paths.ts";
 import type { ResidentAuthConnector } from "../credentials/resident-auth.ts";
 import type { CommandRule } from "../types.ts";
+import type {
+  McpAuthorization,
+  McpAuthorizationTarget,
+  McpAuthorizer,
+  McpCallContext,
+} from "../mcp/mcp-tool-service.ts";
 
 export interface DeploymentLayerRuntime {
   dir: string;
@@ -42,6 +49,52 @@ export function emptyDeploymentLayer(): DeploymentLayerRuntime {
     commandRules: [],
     brokeredTools: [],
   };
+}
+
+function authorizationResult(value: unknown): McpAuthorization {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    typeof (value as { allowed?: unknown }).allowed !== "boolean"
+  ) {
+    throw new Error("deployment layer MCP authorizer must return an object with boolean allowed");
+  }
+  const result = value as Record<string, unknown>;
+  if (result.authorization !== undefined && typeof result.authorization !== "string") {
+    throw new Error("deployment layer MCP authorizer authorization must be a string");
+  }
+  if (
+    result.headers !== undefined &&
+    (!result.headers ||
+      typeof result.headers !== "object" ||
+      Array.isArray(result.headers) ||
+      Object.values(result.headers).some((header) => typeof header !== "string"))
+  ) {
+    throw new Error("deployment layer MCP authorizer headers must be an object of string values");
+  }
+  return {
+    allowed: result.allowed as boolean,
+    ...(typeof result.authorization === "string" ? { authorization: result.authorization } : {}),
+    ...(result.headers ? { headers: result.headers as Record<string, string> } : {}),
+  };
+}
+
+export async function loadMcpLayerAuthorizer(dir: string): Promise<McpAuthorizer | undefined> {
+  const path = join(dir, "mcp-policy.mjs");
+  if (!existsSync(path)) return undefined;
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${path} must be a regular file`);
+  const loaded = (await import(pathToFileURL(path).href)) as { authorizeMcp?: unknown };
+  if (typeof loaded.authorizeMcp !== "function") {
+    throw new Error(`${path} must export async function authorizeMcp(context, target)`);
+  }
+  const authorize = loaded.authorizeMcp as (
+    context: Readonly<McpCallContext>,
+    target: Readonly<McpAuthorizationTarget>,
+  ) => Promise<unknown>;
+  return async (context, target) =>
+    authorizationResult(await authorize(Object.freeze({ ...context }), Object.freeze({ ...target })));
 }
 
 function assertDisjointCredentialLinks(tools: ToolDescriptor[]): void {

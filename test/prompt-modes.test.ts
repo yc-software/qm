@@ -25,6 +25,7 @@ import type { LivenessCache } from "../src/credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
+import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 
 const ORG = "default-org";
@@ -81,6 +82,8 @@ function buildOrchestrator(
     scopeSoulFor?: { conversation: Conversation; soul: string };
     branding?: OrgBranding;
     brandingDefault?: OrgBranding;
+    mcp?: McpToolService;
+    auditLog?: ReturnType<typeof createAuditLog>;
   } = {},
 ) {
   const config = createMemoryConfigStore(ORG);
@@ -88,7 +91,7 @@ function buildOrchestrator(
   if (opts.branding) config.setBranding(scopeId("org", ORG), opts.branding);
 
   const acl = createAclStore();
-  const auditLog = createAuditLog();
+  const auditLog = opts.auditLog ?? createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "pm-")));
   const memory = createMemoryService(workspace);
   const deploy = createDeployService({
@@ -120,6 +123,7 @@ function buildOrchestrator(
     deploy,
     acl,
     config,
+    ...(opts.mcp ? { mcp: opts.mcp } : {}),
     ...(opts.brandingDefault ? { brandingDefault: opts.brandingDefault } : {}),
     skills,
     livenessCache,
@@ -164,6 +168,20 @@ async function sysprompt(orch: ReturnType<typeof createOrchestrator>, input: Orc
   assert.notEqual(prompt, "", "expected !sysprompt to echo the assembled system prompt as the reply");
   return prompt;
 }
+
+test("MCP discovery policy errors are redacted from orchestration audit records", async () => {
+  const marker = "ephemeral-authorization-secret";
+  const auditLog = createAuditLog();
+  const mcp = {
+    async toolDefs() {
+      throw new Error(marker);
+    },
+  } as unknown as McpToolService;
+  const prompt = await sysprompt(buildOrchestrator({ auditLog, mcp }), slackDm(""));
+  assert.doesNotMatch(prompt, new RegExp(marker));
+  assert.ok((await auditLog.events()).every((event) => !JSON.stringify(event).includes(marker)));
+  assert.ok((await auditLog.events()).some((event) => event.action === "mcp.discover" && event.status === "error"));
+});
 
 function assertNoTemplateTokens(prompt: string, label: string) {
   assert.doesNotMatch(

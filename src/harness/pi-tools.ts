@@ -2820,11 +2820,11 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
               d.name,
               `mcp server ${d.serverId}`,
             );
-          } catch (error) {
+          } catch {
             return recordResult(
               callId,
               { tool: d.name, mcpServer: d.serverId, failed: true },
-              text(`[error] ${errMessage(error)}`),
+              text("[error] MCP tool call failed"),
               true,
             );
           }

@@ -111,7 +111,7 @@ export interface McpClient {
   readonly base: string;
   readonly host: string;
   listTools(): Promise<McpRemoteTool[]>;
-  callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
+  callTool(name: string, args: Record<string, unknown>, headers?: Record<string, string>): Promise<McpToolResult>;
 }
 
 interface CachedToken {
@@ -159,12 +159,17 @@ export function createMcpClient(opts: {
     return { authorization: `Bearer ${await mintToken(auth.clientId, auth.clientSecret)}` };
   }
 
-  async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
+  async function rpc(
+    method: string,
+    params: Record<string, unknown>,
+    headers?: Record<string, string>,
+  ): Promise<unknown> {
     const id = ++rpcId;
     const res = await fetchImpl(`${base}/mcp`, {
       method: "POST",
       headers: {
         ...(await authHeaders()),
+        ...headers,
         "content-type": "application/json",
         accept: MCP_ACCEPT,
       },
@@ -198,8 +203,8 @@ export function createMcpClient(opts: {
       }
       return out;
     },
-    async callTool(name, args) {
-      const result = (await rpc("tools/call", { name, arguments: args })) as McpToolResult;
+    async callTool(name, args, headers) {
+      const result = (await rpc("tools/call", { name, arguments: args }, headers)) as McpToolResult;
       if (result.isError) throw new Error(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`);
       return result;
     },

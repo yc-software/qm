@@ -1833,6 +1833,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
+        const mcpContext = {
+          principalId: actor.id,
+          scopeId,
+          ...(input.runId ? { runId: input.runId } : {}),
+        };
+        const mcpToolDefs = deps.mcp
+          ? await deps.mcp.toolDefs(mcpContext).catch(() => {
+              deps.auditLog.record({
+                at: Date.now(),
+                principalId: actor.id,
+                action: "mcp.discover",
+                resource: "policy",
+                scopeLabel: scopeId,
+                status: "error",
+              });
+              return [];
+            })
+          : [];
         const tools = createToolContext({
           sandbox: deps.sandbox,
           provision,
@@ -2004,6 +2022,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(deps.mcp ? { mcp: deps.mcp } : {}),
+          ...(deps.mcp ? { mcpContext, mcpToolDefs } : {}),
           sessionHistory: {
             search: async (q: string, limit?: number) =>
               searchSessionEntries(
@@ -2548,6 +2567,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             systemCacheBoundary: stableSystemBytes,
             history: continuation?.history ?? history,
             tools,
+            mcpToolDefs,
             ...(tools.credentialExecServices ? { credentialExecServices: tools.credentialExecServices } : {}),
             ...(securityPolicy.inboundScreening === "external" &&
             (deps.securityScreener || deps.harness.models.screenSecurity)

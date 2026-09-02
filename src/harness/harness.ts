@@ -12,6 +12,7 @@ export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
+import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 
 interface HarnessImage {
@@ -83,6 +84,7 @@ export interface HarnessTurnInput {
   systemCacheBoundary?: number;
   history: SessionEntry[];
   tools: ToolContext;
+  mcpToolDefs?: readonly McpToolDescriptor[];
   credentialExecServices?: readonly { service: string; binary: string }[];
   screenExternalContent?(input: {
     content: string;
