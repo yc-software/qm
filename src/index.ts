@@ -1,6 +1,7 @@
 import { loadConfig } from "./config.ts";
 import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
+import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage } from "./util/errors.ts";
 import { slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
@@ -29,6 +30,15 @@ server.listen(config.port, () => {
       `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });
+
+if (config.deployProvider === "docker") {
+  void dockerDaemonFailure().then((failure) => {
+    if (failure)
+      console.warn(
+        `[qm] publishing is unavailable: the docker deploy provider is selected but no Docker daemon is reachable from core (${failure}) — make a daemon reachable, or set DEPLOY_PROVIDER to fly or aws`,
+      );
+  });
+}
 
 if (config.backgroundWorkEnabled) {
   built.scheduler.start(1000);

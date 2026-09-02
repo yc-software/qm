@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDockerDeployProvider, dockerDaemonUnreachable } from "../src/deploy/docker-deploy-provider.ts";
+import { createDockerDeployProvider, dockerDaemonFailure } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import type { DockerExec } from "../src/sandbox/docker-exec.ts";
 import { scopeId } from "../src/types.ts";
@@ -152,7 +152,7 @@ test("the daemon probe reports nothing when Docker answers", async () => {
     return { code: 0, stdout: "29.1.3\n", stderr: "" };
   };
 
-  assert.equal(await dockerDaemonUnreachable({ dockerExec }), null);
+  assert.equal(await dockerDaemonFailure({ dockerExec }), null);
   assert.deepEqual(calls, [["version", "-f", "{{.Server.Version}}"]]);
 });
 
@@ -164,7 +164,7 @@ test("the daemon probe reports why Docker is unreachable", async () => {
   });
 
   assert.equal(
-    await dockerDaemonUnreachable({ dockerExec }),
+    await dockerDaemonFailure({ dockerExec }),
     "dial unix /var/run/docker.sock: connect: no such file or directory",
   );
 });
@@ -174,11 +174,17 @@ test("the daemon probe reports a failed probe rather than throwing", async () =>
     throw new Error("spawn docker ENOENT");
   };
 
-  assert.equal(await dockerDaemonUnreachable({ dockerExec }), "spawn docker ENOENT");
+  assert.equal(await dockerDaemonFailure({ dockerExec }), "spawn docker ENOENT");
 });
 
 test("the daemon probe reports the exit code when Docker is silent", async () => {
   const dockerExec: DockerExec = async () => ({ code: 7, stdout: "", stderr: "" });
 
-  assert.equal(await dockerDaemonUnreachable({ dockerExec }), "exit 7");
+  assert.equal(await dockerDaemonFailure({ dockerExec }), "exit 7");
+});
+
+test("the daemon probe reports a hung daemon as a timeout", async () => {
+  const dockerExec: DockerExec = async () => ({ code: -1, stdout: "", stderr: "" });
+
+  assert.equal(await dockerDaemonFailure({ dockerExec }), "no response within 10s");
 });

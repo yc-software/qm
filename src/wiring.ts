@@ -82,7 +82,7 @@ import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, disableLegacyWebhookRows } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
-import { createDockerDeployProvider, dockerDaemonUnreachable } from "./deploy/docker-deploy-provider.ts";
+import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider } from "./deploy/fly-deploy-provider.ts";
 import type { DeployProvider } from "./deploy/deploy-provider.ts";
@@ -983,14 +983,6 @@ export function buildApp(
     if (config.deployProvider === "fly") return createFlyDeployProvider(config.flyDeploy);
     return createDockerDeployProvider();
   })();
-  if (config.deployProvider === "docker") {
-    void dockerDaemonUnreachable().then((reason) => {
-      if (reason)
-        console.warn(
-          `[wiring] docker deploy: DEPLOY_PROVIDER is docker (the default when unset) but no Docker daemon is reachable from core (${reason}) — every publish will fail until a daemon is reachable or DEPLOY_PROVIDER selects fly or aws`,
-        );
-    });
-  }
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
     console.warn(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",

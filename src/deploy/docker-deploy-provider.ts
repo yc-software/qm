@@ -14,11 +14,19 @@ export interface DockerDeployProviderOptions {
   dockerExec?: DockerExec;
 }
 
-export async function dockerDaemonUnreachable(opts: DockerDeployProviderOptions = {}): Promise<string | null> {
+export interface DockerDaemonProbeOptions {
+  docker?: string;
+  dockerExec?: DockerExec;
+}
+
+export async function dockerDaemonFailure(opts: DockerDaemonProbeOptions = {}): Promise<string | null> {
   const dexec = opts.dockerExec ?? spawnDockerExec(opts.docker ?? "docker");
   try {
     const r = await dexec(["version", "-f", "{{.Server.Version}}"], DAEMON_PROBE_TIMEOUT_MS);
-    return r.code === 0 ? null : r.stderr.trim() || `exit ${r.code}`;
+    if (r.code === 0) return null;
+    const stderr = r.stderr.trim();
+    if (stderr) return stderr;
+    return r.code < 0 ? `no response within ${DAEMON_PROBE_TIMEOUT_MS / 1000}s` : `exit ${r.code}`;
   } catch (e) {
     return errMessage(e);
   }
