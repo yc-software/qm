@@ -84,14 +84,14 @@
     "@hono/node-server": "2.0.10",
     "hono": "4.12.34",
     "@fastify/ajv-compiler": {
-      "fast-uri": "3.1.5"
+      "fast-uri": "3.1.6"
     },
     "ajv": {
-      "fast-uri": "3.1.5"
+      "fast-uri": "3.1.6"
     },
     "brace-expansion": "5.0.9",
     "fast-json-stringify": {
-      "fast-uri": "4.1.2"
+      "fast-uri": "4.1.3"
     },
     "protobufjs": "7.6.5"
   },
