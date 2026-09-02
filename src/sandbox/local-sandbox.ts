@@ -44,6 +44,11 @@ export interface LocalSandboxOptions {
   cpus?: number;
   memoryMb?: number;
   coreContainer?: string;
+  agentHost?: string;
+  networkInternal?: boolean;
+  controlNetwork?: string;
+  controlProxyImage?: string;
+  daemonReadyTimeoutMs?: number;
   defaultTimeoutSec?: number;
   homeDir?: string;
   repoRoot?: string;
@@ -80,6 +85,7 @@ export const localVolumeName = (scopeId: string): string => `qm-home-${localSlug
 export const localNetworkName = (containerName: string): string =>
   `qm-net-${containerName.replace(/^qm-(sbx|scratch)-/, "")}`;
 const localScratchName = (key: string): string => `qm-scratch-${localSlug(key)}`;
+const localControlName = (name: string): string => `qm-control-${name}`;
 
 function localSlug(id: string): string {
   const cleaned = id
@@ -90,7 +96,17 @@ function localSlug(id: string): string {
 }
 
 export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions = {}): Sandbox {
+  if (opts.controlNetwork && opts.networkInternal !== true) {
+    throw new Error("controlNetwork requires networkInternal=true");
+  }
+  if (!!opts.controlNetwork !== !!opts.controlProxyImage) {
+    throw new Error("controlNetwork requires controlProxyImage");
+  }
+  if (opts.controlProxyImage && !/^[a-z0-9][a-z0-9./_-]*@sha256:[a-f0-9]{64}$/.test(opts.controlProxyImage)) {
+    throw new Error("controlProxyImage requires an immutable digest");
+  }
   const image = opts.image ?? DEFAULT_LOCAL_SANDBOX_IMAGE;
+  const controlProxyImage = opts.controlNetwork ? opts.controlProxyImage : undefined;
   const dexec = opts.dockerExec ?? spawnDockerExec(opts.dockerBin ?? "docker");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
@@ -168,9 +184,10 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<{ status: number; text: string }> {
-    const base = opts.coreContainer
-      ? `http://${name}:${AGENT_PORT}${path}`
-      : `http://127.0.0.1:${await resolvePort(name)}${path}`;
+    let base: string;
+    if (opts.controlNetwork) base = `http://${localControlName(name)}:${AGENT_PORT}${path}`;
+    else if (opts.coreContainer) base = `http://${name}:${AGENT_PORT}${path}`;
+    else base = `http://${opts.agentHost ?? "127.0.0.1"}:${await resolvePort(name)}${path}`;
     const signals = [AbortSignal.timeout(timeoutMs ?? 30_000), ...(signal ? [signal] : [])];
     const res = await fetchImpl(base, {
       method: body === undefined ? "GET" : "POST",
@@ -181,7 +198,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   }
 
   async function waitDaemon(name: string): Promise<void> {
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + (opts.daemonReadyTimeoutMs ?? 30_000);
     let lastErr = "";
     while (Date.now() < deadline) {
       try {
@@ -200,7 +217,9 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     portByName.delete(name);
     const r = await dexec(["start", name]);
     if (r.code !== 0) throw new Error(`docker start ${name} failed: ${r.stderr.trim()}`);
-    await connectCore(await ensureNetwork(name));
+    const net = await ensureNetwork(name);
+    await connectCore(net);
+    await ensureControlProxy(name, net);
     await waitDaemon(name);
   }
 
@@ -233,20 +252,159 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
   async function ensureNetwork(name: string): Promise<string> {
     const net = localNetworkName(name);
-    if ((await dexec(["network", "inspect", net])).code !== 0) {
-      const r = await dexec(["network", "create", net]);
+    const existing = await dexec(["network", "inspect", "-f", "{{.Internal}}", net]);
+    if (existing.code === 0) {
+      if (opts.networkInternal && existing.stdout.trim() !== "true") {
+        throw new Error(`docker network ${net} must be internal`);
+      }
+    } else {
+      if (!/no such network|network .* not found/i.test(existing.stderr)) {
+        throw new Error(`docker network inspect ${net} failed: ${existing.stderr.trim()}`);
+      }
+      const r = await dexec(["network", "create", ...(opts.networkInternal ? ["--internal"] : []), net]);
       if (r.code !== 0 && !/already exists/i.test(r.stderr)) {
         throw new Error(`docker network create ${net} failed: ${r.stderr.trim()}`);
+      }
+      if (opts.controlNetwork) {
+        const created = await dexec(["network", "inspect", "-f", "{{.Internal}}", net]);
+        if (created.code !== 0) {
+          throw new Error(`docker network inspect ${net} failed: ${created.stderr.trim()}`);
+        }
+        if (created.stdout.trim() !== "true") throw new Error(`docker network ${net} must be internal`);
       }
     }
     return net;
   }
 
   async function connectCore(net: string): Promise<void> {
+    if (opts.controlNetwork) return;
     if (!opts.coreContainer) return;
     const r = await dexec(["network", "connect", net, opts.coreContainer]);
     if (r.code !== 0 && !/already (?:exists|connected)/i.test(r.stderr)) {
       throw new Error(`docker network connect ${net} ${opts.coreContainer} failed: ${r.stderr.trim()}`);
+    }
+  }
+
+  async function ensureControlProxy(name: string, net: string): Promise<void> {
+    if (!opts.controlNetwork) return;
+    if (!controlProxyImage) throw new Error("controlNetwork requires controlProxyImage");
+    const proxy = localControlName(name);
+    const expected = await dexec(["image", "inspect", "-f", "{{.Id}}", controlProxyImage]);
+    if (expected.code !== 0) throw new Error(`control proxy image ${controlProxyImage} is unavailable`);
+    const expectedImageId = expected.stdout.trim();
+    let state = await containerState(proxy);
+    if (state && (!(await controlProxyMatches(proxy, name, net)) || state.imageId !== expectedImageId)) {
+      const removed = await dexec(["rm", "-f", proxy]);
+      if (removed.code !== 0) throw new Error(`docker rm ${proxy} failed: ${removed.stderr.trim()}`);
+      state = null;
+    }
+    if (!state) {
+      const r = await dexec([
+        "run",
+        "-d",
+        "--name",
+        proxy,
+        "--label",
+        "qm.sandbox-control=1",
+        "--label",
+        `qm.control-target=${name}:${AGENT_PORT}`,
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=16m",
+        "--user",
+        "65532:65532",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
+        "--pids-limit",
+        "64",
+        "--memory",
+        "64m",
+        "--cpus",
+        "0.25",
+        "--network",
+        net,
+        "--network-alias",
+        "control",
+        controlProxyImage,
+        "socat",
+        `TCP-LISTEN:${AGENT_PORT},fork,reuseaddr`,
+        `TCP:${name}:${AGENT_PORT}`,
+      ]);
+      if (r.code !== 0) throw new Error(`docker run ${proxy} failed: ${r.stderr.trim()}`);
+    } else if (!state.running) {
+      const r = await dexec(["start", proxy]);
+      if (r.code !== 0) throw new Error(`docker start ${proxy} failed: ${r.stderr.trim()}`);
+    }
+    const connected = await dexec(["network", "connect", opts.controlNetwork, proxy]);
+    if (connected.code !== 0 && !/already (?:exists|connected)/i.test(connected.stderr)) {
+      throw new Error(`docker network connect ${opts.controlNetwork} ${proxy} failed: ${connected.stderr.trim()}`);
+    }
+  }
+
+  async function controlProxyMatches(proxy: string, target: string, workloadNetwork: string): Promise<boolean> {
+    const label = await dexec(["inspect", "-f", '{{index .Config.Labels "qm.sandbox-control"}}', proxy]);
+    if (label.code !== 0 || label.stdout.trim() !== "1") return false;
+    const networks = await dexec(["inspect", "-f", "{{json .NetworkSettings.Networks}}", proxy]);
+    if (networks.code !== 0) return false;
+    try {
+      const attached = JSON.parse(networks.stdout) as Record<string, unknown>;
+      if (
+        JSON.stringify(Object.keys(attached).sort()) !== JSON.stringify([workloadNetwork, opts.controlNetwork!].sort())
+      )
+        return false;
+    } catch {
+      return false;
+    }
+    const command = await dexec(["inspect", "-f", "{{json .Config.Cmd}}", proxy]);
+    if (command.code !== 0) return false;
+    try {
+      if (
+        JSON.stringify(JSON.parse(command.stdout)) !==
+        JSON.stringify(["socat", `TCP-LISTEN:${AGENT_PORT},fork,reuseaddr`, `TCP:${target}:${AGENT_PORT}`])
+      )
+        return false;
+    } catch {
+      return false;
+    }
+    const hardening = await dexec([
+      "inspect",
+      "-f",
+      "{{.Config.User}}|{{.HostConfig.ReadonlyRootfs}}|{{json .HostConfig.CapDrop}}|{{json .HostConfig.SecurityOpt}}|{{.HostConfig.PidsLimit}}|{{.HostConfig.Memory}}|{{.HostConfig.NanoCpus}}|{{json .HostConfig.Tmpfs}}",
+      proxy,
+    ]);
+    if (hardening.code !== 0) return false;
+    const [user, readOnly, capDrop, securityOpt, pids, memory, cpus, tmpfs] = hardening.stdout.trim().split("|");
+    try {
+      return (
+        user === "65532:65532" &&
+        readOnly === "true" &&
+        JSON.parse(capDrop ?? "[]").includes("ALL") &&
+        JSON.parse(securityOpt ?? "[]").includes("no-new-privileges:true") &&
+        pids === "64" &&
+        memory === "67108864" &&
+        cpus === "250000000" &&
+        JSON.parse(tmpfs ?? "{}")["/tmp"] === "rw,noexec,nosuid,size=16m"
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  async function destroyControlProxy(name: string): Promise<void> {
+    if (!opts.controlNetwork) return;
+    const proxy = localControlName(name);
+    const r = await dexec(["rm", "-f", proxy]);
+    if (r.code !== 0 && !/no such (?:object|container)|not found/i.test(r.stderr)) {
+      throw new Error(`docker rm ${proxy} failed: ${r.stderr.trim()}`);
+    }
+  }
+
+  async function removeContainerIfPresent(name: string): Promise<void> {
+    const r = await dexec(["rm", "-f", name]);
+    if (r.code !== 0 && !/no such (?:object|container)|not found/i.test(r.stderr)) {
+      throw new Error(`docker rm ${name} failed: ${r.stderr.trim()}`);
     }
   }
 
@@ -274,17 +432,26 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       "--network",
       net,
       ...(withVolume && scope ? ["-v", `${localVolumeName(scope)}:${homeDir}`] : []),
-      ...(opts.coreContainer ? [] : ["-p", `127.0.0.1:0:${AGENT_PORT}`]),
-      "--add-host=host.docker.internal:host-gateway",
+      ...(opts.coreContainer || opts.controlNetwork ? [] : ["-p", `127.0.0.1:0:${AGENT_PORT}`]),
+      ...(opts.controlNetwork ? [] : ["--add-host=host.docker.internal:host-gateway"]),
       ...(opts.cpus ? ["--cpus", String(opts.cpus)] : []),
       ...(opts.memoryMb ? ["--memory", `${opts.memoryMb}m`] : []),
       image,
     ];
     const r = await dexec(args, 120_000);
     if (r.code !== 0) throw new Error(`docker run ${name} failed: ${r.stderr.trim()}`);
-    portByName.delete(name);
-    await connectCore(net);
-    await waitDaemon(name);
+    try {
+      portByName.delete(name);
+      await connectCore(net);
+      await ensureControlProxy(name, net);
+      await waitDaemon(name);
+    } catch (error) {
+      await destroyControlProxy(name).catch(swallowAs("local-sandbox: control proxy rollback", undefined));
+      await dexec(["rm", "-f", name]).catch(swallowAs("local-sandbox: workload rollback", undefined));
+      await dexec(["network", "rm", net]).catch(swallowAs("local-sandbox: network rollback", undefined));
+      portByName.delete(name);
+      throw error;
+    }
   }
 
   async function ensureContainer(scope: string): Promise<{ name: string; coldStart: boolean }> {
@@ -295,7 +462,11 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       const state = await containerState(name);
       if (state && state.imageId === imageId) {
         if (!state.running) await startContainer(name);
-        else await connectCore(await ensureNetwork(name));
+        else {
+          const net = await ensureNetwork(name);
+          await connectCore(net);
+          await ensureControlProxy(name, net);
+        }
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
@@ -320,7 +491,11 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       const state = await containerState(name);
       if (state) {
         if (!state.running) await startContainer(name);
-        else await connectCore(await ensureNetwork(name));
+        else {
+          const net = await ensureNetwork(name);
+          await connectCore(net);
+          await ensureControlProxy(name, net);
+        }
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
@@ -477,8 +652,9 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
         if (handle.scratch) {
           for (const [k, name] of scratchByKey) if (name === handle.id) scratchByKey.delete(k);
-          if (tdOpts?.destroy) await dexec(["rm", "-f", handle.id]);
+          if (tdOpts?.destroy) await removeContainerIfPresent(handle.id);
           else await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: scratch rm", undefined));
+          await destroyControlProxy(handle.id);
           await disconnectCore(localNetworkName(handle.id));
           await dexec(["network", "rm", localNetworkName(handle.id)]).catch(
             swallowAs("local-sandbox: scratch network rm", undefined),
@@ -490,6 +666,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         if (tdOpts?.keepWarm) return;
 
         if (tdOpts?.destroy) {
+          await destroyControlProxy(handle.id);
           await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: destroy rm", undefined));
           await disconnectCore(localNetworkName(handle.id));
           await dexec(["network", "rm", localNetworkName(handle.id)]).catch(

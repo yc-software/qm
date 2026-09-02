@@ -6,6 +6,7 @@ export interface FakeContainer {
   running: boolean;
   labels: Record<string, string>;
   volume?: string;
+  network?: string;
   args: string[];
 }
 
@@ -15,6 +16,7 @@ export interface FakeDocker {
   volumes: Set<string>;
   networks: Set<string>;
   connections: Set<string>;
+  calls: string[][];
   runCount: number;
   daemonDown: boolean;
   imageMissing: boolean;
@@ -28,11 +30,13 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
   const volumes = new Set<string>();
   const networks = new Set<string>();
   const connections = new Set<string>();
+  const calls: string[][] = [];
   const self: FakeDocker = {
     containers,
     volumes,
     networks,
     connections,
+    calls,
     runCount: 0,
     daemonDown: false,
     imageMissing: false,
@@ -54,12 +58,14 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         const [k = "", v = ""] = args[++i]!.split("=");
         c.labels[k] = v;
       } else if (a === "-v") c.volume = args[++i]!.split(":")[0]!;
+      else if (a === "--network") c.network = args[++i]!;
       else if (a === "-p" || a === "--cpus" || a === "--memory") i++;
     }
     return c;
   }
 
   function exec(args: string[]): { code: number; stdout: string; stderr: string } {
+    calls.push(args);
     const [cmd, ...rest] = args;
     if (self.daemonDown) return fail("Cannot connect to the Docker daemon");
     switch (cmd) {
@@ -75,11 +81,38 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         const name = rest[rest.length - 1]!;
         const c = containers.get(name);
         if (!c) return fail(`Error: No such object: ${name}`);
+        const format = rest[rest.length - 2] ?? "";
+        if (format.includes("qm.sandbox-control")) return ok(c.labels["qm.sandbox-control"] ?? "");
+        if (format.includes("qm.deploy-control")) return ok(c.labels["qm.deploy-control"] ?? "");
+        if (format.includes("NetworkSettings.Networks")) {
+          return ok(
+            JSON.stringify(
+              Object.fromEntries([
+                ...(c.network ? [[c.network, {}]] : []),
+                ...[...connections].filter((v) => v.endsWith(`|${name}`)).map((v) => [v.split("|")[0]!, {}]),
+              ]),
+            ),
+          );
+        }
+        if (format.includes("Config.Cmd")) {
+          const socat = c.args.indexOf("socat");
+          return ok(JSON.stringify(socat < 0 ? [] : c.args.slice(socat)));
+        }
+        if (format.includes("HostConfig.ReadonlyRootfs")) {
+          const has = (arg: string, value?: string) => {
+            const i = c.args.indexOf(arg);
+            return i >= 0 && (value === undefined || c.args[i + 1] === value);
+          };
+          return ok(
+            `${c.args[c.args.indexOf("--user") + 1] ?? ""}|${has("--read-only")}|${JSON.stringify(has("--cap-drop", "ALL") ? ["ALL"] : [])}|${JSON.stringify(has("--security-opt", "no-new-privileges:true") ? ["no-new-privileges:true"] : [])}|${has("--pids-limit", "64") ? "64" : "0"}|${has("--memory", "64m") ? "67108864" : "0"}|${has("--cpus", "0.25") ? "250000000" : "0"}|${JSON.stringify(has("--tmpfs", "/tmp:rw,noexec,nosuid,size=16m") ? { "/tmp": "rw,noexec,nosuid,size=16m" } : {})}`,
+          );
+        }
         return ok(`${c.running} ${c.imageId}`);
       }
       case "network": {
-        const [sub, name] = rest as [string, string];
-        if (sub === "inspect") return networks.has(name) ? ok(name) : fail(`Error: No such network: ${name}`);
+        const sub = rest[0]!;
+        const name = rest[rest.length - 1]!;
+        if (sub === "inspect") return networks.has(name) ? ok("true") : fail(`Error: No such network: ${name}`);
         if (sub === "create") {
           if (networks.has(name)) return fail(`network with name ${name} already exists`);
           networks.add(name);
@@ -87,8 +120,9 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         }
         if (sub === "rm") return networks.delete(name) ? ok(name) : fail(`Error: No such network: ${name}`);
         if (sub === "connect" || sub === "disconnect") {
+          const network = rest[1]!;
           const container = rest[2]!;
-          const key = `${name}|${container}`;
+          const key = `${network}|${container}`;
           if (sub === "connect") {
             if (connections.has(key)) return fail("endpoint already exists");
             connections.add(key);
@@ -134,6 +168,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
       case "rm": {
         const name = rest[rest.length - 1]!;
         containers.delete(name);
+        for (const connection of connections) if (connection.endsWith(`|${name}`)) connections.delete(connection);
         return ok(name);
       }
       case "port": {
