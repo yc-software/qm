@@ -5,11 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { memorableInject } from "../src/memory/memorable/inject.ts";
 
-function stub(script: string): string {
+function stub(script: string): string[] {
   const dir = mkdtempSync(join(tmpdir(), "memorable-inject-"));
   const file = join(dir, "stub.mjs");
   writeFileSync(file, script);
-  return `node ${file}`;
+  return ["node", file];
 }
 
 test("memorableInject returns the rendered block from stdout", async () => {
@@ -25,7 +25,7 @@ test("memorableInject returns the rendered block from stdout", async () => {
 test("memorableInject returns null on empty output, nonzero exit, and missing binary", async () => {
   assert.equal(await memorableInject(stub(""), "personal:U1", "task"), null);
   assert.equal(await memorableInject(stub("process.exit(1);\n"), "personal:U1", "task"), null);
-  assert.equal(await memorableInject("memorable-binary-that-does-not-exist", "personal:U1", "task"), null);
+  assert.equal(await memorableInject(["memorable-binary-that-does-not-exist"], "personal:U1", "task"), null);
 });
 
 test("memorableInject refuses output without the data-not-instructions envelope", async () => {

@@ -5,8 +5,9 @@ import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-p
 import type { MemoryProviderConfig, McpMemoryOperationConfig } from "./provider-config.ts";
 import { createRoutedMemoryService } from "./provider-router.ts";
 import type { MemoryService } from "./memory-service.ts";
-import { createMemorableMemoryProvider, type MemorableProviderDeps } from "./memorable/provider.ts";
+import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
+import type { SessionEntry } from "../types.ts";
 
 function operation(
   url: string,
@@ -39,22 +40,23 @@ export function createConfiguredMemoryService(opts: {
   defaultMemory: MemoryService;
   config?: MemoryProviderConfig;
   fetchImpl?: McpFetch;
-  /** Required when any provider has type "memorable": how it reads a session's entries and redacts secrets. */
-  memorable?: Pick<MemorableProviderDeps, "loadEntries">;
-  onError?: (error: unknown, provider: string, operation: "recall" | "query") => void;
+  /** Session trace access for providers that derive memory from tool-call history (currently "memorable"). */
+  sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
+  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
   if (!opts.config) return opts.defaultMemory;
   const providers: Record<string, MemoryService> = { default: opts.defaultMemory };
   for (const provider of opts.config.providers) {
     if (provider.type === "memorable") {
-      if (!opts.memorable) throw new Error(`memory provider ${provider.id} needs session access to record procedures`);
+      if (!opts.sessionEntries)
+        throw new Error(`memory provider ${provider.id} needs session access to record procedures`);
       providers[provider.id] = createMemorableMemoryProvider({
-        bin: provider.bin,
+        argv: provider.argv,
         env: provider.env,
         injectTimeoutMs: provider.injectTimeoutMs,
         recordTimeoutMs: provider.recordTimeoutMs,
         mask: createSecretValueMasker(provider.redactValues),
-        ...opts.memorable,
+        loadEntries: opts.sessionEntries,
       });
       continue;
     }

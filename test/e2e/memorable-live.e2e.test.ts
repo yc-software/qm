@@ -144,6 +144,7 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
   let memory: ReturnType<typeof createConfiguredMemoryService>;
   let cli: (args: string[]) => string;
   const timings: Record<string, number> = {};
+  const errors: string[] = [];
 
   const capture = (scope: ScopeId, sessionId: string) =>
     memory.capture(scope, [], Date.now(), "U1", { mode: "automatic", sessionId, actorId: "U1" });
@@ -187,7 +188,7 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
 
     const config = parseMemoryProviderConfig(
       JSON.stringify({
-        providers: [{ id: "procedures", type: "memorable", bin: CLI, injectTimeoutMs: 30_000 }],
+        providers: [{ id: "procedures", type: "memorable", bin: CLI!.split(" "), injectTimeoutMs: 30_000 }],
         routes: [
           { provider: "default", scopes: ["personal"], capture: "automatic" },
           { provider: "procedures", scopes: ["personal"], capture: "automatic", manage: false, label: "Procedures" },
@@ -198,7 +199,8 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
     memory = createConfiguredMemoryService({
       defaultMemory: createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memorable-ws-")))),
       config,
-      memorable: { loadEntries: async (id) => SESSIONS[id] ?? [] },
+      sessionEntries: async (id) => SESSIONS[id] ?? [],
+      onError: (error, providerId, operation) => errors.push(`${providerId}:${operation}:${String(error)}`),
     });
   });
 
@@ -300,11 +302,17 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
     assert.equal((await rows(U2)).length, 0);
   });
 
-  it("a read-only scope refuses capture with a consent reason but still recalls", { timeout: 120_000 }, async () => {
-    await assert.rejects(capture(U3, "s-tls"), /memorable_write_denied.*read-only/);
-    assert.equal((await rows(U3)).length, 0);
-    assert.equal(await memory.recall(U3, { query: "rotate the ingress TLS cert" }), ""); // nothing stored for U3
-  });
+  it(
+    "a read-only scope refuses capture; the route fails open and the notebook is unaffected",
+    { timeout: 120_000 },
+    async () => {
+      // The provider surfaces the CLI's consent refusal; the route's default failOpen turns it into a logged no-op.
+      assert.equal(await capture(U3, "s-tls"), 0);
+      assert.match(errors.join("\n"), /procedures:capture:.*memorable_write_denied.*read-only/);
+      assert.equal((await rows(U3)).length, 0);
+      assert.equal(await memory.recall(U3, { query: "rotate the ingress TLS cert" }), ""); // nothing stored for U3
+    },
+  );
 
   it("a denied scope recalls nothing even with procedures present", { timeout: 60_000 }, async () => {
     cli(["forget", "--scope", U1]);

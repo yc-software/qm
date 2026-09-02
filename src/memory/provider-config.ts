@@ -1,5 +1,6 @@
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
+import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
 
 const KINDS = new Set<ScopeKind>(["personal", "channel", "team", "org", "group"]);
 const ID = /^[a-z][a-z0-9-]{0,62}$/;
@@ -35,59 +36,17 @@ interface McpMemoryProviderConfig {
   timeoutMs: number;
 }
 
-interface MemorableMemoryProviderConfig {
-  id: string;
-  type: "memorable";
-  /** Command used to run the Memorable CLI, e.g. `memorable` or `node /opt/memorable/cli.js`. */
-  bin: string;
-  /** Allow-listed environment handed to the spawned CLI. Never the whole process environment. */
-  env: NodeJS.ProcessEnv;
-  injectTimeoutMs: number;
-  recordTimeoutMs: number;
-  /** Process environment values that must be redacted from anything relayed to the CLI. */
-  redactValues: Record<string, string>;
-}
-
 type AnyMemoryProviderConfig = McpMemoryProviderConfig | MemorableMemoryProviderConfig;
+
+/** Which capture policies a route may set against a provider; providers declare this so route checks stay generic. */
+function capturePoliciesOf(provider: AnyMemoryProviderConfig): ReadonlySet<MemoryCapturePolicy> {
+  if (provider.type === "mcp") return new Set(provider.write ? ["off", "explicit", "automatic"] : ["off"]);
+  return provider.capturePolicies;
+}
 
 export interface MemoryProviderConfig {
   providers: AnyMemoryProviderConfig[];
   routes: MemoryProviderRoute[];
-}
-
-const MEMORABLE_ENV_ALLOWLIST = [
-  "PATH",
-  "TMPDIR",
-  "LANG",
-  "LC_ALL",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "NODE_EXTRA_CA_CERTS",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "ALL_PROXY",
-  "HOME",
-  "MEMORABLE_BACKEND",
-  "MEMORABLE_DB_URL",
-  "MEMORABLE_API_URL",
-  "MEMORABLE_API_KEY",
-  "MEMORABLE_HOME",
-] as const;
-
-function memorableEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = {};
-  for (const name of MEMORABLE_ENV_ALLOWLIST) if (env[name] !== undefined) out[name] = env[name];
-  out.MEMORABLE_BACKEND = env.MEMORABLE_BACKEND?.trim() || "qm";
-  // The CLI gets the connection string under its own name only; DATABASE_URL itself never crosses.
-  if (!out.MEMORABLE_DB_URL && env.DATABASE_URL) out.MEMORABLE_DB_URL = env.DATABASE_URL;
-  return out;
-}
-
-function stringValues(env: NodeJS.ProcessEnv): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) if (typeof value === "string") out[key] = value;
-  return out;
 }
 
 function timeout(value: unknown, at: string, fallback: number, max: number): number {
@@ -184,18 +143,7 @@ export function parseMemoryProviderConfig(
     const raw = object(value, `MEMORY_PROVIDER_CONFIG.providers[${i}]`);
     const id = string(raw.id, `MEMORY_PROVIDER_CONFIG.providers[${i}].id`);
     if (!ID.test(id) || id === "default") throw new Error(`invalid memory provider id: ${id}`);
-    if (raw.type === "memorable") {
-      const bin = raw.bin === undefined ? "memorable" : string(raw.bin, `memory provider ${id}.bin`);
-      return {
-        id,
-        type: "memorable" as const,
-        bin,
-        env: memorableEnv(env),
-        injectTimeoutMs: timeout(raw.injectTimeoutMs, `memory provider ${id}.injectTimeoutMs`, 15_000, 60_000),
-        recordTimeoutMs: timeout(raw.recordTimeoutMs, `memory provider ${id}.recordTimeoutMs`, 120_000, 600_000),
-        redactValues: stringValues(env),
-      } satisfies MemorableMemoryProviderConfig;
-    }
+    if (raw.type === "memorable") return parseMemorableProvider(raw, id, env);
     if (raw.type !== "mcp") throw new Error(`memory provider ${id} has unsupported type`);
     const timeoutMs = timeout(raw.timeoutMs, `memory provider ${id}.timeoutMs`, 3_000, 30_000);
     return {
@@ -219,11 +167,9 @@ export function parseMemoryProviderConfig(
     if (!(["off", "explicit", "automatic"] as unknown[]).includes(capture))
       throw new Error(`memory route ${i} has invalid capture policy`);
     const target = providerById.get(provider);
-    if (target?.type === "mcp" && capture !== "off" && !target.write)
-      throw new Error(`memory route ${i} enables capture but provider ${provider} has no write operation`);
-    if (target?.type === "memorable" && capture === "explicit")
+    if (target && !capturePoliciesOf(target).has(capture as MemoryCapturePolicy))
       throw new Error(
-        `memory route ${i}: provider ${provider} records procedures automatically; use capture "automatic" or "off"`,
+        `memory route ${i}: provider ${provider} does not support capture "${String(capture)}" (allowed: ${[...capturePoliciesOf(target)].join(", ")})`,
       );
     return {
       provider,

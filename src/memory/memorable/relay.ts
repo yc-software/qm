@@ -24,7 +24,7 @@ function refusalReason(stdout: string): string | null {
 export type RelayOutcome = { ok: true } | { ok: false; reason: string };
 
 export function relayRecord(
-  bin: string,
+  argv: readonly string[],
   capture: MemorableCapture,
   timeoutMs: number = RELAY_TIMEOUT_MS,
   opts?: { env: NodeJS.ProcessEnv; apiKey?: string },
@@ -35,7 +35,7 @@ export function relayRecord(
       resolve({ ok: true });
       return;
     }
-    const [cmd = "memorable", ...preArgs] = bin.split(" ").filter(Boolean);
+    const [cmd = "memorable", ...preArgs] = argv;
     const child = spawn(cmd, [...preArgs, "record", "--scope", capture.scope_id, "-"], {
       stdio: ["pipe", "pipe", "pipe"],
       ...(opts ? { env: { ...opts.env, ...(opts.apiKey ? { MEMORABLE_API_KEY: opts.apiKey } : {}) } } : {}),

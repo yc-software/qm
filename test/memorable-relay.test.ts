@@ -21,12 +21,12 @@ const capture: MemorableCapture = {
   ],
 };
 
-function stub(script: string): { bin: string; marker: string } {
+function stub(script: string): { bin: string[]; marker: string } {
   const dir = mkdtempSync(join(tmpdir(), "memorable-relay-"));
   const file = join(dir, "stub.mjs");
   const marker = join(dir, "marker");
   writeFileSync(file, script.replace("MARKER", JSON.stringify(marker)));
-  return { bin: `node ${file}`, marker };
+  return { bin: ["node", file], marker };
 }
 
 test("relayRecord pipes the capture as JSON to the configured binary", async () => {
@@ -40,7 +40,7 @@ test("relayRecord pipes the capture as JSON to the configured binary", async () 
 });
 
 test("relayRecord resolves quietly when the binary is missing", async () => {
-  await relayRecord("memorable-binary-that-does-not-exist", capture);
+  await relayRecord(["memorable-binary-that-does-not-exist"], capture);
 });
 
 test("relayRecord stops waiting on a child that never exits", async () => {

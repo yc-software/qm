@@ -75,3 +75,40 @@ test("external recall failures degrade to the remaining provider", async () => {
   assert.equal(await memory.recall("org:acme", { query: "launch" }), "notebook memory");
   assert.match(errors[0]!, /^broken:recall:Error: offline$/);
 });
+
+test("external capture failures degrade to the remaining provider", async () => {
+  const errors: string[] = [];
+  const calls: string[] = [];
+  const broken = provider("broken", calls);
+  broken.capture = async () => {
+    throw new Error("consent denied");
+  };
+  const strict = provider("strict", calls);
+  strict.capture = async () => {
+    throw new Error("offline");
+  };
+  const memory = createRoutedMemoryService({
+    providers: { notebook: provider("notebook", calls), broken, strict },
+    routes: [
+      { provider: "notebook", scopes: ["org"], capture: "automatic" },
+      { provider: "broken", scopes: ["org"], capture: "automatic", manage: false, failOpen: true },
+    ],
+    onError: (error, providerId, operation) => errors.push(`${providerId}:${operation}:${String(error)}`),
+  });
+  const stored = await memory.capture("org:acme", ["fact"], 1, "U1", { mode: "automatic" });
+  assert.ok(stored >= 0);
+  assert.ok(
+    calls.some((c) => c.startsWith("notebook:capture")),
+    `notebook still wrote: ${calls.join(",")}`,
+  );
+  assert.match(errors[0]!, /^broken:capture:Error: consent denied$/);
+
+  const strictMemory = createRoutedMemoryService({
+    providers: { notebook: provider("notebook", calls), strict },
+    routes: [
+      { provider: "notebook", scopes: ["org"], capture: "automatic" },
+      { provider: "strict", scopes: ["org"], capture: "automatic", manage: false, failOpen: false },
+    ],
+  });
+  await assert.rejects(strictMemory.capture("org:acme", ["fact"], 1, "U1", { mode: "automatic" }), /offline/);
+});

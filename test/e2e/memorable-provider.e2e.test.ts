@@ -56,7 +56,7 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
 
     const memoryProviderConfig = parseMemoryProviderConfig(
       JSON.stringify({
-        providers: [{ id: "procedures", type: "memorable", bin: CLI, injectTimeoutMs: 30_000 }],
+        providers: [{ id: "procedures", type: "memorable", bin: CLI!.split(" "), injectTimeoutMs: 30_000 }],
         routes: [
           { provider: "default", scopes: ["personal"], capture: "automatic" },
           { provider: "procedures", scopes: ["personal"], capture: "automatic", manage: false, label: "Procedures" },

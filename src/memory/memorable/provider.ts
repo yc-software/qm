@@ -5,7 +5,7 @@ import { memorableInject } from "./inject.ts";
 import { relayRecord } from "./relay.ts";
 
 export interface MemorableProviderDeps {
-  bin: string;
+  argv: readonly string[];
   env: NodeJS.ProcessEnv;
   /** Loads the session entries a capture should be derived from. */
   loadEntries: (sessionId: string) => Promise<SessionEntry[]>;
@@ -59,7 +59,7 @@ export function createMemorableMemoryProvider(deps: MemorableProviderDeps): Memo
     async recall(scopeId: ScopeId, context) {
       const task = context?.query?.trim();
       if (!task) return "";
-      const block = await inject(deps.bin, scopeId, task, spawnOpts, deps.injectTimeoutMs);
+      const block = await inject(deps.argv, scopeId, task, spawnOpts, deps.injectTimeoutMs);
       return block ?? "";
     },
 
@@ -69,7 +69,7 @@ export function createMemorableMemoryProvider(deps: MemorableProviderDeps): Memo
       const raw = captureSession(context.sessionId, entries);
       const capture = redactCapture({ ...raw, scope_id: scopeId }, mask);
       if (!capture.workflows.length) return 0;
-      const outcome = await relay(deps.bin, capture, deps.recordTimeoutMs, spawnOpts);
+      const outcome = await relay(deps.argv, capture, deps.recordTimeoutMs, spawnOpts);
       if (!outcome.ok) throw new Error(`memorable record refused: ${outcome.reason}`);
       return capture.workflows.length;
     },

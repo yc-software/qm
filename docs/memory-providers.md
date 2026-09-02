@@ -70,9 +70,12 @@ either direction.
 }
 ```
 
-Options: `bin` (default `memorable`; may include arguments, e.g. `node /opt/memorable/cli.js`),
+Options: `bin` (default `memorable`; a string or an argv array such as `["node", "/opt/memorable/cli.js"]`),
+`passEnv` (extra environment variable names to hand the CLI, e.g. `["MEMORABLE_STORE_KEY"]`),
 `injectTimeoutMs` (default 15000) and `recordTimeoutMs` (default 120000). The CLI is not bundled:
-install it with `npm i -g memorable-cli` (its `qm` backend also needs the `pg` package resolvable
+install it with `npm i -g memorable-cli@latest` — the `qm` backend needs 0.5.9 or newer, and an
+npm `min-release-age` setting can silently pick an older release, so check `memorable --version`
+(its `qm` backend also needs the `pg` package resolvable
 from QM's working directory). Recording calls the Memorable extraction service, so set both
 `MEMORABLE_API_URL` and `MEMORABLE_API_KEY`; recall is local. Consent is the CLI's own act, per
 scope: nothing is recorded for a scope until `memorable enable --scope <scope-id>` has been run
@@ -80,5 +83,6 @@ with the same `MEMORABLE_BACKEND=qm` and `MEMORABLE_DB_URL`. It sees only an all
 `MEMORABLE_*`, `PATH`, `HOME`, proxy and TLS variables — with `MEMORABLE_BACKEND` defaulting to
 `qm` and the database reachable solely as `MEMORABLE_DB_URL`. Routes to this provider accept
 `capture: "automatic"` or `"off"`; explicit `remember` writes are facts, not procedures, and are
-left to the notebook. The provider never exposes a notebook, so keep `manage: false` and let
+left to the notebook. A consent refusal from the CLI is reported as a capture error; like any
+external route it fails open by default, so the notebook write still lands and the refusal is logged. The provider never exposes a notebook, so keep `manage: false` and let
 `default` handle editing.

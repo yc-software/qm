@@ -67,7 +67,7 @@ describe(
       });
       const config = parseMemoryProviderConfig(
         JSON.stringify({
-          providers: [{ id: "procedures", type: "memorable", bin: CLI, injectTimeoutMs: 30_000 }],
+          providers: [{ id: "procedures", type: "memorable", bin: CLI!.split(" "), injectTimeoutMs: 30_000 }],
           routes: [
             { provider: "default", scopes: ["personal"], capture: "automatic" },
             { provider: "procedures", scopes: ["personal"], capture: "automatic", manage: false, label: "Procedures" },
@@ -78,7 +78,7 @@ describe(
       memory = createConfiguredMemoryService({
         defaultMemory: createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memorable-ws-")))),
         config,
-        memorable: { loadEntries: async (id) => (id === "s-e2e" ? trace : []) },
+        sessionEntries: async (id) => (id === "s-e2e" ? trace : []),
       });
     });
 

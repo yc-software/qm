@@ -63,19 +63,34 @@ test("provider config rejects unknown providers and public cleartext MCP URLs", 
 test("provider config accepts a memorable provider with an allow-listed child environment", () => {
   const config = parseMemoryProviderConfig(
     JSON.stringify({
-      providers: [{ id: "procedures", type: "memorable", bin: "node /opt/memorable/cli.js", injectTimeoutMs: 5000 }],
+      providers: [
+        {
+          id: "procedures",
+          type: "memorable",
+          bin: ["node", "/opt/memorable dir/cli.js"],
+          passEnv: ["MEMORABLE_STORE_KEY"],
+          injectTimeoutMs: 5000,
+        },
+      ],
       routes: [{ provider: "procedures", scopes: ["personal"], capture: "automatic", manage: false }],
     }),
-    { DATABASE_URL: "postgres://qm", PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-never", MEMORABLE_API_KEY: "mk" },
+    {
+      DATABASE_URL: "postgres://qm",
+      PATH: "/usr/bin",
+      ANTHROPIC_API_KEY: "sk-never",
+      MEMORABLE_API_KEY: "mk",
+      MEMORABLE_STORE_KEY: "aa",
+    },
   );
   const provider = config?.providers[0];
   if (provider?.type !== "memorable") throw new Error("expected memorable provider");
-  assert.equal(provider.bin, "node /opt/memorable/cli.js");
+  assert.deepEqual(provider.argv, ["node", "/opt/memorable dir/cli.js"]);
   assert.equal(provider.injectTimeoutMs, 5000);
   assert.equal(provider.recordTimeoutMs, 120_000);
   assert.deepEqual(provider.env, {
     PATH: "/usr/bin",
     MEMORABLE_API_KEY: "mk",
+    MEMORABLE_STORE_KEY: "aa",
     MEMORABLE_BACKEND: "qm",
     MEMORABLE_DB_URL: "postgres://qm",
   });
@@ -93,6 +108,25 @@ test("provider config rejects explicit capture on a memorable route", () => {
         }),
         {},
       ),
-    /records procedures automatically/,
+    /does not support capture "explicit"/,
+  );
+});
+
+test("provider config rejects malformed passEnv names and empty bin", () => {
+  assert.throws(
+    () =>
+      parseMemoryProviderConfig(
+        JSON.stringify({ providers: [{ id: "p", type: "memorable", passEnv: ["lower"] }], routes: [] }),
+        {},
+      ),
+    /passEnv/,
+  );
+  assert.throws(
+    () =>
+      parseMemoryProviderConfig(
+        JSON.stringify({ providers: [{ id: "p", type: "memorable", bin: [] }], routes: [] }),
+        {},
+      ),
+    /bin/,
   );
 });

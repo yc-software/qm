@@ -26,7 +26,7 @@ function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit
 export function createRoutedMemoryService(opts: {
   providers: Readonly<Record<string, MemoryService>>;
   routes: readonly MemoryProviderRoute[];
-  onError?: (error: unknown, provider: string, operation: "recall" | "query") => void;
+  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
   const routesFor = (scopeId: ScopeId): MemoryProviderRoute[] => opts.routes.filter((route) => matches(route, scopeId));
   const providerFor = (route: MemoryProviderRoute): MemoryService => {
@@ -66,7 +66,15 @@ export function createRoutedMemoryService(opts: {
       const mode = context?.mode ?? "explicit";
       const routes = routesFor(scopeId).filter((route) => captureAllowed(route.capture, mode));
       const counts = await Promise.all(
-        routes.map((route) => providerFor(route).capture(scopeId, facts, at, author, context)),
+        routes.map(async (route) => {
+          try {
+            return await providerFor(route).capture(scopeId, facts, at, author, context);
+          } catch (error) {
+            if (!route.failOpen) throw error;
+            opts.onError?.(error, route.provider, "capture");
+            return 0;
+          }
+        }),
       );
       return counts.length ? Math.max(...counts) : 0;
     },

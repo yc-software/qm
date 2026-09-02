@@ -36,14 +36,14 @@ export function clampChars(text: string, max: number): string {
 }
 
 export function memorableInject(
-  bin: string,
+  argv: readonly string[],
   scopeId: string,
   task: string,
   opts?: { env: NodeJS.ProcessEnv; apiKey?: string },
   timeoutMs: number = INJECT_TIMEOUT_MS,
 ): Promise<string | null> {
   return new Promise((resolve) => {
-    const [cmd = "memorable", ...preArgs] = bin.split(" ").filter(Boolean);
+    const [cmd = "memorable", ...preArgs] = argv;
     const child = spawn(cmd, [...preArgs, "inject", "--scope", scopeId], {
       stdio: ["pipe", "pipe", "ignore"],
       ...(opts ? { env: { ...opts.env, ...(opts.apiKey ? { MEMORABLE_API_KEY: opts.apiKey } : {}) } } : {}),
