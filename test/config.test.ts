@@ -60,6 +60,48 @@ test("deploy provider defaults to docker and rejects unknown values", () => {
   assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "flly" }), /DEPLOY_PROVIDER="flly" is not recognized/);
 });
 
+test("local sandbox accepts an isolated daemon peer and an internal network", () => {
+  const config = loadConfig({
+    ...productionEnv,
+    LOCAL_SANDBOX_NETWORK_INTERNAL: "true",
+    LOCAL_SANDBOX_CONTROL_NETWORK: "qm-control",
+    LOCAL_SANDBOX_CONTROL_PROXY_IMAGE:
+      "example.invalid/control-proxy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  assert.deepEqual(config.localSandbox, {
+    networkInternal: true,
+    controlNetwork: "qm-control",
+    controlProxyImage:
+      "example.invalid/control-proxy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  assert.throws(
+    () => loadConfig({ ...productionEnv, LOCAL_SANDBOX_NETWORK_INTERNAL: "sometimes" }),
+    /LOCAL_SANDBOX_NETWORK_INTERNAL=.*not a recognized boolean/,
+  );
+});
+
+test("Docker Apps deployment accepts the isolated daemon peer and network", () => {
+  const config = loadConfig({
+    ...productionEnv,
+    DOCKER_DEPLOY_ENDPOINT_HOST: "host.docker.internal",
+    DOCKER_DEPLOY_NETWORK_INTERNAL: "true",
+    DOCKER_DEPLOY_CONTROL_NETWORK: "qm-control",
+    DOCKER_DEPLOY_CONTROL_PROXY_IMAGE:
+      "example.invalid/control-proxy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  assert.deepEqual(config.dockerDeploy, {
+    endpointHost: "host.docker.internal",
+    networkInternal: true,
+    controlNetwork: "qm-control",
+    controlProxyImage:
+      "example.invalid/control-proxy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  assert.throws(
+    () => loadConfig({ ...productionEnv, DOCKER_DEPLOY_ENDPOINT_HOST: "http://host.docker.internal" }),
+    /DOCKER_DEPLOY_ENDPOINT_HOST must be a hostname/,
+  );
+});
+
 test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }), /missing or insecure required core secrets/);
   assert.equal(loadConfig(productionEnv).production, true);

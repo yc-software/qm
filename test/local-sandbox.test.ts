@@ -19,6 +19,7 @@ import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
+const controlProxyImage = "alpine/socat@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 let daemon: ChildProcess;
 let daemonPort = 0;
 
@@ -313,4 +314,205 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   assert.ok(seen.includes(`http://${h.id}:8080/health`));
   await sb.teardown(h, { destroy: true });
   assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
+});
+
+test("an isolated daemon publishes sandbox control only to its configured peer and denies sandbox egress", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const seen: string[] = [];
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    seen.push(url);
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const sb = makeSandbox(fake, {
+    agentHost: "host.docker.internal",
+    networkInternal: true,
+    fetchImpl,
+  });
+
+  const h = await sb.provision(rw(scopeId("personal", "U41")));
+  const args = fake.containers.get(h.id)!.args;
+  assert.ok(fake.calls.some((call) => call.join(" ") === `network create --internal ${localNetworkName(h.id)}`));
+  assert.ok(args.includes("-p"));
+  assert.ok(seen.includes(`http://host.docker.internal:${daemonPort}/health`));
+  assert.equal(fake.connections.size, 0);
+  await sb.teardown(h, { destroy: true });
+});
+
+test("a workload control proxy bridges Core without exposing Core to the workload network", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const seen: string[] = [];
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    seen.push(url);
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const sb = makeSandbox(fake, {
+    controlNetwork: "qm-control",
+    controlProxyImage,
+    networkInternal: true,
+    fetchImpl,
+  });
+
+  const h = await sb.provision(rw(scopeId("personal", "U42")));
+  const proxy = `qm-control-${h.id}`;
+  assert.ok(fake.containers.has(proxy));
+  assert.ok(fake.connections.has(`qm-control|${proxy}`));
+  assert.ok(seen.includes(`http://${proxy}:8080/health`));
+  const relay = fake.containers.get(proxy)!;
+  for (const arg of ["--read-only", "--cap-drop", "--security-opt", "--pids-limit", "--memory", "--cpus", "--user"]) {
+    assert.ok(relay.args.includes(arg), arg);
+  }
+  const workload = fake.containers.get(h.id)!;
+  assert.equal(workload.args.includes("-p"), false);
+  assert.equal(workload.args.includes("--add-host"), false);
+  assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
+  await sb.teardown(h, { destroy: true });
+});
+
+test("a stale workload control proxy is recreated before reuse", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const sb = makeSandbox(fake, {
+    controlNetwork: "qm-control",
+    controlProxyImage,
+    networkInternal: true,
+    fetchImpl,
+  });
+  const layers = rw(scopeId("personal", "U43"));
+  const first = await sb.provision(layers);
+  const proxy = `qm-control-${first.id}`;
+  fake.imageId = "sha256:image-v2";
+
+  const second = await sb.provision(layers);
+
+  assert.equal(fake.containers.get(proxy)!.imageId, "sha256:image-v2");
+  await sb.teardown(first);
+  await sb.teardown(second, { destroy: true });
+});
+
+test("a tampered workload control proxy is recreated before reuse", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const sb = makeSandbox(fake, {
+    controlNetwork: "qm-control",
+    controlProxyImage,
+    networkInternal: true,
+    fetchImpl,
+  });
+  const layers = rw(scopeId("personal", "U43-tampered"));
+  const first = await sb.provision(layers);
+  const proxy = `qm-control-${first.id}`;
+  delete fake.containers.get(proxy)!.labels["qm.sandbox-control"];
+  const before = fake.runCount;
+
+  const second = await sb.provision(layers);
+
+  assert.equal(fake.runCount, before + 1);
+  await sb.teardown(first);
+  await sb.teardown(second, { destroy: true });
+});
+
+test("a control proxy with an extra network is recreated before reuse", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const sb = makeSandbox(fake, { controlNetwork: "qm-control", controlProxyImage, networkInternal: true, fetchImpl });
+  const layers = rw(scopeId("personal", "U43-extra-network"));
+  const first = await sb.provision(layers);
+  const proxy = `qm-control-${first.id}`;
+  fake.connections.add(`shared-network|${proxy}`);
+  const before = fake.runCount;
+
+  const second = await sb.provision(layers);
+
+  assert.equal(fake.runCount, before + 1);
+  await sb.teardown(first);
+  await sb.teardown(second, { destroy: true });
+});
+
+test("a failed control-proxy health check removes the workload and relay", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake, {
+    controlNetwork: "qm-control",
+    controlProxyImage,
+    networkInternal: true,
+    daemonReadyTimeoutMs: 50,
+    fetchImpl: () => Promise.resolve(new Response("", { status: 503 })),
+  });
+  const scope = scopeId("personal", "U44");
+  const name = localContainerName(scope);
+
+  await assert.rejects(sb.provision(rw(scope)), /exec daemon never became reachable/);
+
+  assert.equal(fake.containers.has(name), false);
+  assert.equal(fake.containers.has(`qm-control-${name}`), false);
+  assert.equal(fake.networks.has(localNetworkName(name)), false);
+});
+
+test("control mode fails closed unless its sandbox network is internal", () => {
+  const workspace = createLocalWorkspaceStore("/tmp/qm-control-mode-validation");
+  assert.throws(
+    () => createLocalSandbox(workspace, { controlNetwork: "qm-control", controlProxyImage: "alpine/socat:1.8.0.0" }),
+    /requires networkInternal=true/,
+  );
+  assert.throws(
+    () =>
+      createLocalSandbox(workspace, {
+        controlNetwork: "qm-control",
+        controlProxyImage: "alpine/socat:1.8.0.0",
+        networkInternal: false,
+      }),
+    /requires networkInternal=true/,
+  );
+});
+
+test("control mode rejects a mutable sandbox control proxy image", () => {
+  const workspace = createLocalWorkspaceStore("/tmp/qm-control-image-validation");
+  assert.throws(
+    () =>
+      createLocalSandbox(workspace, {
+        controlNetwork: "qm-control",
+        controlProxyImage: "alpine/socat:1.8.0.0",
+        networkInternal: true,
+      }),
+    /immutable digest/,
+  );
+});
+
+test("a missing control proxy does not prevent sandbox resource cleanup", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    return Promise.resolve(
+      new Response(url.endsWith("/health") ? "" : JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })),
+    );
+  };
+  const sb = makeSandbox(fake, {
+    controlNetwork: "qm-control",
+    controlProxyImage,
+    networkInternal: true,
+    fetchImpl,
+  });
+  const handle = await sb.provision(rw(scopeId("personal", "U45")));
+  fake.containers.delete(`qm-control-${handle.id}`);
+
+  await sb.teardown(handle, { destroy: true });
+
+  assert.equal(fake.containers.has(handle.id), false);
+  assert.equal(fake.networks.has(localNetworkName(handle.id)), false);
+  assert.equal(fake.volumes.has(localVolumeName(scopeId("personal", "U45"))), false);
 });

@@ -154,6 +154,7 @@ export interface Config {
   eagerProvisionEnabled: boolean;
   awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
+  dockerDeploy: DockerDeployEnv;
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
   awsDeploy: AwsDeployEnv;
@@ -274,11 +275,33 @@ interface LocalSandboxEnv {
   dockerBin?: string;
   cpus?: number;
   memoryMb?: number;
-  coreContainer?: string;
+  agentHost?: string;
+  networkInternal?: boolean;
+  controlNetwork?: string;
+  controlProxyImage?: string;
   defaultTimeoutSec?: number;
 }
 
 function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
+  const agentHost = env.LOCAL_SANDBOX_AGENT_HOST?.trim();
+  const controlNetwork = env.LOCAL_SANDBOX_CONTROL_NETWORK?.trim();
+  const controlProxyImage = env.LOCAL_SANDBOX_CONTROL_PROXY_IMAGE?.trim();
+  const networkInternal = boolEnvStrict("LOCAL_SANDBOX_NETWORK_INTERNAL", env.LOCAL_SANDBOX_NETWORK_INTERNAL);
+  if (agentHost && !/^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$/.test(agentHost)) {
+    throw new Error("LOCAL_SANDBOX_AGENT_HOST must be a hostname without a scheme, port, or path");
+  }
+  if (!!controlNetwork !== !!controlProxyImage) {
+    throw new Error("LOCAL_SANDBOX_CONTROL_NETWORK and LOCAL_SANDBOX_CONTROL_PROXY_IMAGE must be set together");
+  }
+  if (controlNetwork && networkInternal !== true) {
+    throw new Error("LOCAL_SANDBOX_CONTROL_NETWORK requires LOCAL_SANDBOX_NETWORK_INTERNAL=true");
+  }
+  if (controlNetwork && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(controlNetwork)) {
+    throw new Error("LOCAL_SANDBOX_CONTROL_NETWORK must be a Docker network name");
+  }
+  if (controlProxyImage && !/^[a-z0-9][a-z0-9./_-]*@sha256:[a-f0-9]{64}$/.test(controlProxyImage)) {
+    throw new Error("LOCAL_SANDBOX_CONTROL_PROXY_IMAGE must be an immutable image digest");
+  }
   return {
     ...(env.LOCAL_SANDBOX_IMAGE ? { image: env.LOCAL_SANDBOX_IMAGE } : {}),
     ...(env.LOCAL_SANDBOX_DOCKER_BIN ? { dockerBin: env.LOCAL_SANDBOX_DOCKER_BIN } : {}),
@@ -288,6 +311,10 @@ function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
     ...(numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) !== undefined
       ? { memoryMb: numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) }
       : {}),
+    ...(agentHost ? { agentHost } : {}),
+    ...(controlNetwork ? { controlNetwork } : {}),
+    ...(controlProxyImage ? { controlProxyImage } : {}),
+    ...(networkInternal !== undefined ? { networkInternal } : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
@@ -300,6 +327,41 @@ interface SpritesSandboxEnv {
   namePrefix?: string;
   egressProxyUrl?: string;
   defaultTimeoutSec?: number;
+}
+
+interface DockerDeployEnv {
+  endpointHost?: string;
+  networkInternal?: boolean;
+  controlNetwork?: string;
+  controlProxyImage?: string;
+}
+
+function dockerDeployEnv(env: NodeJS.ProcessEnv): DockerDeployEnv {
+  const endpointHost = env.DOCKER_DEPLOY_ENDPOINT_HOST?.trim();
+  const controlNetwork = env.DOCKER_DEPLOY_CONTROL_NETWORK?.trim();
+  const controlProxyImage = env.DOCKER_DEPLOY_CONTROL_PROXY_IMAGE?.trim();
+  const networkInternal = boolEnvStrict("DOCKER_DEPLOY_NETWORK_INTERNAL", env.DOCKER_DEPLOY_NETWORK_INTERNAL);
+  if (endpointHost && !/^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$/.test(endpointHost)) {
+    throw new Error("DOCKER_DEPLOY_ENDPOINT_HOST must be a hostname without a scheme, port, or path");
+  }
+  if (!!controlNetwork !== !!controlProxyImage) {
+    throw new Error("DOCKER_DEPLOY_CONTROL_NETWORK and DOCKER_DEPLOY_CONTROL_PROXY_IMAGE must be set together");
+  }
+  if (controlNetwork && networkInternal !== true) {
+    throw new Error("DOCKER_DEPLOY_CONTROL_NETWORK requires DOCKER_DEPLOY_NETWORK_INTERNAL=true");
+  }
+  if (controlNetwork && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(controlNetwork)) {
+    throw new Error("DOCKER_DEPLOY_CONTROL_NETWORK must be a Docker network name");
+  }
+  if (controlProxyImage && !/^[a-z0-9][a-z0-9./_-]*@sha256:[a-f0-9]{64}$/.test(controlProxyImage)) {
+    throw new Error("DOCKER_DEPLOY_CONTROL_PROXY_IMAGE must be an immutable image digest");
+  }
+  return {
+    ...(endpointHost ? { endpointHost } : {}),
+    ...(controlNetwork ? { controlNetwork } : {}),
+    ...(controlProxyImage ? { controlProxyImage } : {}),
+    ...(networkInternal !== undefined ? { networkInternal } : {}),
+  };
 }
 
 function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
@@ -979,6 +1041,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     eagerProvisionEnabled: boolEnvStrict("EAGER_PROVISION", env.EAGER_PROVISION) ?? false,
     awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
+    dockerDeploy: dockerDeployEnv(env),
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
     awsDeploy: awsDeployEnv(env),
