@@ -1,15 +1,27 @@
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { spawnDockerExec, type DockerExec } from "../sandbox/docker-exec.ts";
+import { errMessage } from "../util/errors.ts";
 
 const APP_PORT = 8080;
 const LEGACY_NETWORK = "agent-deploynet";
+const DAEMON_PROBE_TIMEOUT_MS = 10_000;
 
 export interface DockerDeployProviderOptions {
   image?: string;
   docker?: string;
   basePort?: number;
   dockerExec?: DockerExec;
+}
+
+export async function dockerDaemonUnreachable(opts: DockerDeployProviderOptions = {}): Promise<string | null> {
+  const dexec = opts.dockerExec ?? spawnDockerExec(opts.docker ?? "docker");
+  try {
+    const r = await dexec(["version", "-f", "{{.Server.Version}}"], DAEMON_PROBE_TIMEOUT_MS);
+    return r.code === 0 ? null : r.stderr.trim() || `exit ${r.code}`;
+  } catch (e) {
+    return errMessage(e);
+  }
 }
 
 export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {}): DeployProvider {
