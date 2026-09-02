@@ -154,11 +154,6 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
 
     apply: (d, version) =>
       serialized(d, async () => {
-        if (!appsDomain) {
-          throw new Error(
-            `porter deploy ${d.id}: PORTER_DEPLOY_APPS_DOMAIN is not set, so the app would have no address — enable sandbox ingress on the cluster, point a wildcard DNS record at it, and set PORTER_DEPLOY_APPS_DOMAIN (docs/porter.md)`,
-          );
-        }
         resolveCache.delete(d.id);
         const { id: volumeId } = await ensurePorterVolume(client, volumeName(d));
         await retireBodies(d, true);
@@ -186,7 +181,12 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
           });
         try {
           await waitPorterRunning(name, sb);
-          const host = (await sb.refresh()).host || domainOf(d)!;
+          const host = (await sb.refresh()).host || domainOf(d);
+          if (!host) {
+            throw new Error(
+              `porter deploy ${d.id}: the cluster named no host for the app — its sandbox ingress has no root domain, so set PORTER_DEPLOY_APPS_DOMAIN to a domain whose wildcard resolves to that ingress (docs/porter.md)`,
+            );
+          }
           await materialize(sb.id, version);
           await startApp(sb.id, version);
           await store.put(d.id, { deploymentId: d.id, sandboxId: sb.id, name, host, createdAtMs: Date.now() });

@@ -18,6 +18,7 @@ export interface FakePorterBody {
 export interface FakePorterOptions {
   terminateLag?: number;
   pageSize?: number;
+  assignHost?: boolean;
 }
 
 export interface FakePorter {
@@ -156,7 +157,8 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
         mkdirSync(home, { recursive: true });
         mkdirSync(app, { recursive: true });
         const exposed = spec.networking?.[0];
-        const host = exposed ? (exposed.domains?.[0]?.domain ?? `${spec.name}.fake.test`) : "";
+        const named = opts.assignHost === false ? undefined : `${spec.name}.fake.test`;
+        const host = exposed ? (exposed.domains?.[0]?.domain ?? named ?? "") : "";
         bodies.set(spec.name!, {
           id: `sb-${++bodySeq}`,
           phase: "running",

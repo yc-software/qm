@@ -98,16 +98,20 @@ principal with `AmazonEKSClusterAdminPolicy`, then `aws eks update-kubeconfig`.
 
 ## Giving published apps stable hostnames
 
-Apps the agent deploys are reachable only if the cluster gives them an address. With
-`PORTER_DEPLOY_APPS_DOMAIN` unset, core warns at startup and every publish is refused up
-front, before anything is created.
+Published apps get their address from the cluster, not from qm. Declare the sandbox load
+balancer with a root domain at cluster creation and **Porter names every published app
+itself**: `<app>.<root domain>`, served on a wildcard Let's Encrypt certificate that Porter
+also obtains. `PORTER_DEPLOY_APPS_DOMAIN` is then only for choosing a different name — leave
+it unset and the cluster-assigned hostname is used as-is. Set it when the cluster serves
+more than one apps domain, or when you want a name other than the cluster's own root domain;
+it has to resolve to the same sandbox ingress either way.
 
 The address comes from Porter's **sandbox ingress**, which is separate from the ingress
 that serves Porter apps and is configured per cluster. A cluster without it rejects every
 publish before DNS is ever consulted, with `HTTP 400: validation error: visibility: no
 private sandbox ingress is configured on this cluster` (`no public sandbox ingress` when
-`PORTER_DEPLOY_VISIBILITY=public`). Turn sandbox ingress on first; the wildcard record
-below is what gives the resulting apps stable names.
+`PORTER_DEPLOY_VISIBILITY=public`). A cluster that has it but no root domain names no host,
+and the deploy fails after the body is created (the body is then retired, so nothing leaks).
 
 The dashboard has a toggle for it, but it is also a plain field on the cluster contract,
 so it can be turned on headlessly. `GET /api/projects/<project>/contracts` returns the
@@ -131,6 +135,26 @@ true`. Route53 authenticates through the cluster's own pod identity and needs no
 `DNS_PROVIDER_TYPE_CLOUDFLARE` needs one stored first at `POST
 /api/v2/projects/<project>/clusters/<cluster>/dns/credentials`. The same route creates a
 cluster in the first place — omit `cluster.clusterId` and Porter provisions a new one.
+
+Note where that array hangs: `additionalLoadBalancers` is a field of `cluster`, a sibling of
+`eksKind`, while `sandboxesEnabled` is inside `eksKind`. Putting the load balancer in the
+obvious-looking spot next to `sandboxesEnabled` does not fail — Porter parses the contract
+with unknown fields discarded, so a misplaced or misspelled key is dropped in silence and
+the POST still answers `201` with a revision id. The cluster then provisions with no sandbox
+ingress and the mistake only surfaces 40 minutes later, when the first publish is refused.
+**Always read the contract back after submitting it** and confirm the fields you set are
+actually there:
+
+```bash
+curl -s -H "Authorization: Bearer $PORTER_DEPLOY_API_TOKEN" \
+  https://dashboard.porter.run/api/projects/<project>/contracts |
+  jq -r '.[] | select(.cluster_id==<cluster>) | .base64_contract' | tail -1 | base64 -d | jq .
+```
+
+The same silent-drop rule makes the contract useless for guessing at fields the schema may
+not have: an invented key and a real one are equally accepted. To test whether a field
+exists, send it together with a deliberate control key that certainly is not a field, then
+read back and compare which of the two survived.
 
 Put the sandbox load balancer in the contract you create the cluster with, and treat every
 later revision as a one-at-a-time operation: **submit a revision only when the cluster
@@ -169,29 +193,47 @@ Once the revision reconciles, `GET
 /api/v2/projects/<project>/clusters/<cluster>/load-balancers` returns the new
 `owner: "sandbox"` entry whose `address.value` is what the wildcard record points at.
 
-Routing and TLS arrive separately, and only the first is reliable. The load balancer and
-the ingress rules come up within a couple of minutes and published apps answer on the
-wildcard domain straight away — but the wildcard certificate is a `Certificate` in the
-`porter-sandbox` namespace naming a `letsencrypt-sandbox-<visibility>-route53-prod`
-ClusterIssuer, and on a cluster whose Porter IAM came from the standard CloudFormation
-template that issuer is never created: the template grants no Route53 actions to any
-`porter-*` role, and cert-manager gets neither an IAM role annotation nor an EKS pod
-identity association, so the DNS-01 challenge has no credentials. Until that is sorted out
-the ingress serves nginx's self-signed _Kubernetes Ingress Controller Fake Certificate_,
-so every client — including the agent's own probe of the app it just published, which is
-why it reports a gateway error it cannot explain — fails certificate verification against
-an app that is otherwise serving correctly. Check with `kubectl get certificate -n
-porter-sandbox` before believing a publish is broken.
+Routing, DNS and TLS all come up on their own, provided the sandbox load balancer was in
+the contract the cluster was created with. Porter reads its `dnsProviderConfig` and
+`rootDomains` and, through the cluster's Route53 pod identity, **creates a dedicated hosted
+zone for the root domain, adds the `NS` delegation for it to the parent zone, and puts the
+wildcard alias record inside it** pointing at the sandbox load balancer. cert-manager's
+DNS-01 challenge then has a zone it can write to, and the wildcard certificate issues by
+itself — a real Let's Encrypt `*.<root domain>` certificate, verified by ordinary clients
+with no `-k`. You do not create the zone, the delegation, or the wildcard record by hand.
 
-Point a wildcard DNS record at the cluster's ingress load balancer and name it:
+Porter also mints the credentials for it: a per-cluster role
+`porter-cert-manager-route53-<cluster id>` whose inline policy allows
+`route53:ChangeResourceRecordSets` and `ListResourceRecordSets` on that one delegated zone,
+plus `GetChange` and `ListHostedZonesByName`. If TLS is not issuing, check that this role
+exists — its absence, not a cert-manager misconfiguration, is the usual cause.
+
+Two things follow. The parent zone must be in the same AWS account the cluster runs in, so
+Porter can write the delegation. And **teardown has to remove what Porter created**: the
+delegated hosted zone and the `NS` record in the parent zone both outlive the cluster.
+
+This is worth stating plainly because the failure it replaces was so confusing: a cluster
+whose sandbox load balancer was attached _after_ creation, or whose root domain was never
+delegated, has no usable zone for the DNS-01 challenge, so the certificate never issues and
+the ingress serves nginx's self-signed _Kubernetes Ingress Controller Fake Certificate_.
+Every client then fails certificate verification against an app that is otherwise serving
+correctly — including the agent's own probe of the app it just published, which is why it
+reports a gateway error it cannot explain. `kubectl get certificate -n porter-sandbox` tells
+you which situation you are in before you go hunting.
+
+Naming the domain is optional. Porter assigns every sandbox that exposes a port a hostname
+of its own, `<sandbox name>.<cluster root domain>`, whether or not the create request asked
+for a domain — sending `networking: [{port: 8080}]` with no `domains` key, or with
+`domains: []`, both come back with a populated `host`. So a cluster whose sandbox load
+balancer carries a root domain publishes apps at a working HTTPS address with nothing set:
 
 ```bash
-PORTER_DEPLOY_APPS_DOMAIN=apps.example.com   # *.apps.example.com -> cluster ingress
+PORTER_DEPLOY_APPS_DOMAIN=apps.example.com   # optional; overrides the assigned hostname
 ```
 
-Each deployment then publishes at `<name>.apps.example.com`. Deployments are **private**
-by default, matching the other providers; `PORTER_DEPLOY_VISIBILITY=public` opts a
-deployment's domain into public ingress.
+Set it only to choose the name yourself; the wildcard record it relies on is the one Porter
+already created. Deployments are **private** by default, matching the other providers;
+`PORTER_DEPLOY_VISIBILITY=public` opts a deployment's domain into public ingress.
 
 ## Forcing sandbox egress through the proxy
 
@@ -208,9 +250,14 @@ available on this cluster` — so the agent ends up with no computer rather than
   with `{"sandbox_config":{"egress_enabled":true}}`, then `POST
 .../trigger-system-application-reconcile` with `{"dry_run":false,
 "system_application_name":"sandbox-api"}`. `GET` on the same path reads it back, and
-  turning it on installs Cilium, which enforces the allowlist. A project API token is
-  refused here with `PERMISSION_DENIED` even though it may create clusters — this call
-  needs a Porter account with admin rights on the project.
+  turning it on installs Cilium, which enforces the allowlist. There is no contract field
+  for any of this — the cluster contract carries no egress key at all, so it cannot be set
+  at creation time and this PATCH is the only route. The call is gated on the token's role,
+  not on being a human: a Developer-role API token is refused with `PERMISSION_DENIED` even
+  though it may create clusters, while an **Admin-role API token** (Settings → API tokens)
+  is accepted. Minting an admin token is enough; no dashboard session is required. The same
+  distinction governs `DELETE /api/projects/<project>/clusters/<cluster>`, which answers a
+  Developer token with `403 insufficient permissions to perform action`.
 - **The proxy has to be reachable from outside the cluster.** Porter attaches a
   NetworkPolicy to every sandbox that permits DNS plus `0.0.0.0/0` _except_ `10.0.0.0/8`,
   `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` and `100.64.0.0/10` — every RFC1918
