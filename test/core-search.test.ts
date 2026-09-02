@@ -56,22 +56,22 @@ test("intersection backend requires visibility to every principal", async () => 
   );
 });
 test("POST /v1/search derives principals from capability and shared scopes fail closed", async () => {
-  const seen: string[][] = [];
-  const external: SearchBackend = {
-    name: "external",
-    async search(r) {
-      seen.push(r.principals.map((p) => p.id));
-      return [];
-    },
-  };
   const secret = "search-route-secret".repeat(3);
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-")), signingSecret: secret }), {
-    searchBackends: [external],
-  });
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-")), signingSecret: secret }));
   await built.directory.replaceChannels(
-    [{ channelId: "C1", name: "private", isPrivate: true }],
-    principals.map((p) => ({ channelId: "C1", principalId: p.id })),
+    [
+      { channelId: "C1", name: "private", isPrivate: true },
+      { channelId: "C-ALICE", name: "alice-only", isPrivate: true },
+    ],
+    [
+      ...principals.map((p) => ({ channelId: "C1", principalId: p.id })),
+      { channelId: "C-ALICE", principalId: principals[0]!.id },
+    ],
   );
+  await built.app.ingestSurfaceEvents([
+    { container: "C1", ts: "1", text: "pelican launch shared", kind: "channel" },
+    { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
+  ]);
   const server = createServer(built.app, { signingSecret: secret, auditLog: built.auditLog });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -89,16 +89,26 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     fetch(`${base}/v1/search`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": cap },
-      body: JSON.stringify({ query: "plan" }),
+      body: JSON.stringify({ query: "pelican" }),
     });
   try {
-    assert.equal((await post(await token(principals))).status, 200);
-    assert.deepEqual(seen, [["alice@example.com", "bob@example.com"]]);
-    assert.equal((await post(await token())).status, 409);
-    assert.equal(seen.length, 1);
-    const event = (await built.auditLog.events()).find((e) => e.action === "search.query");
-    assert.ok(event);
-    assert.doesNotMatch(event.detail ?? "", /plan/);
+    const ok = await post(await token(principals));
+    assert.equal(ok.status, 200);
+    const body = (await ok.json()) as { hits: Array<{ id: string; backend: string }> };
+    assert.deepEqual(
+      body.hits.filter((hit) => hit.backend === "slack").map((hit) => hit.id),
+      ["C1:1"],
+      "a message only one participant can see is never returned to the shared conversation",
+    );
+
+    const missing = await post(await token());
+    assert.equal(missing.status, 409);
+    assert.equal(((await missing.json()) as { error: string }).error, "principal_set_unavailable");
+
+    const events = (await built.auditLog.events()).filter((e) => e.action === "search.query");
+    assert.equal(events.length, 1, "a fail-closed request runs no search and records none");
+    assert.match(events[0]!.detail ?? "", /"principals":\["alice@example.com","bob@example.com"\]/);
+    assert.doesNotMatch(events[0]!.detail ?? "", /pelican/, "query text is not copied into the audit log");
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

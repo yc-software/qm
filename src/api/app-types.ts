@@ -97,7 +97,7 @@ import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../harness/harness-router.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectStore } from "../projects/project-store.ts";
-import type { SearchBackend, SearchHit } from "../search/core-search.ts";
+import type { SearchHit } from "../search/core-search.ts";
 
 interface DeploymentVersionView {
   version: number;
@@ -571,7 +571,6 @@ export interface AppDeps {
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   runtimeFallback?: RuntimeChoice;
-  searchBackends?: readonly SearchBackend[];
 }
 
 export interface ContextSummary {

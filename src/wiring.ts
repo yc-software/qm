@@ -294,7 +294,6 @@ import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
 import { errMessage, swallowAs } from "./util/errors.ts";
 import { sleep } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
-import type { SearchBackend } from "./search/core-search.ts";
 
 export interface Runtime {
   start(): void;
@@ -404,7 +403,6 @@ export function buildApp(
     securityScreener?: SecurityScreener;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
-    searchBackends?: readonly SearchBackend[];
   } = {},
 ): BuiltApp {
   if (config.databaseUrl && !config.connectorSecretKey) {
@@ -1316,7 +1314,6 @@ export function buildApp(
     providerKeys,
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeys),
     runWaitMs: config.runWaitMs,
-    ...(overrides.searchBackends ? { searchBackends: overrides.searchBackends } : {}),
   });
   const slackCore = createSlackCoreClient({
     app,
