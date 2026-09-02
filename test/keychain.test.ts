@@ -81,6 +81,36 @@ test("envKey defaults from the service name (github → GITHUB_TOKEN)", async ()
   assert.equal(meta.service, "github");
 });
 
+test("envKey derived from a digit-leading service name is still a valid env var (1password → _1PASSWORD_TOKEN)", async () => {
+  const k = kc();
+  const meta = await k.save({ ownerId: "U1", service: "1password", secret: "ops_token" });
+  assert.equal(meta.envKey, "_1PASSWORD_TOKEN");
+});
+
+test("the manifest teaches on-demand op reads exactly when a 1password credential is visible", async () => {
+  const k = kc();
+  const op = await k.save({
+    ownerId: "U1",
+    service: "1password",
+    secret: "ops_token",
+    envKey: "OP_SERVICE_ACCOUNT_TOKEN",
+  });
+  const base = {
+    scopeId: "channel:C1" as const,
+    conversationKind: "channel" as const,
+    actorId: "U2",
+    members: [{ id: "U1", displayName: "Alice" }, { id: "U2" }],
+    scopeGrants: [],
+    injected: [],
+  };
+  const withOp = renderKeychainManifest({ ...base, entriesByOwner: new Map([["U1", [op]]]) });
+  assert.match(withOp, /service-account token/);
+  assert.match(withOp, /op read "op:\/\/<vault>\/<item>\/<field>"/);
+
+  const withoutOp = renderKeychainManifest({ ...base, entriesByOwner: new Map([["U1", [await k.save(GH)]]]) });
+  assert.doesNotMatch(withoutOp, /op read/);
+});
+
 test("only the owner can grant; materialize is scope-checked; once-grants are consumed", async () => {
   const k = kc();
   const cred = await k.save(GH);

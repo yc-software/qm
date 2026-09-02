@@ -148,6 +148,13 @@ test("destructive controls settle duplicate attempts while a mutation is busy", 
   );
 });
 
+test("connecting 1Password rides the secret-drop flow with a fixed service-account shape", () => {
+  assert.match(connectorsSource, /service: "1password"/);
+  assert.match(connectorsSource, /envKey: "OP_SERVICE_ACCOUNT_TOKEN"/);
+  assert.match(connectorsSource, /developer\.1password\.com\/docs\/service-accounts/);
+  assert.match(connectorsSource, /credential\.service === "1password"/);
+});
+
 test("keychain rows reserve success badges for actionable states", () => {
   assert.doesNotMatch(connectorsSource, /Stored securely/);
   assert.doesNotMatch(connectorsSource, />Connected<\/span>/);

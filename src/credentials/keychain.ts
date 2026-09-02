@@ -401,7 +401,8 @@ function credId(ownerId: string, service: string, slot: string): string {
 }
 
 function defaultEnvKey(service: string): string {
-  return `${service.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_TOKEN`;
+  const base = service.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+  return `${/^[0-9]/.test(base) ? "_" : ""}${base}_TOKEN`;
 }
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -1528,6 +1529,19 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     lines.push("", "In this conversation:", ...memberLines);
   } else {
     lines.push("", "No keychain credentials registered yet for the people here.");
+  }
+
+  const hasOnePassword =
+    [...input.entriesByOwner.values()].some((creds) => creds.some((c) => c.service === "1password")) ||
+    input.injected.some((m) => m.service === "1password");
+  if (hasOnePassword) {
+    lines.push(
+      "",
+      "A `1password` credential is a vault-scoped 1Password service-account token, not a single secret. " +
+        "Once `OP_SERVICE_ACCOUNT_TOKEN` is in your shell, fetch exactly the item a task needs, at the moment it needs it, with the `op` CLI: " +
+        '`op item list --format json` to find it, `op read "op://<vault>/<item>/<field>"` to load one field. ' +
+        "If `op` is missing, install it into $HOME first. Read single fields — never dump whole vaults or items, and never echo what you read.",
+    );
   }
 
   if (hasOwn) {
