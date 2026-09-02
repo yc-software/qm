@@ -18,6 +18,7 @@ import {
   FileText,
   Files,
   GitFork,
+  Globe,
   Maximize2,
   Paperclip,
   Pencil,
@@ -195,6 +196,7 @@ export function createChatSurface(
   let workTicker: ReturnType<typeof setInterval> | null = null;
   let revealedTailLen = 0;
   let liveWorkExpanded = false;
+  let liveViewHidden = false;
 
   function notePendingSessionOnSend(): void {
     if (!chatState.threadRef || chatState.sessionId !== null) return;
@@ -1864,17 +1866,21 @@ export function createChatSurface(
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     const summary = liveWorkSummary(work);
-    const expandable = Boolean(summary?.detail);
-    const expanded = expandable && liveWorkExpanded;
+    const liveViewUrl = liveWorkViewUrl(work);
+    const expandable = Boolean(summary?.detail) || Boolean(liveViewUrl);
+    const expanded = liveViewUrl ? !liveViewHidden : Boolean(summary?.detail) && liveWorkExpanded;
     let title = "";
-    if (expandable) title = liveWorkExpanded ? "Show less" : "Show more";
+    if (expandable) {
+      if (liveViewUrl) title = expanded ? "Hide the live browser" : "Show the live browser";
+      else title = expanded ? "Show less" : "Show more";
+    }
     return html`
       <section class="live-work-dock ${expanded ? "expanded" : ""}" aria-live="polite">
         <button
           type="button"
           class="live-work-line ${expandable ? "" : "static"}"
           ?disabled=${!expandable}
-          aria-expanded=${expandable ? String(liveWorkExpanded) : nothing}
+          aria-expanded=${expandable ? String(expanded) : nothing}
           title=${title}
           @click=${toggleLiveWorkExpanded}
         >
@@ -1885,12 +1891,29 @@ export function createChatSurface(
           ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
           ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
         </button>
+        ${liveViewUrl && !liveViewHidden
+          ? html`<iframe
+              class="live-view"
+              src=${liveViewUrl}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock"
+              referrerpolicy="no-referrer"
+              allow="autoplay"
+            ></iframe>`
+          : nothing}
       </section>
     `;
   }
 
+  function liveWorkViewUrl(work: WorkBlock): string | null {
+    const active = activeToolRow(work);
+    const call = (active?.call?.payload ?? {}) as ToolPayload;
+    return call.tool === "browser_use" && call.liveViewUrl?.startsWith("https://") ? call.liveViewUrl : null;
+  }
+
   function toggleLiveWorkExpanded(): void {
-    liveWorkExpanded = !liveWorkExpanded;
+    const work = chatState.liveWork;
+    if (work && liveWorkViewUrl(work)) liveViewHidden = !liveViewHidden;
+    else liveWorkExpanded = !liveWorkExpanded;
     drawActiveChat();
   }
 
@@ -2120,6 +2143,7 @@ export function createChatSurface(
       done: "Managed process",
       attempted: "Tried managing process",
     },
+    browser_use: { icon: Globe, active: "Browsing", done: "Browsed", attempted: "Tried browsing" },
   };
   const UNKNOWN_TOOL = { icon: Wrench, active: "Working", done: "Finished step", attempted: "Tried step" };
 
@@ -2162,6 +2186,8 @@ export function createChatSurface(
         const target = call.command ? firstLine(call.command, 48) : (call.process_id ?? call.monitor_id ?? "");
         return [action, target].filter(Boolean).join(" ");
       }
+      case "browser_use":
+        return call.task ? firstLine(call.task) : "";
       default:
         return "";
     }
@@ -2196,6 +2222,18 @@ export function createChatSurface(
     const classes = ["tool-row", `tool-${kind}`].join(" ");
     const head = html`<span class="tool-icon">${icon(meta.icon, 15)}</span>
       <span class="tool-label">${label}${detail ? html` <span class="tool-detail">${detail}</span>` : nothing}</span>`;
+    if (tool === "browser_use" && kind === "running" && call.liveViewUrl?.startsWith("https://")) {
+      return html`<details class="${classes} tool-expandable" open>
+        <summary class="tool-summary">${head}${icon(ChevronRight, 14)}</summary>
+        <iframe
+          class="live-view"
+          src=${call.liveViewUrl}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock"
+          referrerpolicy="no-referrer"
+          allow="autoplay"
+        ></iframe>
+      </details>`;
+    }
     if (tool === "execute" && row.result && (result.stdout || result.stderr)) {
       return html`<details class="${classes} tool-expandable">
         <summary class="tool-summary">${head}${icon(ChevronRight, 14)}</summary>

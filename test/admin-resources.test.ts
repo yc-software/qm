@@ -36,7 +36,10 @@ function brokeredLayer(): string {
   return dir;
 }
 
-function start(harnessId = "pi"): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(
+  harnessId = "pi",
+  extraDeps: Record<string, unknown> = {},
+): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-res-")), deploymentLayerDir: brokeredLayer() }),
   );
@@ -51,6 +54,7 @@ function start(harnessId = "pi"): { base: string; built: BuiltApp; close: () => 
     brokeredServices: () => built.brokeredTools.map((tool) => tool.service),
     channelPolicy: built.channelPolicy,
     harnessId,
+    ...extraDeps,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -718,6 +722,45 @@ test("webui-models is an org-wide string-list read back via admin GET and surfac
     assert.equal(clear.status, 200);
     const afterClear = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     assert.equal(((await afterClear.json()) as { webuiModels: string[] | null }).webuiModels, null);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("browser-use-key live-validates against the provider, reads back as a flag, and clears", async () => {
+  const validationFetch = (async (url: unknown, init?: RequestInit) => {
+    assert.equal(String(url).startsWith("https://api.browser-use.com/"), true);
+    const key = (init?.headers as Record<string, string> | undefined)?.["X-Browser-Use-API-Key"];
+    return key === "bu_good"
+      ? new Response(JSON.stringify({ items: [] }), { status: 200 })
+      : new Response(JSON.stringify({ detail: "Invalid API key" }), { status: 401 });
+  }) as typeof fetch;
+  const srv = start("pi", { modelCredentialFetch: validationFetch });
+  try {
+    const url = `${srv.base}/v1/admin/scopes/org:default-org/browser-use-key`;
+    const rejected = await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ key: "bu_bad" }) });
+    assert.equal(rejected.ok, false);
+    assert.match(JSON.stringify(await rejected.json()), /rejected the key/);
+
+    const wrongScope = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/browser-use-key`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ key: "bu_good" }),
+    });
+    assert.equal(wrongScope.ok, false);
+
+    assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ key: "bu_good" }) })).status, 200);
+    let body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
+      browserUseKeyConfigured: boolean;
+    };
+    assert.equal(body.browserUseKeyConfigured, true);
+    assert.equal(JSON.stringify(body).includes("bu_good"), false);
+
+    assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ key: "" }) })).status, 200);
+    body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
+      browserUseKeyConfigured: boolean;
+    };
+    assert.equal(body.browserUseKeyConfigured, false);
   } finally {
     await srv.close();
   }

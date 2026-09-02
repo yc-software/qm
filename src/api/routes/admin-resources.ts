@@ -35,6 +35,7 @@ import { parseSecurityPosture, SECURITY_POSTURES, type SecurityPosture } from ".
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
+import { validateBrowserUseKey } from "../../tools/browser-use.ts";
 
 type Actor = { id: string };
 
@@ -649,6 +650,35 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       },
       (deps, scope, steps) => deps.config!.setBrowseMaxSteps(scope, steps),
     ),
+  },
+  {
+    id: "browser-use-key",
+    kind: "custom",
+    target: "org",
+    secret: true,
+    clearable: true,
+    label:
+      "Browser Use Cloud API key, org-wide. When set, agents get the browser_use tool: cloud-browser web tasks with a live view in the web UI. Write-only; empty clears.",
+    readKey: "browserUseKeyConfigured",
+    get: (deps, scope) => deps.config!.getBrowserUseKey(scope) !== null,
+    apply: async (ctx, _actor, scope) => {
+      const bad = orgOnly(scope, "the Browser Use key is org-wide");
+      if (bad) return bad;
+      const raw = (ctx.body as { key?: unknown }).key;
+      if (raw !== undefined && raw !== null && typeof raw !== "string") {
+        return { error: "browser-use-key requires { key: string } (empty clears the key)" };
+      }
+      const key = typeof raw === "string" ? raw.trim() : "";
+      if (key) {
+        const rejected = await validateBrowserUseKey(
+          key,
+          ctx.deps.modelCredentialFetch ? { fetchImpl: ctx.deps.modelCredentialFetch } : undefined,
+        );
+        if (rejected) return { error: `Browser Use rejected the key: ${rejected}` };
+      }
+      ctx.deps.config!.setBrowserUseKey(scope, key || null);
+      return { ok: true };
+    },
   },
   {
     id: "connectors",

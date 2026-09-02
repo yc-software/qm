@@ -4602,6 +4602,32 @@
                     ><span class="status" id="st-browse-max-steps"></span>
                   </div>
                 </section>
+                <section class="card setting-row hidden" id="card-browser-use">
+                  <div class="head">
+                    <h2>Cloud browsing (Browser Use)</h2>
+                    <p>
+                      When a Browser Use Cloud API key is set, agents can run web tasks in a live cloud browser; people
+                      see the live browser in the web UI. The key is write-only. The cloud browser runs on Browser Use's
+                      network, outside this deployment's egress controls.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <label for="browser-use-key">API key</label>
+                    <input
+                      type="password"
+                      id="browser-use-key"
+                      autocomplete="new-password"
+                      placeholder="Write-only API key"
+                      style="max-width: 360px"
+                    />
+                    <p class="field-hint" id="browser-use-key-status"></p>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="browser-use-key">Save</button
+                    ><button class="danger hidden" id="browser-use-key-clear">Clear key</button
+                    ><span class="status" id="st-browser-use-key"></span>
+                  </div>
+                </section>
                 <section class="card setting-row hidden" id="card-turn-wall-clock">
                   <div class="head">
                     <h2>Turn time limit</h2>
@@ -6704,6 +6730,15 @@
         const showBrowseSteps = scope.startsWith("org:") && "browseMaxSteps" in r.data;
         $("card-browse-max-steps").classList.toggle("hidden", !showBrowseSteps);
         if (showBrowseSteps) $("browse-max-steps").value = r.data.browseMaxSteps ?? "";
+        const showBrowserUse = scope.startsWith("org:") && "browserUseKeyConfigured" in r.data;
+        $("card-browser-use").classList.toggle("hidden", !showBrowserUse);
+        if (showBrowserUse) {
+          $("browser-use-key").value = "";
+          $("browser-use-key-clear").classList.toggle("hidden", !r.data.browserUseKeyConfigured);
+          $("browser-use-key-status").textContent = r.data.browserUseKeyConfigured
+            ? "Configured — paste a new key to replace it, or press Clear key to remove it."
+            : "Not configured — agents have no cloud browser.";
+        }
         const showTurnWallClock = scope.startsWith("org:") && "turnWallClockSec" in r.data;
         $("card-turn-wall-clock").classList.toggle("hidden", !showTurnWallClock);
         if (showTurnWallClock) $("turn-wall-clock").value = r.data.turnWallClockSec ?? "";
@@ -8191,6 +8226,7 @@
           orgName: $("branding-org-name").value.trim(),
         }),
         "browse-max-steps": () => ({ steps: $("browse-max-steps").value.trim() }),
+        "browser-use-key": () => ({ key: $("browser-use-key").value.trim() }),
         "turn-wall-clock": () => ({ sec: $("turn-wall-clock").value.trim() }),
         "browse-model": () => ({ modelId: $("browse-model").value }),
       };
@@ -8212,6 +8248,7 @@
         "people-directory-url": "st-people-directory-url",
         "ack-emoji": "st-ack-emoji",
         "browse-max-steps": "st-browse-max-steps",
+        "browser-use-key": "st-browser-use-key",
         "turn-wall-clock": "st-turn-wall-clock",
         "browse-model": "st-browse-model",
         branding: "st-branding",
@@ -8225,6 +8262,7 @@
         "people-directory-url",
         "ack-emoji",
         "browse-max-steps",
+        "browser-use-key",
         "turn-wall-clock",
         "browse-model",
         "branding",
@@ -8371,6 +8409,28 @@
           }
         };
       });
+      $("browser-use-key-clear").onclick = async () => {
+        if (!confirm("Clear the Browser Use API key? Agents lose the cloud browser until a new key is saved.")) return;
+        const requestedScope = scope;
+        const btn = $("browser-use-key-clear");
+        btn.disabled = true;
+        setStatus("st-browser-use-key", "Clearing…", "saving", true);
+        const r = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/browser-use-key", {
+          key: "",
+        });
+        btn.disabled = false;
+        if (requestedScope !== scope) {
+          setStatus("st-browser-use-key", "", "");
+          return;
+        }
+        if (r.ok) {
+          await loadScope();
+          setStatus("st-browser-use-key", "Cleared", "ok");
+        } else {
+          const message = r.status === 403 ? "Not authorized for this scope." : r.data?.message || "Clear failed.";
+          setStatus("st-browser-use-key", message, "err");
+        }
+      };
       $("view-governance").addEventListener("input", (e) => {
         if (!(
           e.target instanceof HTMLInputElement ||

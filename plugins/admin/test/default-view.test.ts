@@ -147,6 +147,7 @@ test("governance renders simple settings as compact rows with contextual actions
     "card-people-directory",
     "card-browse-model",
     "card-browse-max-steps",
+    "card-browser-use",
     "card-turn-wall-clock",
   ]) {
     assert.match(html, new RegExp(`class="card setting-row(?: hidden)?" id="${id}"`));
@@ -155,6 +156,21 @@ test("governance renders simple settings as compact rows with contextual actions
   assert.match(html, /class="setting-switch" aria-hidden="true"/);
   assert.match(html, /data-save="external-slack-participants">\s*Apply\s*<\/button\s*>/);
   assert.match(html, /"turnWallClockSec" in r\.data/);
+});
+
+test("browser use key card is write-only, org-scoped, and clearable", () => {
+  assert.match(html, /type="password"\s+id="browser-use-key"/);
+  assert.match(html, /data-save="browser-use-key">\s*Save\s*<\/button\s*>/);
+  assert.match(html, /class="danger hidden" id="browser-use-key-clear">\s*Clear key\s*<\/button\s*>/);
+  assert.match(html, /"browserUseKeyConfigured" in r\.data/);
+  assert.match(html, /outside this deployment's egress controls\./);
+  assert.match(html, /Configured — paste a new key to replace it, or press Clear key to remove it\./);
+  assert.match(html, /Not configured — agents have no cloud browser\./);
+  assert.match(html, /"browser-use-key": \(\) => \(\{ key: \$\("browser-use-key"\)\.value\.trim\(\) \}\)/);
+  assert.match(html, /confirm\("Clear the Browser Use API key\?/);
+  assert.doesNotMatch(html, /sectionButton\("browser-use-key"\)\.disabled/);
+  const reloads = html.match(/const SAVE_RELOADS = new Set\(\[[\s\S]*?\]\)/)?.[0] ?? "";
+  assert.match(reloads, /"browser-use-key"/);
 });
 
 test("compact governance rows preserve policy detail and collapse before they overflow", () => {

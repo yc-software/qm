@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolActivity, WorkBlock } from "../src/core-bridge.ts";
-import { buildTimeline, toolRowKind, type ToolRowModel } from "../src/timeline.ts";
+import { buildTimeline, toolRowKind, type ToolPayload, type ToolRowModel } from "../src/timeline.ts";
 
 function act(seq: number, type: ToolActivity["type"], payload: unknown): ToolActivity {
   return { seq, parentSeq: null, type, payload, createdAt: seq };
@@ -299,4 +299,30 @@ test("memoized output still reflects a mutated-then-replaced work correctly", ()
   const items = buildTimeline(work);
   assert.equal(items.length, 2);
   assert.equal(items[1]?.kind, "tool");
+});
+
+test("a re-emitted tool_call with the same callId updates its row in place — no duplicate", () => {
+  const work = workWith([
+    act(1, "tool_call", { tool: "browser_use", task: "buy socks", callId: "b1" }),
+    act(2, "tool_call", { tool: "browser_use", task: "buy socks", liveViewUrl: "https://live.browser-use.com/x", callId: "b1" }),
+    act(3, "tool_result", { tool: "browser_use", status: "completed", callId: "b1" }),
+  ]);
+  const items = buildTimeline(work);
+  assert.equal(items.length, 1, "both calls and the result collapse into one row");
+  assert.ok(items[0].kind === "tool");
+  const row = items[0].row;
+  assert.equal((row.call?.payload as ToolPayload | undefined)?.liveViewUrl, "https://live.browser-use.com/x");
+  assert.ok(row.result, "the result attaches to the merged row");
+});
+
+test("a same-callId call arriving after a result starts a fresh row (approval-gate retry)", () => {
+  const work = workWith([
+    act(1, "tool_call", { tool: "execute", command: "rm x", callId: "c1" }),
+    act(2, "tool_result", { tool: "execute", blocked: "needs_approval", reason: "delete", callId: "c1" }),
+    act(3, "tool_call", { tool: "execute", command: "rm x", callId: "c1" }),
+  ]);
+  const items = buildTimeline(work);
+  assert.equal(items.length, 2, "the retry gets its own row");
+  assert.ok(items[0].kind === "tool" && items[0].row.result, "the first row keeps its result");
+  assert.ok(items[1].kind === "tool" && !items[1].row.result, "the retry row is still open");
 });

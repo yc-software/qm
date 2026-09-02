@@ -12,6 +12,7 @@ import {
   type PersistedPeopleDirectoryUrl,
   type PersistedBrowseMaxSteps,
   type PersistedBrowseModel,
+  type PersistedBrowserUseKey,
   type PersistedTurnWallClock,
   type PersistedDeploymentIdentity,
 } from "../src/resolution/config-store.ts";
@@ -42,6 +43,7 @@ const TABLES = [
   "people_directory_urls",
   "browse_max_steps_configs",
   "browse_model_configs",
+  "browser_use_key_configs",
   "turn_wall_clock_configs",
   "deployment_identity",
 ];
@@ -65,6 +67,7 @@ const maps = (f: PostgresArtifactMaps) => ({
   peopleDirectoryUrls: f.map<PersistedPeopleDirectoryUrl>("people_directory_urls"),
   browseMaxSteps: f.map<PersistedBrowseMaxSteps>("browse_max_steps_configs"),
   browseModels: f.map<PersistedBrowseModel>("browse_model_configs"),
+  browserUseKeys: f.map<PersistedBrowserUseKey>("browser_use_key_configs"),
   turnWallClocks: f.map<PersistedTurnWallClock>("turn_wall_clock_configs"),
   deploymentIdentity: f.map<PersistedDeploymentIdentity>("deployment_identity"),
 });
@@ -322,7 +325,7 @@ test(
     const policy = defaultOrgPolicy();
 
     const m = maps(f);
-    const a = createMemoryConfigStore("default-org", m);
+    const a = createMemoryConfigStore("default-org", { ...m, connectorSecretKey: "pg-test-material" });
     const version = a.setSoul(ch, "a channel-specific soul");
     a.setCommandPolicy(ch, policy);
     await a.setSecurityPosture(ch, "strict");
@@ -332,6 +335,7 @@ test(
     a.setPeopleDirectoryUrl(ch, "https://www.example.com/people");
     a.setBrowseMaxSteps(ch, 120);
     a.setBrowseModel(ch, "claude-sonnet-4-6");
+    a.setBrowserUseKey(org, "bu_pg_secret");
     await a.setTurnWallClockSec(org, 600);
     await settle(
       async () =>
@@ -344,10 +348,11 @@ test(
         (await m.peopleDirectoryUrls.get(ch))?.url === "https://www.example.com/people" &&
         (await m.browseMaxSteps.get(ch))?.steps === 120 &&
         (await m.browseModels.get(ch))?.modelId === "claude-sonnet-4-6" &&
+        !!(await m.browserUseKeys.get(org))?.secretEnc &&
         (await m.turnWallClocks.get(org))?.sec === 600,
     );
 
-    const b = createMemoryConfigStore("default-org", maps(f));
+    const b = createMemoryConfigStore("default-org", { ...maps(f), connectorSecretKey: "pg-test-material" });
     assert.equal(b.getSoul(ch), null, "a cold instance has no scoped soul until it hydrates");
     await b.hydrate?.();
 
@@ -365,6 +370,7 @@ test(
     assert.equal(b.getPeopleDirectoryUrl(ch), "https://www.example.com/people", "the people-directory url survived");
     assert.equal(b.getBrowseMaxSteps(ch), 120, "the browse step limit survived");
     assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6", "the browse model survived");
+    assert.equal(b.getBrowserUseKey(org), "bu_pg_secret", "the browser use key decrypts after restart");
     assert.equal(await b.getTurnWallClockSecDurable(org), 600, "the turn wall-clock limit survived");
   },
 );
@@ -376,7 +382,7 @@ test(
     const f = createPostgresMapFactory(URL!);
     const ch = scopeId("channel", "C2");
     const m = maps(f);
-    const a = createMemoryConfigStore("default-org", m);
+    const a = createMemoryConfigStore("default-org", { ...m, connectorSecretKey: "pg-test-material" });
 
     let lastVersion = 0;
     for (let i = 1; i <= 8; i++) {
@@ -404,7 +410,7 @@ test(
         !(await m.turnWallClocks.get(scopeId("org", "default-org"))),
     );
 
-    const b = createMemoryConfigStore("default-org", maps(f));
+    const b = createMemoryConfigStore("default-org", { ...maps(f), connectorSecretKey: "pg-test-material" });
     await b.hydrate?.();
     assert.equal(b.getSoul(ch), "soul v8", "the durable soul ends on the last write, not a reordered earlier one");
     assert.equal(b.soulVersion(ch), lastVersion);

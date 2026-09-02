@@ -22,6 +22,8 @@ export interface ToolPayload {
   process_id?: string;
   monitor_id?: string;
   added?: number;
+  task?: string;
+  liveViewUrl?: string;
 }
 
 export interface ToolRowModel {
@@ -113,11 +115,17 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
       items.push({ kind: "text", activity: a });
       open = null;
     } else if (a.type === "tool_call") {
-      const row: ToolRowModel = { call: a, result: null };
       const cid = callIdOf(a);
-      if (cid) rowByCallId.set(cid, row);
-      open = row;
-      items.push({ kind: "tool", row });
+      const existing = cid ? rowByCallId.get(cid) : undefined;
+      if (existing && !existing.result) {
+        existing.call = a;
+        open = existing;
+      } else {
+        const row: ToolRowModel = { call: a, result: null };
+        if (cid) rowByCallId.set(cid, row);
+        open = row;
+        items.push({ kind: "tool", row });
+      }
     } else if (a.type === "tool_result") {
       const cid = callIdOf(a);
       const matched = cid ? rowByCallId.get(cid) : undefined;

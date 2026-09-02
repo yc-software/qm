@@ -1,4 +1,4 @@
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 
@@ -239,13 +239,13 @@ export async function onBotJoinedChannel(opts: {
       );
       ensureHeader?.(channel);
     }
-  } catch {
-    void 0;
+  } catch (e) {
+    swallow("slack delivery: channel welcome", e);
   }
   try {
     await syncDirectory();
-  } catch {
-    void 0;
+  } catch (e) {
+    swallow("slack delivery: directory sync", e);
   }
 }
 

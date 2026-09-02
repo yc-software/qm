@@ -24,6 +24,7 @@ import type { BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import type { GapPhase, GapWork } from "../sessions/session-store.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createNullLedger, type ToolLedger } from "../runs/tool-ledger.ts";
+import type { BrowserUseRunner } from "./browser-use.ts";
 import type {
   BackgroundExecBroker,
   BackgroundStartResult,
@@ -153,6 +154,7 @@ interface ReachedProvenance {
 }
 
 export interface ToolContext extends SurfaceToolDeps {
+  browserUse?: BrowserUseRunner;
   credentialExecServices?: readonly { service: string; binary: string }[];
   credentialExec?(
     service: string,
@@ -374,6 +376,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 
 export interface ToolContextDeps {
   sandbox: Sandbox;
+  browserUse?: BrowserUseRunner;
   credentialExecServices?: readonly { service: string; binary: string }[];
   credentialExec?: ToolContext["credentialExec"];
   provision: () => Promise<SandboxHandle>;
@@ -521,6 +524,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   }
 
   return {
+    ...(deps.browserUse ? { browserUse: deps.browserUse } : {}),
     ...(deps.credentialExecServices ? { credentialExecServices: deps.credentialExecServices } : {}),
     ...(deps.credentialExec ? { credentialExec: deps.credentialExec } : {}),
     async computerStatus(): Promise<ComputerStatus> {

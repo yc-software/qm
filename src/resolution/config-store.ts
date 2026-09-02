@@ -112,6 +112,10 @@ export interface PersistedBrowseModel {
   scopeId: ScopeId;
   modelId: string;
 }
+export interface PersistedBrowserUseKey {
+  scopeId: ScopeId;
+  secretEnc: string;
+}
 export interface PersistedTurnWallClock {
   scopeId: ScopeId;
   sec: number;
@@ -209,6 +213,8 @@ export interface ScopedConfigStore {
   setBrowseMaxSteps(id: ScopeId, steps: number | null): void;
   getBrowseModel(id: ScopeId): string | null;
   setBrowseModel(id: ScopeId, modelId: string | null): void;
+  getBrowserUseKey(id: ScopeId): string | null;
+  setBrowserUseKey(id: ScopeId, key: string | null): void;
   getTurnWallClockSecDurable(id: ScopeId): Promise<number | null>;
   setTurnWallClockSec(id: ScopeId, sec: number | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
@@ -245,6 +251,7 @@ export function createMemoryConfigStore(
     branding?: DurableMap<PersistedBranding>;
     browseMaxSteps?: DurableMap<PersistedBrowseMaxSteps>;
     browseModels?: DurableMap<PersistedBrowseModel>;
+    browserUseKeys?: DurableMap<PersistedBrowserUseKey>;
     turnWallClocks?: DurableMap<PersistedTurnWallClock>;
     deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
     connectorSecretKey?: Buffer | string;
@@ -272,6 +279,7 @@ export function createMemoryConfigStore(
   const branding = new Map<ScopeId, OrgBranding>();
   const browseMaxSteps = new Map<ScopeId, number>();
   const browseModels = new Map<ScopeId, string>();
+  const browserUseKeys = new Map<ScopeId, string>();
   const turnWallClocks = new Map<ScopeId, number>();
   const soulStore = opts.souls ?? createMemoryMap<PersistedSoul>();
   const soulHistoryStore = opts.soulHistory ?? createMemoryMap<PersistedSoulRevision>();
@@ -293,6 +301,7 @@ export function createMemoryConfigStore(
   const brandingStore = opts.branding ?? createMemoryMap<PersistedBranding>();
   const browseMaxStepsStore = opts.browseMaxSteps ?? createMemoryMap<PersistedBrowseMaxSteps>();
   const browseModelStore = opts.browseModels ?? createMemoryMap<PersistedBrowseModel>();
+  const browserUseKeyStore = opts.browserUseKeys ?? createMemoryMap<PersistedBrowserUseKey>();
   const turnWallClockStore = opts.turnWallClocks ?? createMemoryMap<PersistedTurnWallClock>();
   const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
   const persistWarn = (what: string) => (e: unknown) =>
@@ -446,6 +455,7 @@ export function createMemoryConfigStore(
           for (const r of await brandingStore.all()) branding.set(r.scopeId, r.branding);
           for (const r of await browseMaxStepsStore.all()) browseMaxSteps.set(r.scopeId, r.steps);
           for (const r of await browseModelStore.all()) browseModels.set(r.scopeId, r.modelId);
+          for (const r of await browserUseKeyStore.all()) browserUseKeys.set(r.scopeId, r.secretEnc);
           for (const r of await turnWallClockStore.all()) turnWallClocks.set(r.scopeId, r.sec);
         })();
       }
@@ -891,6 +901,26 @@ export function createMemoryConfigStore(
       } else {
         browseModels.set(id, modelId);
         persist(`browseModel:${id}`, "browse model", () => browseModelStore.put(id, { scopeId: id, modelId }));
+      }
+    },
+    getBrowserUseKey: (id) => {
+      const enc = browserUseKeys.get(id);
+      if (!enc) return null;
+      try {
+        return decryptSecret(enc, connectorKey);
+      } catch (e) {
+        console.error("[config] failed to decrypt the Browser Use key:", errMessage(e));
+        return null;
+      }
+    },
+    setBrowserUseKey(id, key) {
+      if (key === null) {
+        browserUseKeys.delete(id);
+        persist(`browserUseKey:${id}`, "browser use key", () => browserUseKeyStore.delete(id));
+      } else {
+        const secretEnc = encryptSecret(key, connectorKey);
+        browserUseKeys.set(id, secretEnc);
+        persist(`browserUseKey:${id}`, "browser use key", () => browserUseKeyStore.put(id, { scopeId: id, secretEnc }));
       }
     },
     getTurnWallClockSecDurable: async (id) => (await turnWallClockStore.get(id))?.sec ?? null,

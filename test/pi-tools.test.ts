@@ -2155,3 +2155,96 @@ test("a quarantined tool result does not pause the turn — release runs through
   assert.equal(ref.pausedOnApproval, undefined, "the agent keeps going with the stub");
   assert.equal(ref.pendingApprovals!.length, 0, "the release card is raised by the orchestrator, not the tool layer");
 });
+
+test("browser_use is turn-scoped, records the live view on the call entry, and relays the run answer", async () => {
+  const absent = createPiTools({ current: fakeToolContext() });
+  assert.equal(
+    absent.some((tool) => tool.name === "browser_use"),
+    false,
+  );
+  const viaOpts = createPiTools({ current: null }, { browserUse: true });
+  assert.equal(
+    viaOpts.some((tool) => tool.name === "browser_use"),
+    true,
+  );
+
+  const emitted: Emitted[] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    async browserUse(task, opts) {
+      await opts?.onLiveView?.("https://live.browser-use.com/abc");
+      return {
+        status: "completed",
+        result: `did: ${task}`,
+        error: null,
+        liveViewUrl: "https://live.browser-use.com/abc",
+      };
+    },
+  };
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tool = createPiTools(ref).find((candidate) => candidate.name === "browser_use")!;
+  const result = (await call(tool, { task: "find the top story" })) as { content: Array<{ text: string }> };
+  assert.match(result.content[0]!.text, /did: find the top story/);
+  assert.deepEqual(
+    emitted.map((e) => `${e.type}:${e.payload.tool}`),
+    ["tool_call:browser_use", "tool_call:browser_use", "tool_result:browser_use"],
+  );
+  assert.equal(emitted[0]!.payload.liveViewUrl, undefined);
+  assert.equal(emitted[0]!.payload.task, "find the top story");
+  assert.equal(emitted[1]!.payload.liveViewUrl, "https://live.browser-use.com/abc");
+  assert.equal(emitted[1]!.payload.task, "find the top story");
+  assert.equal(emitted[2]!.payload.status, "completed");
+  assert.equal(emitted[2]!.payload.isError, false);
+});
+
+test("browser_use wires secrets through by name only — no value ever enters the tape", async () => {
+  const emitted: Emitted[] = [];
+  let received: unknown = null;
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    async browserUse(_task, opts) {
+      received = (opts as { secrets?: unknown }).secrets;
+      return { status: "completed", result: "signed in", error: null, liveViewUrl: null };
+    },
+  };
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tool = createPiTools(ref).find((candidate) => candidate.name === "browser_use")!;
+  await call(tool, { task: "sign in using the secret ACME_PASSWORD", secrets: [{ env_key: "ACME_PASSWORD", domains: ["acme.com"] }] });
+  assert.deepEqual(received, [{ envKey: "ACME_PASSWORD", domains: ["acme.com"] }]);
+  assert.deepEqual(emitted[0]!.payload.secrets, [{ envKey: "ACME_PASSWORD", domains: ["acme.com"] }]);
+  assert.equal(JSON.stringify(emitted).includes("hunter2"), false);
+});
+
+test("browser_use reports a failed run as a tool error and still records the call without a live view", async () => {
+  const emitted: Emitted[] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    async browserUse() {
+      return { status: "failed", result: null, error: "the site blocked the agent", liveViewUrl: null };
+    },
+  };
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tool = createPiTools(ref).find((candidate) => candidate.name === "browser_use")!;
+  const result = (await call(tool, { task: "buy a thing" })) as { content: Array<{ text: string }> };
+  assert.match(result.content[0]!.text, /\[failed\] the site blocked the agent/);
+  assert.equal(emitted[0]!.payload.liveViewUrl, undefined);
+  assert.equal(emitted[1]!.payload.error, "the site blocked the agent");
+});

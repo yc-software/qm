@@ -76,6 +76,7 @@ import {
   renderPendingOnboardingPrompt,
 } from "../onboarding/onboarding.ts";
 import { createToolContext, NeedsApproval, CommandDenied } from "../tools/primitives.ts";
+import { createBrowserUseRunner } from "../tools/browser-use.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import { shq } from "../util/shell.ts";
@@ -1067,6 +1068,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ownerAuthAvailable = true;
       }
       const connectorEnv: Record<string, string> = {};
+      const grantedEnvSecrets = new Map<string, string>();
       const ownerAuthEnv: Record<string, string> = {};
       const ownerEnvCredentialIds: string[] = [];
       const keychainInjected: MaterializedEnvCred[] = [];
@@ -1085,7 +1087,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         for (const m of [...own, ...(await deps.keychain.materializeStanding(scopeId))]) {
           const injected = m.env.filter(({ key }) => !(key in connectorEnv));
-          for (const { key, value } of injected) connectorEnv[key] = value;
+          for (const { key, value } of injected) {
+            connectorEnv[key] = value;
+            grantedEnvSecrets.set(key, value);
+          }
           if (m.grantId && injected.length) {
             keychainInjected.push({ ...m, env: injected });
             deps.auditLog.record({
@@ -1153,8 +1158,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
             continue;
           const rec = await deps.serviceCreds.getServiceCredentialSecret(orgScope, cred.slug);
-          if (rec?.secret && rec.delivery === "env" && rec.enabled && rec.envKey === cred.envKey)
+          if (rec?.secret && rec.delivery === "env" && rec.enabled && rec.envKey === cred.envKey) {
             connectorEnv[cred.envKey] = rec.secret;
+            grantedEnvSecrets.set(cred.envKey, rec.secret);
+          }
         }
         const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
@@ -1833,6 +1840,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
+        const browserUseKey =
+          strictReadOnly || !allInternal || actor.type !== "internal"
+            ? null
+            : deps.config?.getBrowserUseKey(toScopeId("org", orgId()));
         const tools = createToolContext({
           sandbox: deps.sandbox,
           provision,
@@ -1862,6 +1873,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
+          ...(browserUseKey
+            ? {
+                browserUse: createBrowserUseRunner(browserUseKey, grantedEnvSecrets, {
+                  onSecretsBound: (bindings) =>
+                    deps.auditLog.record({
+                      at: Date.now(),
+                      principalId: actor.id,
+                      action: "browser_use.secrets_bound",
+                      resource: bindings.map((b) => `${b.alias} on ${b.domains.join("|")}`).join(", "),
+                      scopeLabel: scopeId,
+                    }),
+                }),
+              }
+            : {}),
           ...(() => {
             const available =
               strictReadOnly || actor.type !== "internal"
@@ -2549,6 +2574,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             history: continuation?.history ?? history,
             tools,
             ...(tools.credentialExecServices ? { credentialExecServices: tools.credentialExecServices } : {}),
+            ...(tools.browserUse ? { browserUse: true } : {}),
             ...(securityPolicy.inboundScreening === "external" &&
             (deps.securityScreener || deps.harness.models.screenSecurity)
               ? {
