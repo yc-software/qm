@@ -10,8 +10,15 @@ export function resolveMentionsInText(text: string, lookup: (id: string) => stri
   });
 }
 
-export function stripMention(text: string, botUserId: string): string {
-  const withoutMention = botUserId ? text.replace(new RegExp(`<@${botUserId}>`, "g"), "") : text;
+export function stripMention(text: string, botUserId: string, ownBotId = ""): string {
+  // Strip BOTH mention forms (bot user id and bot id — see
+  // mentionsBot) including the legacy `<@ID|label>` shape, so the core
+  // never receives a raw `<@B…>` token for an addressed turn (#630).
+  let withoutMention = text;
+  for (const id of [botUserId, ownBotId]) {
+    if (!id) continue;
+    withoutMention = withoutMention.replace(new RegExp(`<@${id}(?:\|[^>]*)?>`, "g"), "");
+  }
   return decodeSlackEntities(withoutMention).trim();
 }
 
