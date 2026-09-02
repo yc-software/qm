@@ -4,10 +4,9 @@ import {
   exchangeCode,
   openOAuthState,
   PROVIDERS,
-  sealOAuthState,
   createSecretClientResolver,
-  generateCodeVerifier,
-  codeChallengeS256,
+  sealPkceState,
+  pkceVerifierFor,
   type OAuthClientResolver,
   type AccountType,
 } from "../../connectors/oauth.ts";
@@ -15,6 +14,7 @@ import { bestOAuthTokenStatus, CONNECTOR_STATUS_ACCOUNT_TYPES } from "../../cred
 import type { OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
+import { PORTAL_IDENTITY_HEADER, verifyPortalIdentity, type PortalIdentity } from "../../auth/portal-identity.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
@@ -27,6 +27,35 @@ function oauthStateSecret(deps: ServerDeps, signingSecret: string | undefined): 
   const value = deps.oauthStateSecret ?? signingSecret;
   if (!value) throw new Error("OAuth state secret required");
   return value;
+}
+
+function surfaceFrontsCallbacks(ctx: BaseCtx): boolean {
+  return !!ctx.deps.portalUrl && !!(ctx.deps.portalIdentitySecret ?? ctx.secret);
+}
+
+async function browserFinisher(ctx: BaseCtx): Promise<PortalIdentity | null> {
+  const raw = ctx.req.headers[PORTAL_IDENTITY_HEADER];
+  const token = Array.isArray(raw) ? raw[0] : raw;
+  const identitySecret = ctx.deps.portalIdentitySecret ?? ctx.secret;
+  if (!token || !identitySecret) return null;
+  return await verifyPortalIdentity(token, identitySecret, Date.now());
+}
+
+async function assertBrowserFinisher(ctx: BaseCtx, principalId: string): Promise<void> {
+  if (!surfaceFrontsCallbacks(ctx)) return;
+  const finisher = await browserFinisher(ctx);
+  if (finisher?.imp) {
+    throw new Error("finish this connection as yourself — stop impersonating before connecting an account");
+  }
+  if (!samePerson(finisher?.p ?? null, principalId)) {
+    throw new Error("finish this connection in the signed-in browser session that started it");
+  }
+  if (ctx.deps.identity) {
+    await ctx.deps.identity.refresh();
+    if (ctx.deps.identity.classify(finisher!.p).type !== "internal") {
+      throw new Error("this account is no longer active in the workspace");
+    }
+  }
 }
 
 export function resolverFor(deps: ServerDeps): OAuthClientResolver {
@@ -124,16 +153,14 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
   const providerError = url.searchParams.get("error");
   if (providerError) return sendJson(res, 400, { error: "oauth_denied", message: providerError });
   if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
-  let state;
   try {
-    state = await openOAuthState(stateParam, {
-      secret: oauthStateSecret(deps, secret),
-      maxAgeMs: OAUTH_STATE_MAX_AGE_MS,
-    });
+    const stateSecret = oauthStateSecret(deps, secret);
+    const state = await openOAuthState(stateParam, { secret: stateSecret, maxAgeMs: OAUTH_STATE_MAX_AGE_MS });
     if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
     if (state.orgId !== undefined && state.orgId !== configOrgId()) {
       throw new Error("OAuth state is for a different org");
     }
+    await assertBrowserFinisher(ctx, state.principalId);
     if (
       !deps.replayDedupe ||
       !(await deps.replayDedupe.claim(`oauth:${state.nonce}`, state.issuedAt + OAUTH_STATE_MAX_AGE_MS))
@@ -142,11 +169,12 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     }
     const accountType = state.accountType ?? "default";
     const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
+    const codeVerifier = pkceVerifierFor(state, stateSecret);
     const { hosts, token } = await exchangeCode(oauthRoute.provider, code, state.redirectUri, {
       client,
       fetchImpl: deps.oauthFetch,
       accountType,
-      ...(state.codeVerifier ? { codeVerifier: state.codeVerifier } : {}),
+      ...(codeVerifier ? { codeVerifier } : {}),
     });
     if (!token.accessToken) throw new Error("oauth exchange returned an empty access token");
     const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
@@ -224,8 +252,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       });
     }
     const returnTo = safeReturnTo(url.searchParams.get("returnTo")) ?? rec.returnTo;
-    const codeVerifier = PROVIDERS[rec.provider]?.pkce ? generateCodeVerifier() : undefined;
-    const state = await sealOAuthState(
+    const { state, codeChallenge } = await sealPkceState(
       {
         provider: rec.provider,
         principalId: rec.principalId,
@@ -234,7 +261,6 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
         ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
         clientRef: client.clientRef,
         ...(returnTo ? { returnTo } : {}),
-        ...(codeVerifier ? { codeVerifier } : {}),
         consentLinkId: linkId,
       },
       { secret: oauthStateSecret(deps, secret) },
@@ -244,7 +270,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       state,
       client,
       accountType: rec.accountType,
-      ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
+      ...(codeChallenge ? { codeChallenge } : {}),
     });
     audit(deps, {
       principalId: rec.principalId,
@@ -349,6 +375,12 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
   const redirectUri = url.searchParams.get("redirectUri") ?? "";
   if (!principalId || !redirectUri)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and redirectUri required" });
+  if (ctx.actor?.imp) {
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "connector flows cannot be started while impersonating",
+    });
+  }
   const accountType = parseAccountType(url.searchParams.get("accountType"));
   try {
     const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
@@ -358,8 +390,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
         message: "redirectUri is not registered for this client",
       });
     }
-    const codeVerifier = provider.pkce ? generateCodeVerifier() : undefined;
-    const state = await sealOAuthState(
+    const { state, codeChallenge } = await sealPkceState(
       {
         provider: oauthRoute.provider,
         principalId,
@@ -370,7 +401,6 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
         ...(safeReturnTo(url.searchParams.get("returnTo"))
           ? { returnTo: safeReturnTo(url.searchParams.get("returnTo")) }
           : {}),
-        ...(codeVerifier ? { codeVerifier } : {}),
       },
       { secret: oauthStateSecret(deps, secret) },
     );
@@ -379,7 +409,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       state,
       client,
       accountType,
-      ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
+      ...(codeChallenge ? { codeChallenge } : {}),
     });
     audit(deps, {
       principalId,

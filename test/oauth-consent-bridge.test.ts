@@ -17,9 +17,14 @@ import {
   CONTROL_PLANE_AUD,
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "./support/portal-identity.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
+
+function finisher(principalId: string): Record<string, string> {
+  return { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: principalId, exp: Date.now() + 60_000 }, SECRET) };
+}
 
 function start(
   fetchImpl: FetchLike,
@@ -130,7 +135,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
     );
 
     const cb = `/v1/connectors/oauth/google/callback?code=code-1&state=${encodeURIComponent(consent.searchParams.get("state") ?? "")}`;
-    const cbRes = await fetch(`${srv.base}${cb}`, { redirect: "manual" });
+    const cbRes = await fetch(`${srv.base}${cb}`, { redirect: "manual", headers: finisher("U1") });
     assert.equal(cbRes.status, 302);
     assert.match(cbRes.headers.get("location") ?? "", /^\/connectors\?connector=google&status=connected/);
     assert.equal(exchanged, 1);
@@ -200,6 +205,35 @@ test("a wrong-recipient click is refused, leaves the link usable, and reports wh
   }
 });
 
+test("a leaked consent URL is dead outside the browser session it was minted for", async () => {
+  let exchanged = 0;
+  const srv = start(async () => {
+    exchanged += 1;
+    return { ok: true, status: 200, json: async () => ({ access_token: "at-google" }) };
+  });
+  try {
+    const { connectPath } = (await (await mint(srv.base, await consentTok("U1"), { provider: "google" })).json()) as {
+      connectPath: string;
+    };
+    const decision = (await (await redeem(srv.base, coreRedeemPath(connectPath), "U1")).json()) as {
+      authorizeUrl: string;
+    };
+    const state = new URL(decision.authorizeUrl).searchParams.get("state") ?? "";
+    const cb = `/v1/connectors/oauth/google/callback?code=code-1&state=${encodeURIComponent(state)}`;
+
+    const leaked = await fetch(`${srv.base}${cb}`, { redirect: "manual", headers: finisher("U2") });
+    assert.equal(leaked.status, 400);
+    assert.equal(exchanged, 0, "U2's browser must not spend U1's authorization");
+    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
+
+    const owner = await fetch(`${srv.base}${cb}`, { redirect: "manual", headers: finisher("U1") });
+    assert.equal(owner.status, 302, "the rejected attempt must not have burned the state");
+    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), "at-google");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("connecting from a channel never re-grants a previously private connector", async () => {
   const fetchImpl: FetchLike = async () => ({
     ok: true,
@@ -218,7 +252,7 @@ test("connecting from a channel never re-grants a previously private connector",
     assert.equal(decision.status, "authorize");
     const state = new URL(decision.authorizeUrl).searchParams.get("state") ?? "";
     const cb = `/v1/connectors/oauth/google/callback?code=code-1&state=${encodeURIComponent(state)}`;
-    assert.equal((await fetch(`${srv.base}${cb}`, { redirect: "manual" })).status, 302);
+    assert.equal((await fetch(`${srv.base}${cb}`, { redirect: "manual", headers: finisher("U1") })).status, 302);
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), "at-google");
     assert.equal((await srv.built.keychain!.materializeStanding("channel:C9")).length, 0);
   } finally {
@@ -261,7 +295,11 @@ test("on an API-only host (no PUBLIC_WEB_URL) the callback does NOT default to t
     const consent = new URL(decision.authorizeUrl);
     const cb = `/v1/connectors/oauth/google/callback?code=code-1&state=${encodeURIComponent(consent.searchParams.get("state") ?? "")}`;
     const cbRes = await fetch(`${srv.base}${cb}`, { redirect: "manual" });
-    assert.equal(cbRes.status, 200);
+    assert.equal(
+      cbRes.status,
+      200,
+      "an API-only host has no browser surface to mint a finisher, so the callback must not demand one",
+    );
     const body = (await cbRes.json()) as { ok: boolean; provider: string };
     assert.equal(body.ok, true);
     assert.equal(body.provider, "google");

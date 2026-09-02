@@ -170,7 +170,7 @@ const corePort = await freePort();
 const webPort = await freePort();
 const coreBase = `http://127.0.0.1:${corePort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
-const redirectUri = `${webBase}/connectors/oauth/google/callback`;
+const redirectUri = `${webBase}/v1/connectors/oauth/google/callback`;
 const expectedRedirect = process.env.GOOGLE_OAUTH_REDIRECT_URI ?? process.env.GOOGLE_OAUTH_REGISTERED_REDIRECT_URI;
 
 if (expectedRedirect && expectedRedirect !== redirectUri) {
@@ -211,6 +211,7 @@ try {
       PORT: String(webPort),
       WEB_UI_PUBLIC_URL: webBase,
       WEB_UI_PRINCIPALS: actor,
+      ...(interactive ? { NODE_ENV: "test", ALLOW_UNSIGNED_TEST_IDENTITY: "1" } : {}),
     },
   });
   web.stderr.on("data", (chunk) => {
@@ -242,10 +243,15 @@ try {
 
   const forged = await fetch(
     `${webBase}/connectors/oauth/google/callback?code=forged-smoke-code&state=forged-smoke-state`,
-    { redirect: "manual" },
+    { redirect: "manual", headers: identity },
   );
   if (forged.status !== 400)
     throw new Error(`web callback route did not forward/reject forged callback as expected (HTTP ${forged.status})`);
+  const unbound = await fetch(`${webBase}/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`, {
+    redirect: "manual",
+  });
+  if (unbound.status !== 400)
+    throw new Error(`web callback route accepted a callback with no signed-in session (HTTP ${unbound.status})`);
   const providerProbe = await probeGoogleTokenEndpoint(redirectUri);
 
   console.log("google oauth readiness ok");
@@ -263,7 +269,9 @@ try {
     );
   } else {
     const timeoutMs = Number(process.env.GOOGLE_OAUTH_SMOKE_TIMEOUT_MS ?? 180_000);
-    console.log("Open this URL in a browser that can reach the redirect_uri:");
+    console.log(`The callback is bound to the signed-in browser session, so sign in first:`);
+    console.log(`  1. open ${webBase} and sign in as ${actor}`);
+    console.log(`  2. open this URL in that same browser:`);
     console.log(authorize.toString());
     console.log(`waiting up to ${Math.round(timeoutMs / 1000)}s for Google to redirect back...`);
     const deadline = Date.now() + timeoutMs;
@@ -278,7 +286,7 @@ try {
     }
     if (!connected) {
       throw new Error(
-        `interactive Google OAuth did not complete; confirm this redirect URI is registered in Google Cloud: ${redirectUri}`,
+        `interactive Google OAuth did not complete; confirm the browser was signed in as ${actor} and that this redirect URI is registered in Google Cloud: ${redirectUri}`,
       );
     }
     console.log("interactive_exchange: connected");

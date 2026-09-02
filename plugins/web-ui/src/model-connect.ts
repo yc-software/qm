@@ -72,7 +72,7 @@ type Mode = "gate" | "manager";
 type Method = "subscription" | "apikey";
 type Flow =
   | { kind: "pick" }
-  | { kind: "claude"; authorizeUrl: string; verifier: string; code: string }
+  | { kind: "claude"; authorizeUrl: string; verifier: string; state: string; code: string }
   | { kind: "chatgpt"; device: DevicePrompt }
   | { kind: "apikey"; value: string };
 
@@ -174,9 +174,10 @@ async function pickSubscription(p: ProviderMeta): Promise<void> {
   paint();
   try {
     if (p.key === "claude") {
-      const start = await api<{ authorizeUrl: string; verifier: string }>("/api/user-model-auth/claude/start", {
-        method: "POST",
-      });
+      const start = await api<{ authorizeUrl: string; verifier: string; state: string }>(
+        "/api/user-model-auth/claude/start",
+        { method: "POST" },
+      );
       s.flow = { kind: "claude", ...start, code: "" };
     } else {
       if (!deviceCache || deviceCache.expiresAt - 30_000 <= Date.now()) {
@@ -227,7 +228,7 @@ async function finishClaude(): Promise<void> {
   try {
     await api("/api/user-model-auth/claude/complete", {
       method: "POST",
-      body: JSON.stringify({ code: s.flow.code.trim(), verifier: s.flow.verifier }),
+      body: JSON.stringify({ code: s.flow.code.trim(), verifier: s.flow.verifier, state: s.flow.state }),
     });
     return afterConnect();
   } catch (e) {

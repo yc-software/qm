@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from "jose";
 
 type FetchLike = typeof fetch;
@@ -16,10 +16,13 @@ export interface OidcConfig {
   expectedTeamId?: string;
 }
 
-export function pkcePair(): { verifier: string; challenge: string } {
-  const verifier = randomBytes(32).toString("base64url");
-  const challenge = createHash("sha256").update(verifier).digest("base64url");
-  return { verifier, challenge };
+export function deriveCodeVerifier(nonce: string, key: Buffer): string {
+  if (!nonce) throw new Error("OIDC nonce required");
+  return createHmac("sha256", key).update(`pkce:${nonce}`).digest("base64url");
+}
+
+export function codeChallengeS256(verifier: string): string {
+  return createHash("sha256").update(verifier).digest("base64url");
 }
 
 export function buildAuthorizeUrl(cfg: OidcConfig, args: { state: string; nonce: string; challenge: string }): string {

@@ -9,14 +9,21 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
+import { PROVIDERS, codeChallengeS256, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "./support/portal-identity.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
   GOOGLE_OAUTH_CLIENT_SECRET: "gsecret",
+  X_OAUTH_CLIENT_ID: "xid",
+  X_OAUTH_CLIENT_SECRET: "xsecret",
 } as NodeJS.ProcessEnv;
+
+function finisher(principalId: string): Record<string, string> {
+  return { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: principalId, exp: Date.now() + 60_000 }, SECRET) };
+}
 
 function sign(method: string, pathWithQuery: string, body = ""): Record<string, string> {
   const ts = Math.floor(Date.now() / 1000);
@@ -40,6 +47,8 @@ function start(fetchImpl: FetchLike): { base: string; built: BuiltApp; close: ()
     auditLog: built.auditLog,
     oauthEnv,
     oauthFetch: fetchImpl,
+    portalUrl: "http://web.test",
+    identity: built.identity,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -74,10 +83,19 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
     assert.equal(consent.searchParams.get("client_id"), "gid");
 
     const callbackPath = `/v1/connectors/oauth/google/callback?code=code-123&state=${encodeURIComponent(state)}`;
-    const callbackRes = await fetch(`${srv.base}${callbackPath}`);
+    const anonymous = await fetch(`${srv.base}${callbackPath}`);
+    assert.equal(anonymous.status, 400);
+    assert.match(((await anonymous.json()) as { message: string }).message, /signed-in browser session/);
+
+    const stranger = await fetch(`${srv.base}${callbackPath}`, { headers: finisher("U2") });
+    assert.equal(stranger.status, 400);
+    assert.match(((await stranger.json()) as { message: string }).message, /signed-in browser session/);
+    assert.equal(exchanged, false, "a stranger's browser must not complete U1's connection");
+
+    const callbackRes = await fetch(`${srv.base}${callbackPath}`, { headers: finisher("U1") });
     assert.equal(callbackRes.status, 200);
     assert.equal(exchanged, true);
-    const replay = await fetch(`${srv.base}${callbackPath}`);
+    const replay = await fetch(`${srv.base}${callbackPath}`, { headers: finisher("U1") });
     assert.equal(replay.status, 400);
     assert.match(((await replay.json()) as { message: string }).message, /already used/);
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), "at-google");
@@ -194,6 +212,106 @@ test("connector token route normalizes expiry seconds before storing", async () 
     const status = await srv.built.connectorTokens.connectorTokenStatus("api.example.test", "U1");
     assert.equal(status.connected, true);
     assert.equal(status.expiresAt, expiresAtMs);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a PKCE flow never exposes the verifier to the user-agent and still exchanges it end to end", async () => {
+  let sentVerifier = "";
+  const fetchImpl: FetchLike = async (url, init) => {
+    assert.equal(url, PROVIDERS.x!.tokenUrl);
+    sentVerifier = new URLSearchParams(init.body).get("code_verifier") ?? "";
+    return { ok: true, status: 200, json: async () => ({ access_token: "at-x", expires_in: 7200 }) };
+  };
+
+  const srv = start(fetchImpl);
+  try {
+    const redirectUri = `${srv.base}/v1/connectors/oauth/x/callback`;
+    const startPath = `/v1/connectors/oauth/x/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}`;
+    const startRes = await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) });
+    assert.equal(startRes.status, 200);
+    const consent = new URL(((await startRes.json()) as { authorizeUrl: string }).authorizeUrl);
+    const state = consent.searchParams.get("state") ?? "";
+    const challenge = consent.searchParams.get("code_challenge") ?? "";
+    assert.ok(state && challenge, "the authorize URL carries both state and challenge");
+
+    const payload = Buffer.from(state.split(".")[1]!, "base64url").toString("utf8");
+    const claims = JSON.parse(payload) as Record<string, unknown>;
+    for (const [name, value] of [...Object.entries(claims), ...consent.searchParams]) {
+      if (typeof value !== "string") continue;
+      assert.notEqual(
+        codeChallengeS256(value),
+        challenge,
+        `the URL the browser follows must not carry the verifier — "${name}" is it in plain sight`,
+      );
+    }
+
+    const callbackPath = `/v1/connectors/oauth/x/callback?code=code-x&state=${encodeURIComponent(state)}`;
+    assert.equal((await fetch(`${srv.base}${callbackPath}`, { headers: finisher("U1") })).status, 200);
+    assert.equal(codeChallengeS256(sentVerifier), challenge, "the exchange sends the verifier behind that challenge");
+    assert.ok(!payload.includes(sentVerifier), "the state the user-agent carries is free of the verifier at any depth");
+    assert.equal(await srv.built.connectorTokens.connectorAccessToken("api.x.com", "U1"), "at-x");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("an impersonated browser cannot finish a connection the impersonated user started", async () => {
+  let exchanged = false;
+  const srv = start(async () => {
+    exchanged = true;
+    return { ok: true, status: 200, json: async () => ({ access_token: "at" }) };
+  });
+  try {
+    const redirectUri = `${srv.base}/v1/connectors/oauth/google/callback`;
+    const startPath = `/v1/connectors/oauth/google/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}`;
+    const startBody = (await (await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) })).json()) as {
+      authorizeUrl: string;
+    };
+    const state = new URL(startBody.authorizeUrl).searchParams.get("state") ?? "";
+    const cb = `/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`;
+
+    const impersonated = {
+      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "U1", imp: "admin", exp: Date.now() + 60_000 }, SECRET),
+    };
+    const res = await fetch(`${srv.base}${cb}`, { headers: impersonated });
+    assert.equal(res.status, 400, "an admin impersonating U1 must not bind a provider account to U1");
+    assert.match(((await res.json()) as { message: string }).message, /stop impersonating/);
+    assert.equal(exchanged, false, "the token exchange must not run for an impersonated finisher");
+
+    assert.equal(
+      (await fetch(`${srv.base}${cb}`, { headers: finisher("U1") })).status,
+      200,
+      "the real signed-in owner still completes the flow",
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a principal who left the workspace cannot finish a connection started before departure", async () => {
+  let exchanged = false;
+  const srv = start(async () => {
+    exchanged = true;
+    return { ok: true, status: 200, json: async () => ({ access_token: "at-google" }) };
+  });
+  try {
+    const redirectUri = `${srv.base}/v1/connectors/oauth/google/callback`;
+    const startPath = `/v1/connectors/oauth/google/start?principalId=U9&redirectUri=${encodeURIComponent(redirectUri)}`;
+    const startRes = await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) });
+    assert.equal(startRes.status, 200);
+    const state = new URL(((await startRes.json()) as { authorizeUrl: string }).authorizeUrl).searchParams.get("state");
+    assert.ok(state);
+
+    await srv.built.identity.deactivate("U9");
+
+    const callbackPath = `/v1/connectors/oauth/google/callback?code=code-9&state=${encodeURIComponent(state)}`;
+    const res = await fetch(`${srv.base}${callbackPath}`, { headers: finisher("U9") });
+    assert.equal(res.status, 400);
+    assert.match(((await res.json()) as { message: string }).message, /no longer active/);
+    assert.equal(exchanged, false, "a departed principal must not spend the authorization");
+    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U9"), null);
   } finally {
     await srv.close();
   }

@@ -50,7 +50,6 @@ export interface TmpClaims {
   k: "tmp";
   state: string;
   nonce: string;
-  pkceVerifier: string;
   returnTo: string;
   iat: number;
   exp: number;
@@ -94,12 +93,7 @@ export function openImpersonation(token: string | null, key: Buffer, now: number
 export function openTmp(token: string | null, key: Buffer, now: number): TmpClaims | null {
   const p = open(token, key);
   if (!p || p.k !== "tmp") return null;
-  if (
-    typeof p.state !== "string" ||
-    typeof p.nonce !== "string" ||
-    typeof p.pkceVerifier !== "string" ||
-    typeof p.exp !== "number"
-  )
+  if (typeof p.state !== "string" || !p.state || typeof p.nonce !== "string" || !p.nonce || typeof p.exp !== "number")
     return null;
   if (now >= p.exp * 1000) return null;
   return p as unknown as TmpClaims;

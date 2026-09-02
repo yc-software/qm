@@ -1,6 +1,6 @@
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
 import { createEnvSecretSource, type SecretSource } from "../credentials/secret-source.ts";
-import { randomUUID, randomBytes, createHash } from "node:crypto";
+import { randomUUID, randomBytes, createHash, createHmac } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
 import { swallow } from "../util/errors.ts";
@@ -9,6 +9,12 @@ export type AccountType = "default" | "personal" | "company";
 
 export function generateCodeVerifier(): string {
   return randomBytes(32).toString("base64url");
+}
+export function deriveCodeVerifier(nonce: string, secret: string): string {
+  if (!secret) throw new Error("OAuth state secret required");
+  if (!nonce) throw new Error("OAuth state nonce required");
+  const key = createHmac("sha256", secret).update("pkce.v1").digest();
+  return createHmac("sha256", key).update(nonce).digest("base64url");
 }
 export function codeChallengeS256(verifier: string): string {
   return createHash("sha256").update(verifier).digest("base64url");
@@ -476,7 +482,6 @@ export interface OAuthState {
   orgId?: string;
   accountType?: AccountType;
   clientRef?: string;
-  codeVerifier?: string;
   consentLinkId?: string;
 }
 
@@ -491,28 +496,35 @@ function isOAuthState(v: unknown): v is OAuthState {
     typeof s.redirectUri === "string" &&
     typeof s.issuedAt === "number" &&
     typeof s.nonce === "string" &&
+    s.nonce !== "" &&
     (s.returnTo === undefined || typeof s.returnTo === "string") &&
     (s.orgId === undefined || typeof s.orgId === "string") &&
     (s.accountType === undefined || (typeof s.accountType === "string" && ACCOUNT_TYPES.includes(s.accountType))) &&
     (s.clientRef === undefined || typeof s.clientRef === "string") &&
-    (s.codeVerifier === undefined || typeof s.codeVerifier === "string") &&
     (s.consentLinkId === undefined || typeof s.consentLinkId === "string")
   );
 }
 
 export function sealOAuthState(
-  state: Omit<OAuthState, "issuedAt" | "nonce"> & { issuedAt?: number; nonce?: string },
+  state: Omit<OAuthState, "issuedAt"> & { issuedAt?: number },
   opts: { secret: string; now?: () => number } = { secret: "" },
 ): Promise<string> {
   if (!opts.secret) throw new Error("OAuth state secret required");
-  return mintSignedPayload(
-    {
-      ...state,
-      issuedAt: state.issuedAt ?? (opts.now ?? Date.now)(),
-      nonce: state.nonce ?? randomUUID(),
-    },
-    opts.secret,
-  );
+  return mintSignedPayload({ ...state, issuedAt: state.issuedAt ?? (opts.now ?? Date.now)() }, opts.secret);
+}
+
+export async function sealPkceState(
+  state: Omit<OAuthState, "issuedAt" | "nonce">,
+  opts: { secret: string; now?: () => number },
+): Promise<{ state: string; codeChallenge?: string }> {
+  const nonce = randomUUID();
+  const sealed = await sealOAuthState({ ...state, nonce }, opts);
+  const verifier = PROVIDERS[state.provider]?.pkce ? deriveCodeVerifier(nonce, opts.secret) : undefined;
+  return { state: sealed, ...(verifier ? { codeChallenge: codeChallengeS256(verifier) } : {}) };
+}
+
+export function pkceVerifierFor(state: OAuthState, secret: string): string | undefined {
+  return PROVIDERS[state.provider]?.pkce ? deriveCodeVerifier(state.nonce, secret) : undefined;
 }
 
 export async function openOAuthState(

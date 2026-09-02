@@ -18,7 +18,8 @@ import {
   type TmpClaims,
 } from "./session.ts";
 import {
-  pkcePair,
+  deriveCodeVerifier,
+  codeChallengeS256,
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserinfo,
@@ -33,14 +34,14 @@ import {
   proxyToUpstream,
   FORWARD_AGENT_API_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
-  FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
   FORWARD_WEBHOOK_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { portalIdentityHeaders } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
+import { sanitizeBranding } from "../../chassis/src/branding.ts";
 import { json, escapeHtml, serveEmojiFavicon } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -103,7 +104,7 @@ async function fetchSurfaceConfig(): Promise<void> {
     });
     if (r.ok) {
       const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
-      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
+      brandAccent = sanitizeBranding({ accent: body.branding?.accent }).accent ?? NEUTRAL_ACCENT;
       modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
       surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
@@ -187,6 +188,7 @@ const DEV_SECRET = "dev-only-insecure-portal-session-secret";
 const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
 const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
+const pkceKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.pkce.v1");
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
 
 const TMP_TTL_S = 600;
@@ -211,13 +213,10 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ADMIN_PROBE_TIMEOUT_MS);
   try {
-    const headers: Record<string, string> = { cookie: `admin=${encodeURIComponent(sub)}` };
-    if (PORTAL_IDENTITY_SECRET) {
-      headers[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-        { p: sub, exp: Date.now() + 60_000 },
-        PORTAL_IDENTITY_SECRET,
-      );
-    }
+    const headers: Record<string, string> = {
+      cookie: `admin=${encodeURIComponent(sub)}`,
+      ...portalIdentityHeaders(sub, PORTAL_IDENTITY_SECRET),
+    };
     const r = await fetch(`${UPSTREAMS.admin}/api/whoami`, { headers, signal: ctrl.signal });
     if (!r.ok) {
       console.warn(`[portal] admin probe returned HTTP ${r.status}`);
@@ -569,6 +568,43 @@ export function connectWrongRecipientHtml(o: { provider: string; alreadyConnecte
   });
 }
 
+async function handleOAuthCallback(
+  res: ServerResponse,
+  o: { corePath: string; session: SessionClaims },
+): Promise<void> {
+  let r: Response;
+  try {
+    r = await fetch(`${CORE}${o.corePath}`, {
+      redirect: "manual",
+      headers: portalIdentityHeaders(o.session.sub, PORTAL_IDENTITY_SECRET),
+    });
+  } catch {
+    return sendHtml(
+      res,
+      502,
+      connectErrorHtml("We couldn't reach the connection service. Please try the link again in a moment."),
+    );
+  }
+  if (r.status >= 300 && r.status < 400) {
+    const location = r.headers.get("location");
+    if (location) {
+      res.writeHead(302, { location, "cache-control": "no-store" });
+      return void res.end();
+    }
+  }
+  if (r.ok) {
+    const body = await r.text();
+    res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "application/json" });
+    return void res.end(body);
+  }
+  const data = (await r.json().catch(() => ({}))) as { message?: string };
+  return sendHtml(
+    res,
+    400,
+    connectErrorHtml(data.message ?? "This connection attempt is invalid or expired — start it again."),
+  );
+}
+
 async function handleConsentRedeem(
   res: ServerResponse,
   o: { corePath: string; session: SessionClaims },
@@ -713,9 +749,7 @@ async function coreImpersonate(
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
     "x-admin-actor": `${admin}@${ORG}`,
-    ...(PORTAL_IDENTITY_SECRET
-      ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: admin, exp: Date.now() + 60_000 }, PORTAL_IDENTITY_SECRET) }
-      : {}),
+    ...portalIdentityHeaders(admin, PORTAL_IDENTITY_SECRET),
   };
   try {
     const r = await fetch(`${CORE}${path}`, { method: "POST", headers, body });
@@ -726,10 +760,8 @@ async function coreImpersonate(
   }
 }
 
-function isOAuthPublicPassthrough(method: string, pathname: string): boolean {
-  if (method !== "GET") return false;
-  if (/^\/v1\/connectors\/oauth\/[^/]+\/callback$/.test(pathname)) return true;
-  return false;
+function isOAuthCallback(method: string, pathname: string): boolean {
+  return method === "GET" && /^\/v1\/connectors\/oauth\/[^/]+\/callback$/.test(pathname);
 }
 
 function hasAgentCapability(req: IncomingMessage): boolean {
@@ -979,8 +1011,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return handleSelfConnect(res, { provider: decodeURIComponent(selfConnect[1] ?? ""), session });
   }
 
-  if (isOAuthPublicPassthrough(method, pathname)) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_OAUTH_HEADERS);
+  if (isOAuthCallback(method, pathname)) {
+    if (!session) return consentBounce();
+    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml());
+    return handleOAuthCallback(res, { corePath: `${pathname}${url.search}`, session });
   }
 
   const dropForm = /^\/drop\/([^/]+)\/form$/.exec(pathname);
@@ -1136,9 +1170,9 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   }
   const state = randomToken();
   const nonce = randomToken();
-  const { verifier, challenge } = pkcePair();
   const now = Math.floor(Date.now() / 1000);
-  const tmp: TmpClaims = { k: "tmp", state, nonce, pkceVerifier: verifier, returnTo, iat: now, exp: now + TMP_TTL_S };
+  const tmp: TmpClaims = { k: "tmp", state, nonce, returnTo, iat: now, exp: now + TMP_TTL_S };
+  const challenge = codeChallengeS256(deriveCodeVerifier(nonce, pkceKey));
   setSession(res, [
     setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
   ]);
@@ -1164,7 +1198,10 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   let sub: string;
   let name = "";
   try {
-    const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
+    const { accessToken, idToken } = await exchangeCode(OIDC, {
+      code,
+      codeVerifier: deriveCodeVerifier(tmp.nonce, pkceKey),
+    });
     const claims = await verifyIdToken(OIDC, idToken, tmp.nonce);
     if (OIDC.expectedTeamId) {
       const team = claims["https://slack.com/team_id"];

@@ -59,7 +59,7 @@ test("openSession enforces kind, sub, and expiry", () => {
   assert.equal(openSession(expired, sessionKey, Date.now()), null);
 
   const tmp = seal(
-    { k: "tmp", state: "s", nonce: "n", pkceVerifier: "v", returnTo: "/", iat: now, exp: now + 60 } satisfies TmpClaims,
+    { k: "tmp", state: "s", nonce: "n", returnTo: "/", iat: now, exp: now + 60 } satisfies TmpClaims,
     sessionKey,
   );
   assert.equal(openSession(tmp, sessionKey, Date.now()), null);
@@ -101,7 +101,6 @@ test("openTmp enforces kind and required fields", () => {
       k: "tmp",
       state: "abc",
       nonce: "xyz",
-      pkceVerifier: "v",
       returnTo: "/web-ui/",
       iat: now,
       exp: now + 600,
@@ -116,6 +115,18 @@ test("openTmp enforces kind and required fields", () => {
     tmpKey,
   );
   assert.equal(openTmp(session, tmpKey, Date.now()), null);
+
+  const blankNonce = seal(
+    { k: "tmp", state: "abc", nonce: "", returnTo: "/", iat: now, exp: now + 600 } satisfies TmpClaims,
+    tmpKey,
+  );
+  assert.equal(openTmp(blankNonce, tmpKey, Date.now()), null, "an empty nonce would collapse the derived verifier");
+
+  const blankState = seal(
+    { k: "tmp", state: "", nonce: "xyz", returnTo: "/", iat: now, exp: now + 600 } satisfies TmpClaims,
+    tmpKey,
+  );
+  assert.equal(openTmp(blankState, tmpKey, Date.now()), null, "an empty state would match a callback that sent none");
 });
 
 test("openImpersonation enforces kind, actor, target, and expiry; key is domain-separated", () => {
@@ -166,9 +177,13 @@ test("openImpersonation enforces kind, actor, target, and expiry; key is domain-
   assert.equal(openImpersonation(noTarget, impersonateKey, Date.now()), null);
 });
 
-test("cookie helpers set HttpOnly/SameSite/Path and Secure only when asked", () => {
+test("cookie helpers set HttpOnly/Path and Secure only when asked, and SameSite stays Lax for the connector OAuth callback", () => {
   const secure = setCookie("portal_session", "v v", { path: "/", maxAge: 100, secure: true });
-  assert.match(secure, /^portal_session=v%20v; HttpOnly; SameSite=Lax; Path=\/; Secure; Max-Age=100$/);
+  assert.match(
+    secure,
+    /^portal_session=v%20v; HttpOnly; SameSite=Lax; Path=\/; Secure; Max-Age=100$/,
+    "SameSite=Strict would strip the session from the provider's cross-site top-level GET to /v1/connectors/oauth/:p/callback, so every connector connect would detour through a full re-login",
+  );
   const insecure = setCookie("portal_oidc_tmp", "x", { path: "/auth", maxAge: 600, secure: false });
   assert.ok(!insecure.includes("Secure"));
   assert.match(clearCookie("portal_session", "/", true), /Max-Age=0/);

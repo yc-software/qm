@@ -5,7 +5,7 @@ import { createGzip, gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { json, readBody, cookie } from "../../chassis/src/http.ts";
-import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
+import { createBrandingCache, injectBranding, type OrgBranding, type RawBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import {
@@ -45,19 +45,14 @@ const ADMIN_CSP = [
   "object-src 'none'",
 ].join("; ");
 
-async function fetchBrand(): Promise<OrgBranding> {
+async function fetchBrand(): Promise<RawBranding> {
   const corePath = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
   const r = await fetch(`${CORE}${corePath}`, {
     headers: signedHeaders("GET", corePath, ""),
     signal: AbortSignal.timeout(2_000),
   });
   if (!r.ok) throw new Error(`surface-config ${r.status}`);
-  const b = ((await r.json()) as { branding?: Record<string, unknown> }).branding;
-  return {
-    ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
-    ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
-    ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
-  };
+  return ((await r.json()) as { branding?: RawBranding }).branding ?? {};
 }
 const brandCache = createBrandingCache(fetchBrand);
 async function refreshBrandNow(): Promise<void> {

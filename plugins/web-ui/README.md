@@ -134,7 +134,10 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
     → core `/v1/connectors/oauth/:p/start` (redirect URI = this surface's
     `/connectors/oauth/:p/callback`), and `POST /api/connectors/revoke` → core
     `/v1/connectors/oauth/revoke`. The callback exchanges the code server-side (tokens never reach
-    the browser) and bounces back into the SPA via a base-relative redirect.
+    the browser) and bounces back into the SPA via a base-relative redirect. It is session-bound:
+    the callback carries the signed-in principal to core, which refuses to store tokens unless that
+    principal is the one the flow was started for, so a leaked consent URL is useless in anyone
+    else's browser. Impersonated sessions cannot start a connector flow.
   - **Deploys** — `GET /api/deployments` → core `/v1/deployments`, grouped into manageable,
     shared, and archived views. Detail and restore routes expose authorized metadata and bring an
     archived version back online; running apps open through the surface's signed deployment proxy.

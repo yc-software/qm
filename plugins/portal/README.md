@@ -52,6 +52,10 @@ surfaces, and it does **not** import the core.
   anymore; the only place an admin is named is the core's `ADMIN_GRANTS`.
 - **Non-admin users need no per-id config.** `PORTAL_EXPECTED_TEAM_ID` pins the workspace, so any
   verified member is a valid user (`WEB_UI_PRINCIPALS` empty = any verified principal).
+- **Connector OAuth is session-bound.** The provider's `/v1/connectors/oauth/:p/callback` leg is
+  not a public passthrough: no session bounces to login, and the portal vouches for the finishing
+  browser with a signed portal identity. The core refuses to store tokens unless that identity is
+  the principal the flow was started for, so a leaked consent URL is dead in anyone else's browser.
 - **CSRF / open-redirect.** Every non-GET requires a same-origin `Origin`; `returnTo` is reduced
   to a same-origin path (rejects `//evil`, `/\evil`, `https:/evil`, `%2f%2f`/`%5c`).
 - **Secret hygiene.** In production the portal refuses to boot unless `PORTAL_SESSION_SECRET`,

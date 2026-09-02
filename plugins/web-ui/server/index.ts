@@ -20,8 +20,12 @@ import {
   PayloadTooLargeError,
   serveEmojiFavicon,
 } from "../../chassis/src/http.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
+import {
+  portalIdentityHeaders,
+  verifyPortalIdentity,
+  PORTAL_IDENTITY_HEADER,
+} from "../../chassis/src/portal-identity.ts";
+import { createBrandingCache, injectBranding, type RawBranding } from "../../chassis/src/branding.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -48,12 +52,7 @@ const DIST = join(ROOT, "dist-web");
 const brandingCache = createBrandingCache(async () => {
   const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
   if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
-  const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
-  return {
-    ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
-    ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
-    ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
-  };
+  return (JSON.parse(r.text) as { branding?: RawBranding }).branding ?? {};
 });
 
 async function brandIndexHtml(html: string): Promise<string> {
@@ -285,6 +284,12 @@ function authenticate(req: IncomingMessage): { identity: Identity } | { denied: 
 function resolveIdentity(req: IncomingMessage): Identity | null {
   const outcome = authenticate(req);
   return "identity" in outcome ? outcome.identity : null;
+}
+
+function identityHeaders(user: string): Record<string, string> {
+  const forwarded = portalTokenStore.getStore();
+  if (forwarded) return { [PORTAL_IDENTITY_HEADER]: forwarded };
+  return portalIdentityHeaders(user, PORTAL_IDENTITY_SECRET);
 }
 
 function cookieUser(req: IncomingMessage): string | null {
@@ -1564,7 +1569,12 @@ const apiRoutes: readonly WebRoute[] = [
     method: "POST",
     path: "/api/connectors/:provider/start",
     handle: async (c) => {
-      const { res, user } = c;
+      const { req, res, user } = c;
+      if (resolveIdentity(req)?.impersonator)
+        return json(res, 403, {
+          error: "forbidden",
+          message: "connecting an account is bound to your own browser session — stop impersonating first",
+        });
       const provider = c.params.provider!;
       const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
       const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo: "/keychain" });
@@ -2432,10 +2442,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (method === "GET" && oauthCallbackPrefix && path.endsWith("/callback")) {
     const provider = path.slice(oauthCallbackPrefix.length, -"/callback".length);
     const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/callback${url.search}`;
-    let ok: boolean;
+    const user = cookieUser(req);
+    let ok = false;
     try {
-      const r = await fetch(`${CORE}${corePath}`, { redirect: "manual" });
-      ok = r.status >= 200 && r.status < 300;
+      if (user) {
+        const r = await fetch(`${CORE}${corePath}`, { redirect: "manual", headers: identityHeaders(user) });
+        ok = r.status >= 200 && r.status < 400;
+      }
     } catch {
       ok = false;
     }

@@ -4,6 +4,8 @@ export interface OrgBranding {
   selfLabel?: string;
 }
 
+export type RawBranding = Partial<Record<keyof OrgBranding, unknown>>;
+
 const REFRESH_MS = 30_000;
 const RETRY_MS = 5_000;
 const FIRST_RENDER_WAIT_MS = 1_500;
@@ -14,7 +16,7 @@ export interface BrandingCache {
   refreshNow(): Promise<void>;
 }
 
-export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): BrandingCache {
+export function createBrandingCache(fetchBranding: () => Promise<RawBranding>): BrandingCache {
   let value: OrgBranding = {};
   let warmed = false;
   let nextAt = 0;
@@ -24,7 +26,7 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
     if (inflight || Date.now() < nextAt) return;
     inflight = (async () => {
       try {
-        value = await fetchBranding();
+        value = sanitizeBranding(await fetchBranding());
         if (process.env.BRANDING_DEBUG) console.error("[branding] fetched:", JSON.stringify(value));
         warmed = true;
         nextAt = Date.now() + REFRESH_MS;
@@ -59,7 +61,25 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
 const escapeAttr = (v: string): string =>
   v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-export function injectBranding(html: string, branding: OrgBranding, opts?: { titleSuffix?: string }): string {
+const BRAND_ACCENT = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+const LABEL_UNSAFE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029<>{}]/g;
+const MARK_UNSAFE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029<>{}"\\]/g;
+
+const clip = (value: string, cap: number): string | undefined => [...value.trim()].slice(0, cap).join("") || undefined;
+
+export function sanitizeBranding(raw: RawBranding): OrgBranding {
+  const accent = typeof raw.accent === "string" ? raw.accent.trim() : "";
+  const mark = clip((typeof raw.mark === "string" ? raw.mark : "").replace(MARK_UNSAFE, ""), 2);
+  const selfLabel = clip((typeof raw.selfLabel === "string" ? raw.selfLabel : "").replace(LABEL_UNSAFE, ""), 40);
+  return {
+    ...(BRAND_ACCENT.test(accent) ? { accent } : {}),
+    ...(mark ? { mark } : {}),
+    ...(selfLabel ? { selfLabel } : {}),
+  };
+}
+
+export function injectBranding(html: string, raw: OrgBranding, opts?: { titleSuffix?: string }): string {
+  const branding = sanitizeBranding(raw);
   const { accent, mark, selfLabel } = branding;
   let out = html;
   if (selfLabel) {
