@@ -90,6 +90,7 @@ test("the curated catalog contains only current model families", () => {
   assert.deepEqual(
     SELECTABLE_BASE_MODELS.map((model) => model.id),
     [
+      "claude-fable-5-1",
       "claude-fable-5",
       "claude-opus-5",
       "claude-opus-4-8",
@@ -111,6 +112,7 @@ test("auxiliary models come from the configured base model's own provider", () =
     "the deployment default resolves an Anthropic auxiliary",
   );
   assert.equal(auxiliaryModelFor("claude-opus-4-8"), "claude-haiku-4-5");
+  assert.equal(auxiliaryModelFor("claude-fable-5-1"), "claude-haiku-4-5");
   assert.equal(auxiliaryModelFor("claude-fable-5"), "claude-haiku-4-5");
   assert.equal(
     auxiliaryModelFor("gpt-5.6-sol"),
@@ -164,6 +166,16 @@ test("an auxiliary is never less serviceable than the base model it was derived 
 });
 
 test("context token budget is half of each model's real input room", () => {
+  const fable51 = getRequiredModel("claude-fable-5-1");
+  assert.equal(fable51.contextWindow, 1_000_000);
+  assert.equal(fable51.maxTokens, 128_000);
+  assert.deepEqual(fable51.cost, {
+    input: 10,
+    output: 50,
+    cacheRead: 0.25,
+    cacheWrite: 12.5,
+  });
+  assert.equal(contextTokenBudgetForModel("claude-fable-5-1"), Math.floor((1_000_000 - 128_000) * 0.5));
   assert.equal(getRequiredModel("claude-fable-5").contextWindow, 1_000_000);
   assert.equal(contextTokenBudgetForModel("claude-fable-5"), Math.floor((1_000_000 - 128_000) * 0.5));
   const sol = contextTokenBudgetForModel("gpt-5.6-sol");

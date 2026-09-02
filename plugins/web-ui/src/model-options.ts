@@ -18,6 +18,10 @@ interface ModelMeta {
 }
 
 const MODEL_CATALOG: Record<string, ModelMeta> = {
+  "claude-fable-5-1": {
+    label: "Fable 5.1",
+    buttonLabel: "Fable 5.1",
+  },
   "claude-opus-5": {
     label: "Opus 5",
     buttonLabel: "Opus 5",
@@ -53,6 +57,7 @@ const MODEL_CATALOG: Record<string, ModelMeta> = {
 };
 
 const DEFAULT_PICKER_MODEL_IDS: readonly string[] = [
+  "claude-fable-5-1",
   "claude-fable-5",
   "claude-opus-5",
   "claude-opus-4-8",

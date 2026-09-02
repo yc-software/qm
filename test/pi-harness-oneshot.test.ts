@@ -631,6 +631,7 @@ test("refusalFallbackNote names both models, carries the provider's refusal, and
 });
 
 test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refused model back", () => {
+  assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
   assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
   assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
   for (const id of REFUSAL_FALLBACK_MODEL_IDS) {
