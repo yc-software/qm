@@ -159,67 +159,81 @@ read back and compare which of the two survived.
 Put the sandbox load balancer in the contract you create the cluster with, and treat every
 later revision as a one-at-a-time operation: **submit a revision only when the cluster
 reads `READY`, and let it finish.** A revision submitted while another is reconciling
-supersedes it, and the interrupted one stops with `CONCURRENT_UPDATE` ("contract revision
-is obsolete, and has been acked"). That path can strand the cluster in `UPDATING`, and
-Porter gates both recovery routes on the status — a new contract is refused with `cluster
-status forbids updating` and deletion with `unable to delete cluster that is updating`.
-Cancelling the dead revision returns 200 without clearing it, so the cluster has to be
-unstuck by Porter support.
+supersedes it. The interrupted one stops with `CONCURRENT_UPDATE` ("contract revision
+is obsolete, and has been acked") and the newer one carries on, so the cluster returns to
+`READY` or `FAILED` once that newer revision completes. While it reconciles, Porter refuses
+a further contract with `cluster status forbids updating` and a delete with `unable to
+delete cluster that is updating`. Wait it out.
 
-A stranded cluster is not idle. Porter's Cluster API controllers keep reconciling it from
-Porter's own account, so tearing its AWS resources out by hand does not work: delete the
-EKS cluster and the nodes and they are rebuilt within minutes, by
-`arn:aws:iam::<account>:role/porter-manager` with a `aws.cluster.x-k8s.io` user agent —
-`aws cloudtrail lookup-events --lookup-attributes
-AttributeKey=EventName,AttributeValue=CreateCluster` shows the recreate. The reconcile
-loop enters the account through one door, so close that first: `porter-manager` and
-`porter-access-manager` each trust `arn:aws:iam::108458755588:role/CAPIManagement` under an
-external id, and dropping those two statements from their trust policies (`aws iam
-update-assume-role-policy`) stops the rebuild immediately. Only then does a manual sweep
-hold. **For a wedged cluster the IAM revoke comes first, not last** — the usual teardown
-order that leaves IAM until the end cannot terminate.
+Do not delete a revision to cancel it. `DELETE /api/projects/<project>/contracts/<revision
+id>` answers 200, but it removes the record the reconciler is working from, and a cluster
+whose in-flight revision disappears is the one that stays in `UPDATING` with nothing left
+to finish it. If a cluster shows `UPDATING` and its newest revision is not changing, ask
+Porter support; resetting the status takes them seconds.
+
+Do not tear down a Porter cluster's AWS resources by hand, and do not edit the trust
+policies on `porter-manager` or `porter-access-manager`. Porter's Cluster API controllers
+rebuild whatever is missing while the cluster exists. Revoking the trust does not stop
+that cleanly. It also cuts off the delete path, so Porter can no longer reach the account
+to remove anything, and the cluster is left half torn down in both systems. The only
+supported teardown is the cluster delete described in [Deleting a cluster](#deleting-a-cluster).
 
 Deleting a cluster through the API needs an admin-role Porter token: `DELETE
 /api/projects/<project>/clusters/<cluster>` answers a project API token with `403
 {"error":"insufficient permissions to perform action"}` even when that token may create
 clusters. Check that you hold one before you provision anything you will need to remove.
 
-The same status gate makes the contract endpoint useless for schema discovery on a wedged
+The same status gate makes the contract endpoint useless for schema discovery on a busy
 cluster. Porter resolves the cluster and checks its status _before_ it parses the protojson
 body, so an unknown field and a well-formed one come back with the identical `cluster status
 forbids updating`, and a nonexistent `clusterId` returns `sql: no rows in result set` just
-as uniformly — probing for whether a contract field exists needs a healthy cluster.
+as uniformly. Probing for whether a contract field exists needs a `READY` cluster.
 Once the revision reconciles, `GET
 /api/v2/projects/<project>/clusters/<cluster>/load-balancers` returns the new
-`owner: "sandbox"` entry whose `address.value` is what the wildcard record points at.
+`owner: "sandbox"` entry whose `address.value` is the sandbox load balancer's hostname.
 
-Routing, DNS and TLS all come up on their own, provided the sandbox load balancer was in
-the contract the cluster was created with. Porter reads its `dnsProviderConfig` and
-`rootDomains` and, through the cluster's Route53 pod identity, **creates a dedicated hosted
-zone for the root domain, adds the `NS` delegation for it to the parent zone, and puts the
-wildcard alias record inside it** pointing at the sandbox load balancer. cert-manager's
-DNS-01 challenge then has a zone it can write to, and the wildcard certificate issues by
-itself — a real Let's Encrypt `*.<root domain>` certificate, verified by ordinary clients
-with no `-k`. You do not create the zone, the delegation, or the wildcard record by hand.
+**You create the DNS zone; Porter creates the certificate.** With
+`DNS_PROVIDER_TYPE_ROUTE53`, Porter looks in the cluster's AWS account for a _public_
+hosted zone named exactly the root domain (`apps.example.com`, not `example.com`). A parent
+zone is rejected on purpose, because scoping cert-manager's credentials to it would grant
+write access beyond the subdomain, and the cluster's system applications stop at
+cert-manager with `no public route53 hosted zone for "apps.example.com" ... create a
+delegated hosted zone`. The zone has to be public even when the sandbox ingress is
+private, because Let's Encrypt validates the DNS-01 challenge over the public internet.
+Set it up before you create the cluster, or before you add the root domain to it:
 
-Porter also mints the credentials for it: a per-cluster role
+1. Create a public hosted zone named exactly the root domain, in the same AWS account as
+   the cluster.
+2. In the parent zone, add an `NS` record for the root domain with the four name servers
+   Route53 assigned to the new zone.
+3. Once the cluster is `READY`, read the sandbox load balancer's hostname from the
+   `load-balancers` endpoint above and add `*.<root domain>` **in the new zone** as an
+   alias `A` record pointing at it. A `CNAME` works too, but an alias `A` record is how
+   Route53 expects to point at a load balancer.
+
+Porter's own docs cover the same steps for Route53 and Cloudflare:
+https://docs.porter.run/sandboxes/networking#configure-networking-on-the-cluster.
+
+From there Porter does the rest. It mints a per-cluster role
 `porter-cert-manager-route53-<cluster id>` whose inline policy allows
-`route53:ChangeResourceRecordSets` and `ListResourceRecordSets` on that one delegated zone,
-plus `GetChange` and `ListHostedZonesByName`. If TLS is not issuing, check that this role
-exists — its absence, not a cert-manager misconfiguration, is the usual cause.
+`route53:ChangeResourceRecordSets` and `ListResourceRecordSets` on that one zone, plus
+`GetChange` and `ListHostedZonesByName`. It attaches that role to cert-manager through EKS
+pod identity. cert-manager then issues a real Let's Encrypt `*.<root domain>` certificate
+that ordinary clients verify with no `-k`. If TLS is not issuing, check that this role
+exists before looking at cert-manager itself.
 
-Two things follow. The parent zone must be in the same AWS account the cluster runs in, so
-Porter can write the delegation. And **teardown has to remove what Porter created**: the
-delegated hosted zone and the `NS` record in the parent zone both outlive the cluster.
+The zone and the `NS` record are yours and outlive the cluster. Remove them when you
+retire the domain, and reuse them for the next cluster that carries the same root domain;
+only the wildcard record needs repointing at the new load balancer.
 
-This is worth stating plainly because the failure it replaces was so confusing: a cluster
-whose sandbox load balancer was attached _after_ creation, or whose root domain was never
-delegated, has no usable zone for the DNS-01 challenge, so the certificate never issues and
-the ingress serves nginx's self-signed _Kubernetes Ingress Controller Fake Certificate_.
-Every client then fails certificate verification against an app that is otherwise serving
-correctly — including the agent's own probe of the app it just published, which is why it
-reports a gateway error it cannot explain. `kubectl get certificate -n porter-sandbox` tells
-you which situation you are in before you go hunting.
+The failure signature when the zone is missing or wrong: the cluster sits in `UPDATING`
+(`UPDATING_UNAVAILABLE` on first creation) for up to two hours and then flips to `FAILED`
+with `RETRYING_TOO_LONG`. Fix the zone, submit the contract again (the dashboard's
+**Retry** button does this), and the install completes within a few minutes. A cluster
+that did reach `READY` but serves nginx's self-signed _Kubernetes Ingress Controller Fake
+Certificate_ has a zone problem of the other kind, usually a wildcard record that lives in
+the parent zone instead of the delegated one. `kubectl get certificate -n porter-sandbox`
+shows whether the certificate ever issued.
 
 Naming the domain is optional. Porter assigns every sandbox that exposes a port a hostname
 of its own, `<sandbox name>.<cluster root domain>`, whether or not the create request asked
@@ -234,6 +248,48 @@ PORTER_DEPLOY_APPS_DOMAIN=apps.example.com   # optional; overrides the assigned 
 Set it only to choose the name yourself; the wildcard record it relies on is the one Porter
 already created. Deployments are **private** by default, matching the other providers;
 `PORTER_DEPLOY_VISIBILITY=public` opts a deployment's domain into public ingress.
+
+## Deleting a cluster
+
+Delete a cluster through Porter, never through AWS. The dashboard's delete button starts
+the same job as `DELETE /api/projects/<project>/clusters/<cluster>` (admin token, see
+above). Everything below then happens on its own:
+
+1. The cluster is marked `DELETING`. A cluster in `UPDATING` or `UPDATING_UNAVAILABLE` is
+   refused instead; wait for the revision to finish first.
+2. Porter removes the ingress load balancers, then deletes the Karpenter `NodePool` and
+   `EC2NodeClass` resources and waits for every node they own to drain and terminate. It
+   then removes the Karpenter interruption queue and EventBridge rules.
+3. Porter's Cluster API controllers delete the EKS cluster and the VPC and node groups
+   they created for it.
+4. The cluster is marked `DELETED`. Fifteen to twenty minutes is normal for an idle
+   cluster.
+
+The delete loop never times out. If the cluster is still `DELETING` after half an hour,
+something in step 2 is refusing to go away, and that is almost always still on your side:
+
+- Running sandboxes. A sandbox pins its node, so Karpenter cannot drain it and the
+  `NodePool` never finalizes. Stop every sandbox on the cluster before deleting it
+  (`porter sandbox list`, or the dashboard's Sandbox tab) and give the daemon a minute to
+  release the nodes. Published apps are sandboxes too.
+- Anything else that blocks eviction: a `PodDisruptionBudget` with no headroom, a pod
+  carrying the `karpenter.sh/do-not-disrupt` annotation, or a stuck finalizer.
+  `porter kubectl -- get nodeclaims` shows what Karpenter is still waiting on, and
+  `porter kubectl -- describe nodeclaim <name>` says why.
+- Load balancers or ingresses you created yourself in the cluster. Porter only removes
+  its own.
+
+Things that do not help, and make it worse:
+
+- Deleting the EKS cluster or its VPC yourself in AWS. Porter's delete then
+  fails on every pass because the cluster it is trying to drain no longer answers, and it
+  cannot finish until someone at Porter clears the leftover Cluster API record.
+- Editing the trust policies on `porter-manager` or `porter-access-manager`. That cuts
+  Porter off from the account entirely, including the delete you are waiting on.
+- Deleting the contract revision, for the reason given above.
+
+If you have cleared the blockers and it is still stuck, send the cluster id to Porter
+support. They can see exactly which step is looping.
 
 ## Forcing sandbox egress through the proxy
 
