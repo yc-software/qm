@@ -181,7 +181,7 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryRewrite(content: string): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
   mcpToolDefs(): McpToolDescriptor[];
-  callMcpTool(name: string, args: Record<string, unknown>): Promise<string>;
+  callMcpTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
   backgroundStart(command: string, opts?: { ttlSeconds?: number }): Promise<BackgroundStartResult>;
   backgroundPoll(
     processId: string,
@@ -920,9 +920,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.mcp?.toolDefs() ?? [];
     },
 
-    async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
+    async callMcpTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy);
+      return deps.mcp.call(name, args, deps.createdBy, signal);
     },
 
     async backgroundStart(command: string, opts?: { ttlSeconds?: number }): Promise<BackgroundStartResult> {

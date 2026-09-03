@@ -337,6 +337,15 @@ const call = (tool: ReturnType<typeof createPiTools>[number] | undefined, params
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
 };
 
+const callWithSignal = (
+  tool: ReturnType<typeof createPiTools>[number] | undefined,
+  params: unknown,
+  signal: AbortSignal,
+) => {
+  assert.ok(tool);
+  return tool.execute("t", params as never, signal, undefined, {} as never);
+};
+
 test("miniapp records a typed artifact without requiring a reply directive", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {
@@ -1420,6 +1429,18 @@ test("execute forwards the agent's timeout_seconds into tc.execute; omitting it 
   assert.equal(sink.lastExecOpts, undefined);
 });
 
+test("execute forwards request cancellation through both production wrappers", async () => {
+  const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
+  const turn = new AbortController();
+  const request = new AbortController();
+  const [execute] = createPiTools({ current: fakeToolContext(sink), abortSignal: turn.signal });
+
+  await callWithSignal(execute, { command: "echo hi" }, request.signal);
+
+  assert.equal(sink.lastExecOpts?.signal, request.signal);
+  assert.notEqual(sink.lastExecOpts?.signal, turn.signal);
+});
+
 test("credential_exec is turn-scoped, typed, and forwards only service plus literal argv", async () => {
   const calls: unknown[] = [];
   const tc: ToolContext = {
@@ -1446,6 +1467,85 @@ test("credential_exec is turn-scoped, typed, and forwards only service plus lite
   const result = await call(tool, { service: "acme", args, timeout_seconds: 7 });
   assert.deepEqual(calls, [{ service: "acme", args, opts: { timeoutSeconds: 7 } }]);
   assert.match((result as { content: Array<{ text: string }> }).content[0]!.text, /authenticated/);
+});
+
+test("credential_exec and external MCP calls receive request cancellation", async () => {
+  const request = new AbortController();
+  const turn = new AbortController();
+  const observed: AbortSignal[] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
+    async credentialExec(_service, _args, opts) {
+      if (opts?.signal) observed.push(opts.signal);
+      return { stdout: "ok", stderr: "", code: 0, timedOut: false };
+    },
+    mcpToolDefs() {
+      return [
+        {
+          name: "crm_query",
+          serverId: "crm",
+          remoteName: "query",
+          description: "Run a query",
+          inputSchema: { type: "object", properties: {} },
+          readOnly: true,
+        },
+      ];
+    },
+    async callMcpTool(_name, _args, signal) {
+      if (signal) observed.push(signal);
+      return "ok";
+    },
+  };
+  const tools = createPiTools(
+    { current: tc, abortSignal: turn.signal },
+    { credentialExecServices: tc.credentialExecServices, mcpTools: () => tc.mcpToolDefs() },
+  );
+
+  await callWithSignal(
+    tools.find((tool) => tool.name === "credential_exec"),
+    { service: "acme", args: [] },
+    request.signal,
+  );
+  await callWithSignal(
+    tools.find((tool) => tool.name === "crm_query"),
+    {},
+    request.signal,
+  );
+
+  assert.deepEqual(observed, [request.signal, request.signal]);
+});
+
+test("external MCP calls fall back to turn cancellation", async () => {
+  let received: AbortSignal | undefined;
+  const turn = new AbortController();
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    mcpToolDefs() {
+      return [
+        {
+          name: "crm_query",
+          serverId: "crm",
+          remoteName: "query",
+          description: "Run a query",
+          inputSchema: { type: "object", properties: {} },
+          readOnly: true,
+        },
+      ];
+    },
+    async callMcpTool(_name, _args, signal) {
+      received = signal;
+      return "ok";
+    },
+  };
+  const tools = createPiTools({ current: tc, abortSignal: turn.signal }, { mcpTools: () => tc.mcpToolDefs() });
+
+  await call(
+    tools.find((tool) => tool.name === "crm_query"),
+    {},
+  );
+
+  assert.equal(received, turn.signal);
 });
 
 test("credential_exec surfaces NeedsApproval and CommandDenied like execute", async () => {

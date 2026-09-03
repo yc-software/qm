@@ -126,6 +126,74 @@ test("disconnect revokes connector grants so reconnect does not resurrect sharin
   assert.deepEqual(await keychain.grantsForScope("channel:C1"), []);
 });
 
+test("pending connector updates finalize only while their durable generation is current", async () => {
+  const keychain = makeKeychain();
+  await keychain.beginConnectorTokenUpdate("auth.example.com", "U1", "attempt-1", "individual");
+
+  assert.deepEqual(await keychain.connectorTokenStatus("auth.example.com", "U1", "individual"), {
+    connected: false,
+  });
+  assert.deepEqual(await keychain.listConnectorsByOwners(["U1"]), new Map());
+  assert.equal(
+    await keychain.setConnectorTokenIfPending(
+      "auth.example.com",
+      "U1",
+      { accessToken: "wrong" },
+      "attempt-0",
+      "individual",
+    ),
+    false,
+  );
+  assert.equal(
+    await keychain.setConnectorTokenIfPending(
+      "auth.example.com",
+      "U1",
+      { accessToken: "first" },
+      "attempt-1",
+      "individual",
+    ),
+    true,
+  );
+  assert.equal(await keychain.connectorAccessToken("auth.example.com", "U1", "individual"), "first");
+
+  await keychain.beginConnectorTokenUpdate("auth.example.com", "U1", "attempt-2", "individual");
+  assert.equal(await keychain.connectorAccessToken("auth.example.com", "U1", "individual"), "first");
+  await keychain.beginConnectorTokenUpdate("auth.example.com", "U1", "attempt-3", "individual");
+  assert.equal(
+    await keychain.setConnectorTokenIfPending(
+      "auth.example.com",
+      "U1",
+      { accessToken: "stale" },
+      "attempt-2",
+      "individual",
+    ),
+    false,
+  );
+  await keychain.cancelConnectorTokenUpdate("auth.example.com", "U1", "attempt-3", "individual");
+  assert.equal(await keychain.connectorAccessToken("auth.example.com", "U1", "individual"), "first");
+});
+
+test("connector deletion wins over an in-flight conditional token update", async () => {
+  const keychain = makeKeychain();
+  await keychain.beginConnectorTokenUpdate("auth.example.com", "U1", "attempt-1", "individual");
+
+  await keychain.deleteConnectorToken("auth.example.com", "U1", "individual");
+
+  assert.equal(
+    await keychain.setConnectorTokenIfPending(
+      "auth.example.com",
+      "U1",
+      { accessToken: "late" },
+      "attempt-1",
+      "individual",
+    ),
+    false,
+  );
+  assert.deepEqual(await keychain.connectorTokenStatus("auth.example.com", "U1", "individual"), {
+    connected: false,
+  });
+});
+
 test("connector token refresh: concurrent callers single-flight; connection metadata survives the rewrite", async () => {
   let nowAt = 10_000;
   let calls = 0;
@@ -195,6 +263,206 @@ test("connector token refresh: concurrent callers single-flight; connection meta
   assert.equal(seen.length, 1);
 });
 
+test("an in-flight refresh survives beginning a connector token update", async () => {
+  let refreshStarted!: () => void;
+  let finishRefresh!: () => void;
+  const started = new Promise<void>((resolve) => {
+    refreshStarted = resolve;
+  });
+  const finish = new Promise<void>((resolve) => {
+    finishRefresh = resolve;
+  });
+  const keychain = makeKeychain({
+    now: () => 10_000,
+    skewMs: 0,
+    refresh: async () => {
+      refreshStarted();
+      await finish;
+      return { accessToken: "fresh", refreshToken: "rotated", expiresAt: 1_000_000 };
+    },
+  });
+  await keychain.setConnectorToken("auth.example.com", "U1", {
+    accessToken: "stale",
+    refreshToken: "original",
+    expiresAt: 5_000,
+  });
+
+  const refreshing = keychain.connectorAccessToken("auth.example.com", "U1");
+  await started;
+  await keychain.beginConnectorTokenUpdate("auth.example.com", "U1", "attempt-1");
+  finishRefresh();
+
+  assert.equal(await refreshing, "fresh");
+  assert.equal(await keychain.connectorAccessToken("auth.example.com", "U1"), "fresh");
+  assert.equal(
+    await keychain.setConnectorTokenIfPending("auth.example.com", "U1", { accessToken: "replacement" }, "attempt-1"),
+    true,
+  );
+  assert.equal(await keychain.connectorAccessToken("auth.example.com", "U1"), "replacement");
+});
+
+test("an in-flight refresh survives canceling a connector token update and keeps its rotated refresh token", async () => {
+  let nowAt = 10_000;
+  let calls = 0;
+  let refreshStarted!: () => void;
+  let finishRefresh!: () => void;
+  const started = new Promise<void>((resolve) => {
+    refreshStarted = resolve;
+  });
+  const finish = new Promise<void>((resolve) => {
+    finishRefresh = resolve;
+  });
+  let secondRefreshToken: string | undefined;
+  const keychain = makeKeychain({
+    now: () => nowAt,
+    skewMs: 0,
+    refresh: async (_host, token) => {
+      calls++;
+      if (calls === 1) {
+        refreshStarted();
+        await finish;
+        return { accessToken: "fresh", refreshToken: "rotated", expiresAt: 1_000_000 };
+      }
+      secondRefreshToken = token.refreshToken;
+      return { accessToken: "fresh-again", refreshToken: token.refreshToken, expiresAt: 3_000_000 };
+    },
+  });
+  await keychain.setConnectorToken("auth.example.com", "U1", {
+    accessToken: "stale",
+    refreshToken: "original",
+    expiresAt: 5_000,
+  });
+
+  const refreshing = keychain.connectorAccessToken("auth.example.com", "U1");
+  await started;
+  await keychain.beginConnectorTokenUpdate("auth.example.com", "U1", "attempt-1");
+  await keychain.cancelConnectorTokenUpdate("auth.example.com", "U1", "attempt-1");
+  finishRefresh();
+
+  assert.equal(await refreshing, "fresh");
+  nowAt = 2_000_000;
+  assert.equal(await keychain.connectorAccessToken("auth.example.com", "U1"), "fresh-again");
+  assert.equal(secondRefreshToken, "rotated");
+  assert.equal(calls, 2);
+});
+
+test("a successful refresh cannot overwrite a concurrent refresh-token replacement with the same access token", async () => {
+  const backing = createMemoryMap<KeychainCredential>();
+  let refreshStarted!: () => void;
+  let finishRefresh!: () => void;
+  const started = new Promise<void>((resolve) => {
+    refreshStarted = resolve;
+  });
+  const finish = new Promise<void>((resolve) => {
+    finishRefresh = resolve;
+  });
+  const keychain = makeKeychain({
+    creds: backing,
+    now: () => 10_000,
+    skewMs: 0,
+    refresh: async () => {
+      refreshStarted();
+      await finish;
+      return { accessToken: "old-flight-result", refreshToken: "old-flight-refresh", expiresAt: 1_000_000 };
+    },
+  });
+  await keychain.setConnectorToken("api.github.com", "U1", {
+    accessToken: "shared-access",
+    refreshToken: "old-refresh",
+    expiresAt: 5_000,
+  });
+  const refreshing = keychain.connectorAccessToken("api.github.com", "U1");
+  await started;
+
+  await keychain.setConnectorToken("api.github.com", "U1", {
+    accessToken: "shared-access",
+    refreshToken: "replacement-refresh",
+    expiresAt: 1_000_000,
+  });
+  finishRefresh();
+
+  assert.equal(await refreshing, "shared-access");
+  let observedRefreshToken: string | undefined;
+  const probe = makeKeychain({
+    creds: backing,
+    now: () => 2_000_000,
+    skewMs: 0,
+    refresh: async (_host, token) => {
+      observedRefreshToken = token.refreshToken;
+      return { accessToken: "probe", refreshToken: token.refreshToken, expiresAt: 3_000_000 };
+    },
+  });
+  assert.equal(await probe.connectorAccessToken("api.github.com", "U1"), "probe");
+  assert.equal(observedRefreshToken, "replacement-refresh");
+});
+
+test("derived connector auth does not survive deletion after a successful refresh", async () => {
+  const backing = createMemoryMap<KeychainCredential>();
+  let deleteBeforeRead = false;
+  const creds: DurableMap<KeychainCredential> = {
+    ...backing,
+    async get(id) {
+      if (deleteBeforeRead) {
+        deleteBeforeRead = false;
+        await backing.delete(id);
+      }
+      return backing.get(id);
+    },
+  };
+  const keychain = makeKeychain({
+    creds,
+    now: () => 10_000,
+    skewMs: 0,
+    refresh: async () => {
+      deleteBeforeRead = true;
+      return { accessToken: "fresh", refreshToken: "rotated", expiresAt: 1_000_000 };
+    },
+  });
+  await keychain.setConnectorToken("api.github.com", "U1", {
+    accessToken: "stale",
+    refreshToken: "old-refresh",
+    expiresAt: 5_000,
+  });
+
+  assert.equal(await keychain.connectorDerivedAuth("api.github.com", "U1"), null);
+  assert.deepEqual(await keychain.connectorTokenStatus("api.github.com", "U1"), { connected: false });
+});
+
+test("a successful refresh cannot restore a connector token deleted while refresh is in flight", async () => {
+  const backing = createMemoryMap<KeychainCredential>();
+  let refreshStarted!: () => void;
+  let finishRefresh!: () => void;
+  const started = new Promise<void>((resolve) => {
+    refreshStarted = resolve;
+  });
+  const finish = new Promise<void>((resolve) => {
+    finishRefresh = resolve;
+  });
+  const keychain = makeKeychain({
+    creds: backing,
+    now: () => 10_000,
+    skewMs: 0,
+    refresh: async () => {
+      refreshStarted();
+      await finish;
+      return { accessToken: "fresh", refreshToken: "rotated", expiresAt: 1_000_000 };
+    },
+  });
+  await keychain.setConnectorToken("api.github.com", "U1", {
+    accessToken: "stale",
+    refreshToken: "old-refresh",
+    expiresAt: 5_000,
+  });
+  const refreshing = keychain.connectorAccessToken("api.github.com", "U1");
+  await started;
+
+  await keychain.deleteConnectorToken("api.github.com", "U1");
+  finishRefresh();
+
+  assert.equal(await refreshing, null);
+  assert.deepEqual(await keychain.connectorTokenStatus("api.github.com", "U1"), { connected: false });
+});
+
 test("connector token refresh failures are logged and never poison the stored token", async (t) => {
   const errors: string[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => {
@@ -255,6 +523,113 @@ test("connector token refresh failures are logged and never poison the stored to
     await recovered.connectorTokenStatus("api.github.com", "U1"),
     { connected: true, expiresAt: 1_000_000, hasRefreshToken: true },
     "a successful refresh clears prior failure metadata",
+  );
+});
+
+test("a refresh failure preserves monotonic ordering across a concurrent connector update", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const backing = createMemoryMap<KeychainCredential>();
+  let refreshStarted!: () => void;
+  let finishRefresh!: () => void;
+  const started = new Promise<void>((resolve) => {
+    refreshStarted = resolve;
+  });
+  const finish = new Promise<void>((resolve) => {
+    finishRefresh = resolve;
+  });
+  const keychain = makeKeychain({
+    creds: backing,
+    now: () => 10_000,
+    skewMs: 0,
+    refresh: async () => {
+      refreshStarted();
+      await finish;
+      throw new Error("temporary provider failure");
+    },
+  });
+  await keychain.setConnectorToken("auth.example.com", "U1", {
+    accessToken: "stale",
+    refreshToken: "original",
+    expiresAt: 5_000,
+  });
+
+  const refreshing = keychain.connectorAccessToken("auth.example.com", "U1");
+  await started;
+  await keychain.beginConnectorTokenUpdate("auth.example.com", "U1", "attempt-1");
+  const markerUpdatedAt = (await backing.all())[0]!.updatedAt;
+  finishRefresh();
+
+  assert.equal(await refreshing, null);
+  const failed = (await backing.all())[0]!;
+  assert.ok(failed.updatedAt > markerUpdatedAt);
+  assert.equal(failed.refresh?.pendingUpdateId, "attempt-1");
+});
+
+test("a failed refresh cannot mark a concurrently replaced connector token as failed", async (t) => {
+  t.mock.method(console, "error", () => undefined);
+  const backing = createMemoryMap<KeychainCredential>();
+  let replaceBeforeWrite = false;
+  const replace = async () => {
+    if (!replaceBeforeWrite) return;
+    replaceBeforeWrite = false;
+    await keychain.setConnectorToken("api.github.com", "U1", {
+      accessToken: "stale",
+      refreshToken: "replacement-refresh",
+      expiresAt: 1_000_000,
+    });
+  };
+  const creds: DurableMap<KeychainCredential> = {
+    ...backing,
+    async merge(id, patch) {
+      await replace();
+      return backing.merge(id, patch);
+    },
+    async update(id, fn) {
+      await replace();
+      return backing.update!(id, fn);
+    },
+  };
+  const keychain = makeKeychain({
+    creds,
+    now: () => 10_000,
+    skewMs: 0,
+    refresh: async () => {
+      throw new Error("old refresh was revoked");
+    },
+  });
+  await keychain.setConnectorToken("api.github.com", "U1", {
+    accessToken: "stale",
+    refreshToken: "stale-refresh",
+    expiresAt: 5_000,
+  });
+
+  replaceBeforeWrite = true;
+  assert.equal(await keychain.connectorAccessToken("api.github.com", "U1"), null);
+  assert.equal(await keychain.connectorAccessToken("api.github.com", "U1"), "stale");
+  assert.deepEqual(await keychain.connectorTokenStatus("api.github.com", "U1"), {
+    connected: true,
+    expiresAt: 1_000_000,
+    hasRefreshToken: true,
+  });
+  let observedRefreshToken: string | undefined;
+  const probe = makeKeychain({
+    creds: backing,
+    now: () => 2_000_000,
+    skewMs: 0,
+    refresh: async (_host, token) => {
+      observedRefreshToken = token.refreshToken;
+      return { accessToken: "probe", refreshToken: token.refreshToken, expiresAt: 3_000_000 };
+    },
+  });
+  assert.equal(await probe.connectorAccessToken("api.github.com", "U1"), "probe");
+  assert.equal(observedRefreshToken, "replacement-refresh");
+});
+
+test("connector refresh requires an atomic credential update capability", () => {
+  const { update: _, ...creds } = createMemoryMap<KeychainCredential>();
+  assert.throws(
+    () => makeKeychain({ creds, refresh: async () => ({ accessToken: "fresh" }) }),
+    /connector token refresh requires atomic credential updates/,
   );
 });
 

@@ -19,10 +19,16 @@ const TOOLS = [
   { name: "update", description: "Write a record", inputSchema: { type: "object", properties: {} } },
 ];
 
-function fakeServerFetch(opts?: { requireBearer?: string; sse?: boolean }): { fetch: McpFetch; calls: string[] } {
+function fakeServerFetch(opts?: { requireBearer?: string; sse?: boolean }): {
+  fetch: McpFetch;
+  calls: string[];
+  signals: Array<AbortSignal | undefined>;
+} {
   const calls: string[] = [];
+  const signals: Array<AbortSignal | undefined> = [];
   const fetch: McpFetch = async (url, init) => {
     calls.push(url);
+    signals.push(init.signal);
     if (opts?.requireBearer && init.headers.authorization !== `Bearer ${opts.requireBearer}`) {
       return jsonResponse({ error: "unauthorized" }, 401);
     }
@@ -35,7 +41,7 @@ function fakeServerFetch(opts?: { requireBearer?: string; sse?: boolean }): { fe
     }
     return jsonResponse(envelope);
   };
-  return { fetch, calls };
+  return { fetch, calls, signals };
 }
 
 function server(partial?: Partial<McpServer>): McpServer {
@@ -62,6 +68,16 @@ test("mcp client lists tools and calls one over plain JSON", async () => {
   );
   const result = await client.callTool("query", { q: "hi" });
   assert.equal(mcpResultText(result), "ran query");
+});
+
+test("mcp client forwards per-call cancellation to the RPC request", async () => {
+  const { fetch, signals } = fakeServerFetch();
+  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
+  const request = new AbortController();
+
+  await client.callTool("query", { q: "hi" }, request.signal);
+
+  assert.deepEqual(signals, [request.signal]);
 });
 
 test("mcp client parses SSE-framed responses", async () => {

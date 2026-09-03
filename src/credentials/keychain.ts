@@ -30,6 +30,7 @@ interface BrokerDelivery {
 }
 
 interface CredentialRefresh {
+  tokenGeneration?: number;
   refreshTokenEnc?: string;
   idTokenEnc?: string;
   accountId?: string;
@@ -39,6 +40,7 @@ interface CredentialRefresh {
   refreshFailedAt?: number;
   refreshError?: string;
   orgId?: string;
+  pendingUpdateId?: string;
 }
 
 export interface CredentialFile {
@@ -72,6 +74,7 @@ export interface KeychainCredential {
   broker?: BrokerDelivery;
   refresh?: CredentialRefresh;
   managed?: "connector";
+  connectorPending?: boolean;
   secretEnc: string;
   fingerprint: string;
   origin?: string;
@@ -349,6 +352,15 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   /** Decrypt an env credential the caller OWNS — no grant machinery, never someone else's. */
   readOwnSecret(ownerId: string, credentialId: string): Promise<string | null>;
   remove(ownerId: string, id: string): Promise<boolean>;
+  beginConnectorTokenUpdate(host: string, principalId: string, updateId: string, accountType?: string): Promise<void>;
+  setConnectorTokenIfPending(
+    host: string,
+    principalId: string,
+    token: OAuthToken,
+    updateId: string,
+    accountType?: string,
+  ): Promise<boolean>;
+  cancelConnectorTokenUpdate(host: string, principalId: string, updateId: string, accountType?: string): Promise<void>;
 
   createGrant(input: CreateGrantInput): Promise<KeychainGrant>;
   grantConnectorToScope(input: {
@@ -453,6 +465,8 @@ export function createKeychain(deps: {
   oauthRefreshMarginMs?: number;
   now?: () => number;
 }): Keychain {
+  if (deps.refreshConnector && !deps.creds.update)
+    throw new Error("connector token refresh requires atomic credential updates");
   const now = deps.now ?? Date.now;
   const oauthSkew = deps.oauthSkewMs ?? 60_000;
   const oauthRefreshMargin = Math.max(deps.oauthRefreshMarginMs ?? 10 * 60_000, oauthSkew);
@@ -593,17 +607,18 @@ export function createKeychain(deps: {
     credId(principalId, host.toLowerCase(), oauthSlot(accountType));
   const inflightRefreshes = new Map<string, Promise<string | null>>();
 
-  async function putConnectorToken(
+  function connectorTokenRecord(
     host: string,
     principalId: string,
     token: OAuthToken,
-    accountType?: string,
-  ): Promise<KeychainCredential> {
-    const t = now();
+    accountType: string | undefined,
+    prior: KeychainCredential | null,
+    pendingUpdateId?: string,
+  ): KeychainCredential {
+    const t = Math.max(now(), (prior?.updatedAt ?? 0) + 1);
     const id = oauthId(host, principalId, accountType);
-    const prior = await deps.creds.get(id);
     const at = token.accountType ?? accountType;
-    const rec: KeychainCredential = {
+    return {
       id,
       ownerId: principalId,
       orgId: token.orgId ?? configOrgId(),
@@ -616,6 +631,7 @@ export function createKeychain(deps: {
       origin: "connector-oauth",
       ...(token.expiresAt !== undefined ? { expiresAt: token.expiresAt } : {}),
       refresh: {
+        tokenGeneration: (prior?.refresh?.tokenGeneration ?? 0) + 1,
         ...(token.refreshToken ? { refreshTokenEnc: encryptSecret(token.refreshToken, deps.key) } : {}),
         ...(token.idToken ? { idTokenEnc: encryptSecret(token.idToken, deps.key) } : {}),
         ...(token.accountId ? { accountId: token.accountId } : {}),
@@ -623,12 +639,118 @@ export function createKeychain(deps: {
         ...(token.clientRef ? { clientRef: token.clientRef } : {}),
         ...(token.grantedScopes ? { grantedScopes: token.grantedScopes } : {}),
         ...(token.orgId ? { orgId: token.orgId } : {}),
+        ...(pendingUpdateId ? { pendingUpdateId } : {}),
       },
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
     };
+  }
+
+  async function putConnectorToken(
+    host: string,
+    principalId: string,
+    token: OAuthToken,
+    accountType?: string,
+  ): Promise<KeychainCredential> {
+    const id = oauthId(host, principalId, accountType);
+    const rec = connectorTokenRecord(host, principalId, token, accountType, await deps.creds.get(id));
     await deps.creds.put(id, rec);
     return rec;
+  }
+
+  function pendingConnectorRecord(
+    host: string,
+    principalId: string,
+    updateId: string,
+    accountType?: string,
+  ): KeychainCredential {
+    const t = now();
+    return {
+      id: oauthId(host, principalId, accountType),
+      ownerId: principalId,
+      orgId: configOrgId(),
+      service: host.toLowerCase(),
+      kind: "env",
+      host: host.toLowerCase(),
+      managed: "connector",
+      connectorPending: true,
+      secretEnc: encryptSecret("", deps.key),
+      fingerprint: fingerprintOf(""),
+      origin: "connector-oauth",
+      refresh: {
+        ...(accountType ? { accountType } : {}),
+        pendingUpdateId: updateId,
+      },
+      createdAt: t,
+      updatedAt: t,
+    };
+  }
+
+  async function beginConnectorTokenUpdate(
+    host: string,
+    principalId: string,
+    updateId: string,
+    accountType?: string,
+  ): Promise<void> {
+    if (!updateId.trim()) throw new Error("connector token update id is required");
+    if (!deps.creds.update || !deps.creds.insertIfAbsent)
+      throw new Error("connector token updates require atomic credential mutations");
+    const id = oauthId(host, principalId, accountType);
+    for (;;) {
+      let updated = false;
+      await deps.creds.update(id, (current) => {
+        updated = true;
+        return {
+          ...current,
+          refresh: { ...current.refresh, ...(accountType ? { accountType } : {}), pendingUpdateId: updateId },
+          updatedAt: Math.max(now(), current.updatedAt + 1),
+        };
+      });
+      if (updated) return;
+      if (await deps.creds.insertIfAbsent(id, pendingConnectorRecord(host, principalId, updateId, accountType))) return;
+    }
+  }
+
+  async function setConnectorTokenIfPending(
+    host: string,
+    principalId: string,
+    token: OAuthToken,
+    updateId: string,
+    accountType?: string,
+  ): Promise<boolean> {
+    if (!token.accessToken?.trim()) throw new Error("access token is required");
+    if (!deps.creds.update) throw new Error("connector token updates require atomic credential mutations");
+    const id = oauthId(host, principalId, accountType);
+    let stored = false;
+    await deps.creds.update(id, (current) => {
+      if (current.refresh?.pendingUpdateId !== updateId) return current;
+      stored = true;
+      return connectorTokenRecord(host, principalId, token, accountType, current);
+    });
+    return stored;
+  }
+
+  async function cancelConnectorTokenUpdate(
+    host: string,
+    principalId: string,
+    updateId: string,
+    accountType?: string,
+  ): Promise<void> {
+    if (!deps.creds.update || !deps.creds.deleteIf)
+      throw new Error("connector token updates require atomic credential mutations");
+    const id = oauthId(host, principalId, accountType);
+    if (
+      await deps.creds.deleteIf(
+        id,
+        (current) => current.connectorPending === true && current.refresh?.pendingUpdateId === updateId,
+      )
+    )
+      return;
+    await deps.creds.update(id, (current) => {
+      if (current.refresh?.pendingUpdateId !== updateId) return current;
+      const { pendingUpdateId: _, ...refresh } = current.refresh ?? {};
+      return { ...current, refresh, updatedAt: Math.max(now(), current.updatedAt + 1) };
+    });
   }
 
   async function connectorRecord(
@@ -636,7 +758,8 @@ export function createKeychain(deps: {
     principalId: string,
     accountType?: string,
   ): Promise<KeychainCredential | null> {
-    return deps.creds.get(oauthId(host, principalId, accountType));
+    const rec = await deps.creds.get(oauthId(host, principalId, accountType));
+    return rec?.connectorPending ? null : rec;
   }
 
   function recToOAuthToken(rec: KeychainCredential): OAuthToken {
@@ -658,14 +781,24 @@ export function createKeychain(deps: {
     return msg.length > 500 ? `${msg.slice(0, 497)}...` : msg;
   }
 
+  const oauthExpired = (rec: KeychainCredential, t: number) =>
+    rec.expiresAt !== undefined && t >= rec.expiresAt - oauthSkew;
+
+  const sameConnectorToken = (left: KeychainCredential, right: KeychainCredential) =>
+    (left.refresh?.tokenGeneration ?? 0) === (right.refresh?.tokenGeneration ?? 0) &&
+    left.fingerprint === right.fingerprint;
+
   async function markConnectorRefreshFailure(rec: KeychainCredential, message: string): Promise<void> {
     const t = now();
-    const current = await deps.creds.get(rec.id);
-    if (!current || current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint) return;
-    await deps.creds.merge(rec.id, {
-      refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message },
-      updatedAt: t,
-    });
+    await deps.creds.update!(rec.id, (current) =>
+      sameConnectorToken(current, rec)
+        ? {
+            ...current,
+            refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message },
+            updatedAt: Math.max(t, current.updatedAt + 1),
+          }
+        : current,
+    );
   }
 
   async function refreshAndStore(
@@ -691,15 +824,13 @@ export function createKeychain(deps: {
         ...(stored.accountId ? { accountId: stored.accountId } : {}),
         ...fresh,
       };
-      // Compare-and-set: if another flight already rotated this credential,
-      // keep its result rather than clobbering a newer refresh token.
-      const current = await deps.creds.get(rec.id);
-      if (current && (current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint)) {
-        const latest = tryDecrypt(current, recToOAuthToken);
-        return latest?.accessToken ?? null;
-      }
-      await putConnectorToken(host, principalId, merged, accountType);
-      return merged.accessToken;
+      const current = await deps.creds.update!(rec.id, (latest) =>
+        sameConnectorToken(latest, rec)
+          ? connectorTokenRecord(host, principalId, merged, accountType, latest, latest.refresh?.pendingUpdateId)
+          : latest,
+      );
+      const latest = current && !oauthExpired(current, now()) ? tryDecrypt(current, recToOAuthToken) : null;
+      return latest?.accessToken ?? null;
     } catch (e) {
       const message = storedRefreshError(e);
       console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
@@ -713,9 +844,6 @@ export function createKeychain(deps: {
       return null;
     }
   }
-
-  const oauthExpired = (rec: KeychainCredential, t: number) =>
-    rec.expiresAt !== undefined && t >= rec.expiresAt - oauthSkew;
 
   async function connectorTokenForRecord(rec: KeychainCredential): Promise<string | null> {
     const t = now();
@@ -949,7 +1077,7 @@ export function createKeychain(deps: {
     async grantConnectorToScope({ host, principalId, accountType, audienceScopeId, purpose }) {
       const id = oauthId(host, principalId, accountType);
       const cred = await deps.creds.get(id);
-      if (!cred) return null;
+      if (!cred || cred.connectorPending) return null;
       for (const g of await deps.grants.all()) {
         if (
           g.credentialId === id &&
@@ -1179,6 +1307,12 @@ export function createKeychain(deps: {
       await putConnectorToken(host, principalId, token, accountType);
     },
 
+    beginConnectorTokenUpdate,
+
+    setConnectorTokenIfPending,
+
+    cancelConnectorTokenUpdate,
+
     async deleteConnectorToken(host, principalId, accountType) {
       await deleteCredential(oauthId(host, principalId, accountType));
     },
@@ -1213,8 +1347,8 @@ export function createKeychain(deps: {
       if (!rec) return null;
       const accessToken = await connectorTokenForRecord(rec);
       if (accessToken === null) return null;
-      // Re-read: a refresh inside connectorTokenForRecord may have rotated the record.
-      const fresh = (await connectorRecord(host, principalId, accountType)) ?? rec;
+      const fresh = await connectorRecord(host, principalId, accountType);
+      if (!fresh) return null;
       const token = tryDecrypt(fresh, recToOAuthToken);
       if (!token) return null;
       return {
@@ -1230,7 +1364,7 @@ export function createKeychain(deps: {
       return bucketByOwner(
         await deps.creds.all(),
         ownerIds,
-        (c) => c.managed === "connector",
+        (c) => c.managed === "connector" && !c.connectorPending,
         (c) => connectorMeta(c, t),
       );
     },
