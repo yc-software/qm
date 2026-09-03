@@ -138,9 +138,12 @@ function requireDocker(): void {
   }
 }
 
-function docker(args: string[], allow?: RegExp): string {
+function docker(args: string[], allow?: RegExp, env?: NodeJS.ProcessEnv): string {
   try {
-    return capture("docker", args, allow ? { allow } : {});
+    return capture("docker", args, {
+      ...(allow ? { allow } : {}),
+      ...(env ? { env } : {}),
+    });
   } catch (e) {
     throw dockerError(args, errMessage(e));
   }
@@ -284,9 +287,8 @@ function ensurePostgres(ctx: DockerCtx, dryRun: boolean): string {
     if (!containerRunning(pgName)) {
       step(`Postgres: starting ${pgName}`);
       docker(["rm", "-f", pgName], /No such container|is not running/);
-      const secretFile = writeSecretEnvFile({ POSTGRES_PASSWORD: password });
-      try {
-        docker([
+      docker(
+        [
           "run",
           "-d",
           "--name",
@@ -298,17 +300,17 @@ function ensurePostgres(ctx: DockerCtx, dryRun: boolean): string {
           "pg",
           "--restart",
           "no",
-          "--env-file",
-          secretFile.path,
+          "-e",
+          "POSTGRES_PASSWORD",
           "-e",
           "POSTGRES_DB=qm",
           "-v",
           `${pgVolume(ctx)}:/var/lib/postgresql/data`,
           "postgres:16",
-        ]);
-      } finally {
-        secretFile.cleanup();
-      }
+        ],
+        undefined,
+        { ...process.env, POSTGRES_PASSWORD: password },
+      );
     }
     return url(password);
   });
@@ -432,40 +434,20 @@ function secretEnvKeys(ctx: DockerCtx, service: string): Set<string> {
   return keys;
 }
 
-function writeSecretEnvFile(entries: Record<string, string>): { path: string; cleanup: () => void } {
-  for (const [key, value] of Object.entries(entries)) {
-    if (/[\r\n]/.test(value)) {
-      throw new CliError(
-        `secret ${key} contains a newline — docker --env-file is line-based and cannot carry it. ` +
-          `Provide a single-line value (e.g. base64-encode PEM keys and decode in the consumer).`,
-      );
+function pushEnvArgs(args: string[], env: Record<string, string>, secretKeys: Set<string>): NodeJS.ProcessEnv {
+  const dockerEnv = { ...process.env };
+  for (const [k, v] of Object.entries(env)) {
+    if (secretKeys.has(k)) {
+      args.push("-e", k);
+      dockerEnv[k] = v;
+    } else {
+      args.push("-e", `${k}=${v}`);
     }
   }
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  const path = join(dir, "secrets.env");
-  writeFileSync(
-    path,
-    `${Object.entries(entries)
-      .map(([k, v]) => `${k}=${v}`)
-      .join("\n")}\n`,
-    { mode: 0o600 },
-  );
-  return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return dockerEnv;
 }
 
-function pushEnvArgs(args: string[], env: Record<string, string>, secretKeys: Set<string>): () => void {
-  const secrets: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) {
-    if (secretKeys.has(k)) secrets[k] = v;
-    else args.push("-e", `${k}=${v}`);
-  }
-  if (!Object.keys(secrets).length) return () => {};
-  const file = writeSecretEnvFile(secrets);
-  args.push("--env-file", file.path);
-  return file.cleanup;
-}
-
-function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: string[]; cleanup: () => void } {
+function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: string[]; env: NodeJS.ProcessEnv } {
   const def = serviceDef(service);
   const args = [
     "run",
@@ -482,7 +464,7 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     "--restart",
     "no",
   ];
-  const cleanup = pushEnvArgs(args, serviceEnv(ctx, service), secretEnvKeys(ctx, service));
+  const env = pushEnvArgs(args, serviceEnv(ctx, service), secretEnvKeys(ctx, service));
   if (service === "core") {
     args.push("-v", `${ctx.prefix}-coredata:/data`);
     for (const m of layerMounts(ctx)) args.push("-v", m);
@@ -497,7 +479,7 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
   }
   args.push(image);
-  return { args, cleanup };
+  return { args, env };
 }
 
 function skillMounts(ctx: DockerCtx): string[] {
@@ -682,11 +664,7 @@ export async function dockerUp(
     docker(["rm", "-f", cname(ctx, def.name)], /No such container|is not running/);
     step(`starting ${def.name}`);
     const run = runArgs(ctx, def.name, image);
-    try {
-      docker(run.args);
-    } finally {
-      run.cleanup();
-    }
+    docker(run.args, undefined, run.env);
     await waitReady(ctx, def.name);
     ok(`${def.name} ready`);
   }
@@ -719,13 +697,9 @@ export async function dockerUp(
       ...(ctx.signingSecret ? { CORE_SIGNING_SECRET: ctx.signingSecret } : {}),
       ...secretValues(ctx, p.name),
     };
-    const cleanup = pushEnvArgs(args, env, secretEnvKeys(ctx, p.name));
+    const dockerEnv = pushEnvArgs(args, env, secretEnvKeys(ctx, p.name));
     args.push(image);
-    try {
-      docker(args);
-    } finally {
-      cleanup();
-    }
+    docker(args, undefined, dockerEnv);
     await waitPluginUp(cname(ctx, p.name));
     ok(`plugin ${p.name} running`);
   }
