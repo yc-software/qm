@@ -201,6 +201,7 @@ function buildDock(): DockviewApi {
       group.model.onWillDrop(holdTileCap);
     }
     if (sessionDrag) refreshSessionDrag();
+    for (const a of groupActions) a.draw();
     persistSoon();
   });
   api.onDidActivePanelChange((e) => {
@@ -1120,6 +1121,7 @@ class GroupActions implements IHeaderActionsRenderer {
       return g?.activePanel ?? g?.panels[0] ?? null;
     };
     const maximized = props.api.isMaximized();
+    const soleGroup = (dockApi?.groups.length ?? 0) <= 1;
     const runTool = (tool: SessionTool): void => {
       this.menuOpen = false;
       const p = activePanel();
@@ -1141,22 +1143,26 @@ class GroupActions implements IHeaderActionsRenderer {
                 </button>
               `,
             )}
-            <div class="split-tools-menu-sep" role="separator"></div>
-            <button
-              class="session-menu-option"
-              type="button"
-              role="menuitem"
-              @click=${() => {
-                this.menuOpen = false;
-                this.draw();
-                if (maximized) props.api.exitMaximized();
-                else props.api.maximize();
-              }}
-            >
-              ${icon(maximized ? Shrink : Expand, 15)}<span
-                >${maximized ? "Restore to grid (Esc)" : "Focus over the grid"}</span
-              >
-            </button>
+            ${maximized || !soleGroup
+              ? html`
+                  <div class="split-tools-menu-sep" role="separator"></div>
+                  <button
+                    class="session-menu-option"
+                    type="button"
+                    role="menuitem"
+                    @click=${() => {
+                      this.menuOpen = false;
+                      this.draw();
+                      if (maximized) props.api.exitMaximized();
+                      else props.api.maximize();
+                    }}
+                  >
+                    ${icon(maximized ? Shrink : Expand, 15)}<span
+                      >${maximized ? "Restore to grid (Esc)" : "Focus over the grid"}</span
+                    >
+                  </button>
+                `
+              : nothing}
           </div>
         `
       : nothing;
@@ -1169,14 +1175,18 @@ class GroupActions implements IHeaderActionsRenderer {
           if (p) paneSplitWithBlank(p);
         },
       },
-      {
-        label: "Open full screen",
-        glyph: icon(Maximize2, 14),
-        run: () => {
-          const p = activePanel();
-          if (p) void maximizePane(panelParams(p));
-        },
-      },
+      ...(maximized || soleGroup
+        ? []
+        : [
+            {
+              label: "Open full screen",
+              glyph: icon(Maximize2, 14),
+              run: () => {
+                const p = activePanel();
+                if (p) void maximizePane(panelParams(p));
+              },
+            },
+          ]),
       {
         label: "Close pane",
         glyph: icon(X, 15),
