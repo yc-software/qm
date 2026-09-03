@@ -34,6 +34,11 @@ test("commonParentDomain finds the deepest shared dot-suffix, never a bare TLD",
   assert.equal(commonParentDomain("a.example.com", "b.other.net"), undefined);
   assert.equal(commonParentDomain("a.example.com", "b.acme.com"), undefined, "a bare TLD is not a cookie domain");
   assert.equal(commonParentDomain("", "apps.example.com"), undefined);
+  assert.equal(
+    commonParentDomain("portal.foo.co.uk", "apps.bar.co.uk"),
+    undefined,
+    "a shared public suffix like co.uk is not a cookie domain browsers accept",
+  );
 });
 
 test("DEPLOY_APPS_DOMAIN alone yields a working portal apps setup — cookie domain derived, boot clean", () => {

@@ -997,7 +997,7 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
     await run(
       hostSplitConfig({ appsDomain: "*.apps.agent.acme.example" }),
       undefined,
-      /env\.core\.AWS_DEPLOY_APPS_DOMAIN .* does not derive a valid ALB host-header hostname/,
+      /env\.core\.DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN.* does not derive a valid ALB host-header hostname/,
     );
     await run(
       hostSplitConfig(bothHosts),

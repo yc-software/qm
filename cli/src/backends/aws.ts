@@ -2592,8 +2592,9 @@ function awsCoreHostnames(config: QmConfig): string[] {
     const apiHost = normalize(hostname, "apiUrl");
     if (apiHost !== new URL(config.publicUrl).hostname.toLowerCase().replace(/\.$/, "")) hosts.push(apiHost);
   }
-  const apps = config.env.core?.AWS_DEPLOY_APPS_DOMAIN?.trim();
-  if (apps) hosts.push(`*.${normalize(apps, "env.core.AWS_DEPLOY_APPS_DOMAIN")}`);
+  const apps = config.env.core?.DEPLOY_APPS_DOMAIN?.trim() || config.env.core?.AWS_DEPLOY_APPS_DOMAIN?.trim();
+  if (apps)
+    hosts.push(`*.${normalize(apps, "the apps domain (env.core.DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN)")}`);
   return [...new Set(hosts)];
 }
 

@@ -36,9 +36,10 @@ function httpGet(
 async function fixture(
   deps: Parameters<typeof createInsecureTestServer>[1],
   upstreamContentType = "text/html; charset=utf-8",
+  upstreamHeaders: Record<string, string> = {},
 ) {
   const upstream = createHttpServer((_req, res) => {
-    res.writeHead(200, { "content-type": upstreamContentType });
+    res.writeHead(200, { "content-type": upstreamContentType, ...upstreamHeaders });
     res.end("UPSTREAM OK");
   });
   upstream.listen(0);
@@ -92,12 +93,23 @@ test("/d/ path serving sandboxes proxied HTML so an app cannot act on the portal
   }
 });
 
-test("/d/ path serving leaves non-HTML responses unsandboxed", async () => {
-  const f = await fixture({}, "application/json");
+test("/d/ path serving sandboxes every response — content-type spoofing cannot dodge it", async () => {
+  const f = await fixture({}, "Text/HTML; charset=utf-8");
   try {
     const data = await httpGet(f.port, "/d/mysite/api", { "x-as-principal": "alice@example.com" });
     assert.equal(data.status, 200);
-    assert.equal(data.headers["content-security-policy"], undefined);
+    assert.match(String(data.headers["content-security-policy"]), /^sandbox /);
+  } finally {
+    await f.close();
+  }
+});
+
+test("/d/ path serving strips clear-site-data so an app cannot log its viewers out of the portal", async () => {
+  const f = await fixture({}, "text/html", { "clear-site-data": '"cookies", "storage"' });
+  try {
+    const page = await httpGet(f.port, "/d/mysite/", { "x-as-principal": "alice@example.com" });
+    assert.equal(page.status, 200);
+    assert.equal(page.headers["clear-site-data"], undefined);
   } finally {
     await f.close();
   }

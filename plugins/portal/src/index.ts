@@ -303,13 +303,37 @@ function hostOf(raw: string): string {
   }
 }
 
+function isMultiPartPublicSuffix(domain: string): boolean {
+  return [
+    "co.uk",
+    "org.uk",
+    "gov.uk",
+    "ac.uk",
+    "com.au",
+    "net.au",
+    "org.au",
+    "co.nz",
+    "co.jp",
+    "or.jp",
+    "ne.jp",
+    "com.br",
+    "com.mx",
+    "co.in",
+    "co.za",
+    "com.sg",
+    "com.hk",
+    "com.tw",
+  ].includes(domain);
+}
+
 export function commonParentDomain(a: string, b: string): string | undefined {
   const as = a.toLowerCase().split(".").filter(Boolean);
   const bs = b.toLowerCase().split(".").filter(Boolean);
   let n = 0;
   while (n < as.length && n < bs.length && as[as.length - 1 - n] === bs[bs.length - 1 - n]) n++;
   if (n < 2) return undefined;
-  return as.slice(as.length - n).join(".");
+  const parent = as.slice(as.length - n).join(".");
+  return isMultiPartPublicSuffix(parent) ? undefined : parent;
 }
 
 export function hostIsWithinDomain(host: string, domain: string): boolean {

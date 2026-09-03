@@ -456,14 +456,16 @@ function deployAppsEnv(
   env: NodeJS.ProcessEnv,
   defaultLoginUrl: string | undefined,
 ): { deployAppsSessionSecret?: string; deployAppsLoginUrl?: string } {
-  const secret = env.DEPLOY_APPS_SESSION_SECRET;
-  const loginUrl = env.DEPLOY_APPS_LOGIN_URL ?? (secret ? defaultLoginUrl : undefined);
-  if (loginUrl && !secret) {
+  const explicit = env.DEPLOY_APPS_SESSION_SECRET;
+  const shared = env.PORTAL_SESSION_SECRET;
+  const loginUrl = env.DEPLOY_APPS_LOGIN_URL ?? (explicit || shared ? defaultLoginUrl : undefined);
+  if (loginUrl && !explicit && !shared) {
     throw new Error("DEPLOY_APPS_LOGIN_URL requires DEPLOY_APPS_SESSION_SECRET");
   }
-  if (secret && !loginUrl) {
+  if (explicit && !loginUrl) {
     throw new Error("DEPLOY_APPS_SESSION_SECRET needs a sign-in address — set DEPLOY_APPS_LOGIN_URL or PUBLIC_WEB_URL");
   }
+  const secret = explicit ?? (loginUrl ? shared : undefined);
   if (!secret || !loginUrl) return {};
   return { deployAppsSessionSecret: secret, deployAppsLoginUrl: loginUrl.replace(/\/$/, "") };
 }
@@ -493,9 +495,18 @@ function sharedPlatformSuffixOf(domain: string): string | undefined {
   return SHARED_PLATFORM_SUFFIXES.find((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
+const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
+const HOSTNAME_RE = new RegExp(`^${HOSTNAME_LABEL}(?:\\.${HOSTNAME_LABEL})+$`);
+
 function deployAppsDomainEnv(env: NodeJS.ProcessEnv, deployProvider: string): string | undefined {
-  const canonical = env.DEPLOY_APPS_DOMAIN?.trim();
-  if (canonical) {
+  const raw = env.DEPLOY_APPS_DOMAIN?.trim();
+  if (raw) {
+    const canonical = raw.toLowerCase().replace(/\.$/, "");
+    if (!HOSTNAME_RE.test(canonical)) {
+      throw new Error(
+        `DEPLOY_APPS_DOMAIN (${raw}) is not a plain DNS name — set it to a bare domain like apps.example.com (no scheme, port, path, or wildcard prefix).`,
+      );
+    }
     const suffix = sharedPlatformSuffixOf(canonical);
     if (suffix) {
       throw new Error(
@@ -1145,13 +1156,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
     porterSandbox: porterSandboxEnv(env),
-    porterDeploy: {
-      ...porterDeployEnv(env),
-      ...(deployAppsDomain && !env.PORTER_DEPLOY_APPS_DOMAIN ? { appsDomain: deployAppsDomain } : {}),
-    },
+    porterDeploy: porterDeployEnv(env),
     awsDeploy: {
       ...awsDeployEnv(env),
-      ...(deployAppsDomain && !env.AWS_DEPLOY_APPS_DOMAIN ? { appsDomain: deployAppsDomain } : {}),
+      ...(env.DEPLOY_APPS_DOMAIN && deployAppsDomain && !env.AWS_DEPLOY_APPS_DOMAIN
+        ? { appsDomain: deployAppsDomain }
+        : {}),
     },
     ...(deployAppsDomain ? { deployAppsDomain } : {}),
     flyDeploy: flyDeployEnv(env),

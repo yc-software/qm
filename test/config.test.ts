@@ -521,7 +521,11 @@ test("DEPLOY_APPS_DOMAIN is the one-var apps setup: it feeds the gate and defaul
     AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
   });
   assert.equal(config.deployAppsDomain, "apps.example.com");
-  assert.equal(config.porterDeploy.appsDomain, "apps.example.com");
+  assert.equal(
+    config.porterDeploy.appsDomain,
+    undefined,
+    "the gate domain must not be registered on Porter ingress — that would bypass the gate or loop the proxy",
+  );
   assert.equal(config.awsDeploy.appsDomain, "apps.example.com");
   const overridden = loadConfig({
     DEPLOY_PROVIDER: "porter",
@@ -545,7 +549,8 @@ test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DO
     PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com",
   });
   assert.equal(porter.deployAppsDomain, "apps.example.com");
-  assert.equal(porter.awsDeploy.appsDomain, "apps.example.com");
+  assert.equal(porter.awsDeploy.appsDomain, undefined);
+  assert.equal(porter.porterDeploy.appsDomain, "apps.example.com");
   const aws = loadConfig({
     AWS_DEPLOY_APPS_DOMAIN: "apps.example.com",
     AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
@@ -562,6 +567,33 @@ test("DEPLOY_APPS_DOMAIN refuses shared platform domains that cannot carry per-a
       .deployAppsDomain,
     "apps.example.com",
   );
+});
+
+test("DEPLOY_APPS_DOMAIN must be a bare DNS name, normalized to lowercase without a trailing dot", () => {
+  const gate = { AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef" };
+  assert.equal(loadConfig({ DEPLOY_APPS_DOMAIN: "Apps.Example.COM.", ...gate }).deployAppsDomain, "apps.example.com");
+  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "https://apps.example.com", ...gate }), /bare domain/);
+  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "apps.example.com:443@evil.example", ...gate }), /bare domain/);
+  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "*.apps.example.com", ...gate }), /bare domain/);
+  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.fly.dev.", ...gate }), /shared platform domain/);
+});
+
+test("the portal session secret doubles as the deploy-apps viewer secret when a login URL exists", () => {
+  const derived = loadConfig({ PORTAL_SESSION_SECRET: "shared", PUBLIC_WEB_URL: "https://qm.example.com" });
+  assert.equal(derived.deployAppsSessionSecret, "shared");
+  assert.equal(derived.deployAppsLoginUrl, "https://qm.example.com");
+  const noUrl = loadConfig({ PORTAL_SESSION_SECRET: "shared" });
+  assert.equal(
+    noUrl.deployAppsSessionSecret,
+    undefined,
+    "no sign-in address means the fallback stays off, not a throw",
+  );
+  const explicit = loadConfig({
+    PORTAL_SESSION_SECRET: "shared",
+    DEPLOY_APPS_SESSION_SECRET: "own",
+    PUBLIC_WEB_URL: "https://qm.example.com",
+  });
+  assert.equal(explicit.deployAppsSessionSecret, "own");
 });
 
 test("the deploy-apps sign-in address defaults to the public web URL", () => {

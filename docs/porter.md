@@ -106,8 +106,11 @@ domain you control (e.g. `apps.example.com`, with `*.apps.example.com` pointed a
 instance) upgrades every app to its own origin — `https://<app>.apps.example.com/` — with
 portal single sign-on, the request-access flow, and live editing; the portal derives its
 cookie and returnTo settings from it, and boot probes the wildcard record and prints the
-exact DNS record to add when it is missing. The per-provider variables below remain as
-explicit overrides.
+exact DNS record to add when it is missing. Point the wildcard at the ingress that fronts
+core, never at Porter's sandbox ingress — the gate runs in core, so DNS that skips core
+skips the gate. `PORTER_DEPLOY_APPS_DOMAIN` is the separate, ungated mechanism: it
+registers each app's domain on Porter's own sandbox ingress and is deliberately NOT
+defaulted from `DEPLOY_APPS_DOMAIN`.
 
 Published apps get their address from the cluster, not from qm. Declare the sandbox load
 balancer with a root domain at cluster creation and **Porter names every published app
@@ -227,6 +230,10 @@ This is worth stating plainly because the failure it replaces was so confusing: 
 whose sandbox load balancer was attached _after_ creation, or whose root domain was never
 delegated, has no usable zone for the DNS-01 challenge, so the certificate never issues and
 the ingress serves nginx's self-signed _Kubernetes Ingress Controller Fake Certificate_.
+The remediation (confirmed with Porter support) is manual: create the dedicated hosted zone
+for the root domain yourself, add its `NS` delegation to the parent zone, move the wildcard
+record into it, then reconcile the cluster (the dashboard's infra **Update**, or re-POST the
+contract) so Porter actually creates the certificate issuer against the new zone.
 Every client then fails certificate verification against an app that is otherwise serving
 correctly — including the agent's own probe of the app it just published, which is why it
 reports a gateway error it cannot explain. `kubectl get certificate -n porter-sandbox` tells
