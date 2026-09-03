@@ -356,6 +356,8 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the secondary must be
     "sprites",
   );
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "sprites" }), /SPRITES_TOKEN/);
+  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "agent37" }), /AGENT37_API_KEY/);
+  assert.equal(loadConfig({ SANDBOX_BACKEND: "agent37", AGENT37_API_KEY: "sk_live_k" }).sandboxBackend, "agent37");
   assert.throws(
     () => loadConfig({ SANDBOX_SECONDARY_BACKEND: "fly" }),
     /SANDBOX_SECONDARY_BACKEND="fly" is not recognized/,

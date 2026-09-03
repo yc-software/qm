@@ -7,6 +7,7 @@ type SecretGate =
   | "sprites"
   | "smolmachines"
   | "porter"
+  | "agent37"
   | "porter-deploy"
   | "fly-sandbox"
   | "fly-deploy"
@@ -37,6 +38,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "DATABASE_URL", requiredWhen: "postgres" },
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
+  { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
   { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: ["porter", "porter-deploy"] },
   { name: "FLY_API_TOKEN", requiredWhen: "fly-sandbox" },
   { name: "FLY_DEPLOY_API_TOKEN", requiredWhen: "fly-deploy" },
@@ -53,6 +55,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   sprites: (env) => env.SANDBOX_BACKEND === "sprites" || env.SANDBOX_SECONDARY_BACKEND === "sprites",
   smolmachines: (env) => env.SANDBOX_BACKEND === "smolmachines" || env.SANDBOX_SECONDARY_BACKEND === "smolmachines",
   porter: (env) => env.SANDBOX_BACKEND === "porter" || env.SANDBOX_SECONDARY_BACKEND === "porter",
+  agent37: (env) => env.SANDBOX_BACKEND === "agent37" || env.SANDBOX_SECONDARY_BACKEND === "agent37",
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
   "fly-sandbox": (env) => env.SANDBOX_BACKEND === "fly",
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
