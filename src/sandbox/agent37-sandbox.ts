@@ -48,7 +48,8 @@ const EXEC_SYNC_MAX_SEC = 240;
 const EXEC_POLL_MS = 2_000;
 const EXIT_GRACE_MS = 60_000;
 const CREATE_TIMEOUT_MS = 330_000;
-const READY_TIMEOUT_MS = 180_000;
+const START_TIMEOUT_MS = 830_000;
+const READY_TIMEOUT_MS = 300_000;
 const READY_POLL_MS = 2_000;
 const DEFAULT_AGENT37_BASE_URL = "https://api.agent37.com";
 const DEFAULT_TEMPLATE = "agent37-qm-computer";
@@ -56,7 +57,8 @@ const DEFAULT_CPUS = 2;
 const DEFAULT_MEMORY_GB = 4;
 const DEFAULT_DISK_GB = 8;
 const STARTABLE_STATES = new Set(["stopped", "sleeping"]);
-const DEAD_STATES = new Set(["failed", "deleting", "deleted"]);
+const GONE_STATES = new Set(["deleting", "deleted"]);
+const DEAD_STATES = new Set(["failed", ...GONE_STATES]);
 
 interface InstanceInfo {
   id: string;
@@ -133,10 +135,10 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
 
   async function findInstance(name: string): Promise<InstanceInfo | null> {
     const { data } = await apiJson<{ data: InstanceInfo[] }>("GET", "/v1/instances");
-    return data.find((i) => i.name === name && !DEAD_STATES.has(i.status)) ?? null;
+    return data.find((i) => i.name === name && !GONE_STATES.has(i.status)) ?? null;
   }
 
-  async function awaitRunning(id: string): Promise<void> {
+  async function ensureRunning(id: string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS;
     for (;;) {
       const info = await apiJson<InstanceInfo>("GET", `/v1/instances/${encodeURIComponent(id)}`);
@@ -144,30 +146,25 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       if (DEAD_STATES.has(info.status)) throw new Error(`agent37 instance ${id}: ${info.status}`);
       if (Date.now() > deadline)
         throw new Error(`agent37 instance ${id}: not running after ${READY_TIMEOUT_MS}ms (status=${info.status})`);
+      if (STARTABLE_STATES.has(info.status)) {
+        const res = await api("POST", `/v1/instances/${encodeURIComponent(id)}/start`, undefined, START_TIMEOUT_MS);
+        if (res.ok) continue;
+        if (res.status !== 400 && res.status !== 409) {
+          throw new Error(`agent37 start ${id}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+        }
+      }
       await sleep(READY_POLL_MS);
     }
-  }
-
-  async function ensureRunning(id: string): Promise<void> {
-    const info = await apiJson<InstanceInfo>("GET", `/v1/instances/${encodeURIComponent(id)}`);
-    if (info.status === "running") return;
-    if (STARTABLE_STATES.has(info.status)) {
-      const res = await api("POST", `/v1/instances/${encodeURIComponent(id)}/start`, undefined, 120_000);
-      if (!res.ok && res.status !== 400) {
-        throw new Error(`agent37 start ${id}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
-      }
-    }
-    await awaitRunning(id);
   }
 
   async function createInstance(name: string): Promise<InstanceInfo> {
     const info = await apiJson<InstanceInfo>(
       "POST",
       "/v1/instances",
-      { template, name, resources, auto_sleep: true },
+      { template, name, resources, auto_sleep: false },
       CREATE_TIMEOUT_MS,
     );
-    await awaitRunning(info.id);
+    await ensureRunning(info.id);
     return info;
   }
 
@@ -237,11 +234,11 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     if (timeoutSec <= EXEC_SYNC_MAX_SEC) {
       r = await postExec(
         name,
-        `timeout ${timeoutSec} sh -c ${shq(script)} > ${out} 2> ${err}; __rc=$?; ${envelope}`,
+        `timeout -k 5 ${timeoutSec} sh -c ${shq(script)} > ${out} 2> ${err}; __rc=$?; ${envelope}`,
         timeoutSec,
       );
     } else {
-      const body = `timeout ${timeoutSec} sh -c ${shq(script)} > ${out} 2> ${err}; echo $? > ${rcf}`;
+      const body = `timeout -k 5 ${timeoutSec} sh -c ${shq(script)} > ${out} 2> ${err}; echo $? > ${rcf}`;
       const start = await postExec(name, `nohup sh -c ${shq(body)} >/dev/null 2>&1 & echo launched`, 30);
       if (start.exit_code !== 0 || !/launched/.test(start.stdout)) {
         throw new Error(`agent37 exec ${name}: background launch failed (rc=${start.exit_code})`);
@@ -395,7 +392,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     processSessions: true,
     egressEnforcement: "none",
     spec: {
-      os: "Debian 12, Agent37 sandbox (sleeps when idle; the whole disk persists)",
+      os: "Debian 12, Agent37 sandbox (the whole disk persists)",
       runtimes: ["Node 24", "Python 3"],
       get tools() {
         return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);

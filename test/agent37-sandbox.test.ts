@@ -131,7 +131,44 @@ test("exec on a sleeping instance wakes it and retries", async () => {
   assert.equal(r.code, 0);
   assert.equal(r.stdout, "still here\n");
   assert.equal(fake.instance(h.id)?.status, "running");
-  assert.ok(fake.calls.some((c) => c.method === "POST" && /\/start$/.test(c.path)));
+  assert.ok(fake.calls.some((c) => c.method === "POST" && c.path.endsWith("/start")));
+});
+
+test("exec during the sleep checkpoint retries start until the freeze clears", async () => {
+  const h = await sandbox.provision(layers);
+  fake.sleep(h.id, { freezing: 2 });
+  const r = await sandbox.run(h, "echo woke");
+  assert.equal(r.stdout.trim(), "woke");
+  assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path.endsWith("/start")).length, 3);
+});
+
+test("exec on a stopping instance waits for it to stop, then starts it", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.writeFile(h, "keep.txt", "still here\n");
+  fake.stop(h.id);
+  const r = await sandbox.run(h, "cat keep.txt");
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, "still here\n");
+  assert.equal(fake.instance(h.id)?.status, "running");
+});
+
+test("a failed instance is surfaced, not replaced, and destroy deletes it", async () => {
+  const h = await sandbox.provision(layers);
+  fake.fail(h.id);
+  const fresh = make();
+  await assert.rejects(fresh.provision(layers), /failed/);
+  assert.equal(fake.names().filter((n) => n === h.id).length, 1);
+  await fresh.teardown(h, { destroy: true });
+  assert.equal(fake.instance(h.id), null);
+});
+
+test("every timed exec carries a kill-after so a TERM-ignoring command cannot outlive the API's ceiling", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.run(h, "true", { timeoutMs: 60_000 });
+  await sandbox.run(h, "true", { timeoutMs: 400_000 });
+  const timed = fake.execScripts().filter((s) => /\btimeout /.test(s));
+  assert.ok(timed.length >= 2);
+  assert.ok(timed.every((s) => /\btimeout -k 5 \d+ /.test(s)));
 });
 
 test("scratch instances are created on demand and deleted at release", async () => {
@@ -180,11 +217,11 @@ test("timeouts beyond the API's sync exec ceiling run detached and poll to compl
   assert.equal(leftovers.stdout.trim(), "0");
 });
 
-test("create requests the template, the default shape and auto sleep", async () => {
+test("create requests the template, the default shape and no auto sleep", async () => {
   const h = await sandbox.provision(layers);
   const created = fake.instance(h.id);
   assert.equal(created?.template, "agent37-qm-computer");
-  assert.equal(created?.autoSleep, true);
+  assert.equal(created?.autoSleep, false);
   assert.deepEqual(created?.resources, { cpu: 2, memory: 4, disk: 8 });
 });
 

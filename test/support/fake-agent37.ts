@@ -16,6 +16,7 @@ interface FakeInstance {
   template?: string;
   autoSleep?: boolean;
   resources?: Record<string, number>;
+  freezing?: number;
   home: string;
 }
 
@@ -31,7 +32,9 @@ export interface FakeAgent37 {
   calls: Agent37Call[];
   names(): string[];
   instance(name: string): FakeInstanceView | null;
-  sleep(name: string): void;
+  sleep(name: string, opts?: { freezing?: number }): void;
+  stop(name: string): void;
+  fail(name: string): void;
   execScripts(): string[];
   cleanup(): void;
 }
@@ -81,7 +84,7 @@ export function installFakeAgent37(): FakeAgent37 {
     return (
       `export HOME=${JSON.stringify(m.home)}; ` +
       script
-        .replace(/\btimeout \d+ /g, "")
+        .replace(/\btimeout (?:-k \d+ )?\d+ /g, "")
         .replace(/\/home\/node/g, m.home)
         .replace(remapPath, (mm) => (mm.startsWith(m.home) ? mm : `${m.home}/tmp/`))
     );
@@ -150,6 +153,10 @@ export function installFakeAgent37(): FakeAgent37 {
       }
       if (sub[2] === "start") {
         if (m.status === "running") return Response.json({ id: m.id, status: "running" });
+        if (m.freezing) {
+          m.freezing--;
+          return error(409, "try_again", "A sleep checkpoint is in flight. Retry in a few seconds.");
+        }
         if (m.status !== "stopped" && m.status !== "sleeping") {
           return error(400, "invalid_request", "Only stopped or sleeping instances can be started.");
         }
@@ -157,10 +164,14 @@ export function installFakeAgent37(): FakeAgent37 {
         return Response.json({ id: m.id, status: m.status });
       }
       if (sub[2] === "stop") {
-        m.status = "stopped";
-        return Response.json({ id: m.id, status: "stopped" });
+        m.status = "stopping";
+        return Response.json({ id: m.id, status: "stopping" });
       }
-      if (method === "GET") return Response.json(info(settle(m)));
+      if (method === "GET") {
+        const body = info(settle(m));
+        if (m.status === "stopping") m.status = "stopped";
+        return Response.json(body);
+      }
       if (method === "DELETE") {
         rmSync(m.home, { recursive: true, force: true });
         m.status = "deleted";
@@ -185,9 +196,20 @@ export function installFakeAgent37(): FakeAgent37 {
           }
         : null;
     },
-    sleep: (name) => {
+    sleep: (name, opts) => {
       const m = byName(name);
-      if (m) m.status = "sleeping";
+      if (m) {
+        m.status = "sleeping";
+        m.freezing = opts?.freezing ?? 0;
+      }
+    },
+    stop: (name) => {
+      const m = byName(name);
+      if (m) m.status = "stopping";
+    },
+    fail: (name) => {
+      const m = byName(name);
+      if (m) m.status = "failed";
     },
     execScripts: () => [...execScripts],
     cleanup: () => rmSync(root, { recursive: true, force: true }),
