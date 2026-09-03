@@ -7,12 +7,22 @@ AWS, GCP, or Azure account. qm can use it two ways, independently:
   home volume.
 - `DEPLOY_PROVIDER=porter` — apps the agent publishes run on the same cluster.
 
-Both need a Porter API token and the project and cluster that own the sandbox API:
+Both need a Porter API token and the project and cluster that own the sandbox API. The
+complete environment for a Porter-backed instance, verified against a live deployment:
 
 ```bash
+SANDBOX_BACKEND=porter
+DEPLOY_PROVIDER=porter
 PORTER_DEPLOY_API_TOKEN=<ADMIN-role api token from Settings -> API tokens>
 PORTER_DEPLOY_PROJECT_ID=<project id>
 PORTER_DEPLOY_CLUSTER_ID=<cluster id>
+PORTER_SANDBOX_IMAGE=ghcr.io/porter-dev/qm-sandbox:latest
+PORTER_DEPLOY_RUNNER_IMAGE=ghcr.io/porter-dev/qm-app-runner:latest
+# PORTER_DEPLOY_URL=            # only when the API host is not https://dashboard.porter.run
+# PORTER_DEPLOY_APPS_DOMAIN=    # optional; the cluster names apps itself (see below)
+# PORTER_DEPLOY_VISIBILITY=public  # public Porter ingress serves apps to ANYONE with the
+                                   # URL, bypassing qm's sign-in gate — leave private and
+                                   # use /d/<app>/ or DEPLOY_APPS_DOMAIN unless that is the intent
 ```
 
 ## Onboarding checklist
