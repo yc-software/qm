@@ -232,3 +232,19 @@ test("resolvePrincipal allowedEmails permits only the seeded verified addresses"
     /permitted email list/,
   );
 });
+
+test("resolvePrincipal permits an email matching either the list or domain", () => {
+  const rule = {
+    claim: "email" as const,
+    allowedEmails: ["admin@gmail.com"],
+    allowedEmailDomain: "example.com",
+  };
+  for (const email of ["admin@gmail.com", "member@example.com"]) {
+    assert.equal(resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email, email_verified: true } }), email);
+  }
+  assert.throws(
+    () =>
+      resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "other@gmail.com", email_verified: true } }),
+    /permitted domain/,
+  );
+});

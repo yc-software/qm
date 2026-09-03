@@ -163,7 +163,10 @@ test("the broker's generated secrets reach both sides under the right names", ()
   assert.ok(!names.has("OIDC_CLIENT_SECRET"), "the operator is never asked for an OIDC client secret in broker mode");
   assert.ok(!names.has("OIDC_CLIENT_ID"));
   assert.ok(!names.has("PORTAL_EXPECTED_TEAM_ID"));
-  assert.ok(!names.has("AUTH_ALLOWED_EMAILS"), "a configured domain removes the per-address allowlist requirement");
+  const allowed = secrets.find((secret) => secret.name === "AUTH_ALLOWED_EMAILS")!;
+  assert.equal(allowed.required, false);
+  assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("portal", allowed), ["OIDC_ALLOWED_EMAILS"]);
   assert.ok(names.has("RESEND_API_KEY"));
   assert.ok(!names.has("SMTP_HOST"), "only the configured transport's credentials are collected");
   assert.ok(secretsForService(config, "auth").some((secret) => secret.name === "CORE_SIGNING_SECRET"));
