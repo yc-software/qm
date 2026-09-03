@@ -169,15 +169,28 @@ test("the queued strip sits behind and outside the composer form", () => {
   assert.match(chat, /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent\)/);
   const composerMarkup = composer.slice(composer.indexOf('<form class="composer-wrap"'), composer.indexOf("</form>"));
   assert.doesNotMatch(composerMarkup, /queuedStrip\(agent\)/);
-  assert.match(
-    shell,
-    /\.queued-strip \{[\s\S]*?z-index: 0;[\s\S]*?width: min\(calc\(var\(--content-w\) - 24px\), calc\(100% - 56px\)\);[\s\S]*?margin: 0 auto -10px;/,
+  const queuedRule = shell.match(/(?:^|\n)\.queued-strip \{[^}]*\}/)?.[0] ?? "";
+  const composerRule = shell.match(/(?:^|\n)\.composer-wrap \{[^}]*\}/)?.[0] ?? "";
+  assert.match(queuedRule, /z-index: 0;/);
+  assert.match(queuedRule, /width: min\(calc\(var\(--content-w\) - 24px\), calc\(100% - 56px\)\);/);
+  assert.match(queuedRule, /margin: 0 auto -10px;/);
+  assert.match(composerRule, /position: relative;\s*z-index: 1;/);
+  const midWidth = shell.slice(
+    shell.indexOf("@container chat (max-width: 860px)"),
+    shell.indexOf("@container chat (max-width: 470px)"),
   );
-  assert.match(shell, /\.composer-wrap \{[\s\S]*?position: relative;\s*z-index: 1;/);
-  assert.match(shell, /margin-right: max\(28px, calc\(22px \+ env\(safe-area-inset-right\)\)\);/);
-  assert.match(shell, /margin-left: max\(28px, calc\(22px \+ env\(safe-area-inset-left\)\)\);/);
-  assert.match(shell, /margin-right: calc\(22px \+ env\(safe-area-inset-right\)\);/);
-  assert.match(shell, /margin-left: calc\(22px \+ env\(safe-area-inset-left\)\);/);
+  const narrow = shell.slice(
+    shell.indexOf("@container chat (max-width: 470px)"),
+    shell.indexOf('[data-density="card"]', shell.indexOf("@container chat (max-width: 470px)")),
+  );
+  assert.match(
+    midWidth,
+    /\.queued-strip \{[^}]*margin-right: max\(28px, calc\(22px \+ env\(safe-area-inset-right\)\)\);[^}]*margin-left: max\(28px, calc\(22px \+ env\(safe-area-inset-left\)\)\);[^}]*\}/,
+  );
+  assert.match(
+    narrow,
+    /\.queued-strip \{[^}]*margin-right: calc\(22px \+ env\(safe-area-inset-right\)\);[^}]*margin-left: calc\(22px \+ env\(safe-area-inset-left\)\);[^}]*\}/,
+  );
 });
 
 // Nothing is sent when a turn settles: core already started the next queued run. The client's only
