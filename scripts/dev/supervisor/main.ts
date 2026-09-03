@@ -322,6 +322,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
       ? "live codex turns (ChatGPT OAuth auth.json)"
       : `live codex turns (openai key from ${assembled.openaiKeySource || "the environment"})`;
   } else if (assembled.harness === "claude") harnessDetail = "live claude turns (native CLI authentication)";
+  else if (assembled.harness === "grok") harnessDetail = "live grok turns (per-user Grok subscription)";
   phase("env", "ok", harnessDetail);
 
   phase("deps", "start");

@@ -1,0 +1,19 @@
+fail_closed = true
+
+[cli]
+auto_update = false
+
+[features]
+feedback = false
+remote_fetch = false
+telemetry = false
+
+[subagents]
+enabled = false
+
+[telemetry]
+otel_enabled = false
+trace_upload = false
+
+[ui]
+yolo = false

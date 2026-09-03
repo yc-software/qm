@@ -61,6 +61,10 @@ export interface CodexTurnAuth {
   expiresAt?: number;
 }
 
+export interface GrokTurnAuth {
+  accessToken: string;
+}
+
 export interface HarnessTurnInput {
   session: Session;
   runId?: string;
@@ -104,6 +108,7 @@ export interface HarnessTurnInput {
   runtimePinned?: boolean;
   claudeOauthToken?: string;
   codexAuth?: CodexTurnAuth;
+  grokAuth?: GrokTurnAuth;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;

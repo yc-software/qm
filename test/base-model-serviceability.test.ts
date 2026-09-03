@@ -71,7 +71,8 @@ test("ChatGPT OAuth is serviceable for Codex without advertising OpenAI to Pi", 
   );
   assert.equal(modelProviderAvailabilityFor("opencode", configured).openai, false);
   assert.equal(
-    modelProviderAvailabilityFor("pi", configured, { anthropic: false, openai: false, openrouter: false }).openai,
+    modelProviderAvailabilityFor("pi", configured, { anthropic: false, openai: false, openrouter: false, xai: false })
+      .openai,
     false,
     "Pi still requires an API-key credential",
   );

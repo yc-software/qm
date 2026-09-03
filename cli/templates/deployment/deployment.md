@@ -29,8 +29,11 @@ it in place. If the repository has not been initialized, collect:
   domain, and no DNS, and domain verification is the step most likely to stall
   a deploy. Recommend Slack sign-in to a Slack workspace and the broker
   otherwise;
-- model provider: Anthropic, OpenAI, or OpenRouter (one key that routes to
-  many models). This is a deployment choice, not a post-deploy one: it becomes
+- model provider: Anthropic, OpenAI, OpenRouter (one key that routes to
+  many models), or xAI. xAI API-key billing and a person's Grok subscription
+  are separate paths: `modelProvider: "xai"` uses `XAI_API_KEY`, while the
+  `grok` harness uses the signed-in person's subscription and never receives
+  that key. This is a deployment choice, not a post-deploy one: it becomes
   `modelProvider` in `qm.config.jsonc`, which makes that provider's API key a
   required secret. Collect the key in the same pass as the other credentials —
   a deployment that cannot answer one message is not finished. An operator who
@@ -73,7 +76,7 @@ npm install
 lands in the deployment repository and its lockfile rather than in the command
 that bootstraps it.
 
-`--model-provider` takes `anthropic`, `openai`, or `openrouter` and defaults to
+`--model-provider` takes `anthropic`, `openai`, `openrouter`, or `xai` and defaults to
 `anthropic`. It writes `modelProvider` into the scaffolded config, which is what
 promotes that provider's key from an optional fallback to a required secret.
 
@@ -178,7 +181,7 @@ mint limits, the boot refusals, and what anonymous visitors are denied.
 
 Whichever sign-in route the deployment takes, the base model needs a key in the
 same pass. `modelProvider` decides which one `qm setup` asks for —
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` — and the wizard
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `XAI_API_KEY` — and the wizard
 prints where to mint it. The operator owns the billing relationship, so they
 create the key; you only place it. It is a required secret, so `qm doctor` calls
 the provider to prove the key is accepted and `qm up` refuses a deployment that
@@ -188,11 +191,30 @@ administrator and then fails their first message.
 
 `modelProvider` also picks the model itself, so no model id has to be chosen at
 deploy time: Anthropic serves `claude-opus-5`, OpenAI `gpt-5.6-sol`, OpenRouter
-`openrouter/auto`. Set `model` in `qm.config.jsonc` only to override that, and
+`openrouter/auto`, and xAI `grok-4.6`. Set `model` in `qm.config.jsonc` only to override that, and
 only with a model the chosen provider can bill — a mismatch is refused at
 startup rather than at the first message. The same rule covers the harness:
 `HARNESS` `codex` runs OpenAI models alone, `claude` runs Anthropic models
 alone, and `openrouter` needs the default `pi` harness.
+
+`HARNESS=grok` is the subscription-backed Grok Build path. It requires each user to
+connect xAI from the account connection screen and requires the operator to enable
+individual model authorization in Admin. It does not consume `XAI_API_KEY`.
+Do not enable it until the organization confirms current xAI subscription terms permit
+this server-side use.
+The core image installs the official Apache-2.0 Grok Build 1.0.13 release with its license
+and third-party notices. QM verifies the binary's architecture-specific digest before a
+Grok harness starts and pins automatic updates, telemetry, trace upload, feedback, remote
+fetch, and subagents off in the root-owned system requirements file. For production,
+allow the core's device and refresh calls to
+`auth.x.ai:443` and force the Grok child through an external CONNECT proxy that only
+permits `cli-chat-proxy.grok.com:443`. Set `env.core.GROK_HTTPS_PROXY` to its
+credentials-free URL. QM forwards that proxy only to Grok and bypasses it for the
+loopback MCP server; it does not route the core's own OAuth fetches through that
+setting. Users' browsers must separately reach `accounts.x.ai:443` to open the exact
+device-approval page returned by xAI. The Fly and AWS templates do not currently create
+a process-aware, hostname-filtered egress boundary, so the setting alone does not enforce
+either rule.
 
 An operator may still prefer to hold the key centrally and rotate it from the
 Admin page. That is a deliberate choice, not the default: drop `modelProvider`

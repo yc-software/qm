@@ -4,9 +4,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
-const core = createServer((_req, res) => {
+const core = createServer((req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
-  res.end("{}");
+  res.end(
+    req.url?.startsWith("/v1/user-model-auth/status")
+      ? JSON.stringify({ individualModelAuth: true, connections: [] })
+      : "{}",
+  );
 });
 await new Promise<void>((r) => core.listen(0, r));
 
@@ -64,4 +68,6 @@ test("a verified allowed principal gets through and /me reports the mode", async
   const body = await r.json();
   assert.equal(body.user, "alice");
   assert.equal(body.mode, "portal");
+  assert.equal(body.individualModelAuth, true);
+  assert.equal(body.modelAuthConnected, false);
 });

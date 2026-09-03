@@ -55,6 +55,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       'OpenRouter API key: bills the base model when modelProvider is "openrouter", an optional deployment fallback otherwise.',
   },
   {
+    name: "XAI_API_KEY",
+    service: "core",
+    required: { when: { kind: "model-provider", provider: "xai" }, optionalOtherwise: true },
+    description:
+      'xAI API key: bills the base model when modelProvider is "xai", an optional deployment fallback otherwise. It is never used for Grok subscription authentication.',
+  },
+  {
     name: "OPENAI_API_KEY",
     service: "core",
     required: {
@@ -72,7 +79,9 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "PUBLIC_API_URL",
     service: "core",
-    required: { when: { kind: "env-in", service: "core", name: "HARNESS", values: ["pi", "opencode", "codex"] } },
+    required: {
+      when: { kind: "env-in", service: "core", name: "HARNESS", values: ["pi", "opencode", "codex", "grok"] },
+    },
     description: "Public core self-API URL reachable from agent sandboxes.",
   },
   {

@@ -197,6 +197,7 @@ test("naming a base model provider makes that provider's key a required deployme
     ["anthropic", "ANTHROPIC_API_KEY"],
     ["openai", "OPENAI_API_KEY"],
     ["openrouter", "OPENROUTER_API_KEY"],
+    ["xai", "XAI_API_KEY"],
   ] as const) {
     const config = makeConfig({ modelProvider: provider });
     assert.equal(secretByName(config, key).required, true, `${provider} requires ${key}`);
@@ -211,6 +212,7 @@ test("naming a base model provider makes that provider's key a required deployme
 test("the providers a deployment did not select stay optional", () => {
   const anthropic = makeConfig({ modelProvider: "anthropic" });
   assert.equal(secretByName(anthropic, "OPENROUTER_API_KEY").required, false);
+  assert.equal(secretByName(anthropic, "XAI_API_KEY").required, false);
   // OPENAI_API_KEY keeps its own Codex rule, so it is absent rather than optional here.
   assert.ok(!computedSecrets(anthropic).some((secret) => secret.name === "OPENAI_API_KEY"));
 });
@@ -226,6 +228,7 @@ test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavi
   const deferred = makeConfig();
   assert.equal(secretByName(deferred, "ANTHROPIC_API_KEY").required, false);
   assert.equal(secretByName(deferred, "OPENROUTER_API_KEY").required, false);
+  assert.equal(secretByName(deferred, "XAI_API_KEY").required, false);
 });
 
 test("conditional secret values use the runtime's trimmed enum semantics", () => {
@@ -249,7 +252,7 @@ test("AWS public app domains require and route their gate secret to core", () =>
 });
 
 test("real harnesses require and route the sandbox-reachable PUBLIC_API_URL to core", () => {
-  for (const harness of ["pi", "opencode"]) {
+  for (const harness of ["pi", "opencode", "codex", "grok"]) {
     const real = makeConfig({ env: { core: { HARNESS: harness } } });
     const publicApi = secretByName(real, "PUBLIC_API_URL");
     assert.equal(publicApi.required, true);

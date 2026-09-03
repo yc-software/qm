@@ -110,19 +110,21 @@ export function awsWorkloadArchitecture(config: QmConfig, workload: string): "ar
   return service.architecture ?? "arm64";
 }
 
-export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
+export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter", "xai"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
 export const MODEL_PROVIDER_KEYS: Readonly<Record<ModelProvider, string>> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
+  xai: "XAI_API_KEY",
 };
 
 export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly string[]>> = {
   anthropic: ["pi", "opencode", "claude", "mock"],
   openai: ["pi", "opencode", "codex", "mock"],
   openrouter: ["pi", "mock"],
+  xai: ["pi", "mock"],
 };
 
 export const isModelProvider = (value: unknown): value is ModelProvider =>

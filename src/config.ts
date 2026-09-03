@@ -35,7 +35,7 @@ export interface Config {
   databaseUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
-  harness: "mock" | "pi" | "opencode" | "codex" | "claude";
+  harness: "mock" | "pi" | "opencode" | "codex" | "claude" | "grok";
   securityPosture: SecurityPosture;
   sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "porter";
   sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "porter";
@@ -55,12 +55,16 @@ export interface Config {
   claudeModel?: string;
   claudeBinPath?: string;
   claudeProcessEnv: NodeJS.ProcessEnv;
+  grokBinPath?: string;
+  grokLauncherPath?: string;
+  grokProcessEnv: NodeJS.ProcessEnv;
   detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  xaiApiKey?: string;
   modelProvider?: ModelProvider;
   providerBaseUrls: ProviderBaseUrls;
   piCaptureRequests: boolean;
@@ -175,6 +179,7 @@ export function providerKeysPresent(config: Config): ModelProviderAvailability {
     anthropic: Boolean(config.anthropicApiKey),
     openai: Boolean(config.openaiApiKey),
     openrouter: Boolean(config.openrouterApiKey),
+    xai: Boolean(config.xaiApiKey),
     ...(config.harness === "codex" && (config.codexAuthFile || config.codexAuthCredential) ? { codexOAuth: true } : {}),
   };
 }
@@ -670,6 +675,28 @@ function numEnvStrict(name: string, value: string | undefined): number | undefin
   return parsed;
 }
 
+function grokHttpsProxyEnvStrict(value: string | undefined): string | undefined {
+  const candidate = value?.trim();
+  if (!candidate) return undefined;
+  try {
+    const url = new URL(candidate);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      !url.hostname ||
+      url.hostname.endsWith(".") ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    )
+      throw new Error("proxy");
+  } catch {
+    throw new Error("GROK_HTTPS_PROXY must be an HTTP(S) origin URL without credentials, a path, query, or fragment");
+  }
+  return candidate;
+}
+
 function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
   return sanitizeBranding({
     accent: env.ORG_BRAND_ACCENT,
@@ -682,10 +709,17 @@ function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
 function harnessEnvStrict(value: string | undefined): Config["harness"] {
   if (value === undefined || value.trim() === "") return "mock";
   const harness = value.trim();
-  if (harness === "mock" || harness === "pi" || harness === "opencode" || harness === "codex" || harness === "claude")
+  if (
+    harness === "mock" ||
+    harness === "pi" ||
+    harness === "opencode" ||
+    harness === "codex" ||
+    harness === "claude" ||
+    harness === "grok"
+  )
     return harness;
   throw new Error(
-    `HARNESS=${JSON.stringify(value)} is not recognized — use mock, pi, opencode, codex, or claude, or unset it.`,
+    `HARNESS=${JSON.stringify(value)} is not recognized — use mock, pi, opencode, codex, claude, or grok, or unset it.`,
   );
 }
 
@@ -801,6 +835,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(
       "CODEX_AUTH_FILE is supported for local Codex harnesses only; production must use CODEX_AUTH_CREDENTIAL (keychain custody)",
     );
+  }
+  if (env.NODE_ENV === "production" && env.GROK_BIN?.trim()) {
+    throw new Error("GROK_BIN is supported for development and tests only; production uses the verified image binary");
+  }
+  if (env.NODE_ENV === "production" && env.GROK_DEV_LAUNCHER?.trim()) {
+    throw new Error("GROK_DEV_LAUNCHER is supported for development only");
   }
   const modelProvider = modelProviderEnvStrict(env);
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
@@ -920,6 +960,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (codexOAuthConfigured && codexAuthCandidate) codexEnv.CODEX_AUTH_FILE = codexAuthCandidate;
   else delete codexEnv.CODEX_AUTH_FILE;
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
+  const grokHttpsProxy = grokHttpsProxyEnvStrict(env.GROK_HTTPS_PROXY);
   const codexProcessEnv = Object.fromEntries(
     [
       "PATH",
@@ -958,6 +999,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "CLAUDE_CODE_OAUTH_TOKEN",
     ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
   ) as NodeJS.ProcessEnv;
+  const grokProcessEnv = Object.fromEntries(
+    ["LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"].flatMap((name) =>
+      env[name] === undefined ? [] : [[name, env[name]]],
+    ),
+  ) as NodeJS.ProcessEnv;
+  if (grokHttpsProxy) grokProcessEnv.HTTPS_PROXY = grokHttpsProxy;
   if (providerBaseUrls.openai) codexProcessEnv.OPENAI_BASE_URL = providerBaseUrls.openai;
   if (providerBaseUrls.anthropic) claudeProcessEnv.ANTHROPIC_BASE_URL = providerBaseUrls.anthropic;
   const turnWallClockMs =
@@ -1012,12 +1059,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.CLAUDE_MODEL ? { claudeModel: env.CLAUDE_MODEL } : {}),
     ...(env.CLAUDE_BIN ? { claudeBinPath: env.CLAUDE_BIN } : {}),
     claudeProcessEnv,
+    ...(env.GROK_BIN ? { grokBinPath: env.GROK_BIN } : {}),
+    ...(env.GROK_DEV_LAUNCHER ? { grokLauncherPath: env.GROK_DEV_LAUNCHER } : {}),
+    grokProcessEnv,
     ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
     ...(env.PI_TITLE_MODEL ? { titleModelId: env.PI_TITLE_MODEL } : {}),
     ...(env.PI_JUDGE_MODEL ? { judgeModelId: env.PI_JUDGE_MODEL } : {}),
     ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
     ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
+    ...(env.XAI_API_KEY ? { xaiApiKey: env.XAI_API_KEY } : {}),
     ...(modelProvider ? { modelProvider } : {}),
     providerBaseUrls,
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),

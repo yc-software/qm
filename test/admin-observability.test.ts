@@ -1280,7 +1280,7 @@ test("an OpenAI-only deployment still gets a browse model picker, and Anthropic 
     config: built.config,
     auditLog: built.auditLog,
     baseModelDefault: "gpt-5.6-sol",
-    providerKeys: { anthropic: false, openai: true, openrouter: false },
+    providerKeys: { anthropic: false, openai: true, openrouter: false, xai: false },
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

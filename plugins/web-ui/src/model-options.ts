@@ -50,6 +50,10 @@ const MODEL_CATALOG: Record<string, ModelMeta> = {
     label: "GPT-5.6 Luna",
     buttonLabel: "5.6 Luna",
   },
+  "grok-4.6": {
+    label: "Grok 4.6",
+    buttonLabel: "Grok 4.6",
+  },
 };
 
 const DEFAULT_PICKER_MODEL_IDS: readonly string[] = [
@@ -60,10 +64,12 @@ const DEFAULT_PICKER_MODEL_IDS: readonly string[] = [
   "claude-haiku-4-5",
 ];
 const DEFAULT_CODEX_MODEL_IDS: readonly string[] = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+const DEFAULT_GROK_MODEL_IDS: readonly string[] = ["grok-4.6"];
 
 function defaultModelIdsForHarness(harnessId: string): readonly string[] {
   if (harnessId === "codex") return DEFAULT_CODEX_MODEL_IDS;
   if (harnessId === "claude") return DEFAULT_PICKER_MODEL_IDS;
+  if (harnessId === "grok") return DEFAULT_GROK_MODEL_IDS;
   return [...DEFAULT_PICKER_MODEL_IDS, ...DEFAULT_CODEX_MODEL_IDS];
 }
 
@@ -72,6 +78,7 @@ const HARNESS_LABELS: Record<string, string> = {
   opencode: "OpenCode",
   codex: "Codex",
   claude: "Claude Code",
+  grok: "Grok Build",
   mock: "Mock",
 };
 
@@ -79,6 +86,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   openrouter: "OpenRouter",
+  xai: "xAI",
   google: "Google",
   "arcee-ai": "Arcee AI",
   "meta-llama": "Meta",
@@ -232,8 +240,16 @@ export function effortLabel(level: EffortLevel): string {
   return EFFORT_LEVELS.find((option) => option.value === level)?.label ?? level;
 }
 
+export function effortLevelsForHarness(harnessId: string): Array<{ value: EffortLevel; label: string }> {
+  return EFFORT_LEVELS.filter(({ value }) => {
+    if (value === "ultracode") return harnessId === "pi";
+    if (value === "max") return harnessId !== "codex" && harnessId !== "grok";
+    return true;
+  });
+}
+
 export function harnessSupportsEffort(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "codex" || harnessId === "claude";
+  return harnessId === "pi" || harnessId === "codex" || harnessId === "claude" || harnessId === "grok";
 }
 
 export function harnessSupportsFastMode(harnessId: string): boolean {

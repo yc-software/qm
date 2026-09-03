@@ -7746,6 +7746,9 @@ h3.ambient-field-label {
 .mc-mark-chatgpt {
   background: #10a37f;
 }
+.mc-mark-grok {
+  background: #111;
+}
 .mc-provider-text {
   flex: 1;
   min-width: 0;

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { baseModelProviders, boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
+import { grokChildEnv } from "../src/harness/grok-home.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -344,6 +345,49 @@ test("HARNESS=claude uses native Claude authentication and does not require an A
   assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_MODEL: "claude-opus-4-8" }).claudeModel, "claude-opus-4-8");
 });
 
+test("Grok receives only the approved proxy and TLS environment", () => {
+  const config = loadConfig({
+    LANG: "en_US.UTF-8",
+    SSL_CERT_FILE: "/etc/ssl/cert.pem",
+    GROK_HTTPS_PROXY: "http://proxy.internal:8080",
+    HTTPS_PROXY: "http://ambient.test:8080",
+    HTTP_PROXY: "http://not-approved:8080",
+    ALL_PROXY: "socks5://not-approved:1080",
+    NO_PROXY: "internal.example",
+    XAI_API_KEY: "must-not-reach-grok",
+  });
+  assert.deepEqual(config.grokProcessEnv, {
+    LANG: "en_US.UTF-8",
+    SSL_CERT_FILE: "/etc/ssl/cert.pem",
+    HTTPS_PROXY: "http://proxy.internal:8080",
+  });
+  assert.equal(
+    grokChildEnv(config.grokProcessEnv, {
+      root: "/tmp/grok",
+      grokHome: "/tmp/grok/home",
+      processHome: "/tmp/grok/process",
+    }).HTTPS_PROXY,
+    "http://proxy.internal:8080",
+  );
+  assert.equal(loadConfig({ GROK_BIN: "/tmp/test-grok" }).grokBinPath, "/tmp/test-grok");
+  assert.equal(loadConfig({ GROK_DEV_LAUNCHER: "/tmp/grok-launcher" }).grokLauncherPath, "/tmp/grok-launcher");
+  for (const value of [
+    "http://user:secret@proxy.internal:8080",
+    "socks5://proxy.internal:1080",
+    "https://proxy.internal/path",
+    "https://proxy.internal?target=other",
+  ])
+    assert.throws(() => loadConfig({ GROK_HTTPS_PROXY: value }), /GROK_HTTPS_PROXY/);
+  assert.throws(
+    () => loadConfig({ ...productionEnv, HARNESS: "pi", GROK_BIN: "/tmp/unverified-grok" }),
+    /GROK_BIN is supported for development and tests only/,
+  );
+  assert.throws(
+    () => loadConfig({ ...productionEnv, HARNESS: "pi", GROK_DEV_LAUNCHER: "/tmp/grok-launcher" }),
+    /GROK_DEV_LAUNCHER is supported for development only/,
+  );
+});
+
 test("SANDBOX_BACKEND: unset defaults to local (dev only); the secondary must be recognized and differ", () => {
   assert.equal(loadConfig({}).sandboxBackend, "local");
   assert.throws(
@@ -390,6 +434,7 @@ test("maxClaims defaults from CONFIG_DEFAULTS and MAX_CLAIMS overrides", () => {
 test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
   assert.equal(loadConfig({}).modelProvider, undefined);
   assert.equal(loadConfig({ MODEL_PROVIDER: " openrouter ", OPENROUTER_API_KEY: "k" }).modelProvider, "openrouter");
+  assert.equal(loadConfig({ MODEL_PROVIDER: "xai", XAI_API_KEY: "k" }).modelProvider, "xai");
   assert.throws(() => loadConfig({ MODEL_PROVIDER: "bedrock" }), /MODEL_PROVIDER.*not recognized/);
 });
 
@@ -407,6 +452,10 @@ test("MODEL_PROVIDER is refused when the harness can never run that vendor's mod
     /cannot serve a base model on HARNESS=opencode/,
     "opencode has no OpenRouter route",
   );
+  assert.throws(
+    () => loadConfig({ MODEL_PROVIDER: "xai", HARNESS: "grok", XAI_API_KEY: "k" }),
+    /cannot serve a base model on HARNESS=grok/,
+  );
   assert.equal(
     loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "codex", OPENAI_API_KEY: "k" }).modelProvider,
     "openai",
@@ -417,7 +466,7 @@ test("MODEL_PROVIDER is refused when the harness can never run that vendor's mod
 test("baseModelProviders constrains the base model only when a provider is declared", () => {
   assert.deepEqual(
     baseModelProviders(loadConfig({ MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "k", ANTHROPIC_API_KEY: "k" })),
-    { anthropic: false, openai: false, openrouter: true },
+    { anthropic: false, openai: false, openrouter: true, xai: false },
     "the declaration outranks a stray key from another vendor",
   );
   assert.equal(

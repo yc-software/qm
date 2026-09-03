@@ -30,6 +30,14 @@ export interface UserModelCredentialStore {
   connections(userId: string): Promise<UserCredentialConnection[]>;
   setApiKey(userId: string, provider: ModelProvider, apiKey: string): Promise<void>;
   setOAuth(userId: string, provider: ModelProvider, tokens: UserOAuthTokens): Promise<void>;
+  beginOAuth(userId: string, provider: ModelProvider, updateId: string): Promise<void>;
+  setOAuthIfPending(
+    userId: string,
+    provider: ModelProvider,
+    tokens: UserOAuthTokens,
+    updateId: string,
+  ): Promise<boolean>;
+  cancelOAuthUpdate(userId: string, provider: ModelProvider, updateId: string): Promise<void>;
   /**
    * Fresh derived material for the user's subscription login (access + id
    * token + account id) — refreshed inside the keychain (single-flight, CAS)
@@ -39,16 +47,17 @@ export interface UserModelCredentialStore {
   delete(userId: string, provider: ModelProvider): Promise<void>;
 }
 
-const PROVIDERS: ModelProvider[] = ["anthropic", "openai"];
+const PROVIDERS = ["anthropic", "openai", "xai"] as const satisfies readonly ModelProvider[];
 const ORIGIN = "individual-model-auth";
 /**
  * OAuth logins are keyed by the provider's auth host, so the keychain's own
  * connector-token machinery (encryption, expiry margin, single-flight refresh
  * via the wired refresh dispatch) covers them with no parallel implementation.
  */
-const AI_OAUTH_HOSTS: Record<"anthropic" | "openai", string> = {
+const AI_OAUTH_HOSTS: Record<(typeof PROVIDERS)[number], string> = {
   anthropic: "claude.ai",
   openai: "auth.openai.com",
+  xai: "auth.x.ai",
 };
 /** Segregates AI subscription logins from any other connector use of the same host. */
 const AI_ACCOUNT_TYPE = "individual-model";
@@ -58,7 +67,18 @@ function serviceFor(provider: ModelProvider): string {
 }
 
 function oauthHostFor(provider: ModelProvider): string | null {
-  return provider === "anthropic" || provider === "openai" ? AI_OAUTH_HOSTS[provider] : null;
+  return provider === "anthropic" || provider === "openai" || provider === "xai" ? AI_OAUTH_HOSTS[provider] : null;
+}
+
+function keychainOAuthToken(provider: ModelProvider, tokens: UserOAuthTokens) {
+  if (!tokens.accessToken?.trim()) throw new Error("access token is required");
+  return {
+    accessToken: tokens.accessToken,
+    ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
+    ...(provider !== "xai" && tokens.idToken ? { idToken: tokens.idToken } : {}),
+    ...(provider !== "xai" && tokens.accountId ? { accountId: tokens.accountId } : {}),
+    ...(tokens.expiresAt !== undefined ? { expiresAt: tokens.expiresAt } : {}),
+  };
 }
 
 /**
@@ -113,7 +133,7 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
       const found: UserCredentialConnection[] = [];
       for (const provider of PROVIDERS) {
         const cred = (await oauthCredential(userId, provider)) ?? (await apiKeyCredential(userId, provider));
-        if (cred) found.push({ provider, kind: cred.kind });
+        if (cred && !(cred.kind === "oauth" && cred.oauth?.needsReconnect)) found.push({ provider, kind: cred.kind });
       }
       return found;
     },
@@ -128,24 +148,38 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
     },
 
     async setOAuth(userId, provider, tokens) {
-      if (!tokens.accessToken?.trim()) throw new Error("access token is required");
       const host = oauthHostFor(provider);
       if (!host) throw new Error(`no subscription login host for provider ${provider}`);
-      await keychain.setConnectorToken(
-        host,
-        userId,
-        {
-          accessToken: tokens.accessToken,
-          ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
-          ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
-          ...(tokens.accountId ? { accountId: tokens.accountId } : {}),
-          ...(tokens.expiresAt !== undefined ? { expiresAt: tokens.expiresAt } : {}),
-        },
-        AI_ACCOUNT_TYPE,
-      );
-      // One connection per provider: a subscription login replaces an API key.
+      await keychain.setConnectorToken(host, userId, keychainOAuthToken(provider, tokens), AI_ACCOUNT_TYPE);
       const apiKeyMeta = await findApiKey(userId, provider);
       if (apiKeyMeta) await keychain.remove(userId, apiKeyMeta.id);
+    },
+
+    async beginOAuth(userId, provider, updateId) {
+      const host = oauthHostFor(provider);
+      if (!host) throw new Error(`no subscription login host for provider ${provider}`);
+      await keychain.beginConnectorTokenUpdate(host, userId, updateId, AI_ACCOUNT_TYPE);
+    },
+
+    async setOAuthIfPending(userId, provider, tokens, updateId) {
+      const host = oauthHostFor(provider);
+      if (!host) throw new Error(`no subscription login host for provider ${provider}`);
+      const stored = await keychain.setConnectorTokenIfPending(
+        host,
+        userId,
+        keychainOAuthToken(provider, tokens),
+        updateId,
+        AI_ACCOUNT_TYPE,
+      );
+      const apiKeyMeta = stored ? await findApiKey(userId, provider) : null;
+      if (apiKeyMeta) await keychain.remove(userId, apiKeyMeta.id);
+      return stored;
+    },
+
+    async cancelOAuthUpdate(userId, provider, updateId) {
+      const host = oauthHostFor(provider);
+      if (!host) return;
+      await keychain.cancelConnectorTokenUpdate(host, userId, updateId, AI_ACCOUNT_TYPE);
     },
 
     async derivedOAuth(userId, provider) {

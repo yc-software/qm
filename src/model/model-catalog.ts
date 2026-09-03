@@ -33,7 +33,7 @@ const cache = new WeakMap<typeof fetch, CacheEntry>();
 export function builtInModelCatalog(): ModelCatalogEntry[] {
   const builtIns = SELECTABLE_BASE_MODELS.flatMap((model) => {
     const provider = resolveModel(model.id)?.provider;
-    return provider === "anthropic" || provider === "openai" || provider === "openrouter"
+    return provider === "anthropic" || provider === "openai" || provider === "openrouter" || provider === "xai"
       ? [{ ...model, provider: provider as string }]
       : [];
   });

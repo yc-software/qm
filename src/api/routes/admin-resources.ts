@@ -11,7 +11,9 @@ import {
   modelSupportedByHarness,
   modelServiceable,
   modelProviderAvailabilityFor,
+  resolveBrowseModel,
   resolveModel,
+  selectableBrowseModels,
   SELECTABLE_BASE_MODELS,
   ALL_PROVIDERS_AVAILABLE,
   type HarnessId,
@@ -41,6 +43,7 @@ import {
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
+import { deploymentModelServiceable } from "../../core/individual-auth-routing.ts";
 
 export interface AutoFlaggerDraft {
   harnessId: HarnessId;
@@ -443,7 +446,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     kind: "boolean",
     target: "org",
     label:
-      "Individual authorization for AI usage org-wide: on means each user must connect their own Claude or Codex account (API key or subscription login) before using the assistant; the org's shared model credentials are not used for their turns.",
+      "Individual authorization for AI usage org-wide: on means each user must connect their own Claude, ChatGPT, or Grok account (API key or subscription login) before using the assistant; the org's shared model credentials are not used for their turns.",
     readKey: "individualModelAuth",
     get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getIndividualModelAuth() : undefined),
     apply: generic<boolean>(
@@ -471,8 +474,17 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      const individualModelAuth = Boolean(
+        ctx.deps.userModelCredentials && (await ctx.deps.config!.getIndividualModelAuthDurable()),
+      );
       const unserviceable = (harness: string): { error: string } | null =>
-        modelId && !modelServiceable(modelId, modelProviderAvailabilityFor(harness, configuredKeys, managedKeys))
+        modelId &&
+        !deploymentModelServiceable(
+          modelId,
+          harness,
+          modelProviderAvailabilityFor(harness, configuredKeys, managedKeys),
+          individualModelAuth,
+        )
           ? {
               error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harness} harness`,
             }
@@ -520,7 +532,17 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
         return { error: `model ${String(modelId)} is not supported by ${harnessId}` };
       const runtimeKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      if (!modelServiceable(modelId, modelProviderAvailabilityFor(harnessId, runtimeKeys)))
+      const individualModelAuth = Boolean(
+        ctx.deps.userModelCredentials && (await ctx.deps.config!.getIndividualModelAuthDurable()),
+      );
+      if (
+        !deploymentModelServiceable(
+          modelId,
+          harnessId,
+          modelProviderAvailabilityFor(harnessId, runtimeKeys),
+          individualModelAuth,
+        )
+      )
         return {
           error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harnessId} harness`,
         };
@@ -681,7 +703,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "The model driving the browser agent in the browse skill, org-wide (empty follows the deployment's base model; fast mode applies only on Opus models).",
     readKey: "browseModel",
-    enumValues: SELECTABLE_BASE_MODELS,
+    enumValues: selectableBrowseModels(),
     get: (deps, scope) => deps.config!.getBrowseModel(scope),
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "the browse model is org-wide");
@@ -692,6 +714,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
+      if (modelId && !resolveBrowseModel(modelId)) return { error: `model ${modelId} isn't supported by browse` };
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
       const providers = modelProviderAvailabilityFor(ctx.deps.harnessId ?? "pi", configuredKeys, managedKeys);

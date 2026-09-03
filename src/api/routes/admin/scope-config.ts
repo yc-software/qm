@@ -3,12 +3,12 @@ import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
 import {
   HARNESS_IDS,
-  SELECTABLE_BASE_MODELS,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
+  selectableBrowseModels,
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
@@ -34,6 +34,7 @@ import {
 import { isHostDenied } from "../../../resolution/egress-policy.ts";
 import { discoverScopes } from "./common.ts";
 import { sessionCategory } from "./origins.ts";
+import { deploymentModelServiceable } from "../../../core/individual-auth-routing.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, body } = ctx;
@@ -305,6 +306,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
   const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
+  const individualModelAuth = values.individualModelAuth === true && Boolean(deps.userModelCredentials);
   const catalog =
     deps.modelCredentials && managedKeys.openrouter
       ? await selectableModelCatalog(deps.modelCredentialFetch)
@@ -315,14 +317,19 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const currentModel =
     runtime &&
     typeof runtime.modelId === "string" &&
-    (currentProvider === "anthropic" || currentProvider === "openai" || currentProvider === "openrouter")
+    (currentProvider === "anthropic" ||
+      currentProvider === "openai" ||
+      currentProvider === "openrouter" ||
+      currentProvider === "xai")
       ? ({ id: runtime.modelId, name: resolvedCurrent!.name, provider: currentProvider } satisfies ModelCatalogEntry)
       : null;
   const modelsFor = (harnessId: string) => {
     const models = selectableCatalogForHarness(catalog, harnessId);
     if (currentModel && runtime?.harnessId === harnessId && !models.some((model) => model.id === currentModel.id))
       models.push(currentModel);
-    return models.filter((model) => modelServiceable(model.id, providersFor(harnessId)));
+    return models.filter((model) =>
+      deploymentModelServiceable(model.id, harnessId, providersFor(harnessId), individualModelAuth),
+    );
   };
   return sendJson(res, 200, {
     scopeId: targetScope,
@@ -337,8 +344,8 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     harnessOptions: HARNESS_IDS.filter((id) => id !== "mock"),
     modelsByHarness: Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)])),
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
-    browseModelOptions: SELECTABLE_BASE_MODELS.filter((m) =>
-      modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
+    browseModelOptions: selectableBrowseModels().filter((model) =>
+      modelServiceable(model.id, providersFor(deps.harnessId ?? "pi")),
     ),
     egressEnforcement: {
       backend: scopeProfile?.backend ?? deps.sandboxBackend ?? "unknown",

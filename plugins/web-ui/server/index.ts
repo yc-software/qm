@@ -1562,6 +1562,21 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/user-model-auth/grok/start",
+    handle: async (c) =>
+      relayCore(c.res, "POST", "/v1/user-model-auth/grok/start", JSON.stringify({ principalId: c.user })),
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/grok/poll",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { deviceAuthId?: unknown };
+      const body = JSON.stringify({ principalId: c.user, deviceAuthId: p.deviceAuthId });
+      return relayCore(c.res, "POST", "/v1/user-model-auth/grok/poll", body);
+    },
+  },
+  {
+    method: "POST",
     path: "/api/connectors/:provider/start",
     handle: async (c) => {
       const { res, user } = c;

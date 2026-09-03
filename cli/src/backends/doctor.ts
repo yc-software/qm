@@ -230,6 +230,7 @@ const MODEL_PROVIDER_PROBES: Readonly<
   },
   openai: { url: "https://api.openai.com/v1/models", headers: (key) => ({ authorization: `Bearer ${key}` }) },
   openrouter: { url: "https://openrouter.ai/api/v1/key", headers: (key) => ({ authorization: `Bearer ${key}` }) },
+  xai: { url: "https://api.x.ai/v1/models", headers: (key) => ({ authorization: `Bearer ${key}` }) },
 };
 
 async function modelProviderCheck(provider: ModelProvider, apiKey: string): Promise<void> {

@@ -60,10 +60,9 @@ test("a pinned model offers a default effort level on the panel", () => {
   assert.match(panel, /ariaLabel: "Default effort level for this project"/);
   assert.match(panel, /focusKey: "context-effort"/);
   // effort choices are filtered to what the pinned harness accepts
-  assert.match(panel, /if \(value === "ultracode"\) return harnessId === "pi"/);
-  assert.match(panel, /if \(value === "max"\) return harnessId !== "codex"/);
+  assert.match(panel, /effortLevelsForHarness\(pinnedHarness\)/);
   // switching models carries a still-valid effort, drops an invalid one
-  assert.match(panel, /effortLevelsFor\(nextHarness\)\.some\(\(o\) => o\.value === effort\) \? effort : undefined/);
+  assert.match(panel, /effortLevelsForHarness\(nextHarness\)\.some\(\(o\) => o\.value === effort\)/);
   // the effort styles exist
   assert.ok(css.includes(".context-model-effort {"));
 });

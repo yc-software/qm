@@ -766,6 +766,29 @@ test("a stored browse model that no longer resolves falls back to the base model
   assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "anthropic");
 });
 
+test("an unsupported Grok base model is not injected into the browse runner", async () => {
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+  });
+  const built = buildApp(config);
+  const { app, sandbox } = built;
+  let captured: ProvisionOptions | undefined;
+  const realProvision = sandbox.provision.bind(sandbox);
+  sandbox.provision = (layers, opts) => {
+    captured = opts;
+    return realProvision(layers, opts);
+  };
+  built.config.setBaseModel("org:default-org", "grok-4.6");
+
+  const result = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:grok" } }));
+
+  assert.equal(result.status, "ok");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL, undefined);
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, undefined);
+});
+
 test("browse follows a live org base model change, not the process-start default", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),

@@ -4,6 +4,7 @@ import {
   applyPickerModelIds,
   applyRuntimeOptions,
   defaultModelValue,
+  effortLevelsForHarness,
   getHarnessOptions,
   getModelOptions,
   getModelOptionsForHarness,
@@ -96,6 +97,19 @@ test("runtime options preserve a fetched OpenRouter model as the selected web tu
   assert.equal(defaultModelValue(), "pi:anthropic/claude-sonnet-4.5");
 });
 
+test("runtime options expose the Grok subscription harness without an xAI API key", () => {
+  applyRuntimeOptions(
+    null,
+    ["grok"],
+    { grok: ["grok-4.6"] },
+    { harnessId: "grok", modelId: "grok-4.6" },
+    { "grok-4.6": { name: "Grok 4.6", provider: "xai" } },
+  );
+  assert.deepEqual(getHarnessOptions(), [{ value: "grok", label: "Grok Build" }]);
+  assert.equal(getModelOptionsForHarness("grok")[0]?.model.provider, "xai");
+  assert.equal(defaultModelValue(), "grok:grok-4.6");
+});
+
 test("runtime options hide retired persisted model ids", () => {
   applyRuntimeOptions(
     null,
@@ -120,11 +134,17 @@ test("harness-only turn controls are exposed only where the adapter supports the
   assert.equal(harnessSupportsEffort("pi"), true);
   assert.equal(harnessSupportsEffort("codex"), true);
   assert.equal(harnessSupportsEffort("claude"), true);
+  assert.equal(harnessSupportsEffort("grok"), true);
   assert.equal(harnessSupportsEffort("opencode"), false);
   assert.equal(harnessSupportsFastMode("pi"), true);
   assert.equal(harnessSupportsFastMode("claude"), true);
   assert.equal(harnessSupportsFastMode("codex"), false);
+  assert.equal(harnessSupportsFastMode("grok"), false);
   assert.equal(harnessSupportsFastMode("opencode"), false);
+  assert.deepEqual(
+    effortLevelsForHarness("grok").map((option) => option.value),
+    ["auto", "low", "medium", "high", "xhigh"],
+  );
 });
 
 test("an all-retired list falls back within the approved harness", () => {

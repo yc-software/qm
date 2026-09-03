@@ -50,6 +50,7 @@
     "lint:knip": "knip"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
     "@anthropic-ai/claude-agent-sdk": "0.3.211",
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@aws-crypto/sha256-js": "^5.2.0",
@@ -60,6 +61,7 @@
     "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-coding-agent": "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.3/earendil-works-pi-coding-agent-0.82.0-qm-security.3.tgz",
     "@fly/sprites": "0.0.1",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@openai/codex": "0.144.5",
     "@opencode-ai/plugin": "1.17.18",
     "@opencode-ai/sdk": "1.17.18",
@@ -97,7 +99,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
     "@types/tar-stream": "^3.1.4",
@@ -107,6 +108,7 @@
     "knip": "^6.26.0",
     "oxlint": "^1.74.0",
     "prettier": "3.9.1",
+    "smol-toml": "1.7.1",
     "typescript": "^5.8.2",
     "typescript-eslint": "^8.61.0"
   }

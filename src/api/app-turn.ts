@@ -150,7 +150,7 @@ export function createTurnMethods(
         };
         if (!individualAuth) {
           const configuredKeys = deps.providerKeys ??
-            deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
+            deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false, xai: false };
           const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
           let orgRuntime;
           let configuredRuntime;

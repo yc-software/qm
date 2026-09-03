@@ -7,6 +7,7 @@ const getModel = getBuiltinModel as unknown as (provider: string, id: string) =>
 
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-5.6-sol";
+export const DEFAULT_GROK_MODEL_ID = "grok-4.6";
 /**
  * pi-ai's ChatGPT-subscription provider: the same model ids as "openai",
  * served from the Codex backend and authenticated with a ChatGPT OAuth
@@ -20,10 +21,10 @@ export function codexSubscriptionModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id : CODEX_SUBSCRIPTION_PREFIX + id;
 }
 export const THINKING_LEVELS = ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"] as const;
-export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
+export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "grok", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
-export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
+export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter", "xai"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
 export function isModelProvider(value: unknown): value is ModelProvider {
@@ -47,7 +48,9 @@ interface ModelEntry {
     template: string;
     input: number;
     output: number;
+    cacheRead?: number;
     cacheWrite?: number;
+    tiers?: NonNullable<PiModel["cost"]["tiers"]>;
     contextWindow: number;
     maxTokens: number;
   };
@@ -100,6 +103,22 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     auxiliary: true,
     clone: { ...GPT_56_CLONE, input: 1, output: 6 },
   },
+  {
+    id: "grok-4.6",
+    name: "Grok 4.6",
+    fastMode: false,
+    webui: true,
+    base: true,
+    clone: {
+      template: "grok-4.5",
+      input: 2,
+      output: 6,
+      cacheRead: 0.5,
+      tiers: [{ inputTokensAbove: 199_999, input: 4, output: 12, cacheRead: 1, cacheWrite: 0 }],
+      contextWindow: 500_000,
+      maxTokens: 128_000,
+    },
+  },
   { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, webui: true, base: true },
   { id: "claude-opus-4-7", name: "Claude Opus 4.7", fastMode: true, webui: false, base: false },
   { id: "claude-opus-4-6", name: "Claude Opus 4.6", fastMode: true, webui: false, base: false },
@@ -117,6 +136,18 @@ export const DEFAULT_WEBUI_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter(
 export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }> = MODEL_REGISTRY.filter(
   (m) => m.base,
 ).map((m) => ({ id: m.id, name: m.name }));
+
+export function resolveBrowseModel(
+  id: string | null | undefined,
+): { id: string; provider: "anthropic" | "openai" | "openrouter" } | undefined {
+  if (!id) return undefined;
+  const provider = resolveModel(id)?.provider;
+  return provider === "anthropic" || provider === "openai" || provider === "openrouter" ? { id, provider } : undefined;
+}
+
+export function selectableBrowseModels(): ReadonlyArray<{ id: string; name: string }> {
+  return SELECTABLE_BASE_MODELS.filter((model) => resolveBrowseModel(model.id));
+}
 
 function builtinModel(id: string): PiModel | undefined {
   for (const provider of MODEL_PROVIDERS) {
@@ -191,8 +222,9 @@ export function resolveModel(id: string): PiModel | undefined {
           cost: {
             input: entry.clone.input,
             output: entry.clone.output,
-            cacheRead: entry.clone.input / 10,
+            cacheRead: entry.clone.cacheRead ?? entry.clone.input / 10,
             cacheWrite: entry.clone.cacheWrite ?? 0,
+            ...(entry.clone.tiers ? { tiers: entry.clone.tiers } : {}),
           },
         })
       : undefined;
@@ -227,10 +259,12 @@ export function modelSupportedByHarness(id: string | undefined, harness: string)
   if (!id) return false;
   if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id))
     return harness === "pi" || harness === "opencode" || harness === "mock";
-  if (harness === "pi" || harness === "opencode" || harness === "mock") return Boolean(resolveModel(id));
   const provider = resolveModel(id)?.provider;
+  if (harness === "pi" || harness === "mock") return Boolean(provider);
+  if (harness === "opencode") return provider === "anthropic" || provider === "openai";
   if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
   if (harness === "codex") return provider === "openai" || /^(?:gpt-|o\d|codex|openai\/)/i.test(id);
+  if (harness === "grok") return provider === "xai" && id === DEFAULT_GROK_MODEL_ID;
   return false;
 }
 
@@ -240,7 +274,9 @@ export function defaultModelForHarness(
   providers?: ModelProviderAvailability,
 ): string {
   if (configured && modelSupportedByHarness(configured, harness)) return configured;
-  const preferred = harness === "codex" ? DEFAULT_CODEX_MODEL_ID : DEFAULT_AGENT_MODEL_ID;
+  let preferred = DEFAULT_AGENT_MODEL_ID;
+  if (harness === "codex") preferred = DEFAULT_CODEX_MODEL_ID;
+  if (harness === "grok") preferred = DEFAULT_GROK_MODEL_ID;
   if (!providers || modelServiceable(preferred, providers)) return preferred;
   const servable = SELECTABLE_BASE_MODELS.find(
     (model) => modelSupportedByHarness(model.id, harness) && modelServiceable(model.id, providers),
@@ -248,15 +284,12 @@ export function defaultModelForHarness(
   return servable?.id ?? preferred;
 }
 
-export interface ModelProviderAvailability {
-  anthropic: boolean;
-  openai: boolean;
-  openrouter: boolean;
+export type ModelProviderAvailability = Record<ModelProvider, boolean> & {
   codexOAuth?: boolean;
-}
+};
 
 function providerFlags(value: ModelProviderAvailability): ModelProviderAvailability {
-  return { anthropic: value.anthropic, openai: value.openai, openrouter: value.openrouter };
+  return { anthropic: value.anthropic, openai: value.openai, openrouter: value.openrouter, xai: value.xai };
 }
 
 export function modelServiceable(id: string, providers: ModelProviderAvailability): boolean {
@@ -266,6 +299,7 @@ export function modelServiceable(id: string, providers: ModelProviderAvailabilit
   if (provider === "openai") return providers.openai;
   if (provider === "anthropic") return providers.anthropic;
   if (provider === "openrouter") return providers.openrouter;
+  if (provider === "xai") return providers.xai;
   return true;
 }
 
@@ -273,7 +307,12 @@ export function serviceableModelIds(ids: readonly string[], providers: ModelProv
   return ids.filter((id) => modelServiceable(id, providers));
 }
 
-export const ALL_PROVIDERS_AVAILABLE: ModelProviderAvailability = { anthropic: true, openai: true, openrouter: true };
+export const ALL_PROVIDERS_AVAILABLE: ModelProviderAvailability = {
+  anthropic: true,
+  openai: true,
+  openrouter: true,
+  xai: true,
+};
 
 export function modelProviderAvailabilityFor(
   harness: string,
@@ -284,11 +323,12 @@ export function modelProviderAvailabilityFor(
   if (harness === "opencode") return { ...providerFlags(configKeys), openrouter: false };
   if (harness === "codex")
     return { ...providerFlags(configKeys), openai: configKeys.openai || Boolean(configKeys.codexOAuth) };
+  if (harness === "grok") return { anthropic: false, openai: false, openrouter: false, xai: false };
   return ALL_PROVIDERS_AVAILABLE;
 }
 
 export function onlyProvider(provider: ModelProvider): ModelProviderAvailability {
-  return { anthropic: false, openai: false, openrouter: false, [provider]: true };
+  return { anthropic: false, openai: false, openrouter: false, xai: false, [provider]: true };
 }
 
 export function defaultModelForProvider(harness: string, provider: ModelProvider): string | undefined {

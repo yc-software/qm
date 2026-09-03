@@ -1,6 +1,7 @@
 import type { ModelProvider, ModelProviderAvailability } from "../model/pi-models.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
+import type { XaiDeviceLoginStore } from "../model/xai-device-login.ts";
 import type { CustomProviderStore } from "../model/custom-provider-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
@@ -90,6 +91,7 @@ export interface ServerDeps {
   providerKeys?: ModelProviderAvailability;
   modelCredentials?: ModelCredentialStore;
   userModelCredentials?: UserModelCredentialStore;
+  xaiDeviceLogins?: XaiDeviceLoginStore;
   mcpServers?: McpServerStore;
   mcpToolService?: McpToolService;
   modelCredentialFetch?: typeof fetch;

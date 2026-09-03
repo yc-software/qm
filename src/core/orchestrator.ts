@@ -133,9 +133,9 @@ import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution, GrantedSkillRef } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import { resolveModel, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
+import { resolveBrowseModel, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
-import type { CodexTurnAuth } from "../harness/harness.ts";
+import type { CodexTurnAuth, GrokTurnAuth } from "../harness/harness.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
 import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
@@ -177,11 +177,6 @@ export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextP
 class ProjectRosterChanged extends Error {}
 
 const ACTIVITY_ENTRY_TYPES = new Set<EntryType>(["tool_call", "tool_result", "approval_request", "approval_resolved"]);
-
-function knownBrowseModel(id: string | null | undefined): { id: string; provider: string } | undefined {
-  const provider = id ? resolveModel(id)?.provider : undefined;
-  return id && provider ? { id, provider } : undefined;
-}
 
 const SHARED_CORE_MD = loadProtocolFile("shared-core");
 const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
@@ -1160,8 +1155,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
         const browseChoice =
-          knownBrowseModel(deps.config?.getBrowseModel(toScopeId("org", orgId()))) ??
-          knownBrowseModel(deps.resolveBaseModelId?.());
+          resolveBrowseModel(deps.config?.getBrowseModel(toScopeId("org", orgId()))) ??
+          resolveBrowseModel(deps.resolveBaseModelId?.());
         if (browseChoice && !("BROWSE_LAB_MODEL" in connectorEnv)) {
           connectorEnv.BROWSE_LAB_MODEL = browseChoice.id;
           connectorEnv.BROWSE_LAB_MODEL_PROVIDER = browseChoice.provider;
@@ -2336,11 +2331,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let userHarnessOverride: string | undefined;
         let claudeOauthToken: string | undefined;
         let codexTurnAuth: CodexTurnAuth | undefined;
+        let grokTurnAuth: GrokTurnAuth | undefined;
         const userCredStore = deps.userModelCredentials;
         if (userCredStore && humanTurn && (await deps.config?.getIndividualModelAuthDurable())) {
-          const [anthCred, oaiCred] = await Promise.all([
+          const [anthCred, oaiCred, xaiCred] = await Promise.all([
             userCredStore.get(actor.id, "anthropic"),
             userCredStore.get(actor.id, "openai"),
+            userCredStore.get(actor.id, "xai"),
           ]);
           // The org's harness choice decides how a ChatGPT subscription is
           // served: pi orgs stay on pi (Codex provider inside pi-ai), others
@@ -2352,6 +2349,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             oaiCred ?? null,
             input.model,
             preferredHarness,
+            xaiCred ?? null,
           );
           if (routing?.kind === "apikey") {
             userHarnessOverride = "pi";
@@ -2392,10 +2390,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               userHarnessOverride = routing.harness;
               userModelOverride = routing.model;
             }
+          } else if (routing?.kind === "oauth" && routing.provider === "xai" && xaiCred?.oauth) {
+            const derived = await userCredStore.derivedOAuth(actor.id, "xai");
+            if (derived) {
+              grokTurnAuth = { accessToken: derived.accessToken };
+              userHarnessOverride = routing.harness;
+              userModelOverride = routing.model;
+            }
           }
           if (!userHarnessOverride) {
             throw new NonRetryableTurnError(
-              "This organization has each person chat on their own AI account, and yours isn't connected yet. Open the web app and connect Claude or ChatGPT from the AI account panel, then try again.",
+              "This organization has each person chat on their own AI account, and yours isn't connected yet. Open the web app and connect Claude, ChatGPT, or Grok from the AI account panel, then try again.",
             );
           }
         }
@@ -2405,6 +2410,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let authLabel = "api-key";
           if (claudeOauthToken) authLabel = "claude-oauth";
           else if (codexTurnAuth) authLabel = "codex-oauth";
+          else if (grokTurnAuth) authLabel = "grok-oauth";
           else if (userProviderKeys?.[CODEX_SUBSCRIPTION_PROVIDER]) authLabel = "codex-oauth-pi";
           console.log(
             `[individual-auth] user=${actor.id} harness=${userHarnessOverride} model=${effectiveModel} auth=${authLabel}`,
@@ -2438,6 +2444,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(claudeOauthToken ? { claudeOauthToken } : {}),
             ...(userHarnessOverride ? { runtimePinned: true } : {}),
             ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),
+            ...(grokTurnAuth ? { grokAuth: grokTurnAuth } : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             ...(input.cancel ? { cancel: input.cancel } : {}),
             input: harnessInput,

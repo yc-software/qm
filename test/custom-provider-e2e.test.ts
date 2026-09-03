@@ -150,7 +150,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     assert.equal(modelSupportedByHarness("qa-chat", "pi"), true);
     assert.equal(modelSupportedByHarness("qa-chat", "opencode"), true);
     assert.equal(modelSupportedByHarness("qa-chat", "codex"), false);
-    assert.equal(modelServiceable("qa-chat", { anthropic: false, openai: false, openrouter: false }), true);
+    assert.equal(modelServiceable("qa-chat", { anthropic: false, openai: false, openrouter: false, xai: false }), true);
 
     // 6. REAL model call through QM's pi path → fake upstream answers
     const reply = await oneShot(

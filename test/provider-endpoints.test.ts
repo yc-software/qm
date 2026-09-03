@@ -25,11 +25,12 @@ test("parseProviderBaseUrl rejects bad values", () => {
   assert.throws(() => parseProviderBaseUrl("X", "https://gw.example.com/#frag"));
 });
 
-test("providerBaseUrlsFromEnv reads the three provider variables", () => {
+test("providerBaseUrlsFromEnv reads configurable provider variables without redirecting xAI", () => {
   const urls = providerBaseUrlsFromEnv({
     ANTHROPIC_BASE_URL: "https://a.example.com",
     OPENAI_BASE_URL: "https://o.example.com/v1/",
     OPENROUTER_BASE_URL: "  ",
+    XAI_BASE_URL: "https://subscription-proxy.example.com",
   } as NodeJS.ProcessEnv);
   assert.deepEqual(urls, { anthropic: "https://a.example.com", openai: "https://o.example.com/v1" });
 });
@@ -38,6 +39,8 @@ test("providerBaseUrl answers only for configured, known providers", () => {
   setProviderBaseUrls({ anthropic: "https://a.example.com" });
   assert.equal(providerBaseUrl("anthropic"), "https://a.example.com");
   assert.equal(providerBaseUrl("openai"), undefined);
+  setProviderBaseUrls({ xai: "https://subscription-proxy.example.com" });
+  assert.equal(providerBaseUrl("xai"), undefined);
   assert.equal(providerBaseUrl("weird"), undefined);
 });
 
@@ -53,6 +56,12 @@ test("a cloned model follows its template's override", () => {
   const clone = resolveModel("claude-opus-5");
   assert.equal(clone?.baseUrl, "https://gw.example.com");
   assert.equal(clone?.id, "claude-opus-5");
+});
+
+test("the xAI API model remains pinned to api.x.ai", () => {
+  setProviderBaseUrls({ xai: "https://subscription-proxy.example.com" });
+  assert.equal(resolveModel("grok-4.6")?.provider, "xai");
+  assert.equal(resolveModel("grok-4.6")?.baseUrl, "https://api.x.ai/v1");
 });
 
 test("loadConfig parses provider base URLs and feeds the child harness envs", () => {
