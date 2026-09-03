@@ -2367,6 +2367,7 @@ a.chat-row-open {
 
 .composer-wrap {
   position: relative;
+  z-index: 1;
   width: min(var(--content-w), calc(100% - 32px));
   margin: 0 auto max(18px, calc(10px + env(safe-area-inset-bottom)));
   padding: 12px;
@@ -7211,6 +7212,11 @@ h3.ambient-field-label {
     margin-right: max(16px, calc(10px + env(safe-area-inset-right)));
     margin-left: max(16px, calc(10px + env(safe-area-inset-left)));
   }
+  .queued-strip {
+    width: auto;
+    margin-right: max(28px, calc(22px + env(safe-area-inset-right)));
+    margin-left: max(28px, calc(22px + env(safe-area-inset-left)));
+  }
 }
 @container chat (max-width: 470px) {
   .custom-chat-shell {
@@ -7223,6 +7229,10 @@ h3.ambient-field-label {
     margin-bottom: calc(10px + env(safe-area-inset-bottom));
     margin-left: calc(10px + env(safe-area-inset-left));
     border-radius: 18px;
+  }
+  .queued-strip {
+    margin-right: calc(22px + env(safe-area-inset-right));
+    margin-left: calc(22px + env(safe-area-inset-left));
   }
   .live-work-dock {
     margin-right: calc(10px + env(safe-area-inset-right));

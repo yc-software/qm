@@ -7,6 +7,7 @@ const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "u
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const bridge = readFileSync(new URL("../src/core-bridge.ts", import.meta.url), "utf8");
 const server = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
+const shell = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("a mid-turn Enter queues the message — it no longer steers the running turn", () => {
   assert.match(composer, /if \(agent\.state\.isStreaming\) return queueDraft\(agent\);/);
@@ -168,6 +169,15 @@ test("the queued strip sits behind and outside the composer form", () => {
   assert.match(chat, /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent\)/);
   const composerMarkup = composer.slice(composer.indexOf('<form class="composer-wrap"'), composer.indexOf("</form>"));
   assert.doesNotMatch(composerMarkup, /queuedStrip\(agent\)/);
+  assert.match(
+    shell,
+    /\.queued-strip \{[\s\S]*?z-index: 0;[\s\S]*?width: min\(calc\(var\(--content-w\) - 24px\), calc\(100% - 56px\)\);[\s\S]*?margin: 0 auto -10px;/,
+  );
+  assert.match(shell, /\.composer-wrap \{[\s\S]*?position: relative;\s*z-index: 1;/);
+  assert.match(shell, /margin-right: max\(28px, calc\(22px \+ env\(safe-area-inset-right\)\)\);/);
+  assert.match(shell, /margin-left: max\(28px, calc\(22px \+ env\(safe-area-inset-left\)\)\);/);
+  assert.match(shell, /margin-right: calc\(22px \+ env\(safe-area-inset-right\)\);/);
+  assert.match(shell, /margin-left: calc\(22px \+ env\(safe-area-inset-left\)\);/);
 });
 
 // Nothing is sent when a turn settles: core already started the next queued run. The client's only
