@@ -1513,20 +1513,23 @@ a.chat-row-open {
   margin-top: 9px;
 }
 .queued-strip {
+  position: relative;
+  z-index: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-top: 9px;
+  width: min(calc(var(--content-w) - 24px), calc(100% - 56px));
+  margin: 0 auto -10px;
 }
 .queued-chip {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 28px;
-  padding: 4px 6px 4px 8px;
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  background: var(--background);
+  min-height: 38px;
+  padding: 6px 6px 14px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 14px 14px 10px 10px;
+  background: color-mix(in srgb, var(--background) 88%, var(--secondary));
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.2;

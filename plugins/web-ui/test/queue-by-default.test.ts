@@ -164,6 +164,12 @@ test("the strip renders core's queue, refreshed from the same read that names th
   assert.match(server, /json\(res, 200, \{ runId, run, \.\.\.\(waiting\.length \? \{ queued: waiting \} : \{\}\) \}\)/);
 });
 
+test("the queued strip sits behind and outside the composer form", () => {
+  assert.match(chat, /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent\)/);
+  const composerMarkup = composer.slice(composer.indexOf('<form class="composer-wrap"'), composer.indexOf("</form>"));
+  assert.doesNotMatch(composerMarkup, /queuedStrip\(agent\)/);
+});
+
 // Nothing is sent when a turn settles: core already started the next queued run. The client's only
 // job is to show it, so a client that never comes back costs the person nothing but the view.
 test("settling a turn follows the next queued run instead of sending it", () => {

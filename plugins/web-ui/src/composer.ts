@@ -533,7 +533,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               `
             : nothing
         }
-        ${queuedStrip(agent)}
         ${
           approvalPauses.length
             ? composerApprovalPanel(approvalPauses)
@@ -1677,6 +1676,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   return {
     state: composerState,
     composerForm,
+    queuedStrip,
     queuedRunsFor,
     setQueuedRuns,
     resetComposer,

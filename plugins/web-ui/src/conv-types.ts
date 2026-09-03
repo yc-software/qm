@@ -115,6 +115,7 @@ interface ComposerState {
 export interface ComposerSurface {
   state: ComposerState;
   composerForm(agent: Agent): TemplateResult;
+  queuedStrip(agent: Agent): TemplateResult | typeof import("lit").nothing;
   queuedRunsFor(threadRef: string | null): QueuedRun[];
   setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;
