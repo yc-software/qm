@@ -257,6 +257,11 @@ function scaffoldDeploymentSkill(dir: string): void {
   }
 }
 
+function scaffoldBrowserUpdater(dir: string, target: Target): void {
+  if (target === "docker") return;
+  writeIfAbsent(dir, [".github", "workflows", "qm-update.yml"], template("deployment/qm-update.yml"));
+}
+
 export function runInit(opts: {
   org?: string;
   target?: Target;
@@ -292,6 +297,7 @@ export function runInit(opts: {
   writeIfAbsent(dir, [".env"], initialEnv(config), 0o600);
   writeIfAbsent(dir, ["AGENTS.md"], AGENTS_TEMPLATE + provider.scaffold.agentsAppendix);
   scaffoldDeploymentSkill(dir);
+  scaffoldBrowserUpdater(dir, target);
   const manifests = renderSlackManifests(config);
   writeIfAbsent(dir, ["slack-app-manifest.yml"], manifests.bot);
   if (usesSlackOidc(config)) writeIfAbsent(dir, ["slack-sso-manifest.yml"], manifests.sso);

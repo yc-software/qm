@@ -32,6 +32,7 @@ import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envc
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
 import { loadConfig, OPENCODE_RUNTIME_VERSION, providerKeysPresent } from "../src/config.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
+import { cliVersion } from "../cli/src/manifest.ts";
 
 function tmpStore(): string {
   const store = mkdtempSync(join(tmpdir(), "qm-dev-test-"));
@@ -438,6 +439,7 @@ test("supervised children share the selected dev org", () => {
     assert.equal(spec.env.CODEX_HOME, undefined);
   }
   for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
+  assert.equal(specs.find((spec) => spec.name === "admin")!.env.QM_VERSION, cliVersion());
   inputs.baseEnv = {};
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
 });

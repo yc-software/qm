@@ -42,6 +42,7 @@ import { deleteModelProvider, getModelProviders, putModelProvider } from "./admi
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
+import { createUpdate, latestUpdate, updateUpdate } from "./admin/updates.ts";
 
 const timed =
   (handle: (ctx: ApiCtx) => void | Promise<void>) =>
@@ -80,6 +81,9 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: testAutoFlagger,
   },
+  { method: "GET", path: "/v1/admin/updates/latest", auth: "either", handle: latestUpdate },
+  { method: "POST", path: "/v1/admin/updates", auth: "either", handle: createUpdate },
+  { method: "PATCH", path: "/v1/admin/updates/:id", auth: "either", handle: updateUpdate },
   { method: "PUT", path: "/v1/admin/scopes/:scope/:resource", auth: "either", handle: putScopeConfig },
   { method: "GET", path: "/v1/admin/whoami", auth: "either", handle: whoami },
   { method: "GET", path: "/v1/admin/scopes", auth: "either", handle: listAdminScopes },

@@ -1,0 +1,111 @@
+name: QM browser update
+run-name: QM update to ${{ inputs.version }} [${{ inputs.request_id }}]
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact eligible QM version
+        required: true
+      request_id:
+        description: QM update job id
+        required: true
+      requested_by:
+        description: QM administrator
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: qm-browser-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - name: Restore deployment environment
+        env:
+          QM_DEPLOY_ENV: ${{ secrets.QM_DEPLOY_ENV }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$QM_DEPLOY_ENV" > .env
+      - name: Install the pinned deployment CLI
+        run: npm ci
+      - name: Resolve deployment target
+        id: deployment
+        run: |
+          set -euo pipefail
+          target=$(npm exec qm -- config get target)
+          printf 'target=%s\n' "$target" >> "$GITHUB_OUTPUT"
+          if [ "$target" = aws ]; then
+            printf 'role=%s\n' "$(npm exec qm -- config get aws.deployRoleArn)" >> "$GITHUB_OUTPUT"
+            printf 'region=%s\n' "$(npm exec qm -- config get aws.region)" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$target" = docker ]; then
+            echo 'Docker browser updates require a self-hosted deployment workflow.' >&2
+            exit 1
+          fi
+      - name: Validate and pin the exact release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          npm exec qm -- update --version "$VERSION"
+          npm install --save-exact "@yc-software/qm@$VERSION"
+      - name: Record the pinned release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- package.json package-lock.json; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json
+          git commit -m "chore: update QM to v$VERSION"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin "+refs/heads/$GITHUB_REF_NAME:refs/remotes/origin/$GITHUB_REF_NAME"
+            if ! git rebase "origin/$GITHUB_REF_NAME"; then
+              git rebase --abort
+              echo 'The deployment branch changed the QM package files. Resolve it before retrying.' >&2
+              exit 1
+            fi
+            if git push origin "HEAD:$GITHUB_REF_NAME"; then
+              exit 0
+            fi
+          done
+          echo 'The deployment branch kept changing. Retry the update.' >&2
+          exit 1
+      - name: Authorize AWS deployment
+        if: steps.deployment.outputs.target == 'aws'
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: ${{ steps.deployment.outputs.role }}
+          aws-region: ${{ steps.deployment.outputs.region }}
+      - name: Install flyctl
+        if: steps.deployment.outputs.target == 'fly'
+        uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be
+      - name: Install the recorded dependencies
+        run: npm ci
+      - name: Install and deploy QM
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          TARGET: ${{ steps.deployment.outputs.target }}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET" = aws ]; then
+            npm exec qm -- up --yes --env-file .env
+          else
+            npm exec qm -- up --env-file .env
+          fi

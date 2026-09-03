@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { cliVersion } from "../../../cli/src/manifest.ts";
 import type { ChildSpec, SlotPorts } from "../lib/types.ts";
 
 export interface SpecInputs {
@@ -88,6 +89,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         CORE_API_URL: `http://localhost:${i.ports.core}`,
         CORE_ORG_ID: orgId,
         ADMIN_BASE_PATH: "/admin",
+        QM_VERSION: cliVersion(),
       },
       port: i.ports.admin,
       readiness: { kind: "log", pattern: `http://localhost:${i.ports.admin}` },

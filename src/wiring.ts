@@ -298,6 +298,8 @@ import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
 import { errMessage, swallowAs } from "./util/errors.ts";
 import { sleep } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import { createMemoryUpdateJobStore, type UpdateJobStore } from "./updates/update-job-store.ts";
+import { createPostgresUpdateJobStore } from "./updates/postgres-update-job-store.ts";
 
 export interface Runtime {
   start(): void;
@@ -362,6 +364,7 @@ export interface BuiltApp {
   skillBundles: SkillBundleStore;
   skillFetcher: SkillPackFetcher;
   auditLog: AuditLog;
+  updateJobs?: UpdateJobStore;
   scheduler: Scheduler;
   webhookReceiver: WebhookReceiver;
   admin: AdminService;
@@ -513,6 +516,9 @@ export function buildApp(
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = config.databaseUrl ? createPostgresAuditLog(config.databaseUrl) : createAuditLog();
+  let updateJobs: UpdateJobStore | undefined;
+  if (config.databaseUrl) updateJobs = createPostgresUpdateJobStore(config.databaseUrl);
+  else if (!config.production) updateJobs = createMemoryUpdateJobStore();
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
@@ -1646,6 +1652,7 @@ export function buildApp(
       void runActivity.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
+      await updateJobs?.close?.();
     },
   };
 
@@ -1681,6 +1688,7 @@ export function buildApp(
     skillBundles,
     skillFetcher,
     auditLog,
+    ...(updateJobs ? { updateJobs } : {}),
     scheduler,
     webhookReceiver,
     admin,
@@ -1771,6 +1779,7 @@ export function serverDeps(
     egressAudit: built.egressAudit,
     sessions: built.sessions,
     auditLog: built.auditLog,
+    ...(built.updateJobs ? { updateJobs: built.updateJobs } : {}),
     errors: built.errors,
     metrics: built.metrics,
     crons: built.crons,

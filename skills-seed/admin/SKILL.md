@@ -108,5 +108,6 @@ where the admin acts directly. If asked, point them there — don't try the API
   recurring in this room, to turn on this scope's `admin-session-reads` flag — from
   their DM, never from here).
 - `403 … grant changes (promote/revoke) are portal-only` — point them at the dashboard.
+- `403 QM updates are portal-only` — point them at the dashboard.
 - `403 capability token not valid for this route` — this core predates agent admin
   access; the user must use the admin dashboard.

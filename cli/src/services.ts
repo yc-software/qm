@@ -1,3 +1,5 @@
+import { cliVersion } from "./manifest.ts";
+
 export const SERVICE_NAMES = ["core", "web-ui", "admin", "portal", "auth"] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 
@@ -97,7 +99,10 @@ export function orgEnv(
   brand?: BrandEnv,
 ): Record<string, string> {
   const base = publicUrl.replace(/\/$/, "");
-  const identity: Record<string, string> = service === "core" ? { ORG_ID: orgId } : { CORE_ORG_ID: orgId };
+  const identity: Record<string, string> = {
+    ...(service === "core" ? { ORG_ID: orgId } : { CORE_ORG_ID: orgId }),
+    ...(service === "admin" ? { QM_VERSION: cliVersion() } : {}),
+  };
   const webUiUrl = base;
   if (service === "core") {
     return {

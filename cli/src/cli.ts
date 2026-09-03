@@ -18,6 +18,7 @@ import { HOSTING_PROVIDER_IDS, hostingProviderChoices, isTarget, type Target } f
 import { type LogOpts } from "./services.ts";
 import { runInit } from "./commands/init.ts";
 import { runSetup } from "./commands/setup.ts";
+import { runUpdate } from "./commands/update.ts";
 import { runSandboxBuild } from "./commands/sandbox.ts";
 import { runChecks, runCheckCommand } from "./commands/check.ts";
 import { assertNodeEngine } from "./preflight.ts";
@@ -119,6 +120,8 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
                                            and only the chosen transport's keys are scaffolded)
   setup [path]                             interactive wizard: scaffold if needed, then walk the
                                            missing secrets with per-provider instructions
+  update [--yes] [--version <version>]     check for a QM release outside the seven-day cooldown;
+                                           --yes pins it exactly and reconciles the deployment
   up                                       build images and bring the deployment up
      --build-from[=<qm-repo>]              build from local Dockerfiles instead of pulling
      --dry-run                             resolve the config + report the plan, change nothing
@@ -273,6 +276,23 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectUnknownFlags(flags, []);
       rejectExtraPositionals(positionals, 1);
       await runSetup({ dir: positionals[0] !== undefined ? resolve(positionals[0]) : resolve(process.cwd()) });
+      return;
+    }
+
+    case "update": {
+      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "yes", "version"]);
+      rejectExtraPositionals(positionals, 0);
+      const requestedVersion = strFlag(flags, "version");
+      const ctx = deployContext(flags);
+      runUpdate({
+        configDir: ctx.configDir,
+        configPath: ctx.configPath,
+        sandboxDir: ctx.sandboxDir,
+        ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
+        target: ctx.target,
+        yes: boolFlag(flags, "yes"),
+        ...(requestedVersion ? { version: requestedVersion } : {}),
+      });
       return;
     }
 

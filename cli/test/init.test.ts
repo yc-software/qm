@@ -103,6 +103,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.match(manifest, /^ {2}name: qm$/m);
     assert.match(manifest, /^ {4}display_name: qm$/m);
     assert.equal(existsSync(join(dir, "slack-sso-manifest.yml")), false);
+    assert.equal(existsSync(join(dir, ".github", "workflows", "qm-update.yml")), false);
 
     const skill = readFileSync(join(dir, "sandbox", "skills", "greet", "SKILL.md"), "utf8");
     assert.match(skill, /name: greet/);
@@ -175,6 +176,25 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
       assert.ok(env.split("\n").includes(line), `.env.example should offer ${line}`);
     }
     assert.ok(existsSync(join(dir, "slack-app-manifest.yml")), "Slack manifest is scaffolded on fly too");
+    const updater = readFileSync(join(dir, ".github", "workflows", "qm-update.yml"), "utf8");
+    assert.match(updater, /workflow_dispatch/);
+    assert.match(updater, /update --version "\$VERSION"/);
+    assert.match(updater, /VERSION: \$\{\{ inputs\.version \}\}/);
+    assert.match(updater, /--version "\$VERSION"/);
+    assert.doesNotMatch(updater, /run:.*\$\{\{ inputs\./);
+    assert.match(updater, /git fetch origin/);
+    assert.match(updater, /git rebase "origin\/\$GITHUB_REF_NAME"/);
+    assert.match(updater, /for attempt in 1 2 3 4 5/);
+    assert.ok(updater.indexOf("Record the pinned release") < updater.indexOf("Install and deploy QM"));
+    assert.match(
+      updater,
+      /if: steps\.deployment\.outputs\.target == 'fly'\n\s+uses: superfly\/flyctl-actions\/setup-flyctl@[0-9a-f]{40}/,
+    );
+    assert.ok(updater.indexOf("setup-flyctl") < updater.indexOf("Install and deploy QM"));
+    assert.match(updater, /cancel-in-progress: false/);
+    assert.match(updater, /contents: write/);
+    assert.match(updater, /Docker browser updates require a self-hosted deployment workflow\./);
+    assert.ok(updater.indexOf('update --version "$VERSION"') < updater.indexOf("npm install --save-exact"));
     assert.equal(existsSync(join(dir, "slack-sso-manifest.yml")), false);
     for (const line of ["# OIDC_CLIENT_ID=", "# OIDC_CLIENT_SECRET=", "# PORTAL_EXPECTED_TEAM_ID="]) {
       assert.ok(env.split("\n").includes(line), `external-IdP secret ${line} stays documented but unrequired`);
@@ -525,7 +545,9 @@ test("init --target aws vendors a contract-valid Terraform deployment", () => {
     const tfvars = readFileSync(tfvarsPath, "utf8");
     assert.match(tfvars, /public_url\s*= "https:\/\/agents\.globex\.example"/);
     assert.match(tfvars, /github_repository\s*= "globex\/deploy"/);
-    assert.ok(!existsSync(join(dir, ".github")), "init does not create deployment automation");
+    const updater = readFileSync(join(dir, ".github", "workflows", "qm-update.yml"), "utf8");
+    assert.match(updater, /aws-actions\/configure-aws-credentials@[0-9a-f]{40}/);
+    assert.doesNotMatch(updater, /globex\/deploy/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

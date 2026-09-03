@@ -7,6 +7,7 @@ primary_region = "sjc"
   CORE_API_URL = "http://qm-core.internal:8080"
   CORE_ORG_ID = "acme"
   ADMIN_BASE_PATH = "/admin"
+  QM_VERSION = "0.1.6"
 
 [[vm]]
   size = "shared-cpu-1x"

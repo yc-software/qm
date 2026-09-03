@@ -242,6 +242,158 @@
         width: min(var(--maxw), 100%);
         margin: 0 auto;
       }
+      .release-alert {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        margin: 0 0 20px;
+        padding: 14px 16px;
+        border: 1px solid #b2ddff;
+        border-radius: 10px;
+        background: #eff8ff;
+        color: #0b4a6f;
+      }
+      .release-alert[data-tone="success"] {
+        border-color: #abefc6;
+        background: #ecfdf3;
+        color: #05603a;
+      }
+      .release-alert[data-tone="success"] .release-alert-mark {
+        background: #067647;
+      }
+      .release-alert[data-tone="success"] .release-alert-copy strong {
+        color: #054f31;
+      }
+      .release-alert[data-tone="danger"] {
+        border-color: #fecdca;
+        background: #fef3f2;
+        color: #912018;
+      }
+      .release-alert[data-tone="danger"] .release-alert-mark {
+        background: #b42318;
+      }
+      .release-alert[data-tone="danger"] .release-alert-copy strong {
+        color: #7a271a;
+      }
+      .release-alert-main {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        min-width: 0;
+      }
+      .release-alert-mark {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        background: #0b4a6f;
+        color: #fff;
+        font-size: 17px;
+        font-weight: 700;
+        line-height: 1;
+      }
+      .release-alert-copy {
+        min-width: 0;
+      }
+      .release-alert-copy strong {
+        display: block;
+        color: #073b59;
+        font-size: 14px;
+        line-height: 1.35;
+      }
+      .release-alert-copy span {
+        display: block;
+        margin-top: 2px;
+        font-size: 12.5px;
+        line-height: 1.45;
+      }
+      .release-alert-copy code {
+        display: inline-block;
+        margin-top: 7px;
+        color: #073b59;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+        user-select: all;
+      }
+      .release-alert-state {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 7px;
+        color: currentColor;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .release-alert-state.busy::before {
+        width: 11px;
+        height: 11px;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 50%;
+        content: "";
+        animation: update-spin 700ms linear infinite;
+      }
+      @keyframes update-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .release-alert-state.busy::before {
+          animation: none;
+        }
+      }
+      .release-alert-actions {
+        display: flex;
+        align-items: center;
+        flex: 0 0 auto;
+        gap: 8px;
+      }
+      .release-alert-actions .header-button {
+        border-color: #7cd4fd;
+        background: #fff;
+        color: #0b4a6f;
+      }
+      .release-alert-actions .primary {
+        min-height: 34px;
+        background: #0b4a6f;
+      }
+      .release-alert-actions .primary:hover {
+        background: #073b59;
+      }
+      .release-alert[data-tone="success"] .release-alert-actions .primary {
+        background: #067647;
+      }
+      .release-alert[data-tone="danger"] .release-alert-actions .primary {
+        background: #b42318;
+      }
+      .update-dialog-eyebrow {
+        margin: 0 0 5px;
+        color: #026aa2;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .update-dialog-note,
+      .update-dialog-error {
+        margin: 14px 0 0;
+        padding: 10px 12px;
+        border: 1px solid #b2ddff;
+        border-radius: 8px;
+        background: #eff8ff;
+        color: #0b4a6f;
+        font-size: 12.5px;
+      }
+      .update-dialog-error {
+        border-color: #fecdca;
+        background: #fef3f2;
+        color: #912018;
+      }
       .history-view .admin-main {
         padding-top: 20px;
       }
@@ -1364,6 +1516,9 @@
         font-variant-numeric: tabular-nums;
       }
       .hidden {
+        display: none;
+      }
+      .release-alert .hidden {
         display: none;
       }
 
@@ -3551,6 +3706,15 @@
           padding: 18px max(14px, env(safe-area-inset-right)) calc(56px + env(safe-area-inset-bottom))
             max(14px, env(safe-area-inset-left));
         }
+        .release-alert {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .release-alert-actions {
+          flex-wrap: wrap;
+          padding-inline-start: 42px;
+        }
         .shellbar {
           top: calc(var(--header-total-h) + 61px);
         }
@@ -3856,6 +4020,27 @@
       <section class="admin-main" aria-label="Admin content">
         <div class="admin-inner">
           <div class="shellbar" id="shellbar"></div>
+
+          <section class="release-alert hidden" id="release-alert" aria-live="polite">
+            <div class="release-alert-main">
+              <span class="release-alert-mark" id="release-alert-mark" aria-hidden="true">↑</span>
+              <div class="release-alert-copy">
+                <strong id="release-alert-title"></strong>
+                <span id="release-alert-detail"></span>
+                <code id="release-alert-command"></code>
+                <span class="release-alert-state hidden" id="release-alert-state"></span>
+              </div>
+            </div>
+            <div class="release-alert-actions">
+              <a class="header-button" id="release-alert-notes" target="_blank" rel="noopener noreferrer"
+                >Release notes ↗</a
+              >
+              <a class="header-button hidden" id="release-alert-run" target="_blank" rel="noopener noreferrer"
+                >View deployment ↗</a
+              >
+              <button class="primary" id="release-alert-action" type="button">Review update</button>
+            </div>
+          </section>
 
           <div id="view-onboarding" class="hidden">
             <div class="setup-head">
@@ -4981,6 +5166,35 @@
       </div>
     </dialog>
 
+    <dialog class="review-dialog" id="update-review" aria-labelledby="update-review-title">
+      <div class="review-dialog-head">
+        <p class="update-dialog-eyebrow">System update</p>
+        <h2 id="update-review-title">Update QM</h2>
+        <p>The selected release is locked before deployment starts.</p>
+      </div>
+      <div class="review-dialog-body">
+        <dl class="review-dialog-facts">
+          <dt>Installed</dt>
+          <dd id="update-review-current"></dd>
+          <dt>Updating to</dt>
+          <dd id="update-review-target"></dd>
+          <dt>Safety window</dt>
+          <dd>Passed the seven-day dependency cooldown</dd>
+          <dt>Runner</dt>
+          <dd>GitHub Actions</dd>
+        </dl>
+        <p class="update-dialog-note">
+          QM will install the exact release, deploy its pinned runtime images, and record progress here. Active sessions
+          may reconnect while services restart.
+        </p>
+        <p class="update-dialog-error hidden" id="update-review-error" aria-live="polite"></p>
+      </div>
+      <div class="review-dialog-foot">
+        <button type="button" id="update-review-cancel">Cancel</button
+        ><button type="button" class="primary" id="update-review-confirm">Start update</button>
+      </div>
+    </dialog>
+
     <script>
       const $ = (id) => document.getElementById(id);
       const EFFECTS = ["allow", "deny", "require_approval"];
@@ -5077,6 +5291,194 @@
         } catch {}
         return { ok: res.ok, status: res.status, data };
       }
+
+      async function copyText(value) {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(value);
+          return true;
+        }
+        const input = document.createElement("textarea");
+        input.value = value;
+        input.setAttribute("readonly", "");
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        try {
+          return document.execCommand("copy");
+        } finally {
+          input.remove();
+        }
+      }
+
+      let releaseStatus = null;
+      let updatePollTimer = null;
+
+      function updateJobOpen(job) {
+        return job && ["dispatching", "queued", "running"].includes(job.state);
+      }
+
+      function renderUpdateAlert(status) {
+        const alert = $("release-alert");
+        const job = status?.updater?.job;
+        const action = $("release-alert-action");
+        const command = $("release-alert-command");
+        const state = $("release-alert-state");
+        const run = $("release-alert-run");
+        alert.removeAttribute("data-tone");
+        state.className = "release-alert-state hidden";
+        command.classList.add("hidden");
+        run.classList.add("hidden");
+        action.disabled = false;
+        $("release-alert-notes").href = status?.releaseUrl || "#";
+        const offerUpdate = (label) => {
+          action.classList.remove("hidden");
+          if (status.updater?.available) {
+            action.textContent = label;
+            return;
+          }
+          command.textContent = status.updateCommand;
+          command.classList.remove("hidden");
+          action.textContent = "Copy update command";
+        };
+
+        if (job && job.state === "succeeded" && Date.now() - job.updatedAt < 15 * 60 * 1000) {
+          alert.dataset.tone = "success";
+          $("release-alert-title").textContent = "QM " + job.targetVersion + " deployed";
+          $("release-alert-detail").textContent = "The update completed successfully. Reload this page to use it.";
+          $("release-alert-mark").textContent = "✓";
+          state.textContent = job.detail || "Deployment complete";
+          state.classList.remove("hidden");
+          action.classList.add("hidden");
+        } else if (job && job.state === "failed") {
+          alert.dataset.tone = "danger";
+          $("release-alert-title").textContent = "QM update needs attention";
+          $("release-alert-detail").textContent = job.detail || "The deployment workflow did not complete.";
+          $("release-alert-mark").textContent = "!";
+          action.classList.add("hidden");
+          if (status.updateAvailable) offerUpdate("Try update again");
+        } else if (updateJobOpen(job)) {
+          $("release-alert-title").textContent = "Updating QM to " + job.targetVersion;
+          $("release-alert-detail").textContent = job.detail || "Preparing the deployment workflow.";
+          $("release-alert-mark").textContent = "↑";
+          state.textContent = job.state === "running" ? "Deploying" : "Queued";
+          state.className = "release-alert-state busy";
+          action.textContent = "Update in progress";
+          action.disabled = true;
+          action.classList.remove("hidden");
+        } else if (status?.updateAvailable) {
+          $("release-alert-title").textContent = "QM " + status.latestVersion + " is ready";
+          $("release-alert-detail").textContent =
+            "Running " + status.currentVersion + ". This release has passed QM’s seven-day safety window.";
+          $("release-alert-mark").textContent = "↑";
+          offerUpdate("Review update");
+        } else {
+          alert.classList.add("hidden");
+          return;
+        }
+
+        const runUrl = job?.runUrl || (updateJobOpen(job) ? status.updater?.actionsUrl : null);
+        if (runUrl) {
+          run.href = runUrl;
+          run.classList.remove("hidden");
+        }
+        alert.classList.remove("hidden");
+      }
+
+      function scheduleUpdatePoll(delay = updateJobOpen(releaseStatus?.updater?.job) ? 4000 : 0) {
+        clearTimeout(updatePollTimer);
+        if (delay) updatePollTimer = setTimeout(loadUpdateAlert, delay);
+      }
+
+      function waitForUpdateReconnect() {
+        const active = updateJobOpen(releaseStatus?.updater?.job);
+        if (!releaseStatus) $("release-alert").classList.add("hidden");
+        else if (active) {
+          $("release-alert-detail").textContent = "Services are restarting. Reconnecting to the update status…";
+        }
+        scheduleUpdatePoll(active ? 4000 : 60000);
+      }
+
+      async function loadUpdateAlert() {
+        const alert = $("release-alert");
+        try {
+          const result = await api("GET", "/api/update");
+          if (!result.ok || !result.data) {
+            if (result.status === 204 || result.status === 401 || result.status === 403) {
+              alert.classList.add("hidden");
+              return;
+            }
+            waitForUpdateReconnect();
+            return;
+          }
+          releaseStatus = result.data;
+          renderUpdateAlert(releaseStatus);
+          scheduleUpdatePoll();
+        } catch {
+          waitForUpdateReconnect();
+        }
+      }
+
+      $("release-alert-action").onclick = async () => {
+        if (!releaseStatus?.updater?.available) {
+          const button = $("release-alert-action");
+          const original = button.textContent;
+          button.disabled = true;
+          try {
+            const copied = await copyText($("release-alert-command").textContent);
+            button.textContent = copied ? "Copied" : "Select and copy the command";
+          } catch {
+            button.textContent = "Select and copy the command";
+          } finally {
+            setTimeout(() => {
+              button.textContent = original;
+              button.disabled = false;
+            }, 3000);
+          }
+          return;
+        }
+        $("update-review-current").textContent = "QM " + releaseStatus.currentVersion;
+        $("update-review-target").textContent = "QM " + releaseStatus.latestVersion;
+        $("update-review-error").classList.add("hidden");
+        $("update-review").showModal();
+        $("update-review-cancel").focus();
+      };
+
+      $("update-review-cancel").onclick = () => $("update-review").close();
+      $("update-review").addEventListener("cancel", (event) => {
+        event.preventDefault();
+        $("update-review").close();
+      });
+      $("update-review-confirm").onclick = async () => {
+        const button = $("update-review-confirm");
+        const error = $("update-review-error");
+        button.disabled = true;
+        button.textContent = "Starting…";
+        error.classList.add("hidden");
+        try {
+          const result = await api("POST", "/api/update", { version: releaseStatus.latestVersion });
+          if (result.data?.error === "version_changed" && result.data.status) {
+            releaseStatus = { ...result.data.status, updater: releaseStatus.updater };
+            $("update-review-current").textContent = "QM " + releaseStatus.currentVersion;
+            $("update-review-target").textContent = "QM " + releaseStatus.latestVersion;
+            error.textContent = result.data.message + ". Review the new version, then confirm again.";
+            error.classList.remove("hidden");
+            renderUpdateAlert(releaseStatus);
+            return;
+          }
+          if (!result.ok) throw new Error(result.data?.message || "The update could not be started. Try again.");
+          releaseStatus.updater.job = result.data.job;
+          $("update-review").close();
+          renderUpdateAlert(releaseStatus);
+          scheduleUpdatePoll();
+        } catch (cause) {
+          error.textContent = cause?.message || "The update could not be started. Try again.";
+          error.classList.remove("hidden");
+        } finally {
+          button.textContent = "Start update";
+          button.disabled = false;
+        }
+      };
 
       async function openWebUiAs(target) {
         if (!target) return;
@@ -5582,6 +5984,7 @@
         }
         $("who").classList.remove("hidden");
         showView("app-view", "Signed in as " + me.data.principal);
+        void loadUpdateAlert();
 
         if (!new URLSearchParams(location.search).get("scope")) scope = "org:" + orgId;
         loadScopeDirectory();

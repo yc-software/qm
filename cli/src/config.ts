@@ -668,6 +668,14 @@ function validate(raw: unknown, path: string): QmConfig {
       );
     }
   }
+  if (env.admin?.QM_VERSION !== undefined) {
+    throw new CliError(`${path}: "env.admin.QM_VERSION" is managed by the deployment target and cannot be overridden`);
+  }
+  if (secretEnv.admin?.QM_VERSION !== undefined) {
+    throw new CliError(
+      `${path}: "secretEnv.admin.QM_VERSION" is managed by the deployment target and cannot be overridden`,
+    );
+  }
   const portalMountsAdmin = services.includes("portal") && services.includes("admin");
   if (portalMountsAdmin && env.admin?.ADMIN_BASE_PATH !== undefined && env.admin.ADMIN_BASE_PATH !== "/admin") {
     throw new CliError(`${path}: env.admin.ADMIN_BASE_PATH must be "/admin" when portal and admin are enabled`);

@@ -18,6 +18,8 @@ import {
 import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
+import { GitHubResponseError, createGitHubUpdater, githubUpdaterConfig } from "./github-updater.ts";
+import { compareVersions, createUpdateChecker, fetchUpdateStatus } from "./update-check.ts";
 
 const PORT = portFromEnv(8090);
 const ADMIN_BASE_PATH = (process.env.ADMIN_BASE_PATH ?? "").replace(/\/$/, "");
@@ -79,6 +81,22 @@ function brandedShell(branding: OrgBranding): { html: string; gzip: Buffer; etag
 }
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
+const CURRENT_QM_VERSION = process.env.QM_VERSION;
+const checkForUpdate = createUpdateChecker(CURRENT_QM_VERSION);
+const updaterConfig = githubUpdaterConfig(process.env);
+const updater = updaterConfig ? createGitHubUpdater(updaterConfig) : null;
+
+interface UpdateJob {
+  id: string;
+  requestedBy: string;
+  currentVersion: string;
+  targetVersion: string;
+  state: "dispatching" | "queued" | "running" | "succeeded" | "failed";
+  detail?: string;
+  runUrl?: string;
+  createdAt: number;
+  updatedAt: number;
+}
 
 function acceptsGzip(req: IncomingMessage): boolean {
   const ae = req.headers["accept-encoding"];
@@ -148,6 +166,79 @@ async function forward(
     console.error("[admin] core request failed:", String(err));
     json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
+}
+
+async function coreJson(
+  principal: string,
+  method: "GET" | "POST" | "PATCH",
+  corePath: string,
+  value?: unknown,
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const body = value === undefined ? "" : JSON.stringify(value);
+  const response = await fetch(`${CORE}${corePath}`, {
+    method,
+    headers: {
+      ...signedHeaders(method, corePath, body),
+      "x-admin-actor": `${principal}@${ORG}`,
+      ...portalIdentityHeader(),
+    },
+    ...(body ? { body } : {}),
+    signal: AbortSignal.timeout(5_000),
+  });
+  const text = await response.text();
+  let data: Record<string, unknown>;
+  try {
+    data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    data = { message: text };
+  }
+  return { ok: response.ok, status: response.status, data };
+}
+
+function updateJob(value: unknown): UpdateJob | null {
+  if (!value || typeof value !== "object") return null;
+  const job = value as Partial<UpdateJob>;
+  if (
+    typeof job.id !== "string" ||
+    typeof job.currentVersion !== "string" ||
+    typeof job.targetVersion !== "string" ||
+    typeof job.state !== "string" ||
+    typeof job.createdAt !== "number" ||
+    typeof job.updatedAt !== "number"
+  ) {
+    return null;
+  }
+  return job as UpdateJob;
+}
+
+async function patchUpdateJob(
+  principal: string,
+  job: UpdateJob,
+  patch: { state: UpdateJob["state"]; detail?: string; runUrl?: string },
+): Promise<UpdateJob> {
+  const response = await coreJson(principal, "PATCH", `/v1/admin/updates/${encodeURIComponent(job.id)}`, patch);
+  return (response.ok && updateJob(response.data.job)) || job;
+}
+
+const UPDATE_START_WINDOW_MS = 10 * 60_000;
+const UPDATE_RESULT_WINDOW_MS = 90 * 60_000;
+
+async function reconcileUpdateJob(principal: string, job: UpdateJob): Promise<UpdateJob> {
+  if (job.state !== "dispatching" && job.state !== "queued" && job.state !== "running") return job;
+  const fail = (detail: string) => patchUpdateJob(principal, job, { state: "failed", detail });
+  if (!updater) return fail("Browser updater is no longer configured");
+  const run = await updater.findRun(job.id, job.runUrl);
+  if (run) {
+    const unchanged = run.state === job.state && run.detail === job.detail && run.runUrl === job.runUrl;
+    return unchanged ? job : patchUpdateJob(principal, job, run);
+  }
+  if (Date.now() - job.updatedAt > UPDATE_RESULT_WINDOW_MS) {
+    return fail("The deployment workflow did not report a result");
+  }
+  if (job.state !== "running" && Date.now() - job.createdAt > UPDATE_START_WINDOW_MS) {
+    return fail("The deployment workflow did not start");
+  }
+  return job;
 }
 
 async function forwardDownload(res: ServerResponse, principal: string, corePath: string): Promise<void> {
@@ -370,6 +461,130 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       "set-cookie": "admin=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax",
     });
     return void res.end(JSON.stringify({ ok: true }));
+  }
+
+  if (method === "GET" && pathname === "/api/update") {
+    const p = cookiePrincipal(req);
+    if (!p) return json(res, 401, { error: "signed_out" });
+    const who = await coreWhoami(p);
+    if (!who) return json(res, 502, { error: "core_unreachable", message: "could not verify admin status" });
+    if (!who.isAdmin) return json(res, 403, { error: "forbidden" });
+    let job: UpdateJob | null = null;
+    let durable = false;
+    try {
+      const latest = await coreJson(p, "GET", "/v1/admin/updates/latest");
+      durable = latest.ok;
+      job = updateJob(latest.data.job);
+      if (job) job = await reconcileUpdateJob(p, job);
+      if (
+        job?.state === "failed" &&
+        CURRENT_QM_VERSION &&
+        compareVersions(job.targetVersion, CURRENT_QM_VERSION) <= 0
+      ) {
+        job = null;
+      }
+    } catch (error) {
+      console.warn(`[admin] update job status failed: ${errMessage(error)}`);
+    }
+    const status = await checkForUpdate();
+    const release =
+      status ??
+      (job
+        ? {
+            currentVersion: job.currentVersion,
+            latestVersion: job.targetVersion,
+            newestVersion: job.targetVersion,
+            updateAvailable: false,
+            updateCommand: `npm exec qm -- update --yes --version ${job.targetVersion}`,
+            releaseUrl: `https://github.com/yc-software/qm/releases/tag/v${encodeURIComponent(job.targetVersion)}`,
+          }
+        : null);
+    if (!release) {
+      res.writeHead(204);
+      return void res.end();
+    }
+    return json(res, 200, {
+      ...release,
+      updater: {
+        available: Boolean(updater && durable),
+        ...(updater ? { actionsUrl: updater.actionsUrl } : {}),
+        ...(job ? { job } : {}),
+      },
+    });
+  }
+
+  if (method === "POST" && pathname === "/api/update") {
+    const p = cookiePrincipal(req);
+    if (!p) return json(res, 401, { error: "signed_out" });
+    const who = await coreWhoami(p);
+    if (!who) return json(res, 502, { error: "core_unreachable", message: "could not verify admin status" });
+    if (!who.isAdmin) return json(res, 403, { error: "forbidden" });
+    if (!updater || !CURRENT_QM_VERSION) {
+      return json(res, 503, { error: "updater_unavailable", message: "Browser updates are not configured" });
+    }
+    let requestedVersion: string;
+    try {
+      requestedVersion = String((JSON.parse(await readBody(req)) as { version?: unknown }).version ?? "");
+    } catch {
+      return json(res, 400, { error: "bad_request", message: "A version is required" });
+    }
+    let status;
+    try {
+      status = await fetchUpdateStatus(CURRENT_QM_VERSION);
+    } catch (error) {
+      console.warn(`[admin] update release check failed: ${errMessage(error)}`);
+      return json(res, 502, { error: "registry_unreachable", message: "the npm registry could not be reached" });
+    }
+    if (!status.updateAvailable) {
+      return json(res, 409, { error: "already_current", message: `QM ${CURRENT_QM_VERSION} is already current` });
+    }
+    if (requestedVersion !== status.latestVersion) {
+      return json(res, 409, {
+        error: "version_changed",
+        message: `The eligible release is now QM ${status.latestVersion}`,
+        status,
+      });
+    }
+    let created;
+    try {
+      created = await coreJson(p, "POST", "/v1/admin/updates", {
+        currentVersion: CURRENT_QM_VERSION,
+        targetVersion: status.latestVersion,
+      });
+    } catch (error) {
+      console.warn(`[admin] update job creation failed: ${errMessage(error)}`);
+      return json(res, 502, { error: "core_unreachable", message: "core unavailable" });
+    }
+    const job = updateJob(created.data.job);
+    if (!created.ok || !job) return json(res, created.status, created.data);
+    let dispatchedRun;
+    try {
+      dispatchedRun = await updater.dispatch({ id: job.id, version: job.targetVersion, requestedBy: p });
+    } catch (error) {
+      if (error instanceof GitHubResponseError && error.status >= 400 && error.status < 500) {
+        const rejected = await patchUpdateJob(p, job, { state: "failed", detail: error.message });
+        return json(res, 202, { job: rejected, actionsUrl: updater.actionsUrl });
+      }
+      console.warn(`[admin] update dispatch result was not confirmed: ${errMessage(error)}`);
+      try {
+        dispatchedRun = await updater.findRun(job.id);
+      } catch (reconcileError) {
+        console.warn(`[admin] update dispatch reconciliation failed: ${errMessage(reconcileError)}`);
+      }
+      if (!dispatchedRun) {
+        const confirming = await patchUpdateJob(p, job, {
+          state: "dispatching",
+          detail: "Confirming the deployment request with GitHub Actions",
+        });
+        return json(res, 202, { job: confirming, actionsUrl: updater.actionsUrl });
+      }
+    }
+    const queued = await patchUpdateJob(
+      p,
+      job,
+      dispatchedRun ?? { state: "queued", detail: "Waiting for the deployment runner" },
+    );
+    return json(res, 202, { job: queued, actionsUrl: updater.actionsUrl });
   }
 
   const principal = cookiePrincipal(req);

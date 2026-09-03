@@ -181,6 +181,15 @@ test("listen ports are managed consistently across deployment targets", () => {
   });
 });
 
+test("the admin release version is managed by QM", () => {
+  withConfig({ env: { admin: { QM_VERSION: "9.9.9" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /env\.admin\.QM_VERSION.*managed/);
+  });
+  withConfig({ secretEnv: { admin: { QM_VERSION: "QM_VERSION_SECRET" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /secretEnv\.admin\.QM_VERSION.*managed/);
+  });
+});
+
 test("portal-mounted admin uses the portal's fixed /admin route", () => {
   withConfig({ services: ["core", "admin", "portal"], env: { admin: { ADMIN_BASE_PATH: "/ops" } } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /env\.admin\.ADMIN_BASE_PATH.*must be "\/admin"/);

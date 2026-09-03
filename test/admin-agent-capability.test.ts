@@ -18,6 +18,7 @@ import {
   CONTROL_PLANE_AUD,
   EGRESS_PROXY_AUD,
 } from "../src/auth/capability-token.ts";
+import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
@@ -50,6 +51,7 @@ function start() {
     errors: built.errors,
     keychain,
     signingSecret: SECRET,
+    ...(built.updateJobs ? { updateJobs: built.updateJobs } : {}),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -276,6 +278,43 @@ test("grant management refuses agent tokens outright — promote/revoke stays in
 
     const u9 = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": await capFor("U9") } });
     assert.equal(((await u9.json()) as any).isAdmin, false, "the refused promote really didn't land");
+  } finally {
+    await s.close();
+  }
+});
+
+test("QM updates refuse agent tokens outright — starting or steering a deployment stays in the portal", async () => {
+  const s = start();
+  try {
+    const cap = await capFor("admin-alice");
+    const body = JSON.stringify({ currentVersion: "0.1.9", targetVersion: "0.2.0" });
+    const attempts = [
+      ["GET", "/v1/admin/updates/latest", undefined],
+      ["POST", "/v1/admin/updates", body],
+      ["PATCH", "/v1/admin/updates/job-1", JSON.stringify({ state: "running" })],
+    ] as const;
+    for (const [method, path, payload] of attempts) {
+      const response = await fetch(`${s.base}${path}`, {
+        method,
+        headers: { "x-agent-capability": cap, "content-type": "application/json" },
+        body: payload,
+      });
+      assert.equal(response.status, 403, `${method} ${path} refuses the agent token`);
+      assert.equal(
+        ((await response.json()) as { message: string }).message,
+        "QM updates are portal-only — the agent cannot start or alter a deployment",
+      );
+    }
+
+    const portal = await fetch(`${s.base}/v1/admin/updates`, {
+      method: "POST",
+      headers: signedRequestHeaders(SECRET, "POST", "/v1/admin/updates", body, {
+        "x-admin-actor": "admin-alice@default-org",
+        "content-type": "application/json",
+      }),
+      body,
+    });
+    assert.equal(portal.status, 202, "the portal's source-authed door still dispatches updates");
   } finally {
     await s.close();
   }

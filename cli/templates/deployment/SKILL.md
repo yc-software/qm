@@ -20,6 +20,10 @@ only once the operator has chosen the broker.
 
 Use the repository's installed `@yc-software/qm` dependency through
 `npm exec qm -- <command>`. Do not require or clone the QM source repository.
+When Admin reports a new release, prefer its configured browser workflow. Its
+GitHub Actions run freezes the eligible version, updates the exact package pin,
+reconciles the deployment, and records the lockfile. If browser updates are not
+configured, run `npm exec qm -- update --yes` from the deployment repository.
 Do not stop at infrastructure health: complete the acceptance checks and return
 the handoff required by `deployment.md`. A web response without a generated
 sidebar title is not a completed deployment.

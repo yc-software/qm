@@ -44,6 +44,9 @@ function capabilityAdminDenied(method: string, pathname: string, url: URL, claim
   if (pathname.startsWith("/v1/admin/grants")) {
     return "admin grant changes (promote/revoke) are portal-only — the agent cannot manage who governs the org";
   }
+  if (pathname.startsWith("/v1/admin/updates")) {
+    return "QM updates are portal-only — the agent cannot start or alter a deployment";
+  }
   if (pathname.startsWith("/v1/admin/impersonate")) {
     return "impersonating a user is portal-only — the agent cannot act as another person";
   }

@@ -91,6 +91,11 @@ test("/api/me with cookie admin=U-rando → 200 (not 401) with isAdmin:false", a
   assert.equal(body.isAdmin, false);
 });
 
+test("/api/update is admin-only and stays empty when release identity is unavailable", async () => {
+  assert.equal((await api("/api/update", "admin=U-rando")).status, 403);
+  assert.equal((await api("/api/update", "admin=U-admin")).status, 204);
+});
+
 test("POST /api/login is removed → 404", async () => {
   const r = await fetch(`${base}/api/login`, {
     method: "POST",

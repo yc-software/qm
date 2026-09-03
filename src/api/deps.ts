@@ -54,6 +54,7 @@ import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
+import type { UpdateJobStore } from "../updates/update-job-store.ts";
 
 export interface ServerDeps {
   production?: boolean;
@@ -103,6 +104,7 @@ export interface ServerDeps {
   sessions?: SessionStore;
   screenSecurity?: SecurityScreenProbe;
   auditLog?: AuditLog;
+  updateJobs?: UpdateJobStore;
   errors?: ErrorLog;
   metrics?: MetricsSink;
   crons?: CronStore;

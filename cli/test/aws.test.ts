@@ -30,7 +30,7 @@ import type { QmConfig } from "../src/config.ts";
 import { computedSecrets } from "../src/secrets.ts";
 import { awsObjectStoreBucket } from "../src/terraform.ts";
 import { withAwsLease } from "../src/aws-lease.ts";
-import { manifestRef } from "../src/manifest.ts";
+import { cliVersion, manifestRef } from "../src/manifest.ts";
 
 process.env.QM_AWS_ROLLOUT_POLL_MS = "5";
 process.env.QM_AWS_LIVE_PROBE_POLL_MS = "5";
@@ -442,6 +442,7 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
     REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
     WEB_UI_PUBLIC_URL: "https://agent.acme.example",
   });
+  assert.equal(serviceEnvironment(config, "admin").QM_VERSION, cliVersion());
   const core = serviceEnvironment(config, "core");
   assert.equal(core.ORG_ID, "acme");
   assert.equal(core.PUBLIC_WEB_URL, "https://agent.acme.example");

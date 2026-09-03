@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfigAt, type QmConfig } from "../src/config.ts";
 import { derivedTomlFor } from "../src/backends/fly.ts";
 import { orgEnv, runnableServices } from "../src/services.ts";
+import { cliVersion } from "../src/manifest.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -26,6 +27,7 @@ test("web-ui serves at the root in both shapes — publicUrl IS the web-ui URL (
   assert.equal(orgEnv("web-ui", "acme", url, true).WEB_UI_PUBLIC_URL, url);
   assert.equal(orgEnv("admin", "acme", url, true).ADMIN_BASE_PATH, "/admin");
   assert.equal(orgEnv("admin", "acme", url, false).ADMIN_BASE_PATH, undefined);
+  assert.equal(orgEnv("admin", "acme", url, true).QM_VERSION, cliVersion());
 });
 
 test("brand env reaches core as ORG_BRAND_* and auth as AUTH_BRAND_NAME, and only when configured", () => {

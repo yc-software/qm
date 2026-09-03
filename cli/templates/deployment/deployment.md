@@ -85,6 +85,39 @@ test -f package-lock.json && npm ci || npm install
 npm exec qm -- version
 ```
 
+After Admin reports a new release, update the exact package pin and deploy its
+runtime images in one command:
+
+```bash
+npm exec qm -- update --yes
+```
+
+Fly and AWS deployments also include `.github/workflows/qm-update.yml`. To make
+Admin's update button deploy without a command, configure the admin service with:
+
+```json
+"env": {
+  "admin": {
+    "QM_UPDATE_GITHUB_REPOSITORY": "owner/deployment-repository",
+    "QM_UPDATE_GITHUB_REF": "main"
+  }
+},
+"secretEnv": {
+  "admin": {
+    "QM_UPDATE_GITHUB_TOKEN": "QM_UPDATE_GITHUB_TOKEN"
+  }
+}
+```
+
+Use a fine-grained token limited to this deployment repository with Actions
+read/write access. Add `FLY_API_TOKEN` as a repository Actions secret for Fly.
+If the update needs local deployment values, add the gitignored `.env` contents
+as the repository secret `QM_DEPLOY_ENV`. AWS uses the configured GitHub OIDC
+deploy role. Allow Actions to write repository contents: the workflow records
+the exact pin in `package.json` and its lockfile before deploying, so a rerun is
+idempotent. A failed deploy therefore leaves the branch ahead of the running
+version; rerun the workflow or run `npm exec qm -- update --yes` to finish it.
+
 Confirm `.env` is private and ignored before adding credentials:
 
 ```bash

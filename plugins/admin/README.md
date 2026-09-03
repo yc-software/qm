@@ -50,6 +50,13 @@ durable, mutable `admin_grants` store, and this surface derives admin status fro
 that, admins are promoted/revoked at runtime through the Users tab (a redeploy never clobbers
 runtime grants).
 
+`QM_VERSION` enables release checks. Browser deployment additionally requires
+`QM_UPDATE_GITHUB_REPOSITORY` and a fine-grained `QM_UPDATE_GITHUB_TOKEN` with Actions
+read/write access. `QM_UPDATE_GITHUB_REF` defaults to `main` and
+`QM_UPDATE_GITHUB_WORKFLOW` defaults to `qm-update.yml`. Without that integration, Admin
+keeps the exact command fallback. Update jobs are authorized and audited in core and remain
+durable in Postgres while GitHub Actions performs the deployment.
+
 ## How it stays safe
 
 - **The browser never holds an admin credential.** The portal supplies the verified identity in a
@@ -66,6 +73,8 @@ runtime grants).
 
 `GET /` (UI) · `GET /healthz` · `GET /api/me` + `GET /api/whoami` (identity + derived admin
 status) · `POST /api/logout` ·
+`GET /api/update` (eligible release and durable job status for admins) ·
+`POST /api/update` (dispatch the exact reviewed release) ·
 `GET /api/scopes/:scopeId` + `PUT /api/scopes/:scopeId/:resource`
 (`command-policy|soul|egress`) ·
 `GET /api/{metrics|errors|audit|crons|deployments|skills|sessions|runs|files}?scope=` ·
