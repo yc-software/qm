@@ -200,8 +200,8 @@ function buildDock(): DockviewApi {
       guarded.add(group);
       group.model.onWillDrop(holdTileCap);
     }
-    if (sessionDrag) refreshSessionDrag();
     for (const a of groupActions) a.draw();
+    if (sessionDrag) refreshSessionDrag();
     persistSoon();
   });
   api.onDidActivePanelChange((e) => {
@@ -1143,26 +1143,28 @@ class GroupActions implements IHeaderActionsRenderer {
                 </button>
               `,
             )}
-            ${maximized || !soleGroup
-              ? html`
-                  <div class="split-tools-menu-sep" role="separator"></div>
-                  <button
-                    class="session-menu-option"
-                    type="button"
-                    role="menuitem"
-                    @click=${() => {
+            ${
+              maximized || !soleGroup
+                ? html`
+                    <div class="split-tools-menu-sep" role="separator"></div>
+                    <button
+                      class="session-menu-option"
+                      type="button"
+                      role="menuitem"
+                      @click=${() => {
                       this.menuOpen = false;
                       this.draw();
                       if (maximized) props.api.exitMaximized();
                       else props.api.maximize();
                     }}
-                  >
-                    ${icon(maximized ? Shrink : Expand, 15)}<span
-                      >${maximized ? "Restore to grid (Esc)" : "Focus over the grid"}</span
                     >
-                  </button>
-                `
-              : nothing}
+                      ${icon(maximized ? Shrink : Expand, 15)}<span
+                        >${maximized ? "Restore to grid (Esc)" : "Focus over the grid"}</span
+                      >
+                    </button>
+                  `
+                : nothing
+            }
           </div>
         `
       : nothing;
