@@ -98,10 +98,12 @@ test("the curated catalog contains only current model families", () => {
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
+      "gpt-6-astra",
       "openrouter/auto",
     ],
   );
   assert.equal(getRequiredModel("gpt-5.6-sol").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6-astra").contextWindow, 1_050_000);
 });
 
 test("auxiliary models come from the configured base model's own provider", () => {
