@@ -38,7 +38,7 @@ import {
   FORWARD_WEBHOOK_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
+import { coreClaimStore, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import { json, escapeHtml, serveEmojiFavicon } from "../../chassis/src/http.ts";
@@ -813,6 +813,9 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
     limit: PLAYGROUND_MINTS_PER_IP,
     windowS: PLAYGROUND_MINT_WINDOW_S,
     nowMs: Date.now(),
+  }).catch((e) => {
+    if (e instanceof ClaimStoreUnavailableError) return false;
+    throw e;
   });
   if (!allowed) return null;
   const now = Math.floor(Date.now() / 1000);

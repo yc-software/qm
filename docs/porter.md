@@ -21,7 +21,10 @@ Everything below this section is reference and field notes; this is the order th
 actually gets a new operator from zero to a working instance (the deployment workflow's
 agent-facing version lives at `cli/templates/deployment/references/porter.md`). If you are an agent doing
 this deployment: install and prefer the `porter` CLI over raw API calls wherever a
-command exists ([install instructions](https://docs.porter.run/cli/installation)); use
+command exists ([install instructions](https://docs.porter.run/cli/installation) — on
+Homebrew that is the `porter-dev` tap, Homebrew core's `porter` is an unrelated tool, and
+`docker-credential-porter` is a separate checksum-verified binary the tap does not
+install); use
 the operator's browser for the dashboard steps when you have browser access, and
 otherwise hand the operator the exact URL and wait — several steps below cannot be done
 any other way.
@@ -46,17 +49,33 @@ any other way.
 3. **Create the cluster with the sandbox load balancer in the creation contract** —
    sandbox ingress, `sandboxesEnabled`, and the apps root domain all belong in the
    contract the cluster is born with; attaching them later is the wedged-cluster
-   forensics that "Giving published apps stable hostnames" below exists to debug.
-4. **Name the administrator before first boot.** Set `ADMIN_GRANTS=<email>:org_admin`
+   forensics that "Giving published apps stable hostnames" below exists to debug. The
+   Route53 hosted zone for the root domain is yours to create either way (dedicated
+   zone, `NS` delegation in the parent, wildcard record inside — then reconcile; see
+   below), and so is the LoadBalancer in front of the egress proxy ("Forcing sandbox
+   egress through the proxy" — without it egress runs fail-open).
+4. **Provision Postgres and set `DATABASE_URL` before first boot.** Sign-in is not
+   optional here: the auth broker's single-use claim endpoint needs core's durable
+   store, so an instance without a database accepts no sign-ins at all. The Porter
+   path has no `qm`-CLI database provisioning — create a datastore in the dashboard
+   (Datastores tab) or run in-cluster Postgres. A datastore created through the API
+   can come back with `connected_cluster_ids` naming your cluster while its security
+   group still refuses it — verify with a `psql` from a pod before booting, and
+   prefer in-cluster Postgres when in doubt.
+5. **Name the administrator before first boot.** Set `ADMIN_GRANTS=<email>:org_admin`
    on core and the sign-in allowlist (`AUTH_ALLOWED_EMAILS=<email>` — the Helm chart
    bridges it to the portal's `OIDC_ALLOWED_EMAILS`). This is the step the old docs
    never mentioned: with Postgres and no `ADMIN_GRANTS`, the instance boots, everyone
    allowed can sign in, and the admin console is permanently unreachable — there is no
    in-product way to grant the first admin afterwards.
-5. **Build, push, and apply**: images built `--platform linux/amd64`, then
+6. **Build, push, and apply**: images built `--platform linux/amd64` and pushed to
+   repositories that already exist (ECR does not create them on push — create or seed
+   each repository first), then
    `for f in porter/apps/*.yaml; do porter apply -f "$f"; done` (twice — the hostname
-   lands on the second pass), then wire the service URLs per the table below. Verify by
-   signing in as the admin and opening the Admin tab.
+   lands on the second pass), then wire the service URLs per the table below. In the
+   v2 app YAML, `env` belongs at the app level: nested under a service it is silently
+   dropped, and the app boots without its configuration. Verify by signing in as the
+   admin and opening the Admin tab.
 
 ## Hosting the qm surfaces
 
@@ -252,12 +271,17 @@ Once the revision reconciles, `GET
 
 Routing, DNS and TLS all come up on their own, provided the sandbox load balancer was in
 the contract the cluster was created with. Porter reads its `dnsProviderConfig` and
-`rootDomains` and, through the cluster's Route53 pod identity, **creates a dedicated hosted
-zone for the root domain, adds the `NS` delegation for it to the parent zone, and puts the
-wildcard alias record inside it** pointing at the sandbox load balancer. cert-manager's
-DNS-01 challenge then has a zone it can write to, and the wildcard certificate issues by
-itself — a real Let's Encrypt `*.<root domain>` certificate, verified by ordinary clients
-with no `-k`. You do not create the zone, the delegation, or the wildcard record by hand.
+`rootDomains`, but **the hosted zone itself is yours to create** — confirmed against
+Porter's team and a live cluster: even with the sandbox load balancer in the creation
+contract, Porter never creates the zone, the delegation, or the wildcard record. Create a
+dedicated Route53 hosted zone for the root domain, add its `NS` delegation to the parent
+zone, put the wildcard record inside it pointing at the sandbox load balancer, then
+reconcile the cluster (the dashboard's infra **Update**, or re-POST the contract) so Porter
+creates the certificate issuer against the zone. cert-manager's DNS-01 challenge then has a
+zone it can write to, and the wildcard certificate issues — a real Let's Encrypt
+`*.<root domain>` certificate, verified by ordinary clients with no `-k`. A wildcard CNAME
+sitting in the parent zone is not enough: DNS resolves, but there is no delegated zone for
+the challenge and the certificate never issues.
 
 Porter also mints the credentials for it: a per-cluster role
 `porter-cert-manager-route53-<cluster id>` whose inline policy allows
@@ -265,20 +289,15 @@ Porter also mints the credentials for it: a per-cluster role
 plus `GetChange` and `ListHostedZonesByName`. If TLS is not issuing, check that this role
 exists — its absence, not a cert-manager misconfiguration, is the usual cause.
 
-Two things follow. The parent zone must be in the same AWS account the cluster runs in, so
-Porter can write the delegation. And **teardown has to remove what Porter created**: the
-delegated hosted zone and the `NS` record in the parent zone both outlive the cluster.
+Two things follow. The parent zone must be in the same AWS account the cluster runs in.
+And **teardown has to remove what you created**: the delegated hosted zone and the `NS`
+record in the parent zone both outlive the cluster.
 
-This is worth stating plainly because the failure it replaces was so confusing: a cluster
-whose sandbox load balancer was attached _after_ creation, or whose root domain was never
-delegated, has no usable zone for the DNS-01 challenge, so the certificate never issues and
-the ingress serves nginx's self-signed _Kubernetes Ingress Controller Fake Certificate_.
-The remediation (confirmed with Porter support) is manual: create the dedicated hosted zone
-for the root domain yourself, add its `NS` delegation to the parent zone, move the wildcard
-record into it, then reconcile the cluster (the dashboard's infra **Update**, or re-POST the
-contract) so Porter actually creates the certificate issuer against the new zone.
-Every client then fails certificate verification against an app that is otherwise serving
-correctly — including the agent's own probe of the app it just published, which is why it
+This is worth stating plainly because the failure is so confusing: a cluster whose root
+domain was never delegated has no usable zone for the DNS-01 challenge, so the certificate
+never issues and the ingress serves nginx's self-signed _Kubernetes Ingress Controller Fake
+Certificate_. Every client then fails certificate verification against an app that is
+otherwise serving correctly — including the agent's own probe of the app it just published, which is why it
 reports a gateway error it cannot explain. `kubectl get certificate -n porter-sandbox` tells
 you which situation you are in before you go hunting.
 

@@ -4,6 +4,12 @@ build:
   method: docker
   context: .
   dockerfile: ./deploy/egress-proxy/Dockerfile
+# Deliberately a worker, not a web service: sandboxes cannot reach in-cluster or
+# private addresses (Porter's sandbox NetworkPolicy blocks every RFC1918 range),
+# and Porter's web ingress cannot carry HTTP CONNECT proxy traffic. Expose port
+# 48080 with a LoadBalancer Service in front of this deployment and point
+# PORTER_SANDBOX_EGRESS_PROXY_URL at it, or sandbox egress runs fail-open —
+# docs/porter.md, "Forcing sandbox egress through the proxy".
 services:
   - name: egress-proxy
     type: worker

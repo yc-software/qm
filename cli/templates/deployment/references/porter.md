@@ -8,8 +8,11 @@ as the reference for every failure mode named below.
 ## Preflight
 
 Install the [Porter CLI](https://docs.porter.run/cli/installation) and prefer
-it over raw API calls wherever a command exists. Require Docker Buildx too —
-every image must be built `--platform linux/amd64`:
+it over raw API calls wherever a command exists. On Homebrew that means the
+`porter-dev` tap — Homebrew core's `porter` is an unrelated tool — and
+`docker-credential-porter` is a separate binary the tap does not install
+(fetch it from Porter's releases and verify the checksum). Require Docker
+Buildx too — every image must be built `--platform linux/amd64`:
 
 ```bash
 porter auth login
@@ -42,6 +45,17 @@ operator the exact URL and wait:
    contract (`docs/porter.md` → "Giving published apps stable hostnames").
    Attaching them after creation is the wedged-cluster path.
 
+## Provision Postgres before first boot
+
+Sign-in hard-requires a durable store: the auth broker's single-use claim
+endpoint lives on core's database, so without `DATABASE_URL` the instance
+boots and then refuses every sign-in. Porter has no `qm`-CLI database
+provisioning — create a datastore in the dashboard's Datastores tab or run
+in-cluster Postgres. An API-created datastore can report your cluster in
+`connected_cluster_ids` while its security group still refuses connections;
+verify with a `psql` from a pod before booting, and prefer in-cluster
+Postgres when in doubt.
+
 ## Configure the administrator before first boot
 
 The workflow's step 1 collected the administrator's email; on Porter nothing
@@ -64,10 +78,12 @@ to the portal's `OIDC_ALLOWED_EMAILS`; on the raw `porter/apps/` path set both.
 for f in porter/apps/*.yaml; do porter apply -f "$f"; done
 ```
 
-Apply runs once per app file, twice overall — assigned hostnames land on the
-second pass. Then hand-wire the six service URLs per the table in
-`docs/porter.md` ("Hosting the qm surfaces"), push secrets as Porter env
-groups, and verify by signing in as the administrator and opening the Admin
-tab. Published-app serving needs nothing further: apps are reachable
+Push images only to repositories that already exist — ECR does not create
+them on push. In the v2 app YAML, `env` belongs at the app level; nested
+under a service it is silently dropped. Apply runs once per app file, twice
+overall — assigned hostnames land on the second pass. Then hand-wire the six
+service URLs per the table in `docs/porter.md` ("Hosting the qm surfaces"),
+push secrets as Porter env groups, and verify by signing in as the
+administrator and opening the Admin tab. Published-app serving needs nothing further: apps are reachable
 signed-in at `/d/<app>/`; setting `DEPLOY_APPS_DOMAIN` upgrades them to
 per-app subdomains (`docs/porter.md`, onboarding checklist).

@@ -9,6 +9,8 @@ export interface ClaimStore {
 const CLAIM_PATH = "/v1/auth/broker/claim";
 const CLAIM_TIMEOUT_MS = 4_000;
 
+export class ClaimStoreUnavailableError extends Error {}
+
 export function coreClaimStore(coreApiUrl: string, signingSecret: string | undefined, label = "chassis"): ClaimStore {
   return {
     async claimFirst(ids, expiresAtMs) {
@@ -21,6 +23,9 @@ export function coreClaimStore(coreApiUrl: string, signingSecret: string | undef
           body,
           signal: AbortSignal.timeout(CLAIM_TIMEOUT_MS),
         });
+        if (r.status >= 500) {
+          throw new ClaimStoreUnavailableError(`core answered the claim endpoint with HTTP ${r.status}`);
+        }
         if (!r.ok) {
           console.error(`[${label}] core refused a single-use claim: HTTP ${r.status}`);
           return null;
@@ -28,8 +33,13 @@ export function coreClaimStore(coreApiUrl: string, signingSecret: string | undef
         const parsed = (await r.json()) as { claimed?: unknown };
         return typeof parsed.claimed === "string" ? parsed.claimed : null;
       } catch (e) {
-        console.error(`[${label}] core single-use claim failed: ${errMessage(e)}`);
-        return null;
+        if (e instanceof ClaimStoreUnavailableError) {
+          console.error(`[${label}] ${e.message} — failing closed, this is a core outage, not a rate limit`);
+          throw e;
+        }
+        const unavailable = new ClaimStoreUnavailableError(`core claim store unreachable: ${errMessage(e)}`);
+        console.error(`[${label}] ${unavailable.message} — failing closed, this is a core outage, not a rate limit`);
+        throw unavailable;
       }
     },
   };

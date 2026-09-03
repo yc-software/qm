@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JWK } from "jose";
 import {
   authorizeQuery,
@@ -380,6 +381,32 @@ test("the broker fails closed when core cannot record a single-use claim", async
   t.after(() => failing.close());
   const response = await openLink(failing, link);
   assert.notEqual(response.status, 302, "an unrecordable link claim must not mint a code");
+});
+
+test("a core outage reads as an outage, never as a rate limit or a stale link", async (t) => {
+  const unavailable = {
+    calls: [] as string[][],
+    async claimFirst(): Promise<string | null> {
+      throw new ClaimStoreUnavailableError("core claim store unreachable: fetch failed");
+    },
+  };
+  const h = await startHarness({ claims: unavailable });
+  t.after(() => h.close());
+  await requestLink(h);
+  assert.equal(h.mailer.sent.length, 0, "sign-in fails closed while core is down");
+
+  const healthy = await startHarness();
+  t.after(() => healthy.close());
+  await requestLink(healthy);
+  const link = linkFrom(healthy.mailer);
+  const downMidVerify = await startHarness({
+    claims: unavailable,
+    env: { AUTH_SIGNING_JWK: healthy.cfg.signingJwk ? JSON.stringify(healthy.cfg.signingJwk) : undefined },
+  });
+  t.after(() => downMidVerify.close());
+  const response = await openLink(downMidVerify, link);
+  assert.equal(response.status, 503, "an outage is a retryable 503, not the dead-end stale-link page");
+  assert.match(await response.text(), /temporarily unavailable/i);
 });
 
 test("the sign-in link is single-use across broker instances that share the claim store", async (t) => {
