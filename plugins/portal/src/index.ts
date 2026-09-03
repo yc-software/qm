@@ -59,7 +59,7 @@ const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
 const COOKIE_DOMAIN =
   process.env.PORTAL_COOKIE_DOMAIN ||
-  (APPS_DOMAIN ? commonParentDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN) : undefined);
+  (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN) : undefined);
 const IS_PROD = process.env.NODE_ENV === "production";
 const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
 const ORIGIN = (() => {
@@ -303,37 +303,9 @@ function hostOf(raw: string): string {
   }
 }
 
-function isMultiPartPublicSuffix(domain: string): boolean {
-  return [
-    "co.uk",
-    "org.uk",
-    "gov.uk",
-    "ac.uk",
-    "com.au",
-    "net.au",
-    "org.au",
-    "co.nz",
-    "co.jp",
-    "or.jp",
-    "ne.jp",
-    "com.br",
-    "com.mx",
-    "co.in",
-    "co.za",
-    "com.sg",
-    "com.hk",
-    "com.tw",
-  ].includes(domain);
-}
-
-export function commonParentDomain(a: string, b: string): string | undefined {
-  const as = a.toLowerCase().split(".").filter(Boolean);
-  const bs = b.toLowerCase().split(".").filter(Boolean);
-  let n = 0;
-  while (n < as.length && n < bs.length && as[as.length - 1 - n] === bs[bs.length - 1 - n]) n++;
-  if (n < 2) return undefined;
-  const parent = as.slice(as.length - n).join(".");
-  return isMultiPartPublicSuffix(parent) ? undefined : parent;
+export function derivedCookieDomain(portalHost: string, appsDomain: string): string | undefined {
+  const host = portalHost.toLowerCase();
+  return host.includes(".") && appsDomain.toLowerCase().endsWith(`.${host}`) ? host : undefined;
 }
 
 export function hostIsWithinDomain(host: string, domain: string): boolean {
@@ -1281,7 +1253,7 @@ export function bootChecks(): void {
   }
   if (APPS_DOMAIN && !COOKIE_DOMAIN) {
     problems.push(
-      `the apps domain (${APPS_DOMAIN}) shares no parent domain with the portal host, so no session cookie can cover both — set PORTAL_COOKIE_DOMAIN explicitly or serve the portal and apps under one parent domain (app returnTo without a domain-wide session cookie loops sign-in forever)`,
+      `the apps domain (${APPS_DOMAIN}) is not a subdomain of the portal host, so the cookie domain cannot be derived — set PORTAL_COOKIE_DOMAIN to the parent domain covering both (app returnTo without a domain-wide session cookie loops sign-in forever)`,
     );
   }
   if (COOKIE_DOMAIN && !hostIsWithinDomain(hostOf(PUBLIC_URL), COOKIE_DOMAIN)) {

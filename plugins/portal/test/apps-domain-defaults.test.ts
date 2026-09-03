@@ -21,24 +21,32 @@ delete process.env.PORTAL_APPS_DOMAIN;
 delete process.env.PORTAL_COOKIE_DOMAIN;
 process.env.DEPLOY_APPS_DOMAIN = "apps.qm.example.com";
 
-const { commonParentDomain, bootChecks } = await import("../src/index.ts");
+const { derivedCookieDomain, bootChecks } = await import("../src/index.ts");
 
 test.after(() => {
   upstream.close();
 });
 
-test("commonParentDomain finds the deepest shared dot-suffix, never a bare TLD", () => {
-  assert.equal(commonParentDomain("qm.example.com", "apps.qm.example.com"), "qm.example.com");
-  assert.equal(commonParentDomain("portal.example.com", "apps.example.com"), "example.com");
-  assert.equal(commonParentDomain("example.com", "apps.example.com"), "example.com");
-  assert.equal(commonParentDomain("a.example.com", "b.other.net"), undefined);
-  assert.equal(commonParentDomain("a.example.com", "b.acme.com"), undefined, "a bare TLD is not a cookie domain");
-  assert.equal(commonParentDomain("", "apps.example.com"), undefined);
+test("the cookie domain derives only when the apps domain sits under the portal host", () => {
+  assert.equal(derivedCookieDomain("qm.example.com", "apps.qm.example.com"), "qm.example.com");
+  assert.equal(derivedCookieDomain("Example.com", "APPS.example.COM"), "example.com");
   assert.equal(
-    commonParentDomain("portal.foo.co.uk", "apps.bar.co.uk"),
+    derivedCookieDomain("portal.example.com", "apps.example.com"),
     undefined,
-    "a shared public suffix like co.uk is not a cookie domain browsers accept",
+    "sibling layouts need an explicit PORTAL_COOKIE_DOMAIN — guessing a shared parent risks landing on a public suffix",
   );
+  assert.equal(
+    derivedCookieDomain("portal.foo.co.uk", "apps.bar.co.uk"),
+    undefined,
+    "no public-suffix list needed: only the portal host itself, a domain the operator demonstrably controls, is derived",
+  );
+  assert.equal(
+    derivedCookieDomain("localhost", "apps.localhost"),
+    undefined,
+    "a single-label host is never a cookie domain",
+  );
+  assert.equal(derivedCookieDomain("", "apps.example.com"), undefined);
+  assert.equal(derivedCookieDomain("example.com", "appsXexample.com"), undefined, "dot-boundary required");
 });
 
 test("DEPLOY_APPS_DOMAIN alone yields a working portal apps setup — cookie domain derived, boot clean", () => {
@@ -53,5 +61,5 @@ test("an apps domain that shares no parent with the portal host refuses to boot 
     encoding: "utf8",
   });
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /shares no parent domain/);
+  assert.match(r.stderr, /not a subdomain of the portal host/);
 });
