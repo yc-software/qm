@@ -15,9 +15,12 @@ Before cloud mutation, read `qm.config.jsonc` when it exists. Its `target` is
 the selected provider; confirm it with the operator and do not offer to change
 it in place. If the repository has not been initialized, collect:
 
-- hosting target: a cloud provider, Fly.io or AWS. Recommend Fly.io when the
-  operator has no preference. The docker target runs everything on the local
-  machine, is for a quick local test drive only, and is outside this
+- hosting target: a cloud provider — Fly.io, AWS, or Porter. Recommend Fly.io
+  when the operator has no preference. Porter deploys onto a Kubernetes
+  cluster in the operator's own cloud account and has no `qm` CLI target:
+  choosing it switches this workflow to `references/porter.md`, which drives
+  the Porter CLI and dashboard directly. The docker target runs everything on
+  the local machine, is for a quick local test drive only, and is outside this
   workflow; never present it as the recommended path for a real deployment;
 - the first administrator's verified work email;
 - how people sign in: the built-in `auth` broker, which emails a one-time link,

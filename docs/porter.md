@@ -10,10 +10,53 @@ AWS, GCP, or Azure account. qm can use it two ways, independently:
 Both need a Porter API token and the project and cluster that own the sandbox API:
 
 ```bash
-PORTER_DEPLOY_API_TOKEN=<api token from Settings -> API tokens>
+PORTER_DEPLOY_API_TOKEN=<ADMIN-role api token from Settings -> API tokens>
 PORTER_DEPLOY_PROJECT_ID=<project id>
 PORTER_DEPLOY_CLUSTER_ID=<cluster id>
 ```
+
+## Onboarding checklist
+
+Everything below this section is reference and field notes; this is the order that
+actually gets a new operator from zero to a working instance (the deployment workflow's
+agent-facing version lives at `cli/templates/deployment/references/porter.md`). If you are an agent doing
+this deployment: install and prefer the `porter` CLI over raw API calls wherever a
+command exists ([install instructions](https://docs.porter.run/cli/installation)); use
+the operator's browser for the dashboard steps when you have browser access, and
+otherwise hand the operator the exact URL and wait — several steps below cannot be done
+any other way.
+
+1. **A cloud account must be linked to the Porter project** at
+   [dashboard.porter.run/cloud-accounts](https://dashboard.porter.run/cloud-accounts)
+   before any cluster can exist. Check first — with a token,
+   `GET <PORTER_DEPLOY_URL>/api/v2/alpha/projects/<project>/cloud-accounts` lists linked
+   accounts and their connection state; without one, look at the dashboard page. If none
+   is connected, the operator has to link one themselves: the flow grants Porter IAM
+   roles via a CloudFormation stack (or the Azure/GCP equivalent) in _their_ cloud
+   console, which no agent should drive unattended. Two AWS gotchas from the field: the
+   quick-create link opens in `us-east-2`, so an org SCP that pins regions makes the
+   stack fail with an explicit deny — reopen the same URL under the permitted region —
+   and the account ID Porter wants is the one shown in the AWS console's own top-right
+   menu, not whatever account the operator's CLI happens to be logged into.
+2. **Mint an Admin-role API token** (Settings → API tokens) and record
+   `PORTER_DEPLOY_PROJECT_ID` and `PORTER_DEPLOY_CLUSTER_ID`. The role matters: a
+   Developer token survives every read until it dies mid-deployment with
+   `PERMISSION_DENIED` (details under egress below) and cannot delete clusters. Check
+   the role before provisioning anything you will later need to remove.
+3. **Create the cluster with the sandbox load balancer in the creation contract** —
+   sandbox ingress, `sandboxesEnabled`, and the apps root domain all belong in the
+   contract the cluster is born with; attaching them later is the wedged-cluster
+   forensics that "Giving published apps stable hostnames" below exists to debug.
+4. **Name the administrator before first boot.** Set `ADMIN_GRANTS=<email>:org_admin`
+   on core and the sign-in allowlist (`AUTH_ALLOWED_EMAILS=<email>` — the Helm chart
+   bridges it to the portal's `OIDC_ALLOWED_EMAILS`). This is the step the old docs
+   never mentioned: with Postgres and no `ADMIN_GRANTS`, the instance boots, everyone
+   allowed can sign in, and the admin console is permanently unreachable — there is no
+   in-product way to grant the first admin afterwards.
+5. **Build, push, and apply**: images built `--platform linux/amd64`, then
+   `for f in porter/apps/*.yaml; do porter apply -f "$f"; done` (twice — the hostname
+   lands on the second pass), then wire the service URLs per the table below. Verify by
+   signing in as the admin and opening the Admin tab.
 
 ## Hosting the qm surfaces
 

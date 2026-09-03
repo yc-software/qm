@@ -137,7 +137,10 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
         ],
       },
     },
-    description: "Porter API token for the sandbox backend and the per-deployment app publisher.",
+    description:
+      "Admin-role Porter API token for the sandbox backend and the per-deployment app publisher — Developer-role tokens fail mid-deployment with PERMISSION_DENIED.",
+    generate:
+      "create an Admin-role API token in the Porter dashboard (https://dashboard.porter.run → Settings → API tokens)",
   },
   {
     name: "SPRITES_TOKEN",
