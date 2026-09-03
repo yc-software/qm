@@ -1638,9 +1638,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   const topology = awsTopology(config, _configDir);
   const { aws } = topology;
   if (new URL(config.publicUrl).protocol !== "https:") {
-    throw new CliError(
-      "AWS deploy requires an HTTPS publicUrl; configure an ACM certificate, update publicUrl, and rerender/apply Terraform before running `qm up`",
-    );
+    throw new CliError("AWS deploy requires an HTTPS publicUrl; use the CloudFront hostname from Terraform output");
   }
   const plugins = new Map(topology.plugins.map((plugin) => [plugin.name, plugin]));
   const services = opts.only ?? topology.workloads;
@@ -2423,45 +2421,25 @@ export function assertGithubDeployTrust(statements: unknown, accountId: string, 
   }
 }
 
-export function assertAwsPublicListener(
-  publicUrl: string,
-  listener: { Protocol?: string; Port?: number; Certificates?: Array<{ CertificateArn?: string }> },
-): void {
-  const protocol = new URL(publicUrl).protocol;
-  if (protocol === "https:") {
-    if (listener.Protocol !== "HTTPS" || listener.Port !== 443) {
-      throw new Error(
-        `publicUrl is HTTPS but the ALB listener is ${listener.Protocol ?? "missing"}:${listener.Port ?? "missing"}; configure certificate_arn and apply Terraform`,
-      );
-    }
-    if (!listener.Certificates?.some((certificate) => Boolean(certificate.CertificateArn))) {
-      throw new Error(
-        "publicUrl is HTTPS but the ALB listener has no certificate; configure certificate_arn and apply Terraform",
-      );
-    }
-    return;
+export function assertAwsPublicListener(originUrl: string, listener: { Protocol?: string; Port?: number }): void {
+  if (new URL(originUrl).protocol !== "http:") {
+    throw new Error("AWS public origin must use HTTP behind CloudFront");
   }
-  if (protocol === "http:") {
-    if (listener.Protocol !== "HTTP" || listener.Port !== 80) {
-      throw new Error(
-        `publicUrl is HTTP but the ALB listener is ${listener.Protocol ?? "missing"}:${listener.Port ?? "missing"}`,
-      );
-    }
-    return;
+  if (listener.Protocol !== "HTTP" || listener.Port !== 80) {
+    throw new Error(
+      `AWS public origin listener is ${listener.Protocol ?? "missing"}:${listener.Port ?? "missing"}, expected HTTP:80`,
+    );
   }
-  throw new Error(`publicUrl must use http or https (got ${protocol})`);
 }
 
 interface AwsPublicListener {
   ListenerArn?: string;
   Protocol?: string;
   Port?: number;
-  Certificates?: Array<{ CertificateArn?: string }>;
   DefaultActions?: Array<{
     Type?: string;
     TargetGroupArn?: string;
     FixedResponseConfig?: { StatusCode?: string };
-    RedirectConfig?: { Protocol?: string; Port?: string; StatusCode?: string };
   }>;
 }
 
@@ -2480,12 +2458,6 @@ function awsPublicOrigin(config: QmConfig): URL {
   } catch {
     throw new Error("env.core.AWS_PUBLIC_ORIGIN_URL must be an HTTP(S) URL when set");
   }
-}
-
-function isHttpsRedirectListener(listener: AwsPublicListener): boolean {
-  if (listener.Protocol !== "HTTP" || listener.Port !== 80) return false;
-  const actions = listener.DefaultActions ?? [];
-  return actions.length === 1 && actions[0]?.Type === "redirect" && actions[0].RedirectConfig?.Protocol === "HTTPS";
 }
 
 interface AwsEcsRoutingService {
@@ -2543,21 +2515,16 @@ function awsPublicFrontDoor(config: QmConfig): AwsPublicFrontDoor {
       loadBalancer.LoadBalancerArn,
     ]).Listeners ?? [];
   const origin = awsPublicOrigin(config);
-  const httpsFrontDoor = origin.protocol === "https:";
-  const redirects = httpsFrontDoor ? listeners.filter(isHttpsRedirectListener) : [];
-  const candidates = listeners.filter((listener) => !redirects.includes(listener));
-  if (candidates.length !== 1 || redirects.length > 1) {
+  if (listeners.length !== 1) {
     const found = listeners
       .map(
         (listener) =>
           `${listener.Protocol ?? "unknown"}:${listener.Port ?? "?"} (default ${listener.DefaultActions?.map((action) => action.Type ?? "unknown").join("+") || "none"})`,
       )
       .join(", ");
-    throw new Error(
-      `expected exactly one public listener${httpsFrontDoor ? " plus at most one port-80 HTTPS-redirect listener" : ""}, found ${found || "none"}`,
-    );
+    throw new Error(`expected exactly one public listener, found ${found || "none"}`);
   }
-  const listener = candidates[0];
+  const listener = listeners[0];
   if (!listener?.ListenerArn) throw new Error("public listener is missing");
   assertAwsPublicListener(origin.toString(), listener);
   return { loadBalancerArn: loadBalancer.LoadBalancerArn, dnsName: loadBalancer.DNSName, listener };

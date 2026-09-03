@@ -28,7 +28,6 @@ const DERIVED_VARS = new Set([
 const OPERATOR_DEFAULTS: Record<string, string> = {
   github_repository: "replace-me/repository",
   github_ref: "refs/heads/main",
-  certificate_arn: "",
 };
 
 export function declaredVariables(variablesTf: string): string[] {

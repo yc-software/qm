@@ -240,7 +240,13 @@ test("successful check --json --live reports the live-drift clause", async () =>
     publicUrl: "https://acme.example.com",
     target: "aws",
     services: ["core"],
-    env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app", AWS_DEPLOY_IMAGE_VERSION: "1" } },
+    env: {
+      core: {
+        AWS_DEPLOY_IMAGE: "acme-microvm-app",
+        AWS_DEPLOY_IMAGE_VERSION: "1",
+        AWS_PUBLIC_ORIGIN_URL: "http://acme.example.com",
+      },
+    },
     imageOverrides: { core: `ghcr.io/acme/core@${digest}` },
     sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
     aws: {
@@ -289,7 +295,7 @@ else if (args.includes("dynamodb get-item") && args.includes("deployment/current
 else if (args.includes("dynamodb get-item") && args.includes("deployment/manifest/manifest")) console.log(JSON.stringify({ Item: { manifest: { S: ${JSON.stringify(JSON.stringify(manifest))} } } }));
 else if (args.includes("s3api get-object")) fs.writeFileSync(argv[argv.indexOf("--key") + 2], ${JSON.stringify(layerBody)});
 else if (args.includes("elbv2 describe-load-balancers")) console.log(JSON.stringify({ LoadBalancers: [{ LoadBalancerArn: "lb", DNSName: "acme.example.com", State: { Code: "active" } }] }));
-else if (args.includes("elbv2 describe-listeners")) console.log(JSON.stringify({ Listeners: [{ ListenerArn: "listener", Protocol: "HTTPS", Port: 443, Certificates: [{ CertificateArn: "certificate" }], DefaultActions: [{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "404" } }] }] }));
+else if (args.includes("elbv2 describe-listeners")) console.log(JSON.stringify({ Listeners: [{ ListenerArn: "listener", Protocol: "HTTP", Port: 80, DefaultActions: [{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "404" } }] }] }));
 else if (args.includes("elbv2 describe-target-groups")) console.log(JSON.stringify({ TargetGroups: [{ TargetGroupArn: "tg", TargetGroupName: ${JSON.stringify(targetGroupName)} }] }));
 else if (args.includes("elbv2 describe-rules")) console.log(JSON.stringify({ Rules: [{ IsDefault: false, Actions: [{ Type: "forward", TargetGroupArn: "tg" }], Conditions: [{ Field: "path-pattern", PathPatternConfig: { Values: ["/v1/*"] } }] }] }));
 else if (args.includes("elbv2 describe-target-health")) console.log(JSON.stringify({ TargetHealthDescriptions: [{ TargetHealth: { State: "healthy" } }] }));
