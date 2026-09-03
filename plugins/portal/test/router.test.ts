@@ -333,9 +333,9 @@ test("new human path /drop/:id: form GET reaches the core /v1 drop form with x-d
   assert.equal(ob.headers["x-drop-owner"], "owner@acme");
 });
 
-test("deployments are OFF by default (404 even with a session)", async () => {
+test("deployments are ON by default — /d/ proxies to core for a signed-in session", async () => {
   const r = await fetch(`${base}/d/some-app/`, { headers: { cookie: sessionCookie("U1") } });
-  assert.equal(r.status, 404);
+  assert.notEqual(r.status, 404, "the /d/ route exists without PORTAL_DEPLOYMENTS_ENABLED");
 });
 
 test("auth/login sets the tmp cookie and 302s to the IdP with PKCE+state+nonce", async () => {

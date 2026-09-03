@@ -170,8 +170,16 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AWS_DEPLOY_GATE_SECRET",
     service: "core",
-    required: { when: { kind: "env-present", service: "core", name: "AWS_DEPLOY_APPS_DOMAIN" } },
-    description: "HMAC key protecting public AWS deployment-app URLs.",
+    required: {
+      when: {
+        kind: "any",
+        conditions: [
+          { kind: "env-present", service: "core", name: "AWS_DEPLOY_APPS_DOMAIN" },
+          { kind: "env-present", service: "core", name: "DEPLOY_APPS_DOMAIN" },
+        ],
+      },
+    },
+    description: "HMAC key protecting public deployment-app URLs on the apps domain.",
     generate: MINT_LOCALLY,
   },
   {

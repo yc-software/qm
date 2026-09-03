@@ -98,6 +98,17 @@ principal with `AmazonEKSClusterAdminPolicy`, then `aws eks update-kubeconfig`.
 
 ## Giving published apps stable hostnames
 
+App serving is tiered so the zero-config path works first. With nothing set, every
+published app is reachable signed-in at `/d/<app>/` on the portal, private to its owner
+and whoever the deployment is shared with; proxied HTML is served under a sandbox CSP so
+app code cannot act on the portal's origin. Setting `DEPLOY_APPS_DOMAIN` to a wildcard
+domain you control (e.g. `apps.example.com`, with `*.apps.example.com` pointed at the
+instance) upgrades every app to its own origin — `https://<app>.apps.example.com/` — with
+portal single sign-on, the request-access flow, and live editing; the portal derives its
+cookie and returnTo settings from it, and boot probes the wildcard record and prints the
+exact DNS record to add when it is missing. The per-provider variables below remain as
+explicit overrides.
+
 Published apps get their address from the cluster, not from qm. Declare the sandbox load
 balancer with a root domain at cluster creation and **Porter names every published app
 itself**: `<app>.<root domain>`, served on a wildcard Let's Encrypt certificate that Porter
@@ -233,7 +244,10 @@ PORTER_DEPLOY_APPS_DOMAIN=apps.example.com   # optional; overrides the assigned 
 
 Set it only to choose the name yourself; the wildcard record it relies on is the one Porter
 already created. Deployments are **private** by default, matching the other providers;
-`PORTER_DEPLOY_VISIBILITY=public` opts a deployment's domain into public ingress.
+`PORTER_DEPLOY_VISIBILITY=public` opts a deployment's domain into public ingress. Note the
+cluster-assigned hostname is Porter ingress only — qm's sign-on gate, request-access flow,
+and live editing need `DEPLOY_APPS_DOMAIN` (a domain you control, not a shared platform
+domain like `onporter.run`).
 
 ## Forcing sandbox egress through the proxy
 

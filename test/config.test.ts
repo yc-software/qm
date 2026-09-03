@@ -510,3 +510,76 @@ test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's to
   assert.equal(inCluster.porterSandbox.ttlSec, 120);
   assert.equal(inCluster.porterDeploy.token, "tok");
 });
+
+test("DEPLOY_APPS_DOMAIN is the one-var apps setup: it feeds the gate and defaults every provider's domain", () => {
+  const config = loadConfig({
+    DEPLOY_PROVIDER: "porter",
+    PORTER_DEPLOY_API_TOKEN: "tok",
+    PORTER_DEPLOY_PROJECT_ID: "7",
+    PORTER_DEPLOY_CLUSTER_ID: "9",
+    DEPLOY_APPS_DOMAIN: "apps.example.com",
+    AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
+  });
+  assert.equal(config.deployAppsDomain, "apps.example.com");
+  assert.equal(config.porterDeploy.appsDomain, "apps.example.com");
+  assert.equal(config.awsDeploy.appsDomain, "apps.example.com");
+  const overridden = loadConfig({
+    DEPLOY_PROVIDER: "porter",
+    PORTER_DEPLOY_API_TOKEN: "tok",
+    PORTER_DEPLOY_PROJECT_ID: "7",
+    PORTER_DEPLOY_CLUSTER_ID: "9",
+    DEPLOY_APPS_DOMAIN: "apps.example.com",
+    PORTER_DEPLOY_APPS_DOMAIN: "apps.other.example.com",
+    AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
+  });
+  assert.equal(overridden.porterDeploy.appsDomain, "apps.other.example.com");
+  assert.equal(overridden.deployAppsDomain, "apps.example.com");
+});
+
+test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DOMAIN is unset", () => {
+  const porter = loadConfig({
+    DEPLOY_PROVIDER: "porter",
+    PORTER_DEPLOY_API_TOKEN: "tok",
+    PORTER_DEPLOY_PROJECT_ID: "7",
+    PORTER_DEPLOY_CLUSTER_ID: "9",
+    PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com",
+  });
+  assert.equal(porter.deployAppsDomain, "apps.example.com");
+  assert.equal(porter.awsDeploy.appsDomain, "apps.example.com");
+  const aws = loadConfig({
+    AWS_DEPLOY_APPS_DOMAIN: "apps.example.com",
+    AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
+  });
+  assert.equal(aws.deployAppsDomain, "apps.example.com");
+  assert.equal(loadConfig({}).deployAppsDomain, undefined);
+});
+
+test("DEPLOY_APPS_DOMAIN refuses shared platform domains that cannot carry per-app subdomains", () => {
+  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.onporter.run" }), /shared platform domain/);
+  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.fly.dev" }), /shared platform domain/);
+  assert.equal(
+    loadConfig({ DEPLOY_APPS_DOMAIN: "apps.example.com", AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef" })
+      .deployAppsDomain,
+    "apps.example.com",
+  );
+});
+
+test("the deploy-apps sign-in address defaults to the public web URL", () => {
+  const derived = loadConfig({
+    DEPLOY_APPS_SESSION_SECRET: "s",
+    PUBLIC_WEB_URL: "https://qm.example.com/",
+  });
+  assert.equal(derived.deployAppsLoginUrl, "https://qm.example.com");
+  assert.equal(derived.deployAppsSessionSecret, "s");
+  const explicit = loadConfig({
+    DEPLOY_APPS_SESSION_SECRET: "s",
+    DEPLOY_APPS_LOGIN_URL: "https://portal.example.com/",
+    PUBLIC_WEB_URL: "https://qm.example.com",
+  });
+  assert.equal(explicit.deployAppsLoginUrl, "https://portal.example.com");
+  assert.throws(() => loadConfig({ DEPLOY_APPS_SESSION_SECRET: "s" }), /DEPLOY_APPS_LOGIN_URL or PUBLIC_WEB_URL/);
+  assert.throws(
+    () => loadConfig({ DEPLOY_APPS_LOGIN_URL: "https://portal.example.com" }),
+    /requires DEPLOY_APPS_SESSION_SECRET/,
+  );
+});

@@ -98,10 +98,16 @@ or every visitor (and every crawler that accepts HTML) shares the socket
 address's one bucket.
 
 Because playground authority must never leave this origin, the portal refuses
-to boot with `PORTAL_PLAYGROUND` alongside `PORTAL_COOKIE_DOMAIN`,
-`PORTAL_APPS_DOMAIN`, or `PORTAL_DEPLOYMENTS_ENABLED` — a domain-wide cookie or
-the deployment proxy would hand anonymous sessions to surfaces that never see
-the `anon` flag. Anonymous sessions are also refused the `/connect/*` and
+to boot with `PORTAL_PLAYGROUND` alongside `PORTAL_COOKIE_DOMAIN`, an apps
+domain (`PORTAL_APPS_DOMAIN` / `DEPLOY_APPS_DOMAIN`), or an explicit
+`PORTAL_DEPLOYMENTS_ENABLED=1` — a domain-wide cookie or the deployment proxy
+would hand anonymous sessions to surfaces that never see the `anon` flag. The
+deployment proxy (`/d/<app>/`), on by default for signed-in portals, turns
+itself off under the playground, and anonymous sessions are refused it at
+request time too. Outside the playground, `PORTAL_APPS_DOMAIN` defaults to
+`DEPLOY_APPS_DOMAIN` and `PORTAL_COOKIE_DOMAIN` to the parent domain the portal
+host shares with the apps domain, so one core-side variable configures both
+processes. Anonymous sessions are also refused the `/connect/*` and
 `/drop/*` flows, so a visitor can't attach real OAuth tokens or dropped secrets
 to a throwaway principal that a cleared cookie orphans.
 

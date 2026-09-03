@@ -56,7 +56,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
   "fly-sandbox": (env) => env.SANDBOX_BACKEND === "fly",
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
-  "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN),
+  "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN || env.DEPLOY_APPS_DOMAIN),
   "google-oauth": (env) => Boolean(env.GOOGLE_OAUTH_CLIENT_ID),
   "dropbox-oauth": (env) => Boolean(env.DROPBOX_OAUTH_CLIENT_ID),
   "linear-oauth": (env) => Boolean(env.LINEAR_OAUTH_CLIENT_ID),

@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import { loadConfig } from "./config.ts";
 import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
@@ -30,6 +32,17 @@ server.listen(config.port, () => {
       `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });
+
+if (config.deployAppsDomain) {
+  const domain = config.deployAppsDomain;
+  const probe = `qm-probe-${randomBytes(4).toString("hex")}.${domain}`;
+  void lookup(probe).catch(() => {
+    console.warn(
+      `[qm] app subdomains are configured but *.${domain} does not resolve (probed ${probe}) — ` +
+        `add a wildcard DNS record for *.${domain} pointing at this instance's ingress, or apps will only be reachable at /d/<app>/`,
+    );
+  });
+}
 
 if (config.deployProvider === "docker") {
   void dockerDaemonFailure().then((failure) => {

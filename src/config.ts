@@ -159,6 +159,7 @@ export interface Config {
   porterSandbox: PorterSandboxEnv;
   porterDeploy: PorterDeployEnv;
   awsDeploy: AwsDeployEnv;
+  deployAppsDomain?: string;
   flyDeploy: FlyDeployEnv;
 }
 
@@ -451,14 +452,60 @@ interface AwsDeployEnv {
   dataRoleArn?: string;
 }
 
-function deployAppsEnv(env: NodeJS.ProcessEnv): { deployAppsSessionSecret?: string; deployAppsLoginUrl?: string } {
+function deployAppsEnv(
+  env: NodeJS.ProcessEnv,
+  defaultLoginUrl: string | undefined,
+): { deployAppsSessionSecret?: string; deployAppsLoginUrl?: string } {
   const secret = env.DEPLOY_APPS_SESSION_SECRET;
-  const loginUrl = env.DEPLOY_APPS_LOGIN_URL;
-  if (!!secret !== !!loginUrl) {
-    throw new Error("DEPLOY_APPS_SESSION_SECRET and DEPLOY_APPS_LOGIN_URL must be set together");
+  const loginUrl = env.DEPLOY_APPS_LOGIN_URL ?? (secret ? defaultLoginUrl : undefined);
+  if (loginUrl && !secret) {
+    throw new Error("DEPLOY_APPS_LOGIN_URL requires DEPLOY_APPS_SESSION_SECRET");
+  }
+  if (secret && !loginUrl) {
+    throw new Error("DEPLOY_APPS_SESSION_SECRET needs a sign-in address — set DEPLOY_APPS_LOGIN_URL or PUBLIC_WEB_URL");
   }
   if (!secret || !loginUrl) return {};
   return { deployAppsSessionSecret: secret, deployAppsLoginUrl: loginUrl.replace(/\/$/, "") };
+}
+
+const SHARED_PLATFORM_SUFFIXES = [
+  "onporter.run",
+  "withporter.run",
+  "porter.run",
+  "fly.dev",
+  "herokuapp.com",
+  "onrender.com",
+  "railway.app",
+  "vercel.app",
+  "netlify.app",
+  "ondigitalocean.app",
+  "azurewebsites.net",
+  "elasticbeanstalk.com",
+  "amazonaws.com",
+  "cloudfront.net",
+  "github.io",
+  "pages.dev",
+  "workers.dev",
+];
+
+function sharedPlatformSuffixOf(domain: string): string | undefined {
+  const host = domain.toLowerCase();
+  return SHARED_PLATFORM_SUFFIXES.find((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+}
+
+function deployAppsDomainEnv(env: NodeJS.ProcessEnv, deployProvider: string): string | undefined {
+  const canonical = env.DEPLOY_APPS_DOMAIN?.trim();
+  if (canonical) {
+    const suffix = sharedPlatformSuffixOf(canonical);
+    if (suffix) {
+      throw new Error(
+        `DEPLOY_APPS_DOMAIN (${canonical}) is under ${suffix}, a shared platform domain that cannot carry per-app subdomains — attach a custom domain you control (set DEPLOY_APPS_DOMAIN=apps.<your-domain> with a wildcard DNS record pointing at this instance), or unset it to keep serving apps signed-in at /d/<app>/.`,
+      );
+    }
+    return canonical;
+  }
+  if (deployProvider === "porter" && env.PORTER_DEPLOY_APPS_DOMAIN) return env.PORTER_DEPLOY_APPS_DOMAIN;
+  return env.AWS_DEPLOY_APPS_DOMAIN;
 }
 
 function awsDeployEnv(env: NodeJS.ProcessEnv): AwsDeployEnv {
@@ -729,6 +776,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     codexOAuthConfigured && codexAuthCandidate
       ? { ...env, CODEX_AUTH_FILE: codexAuthCandidate }
       : { ...env, CODEX_AUTH_FILE: undefined };
+  const deployAppsDomain = deployAppsDomainEnv(env, env.DEPLOY_PROVIDER ?? "docker");
   const missingSecrets = validateCoreSecretEnv(secretEnv);
   if (missingSecrets.length) {
     throw new Error(`missing or insecure required core secrets: ${missingSecrets.join(", ")}`);
@@ -770,9 +818,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "[config] SANDBOX_BACKEND=porter without PORTER_SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set PORTER_SANDBOX_EGRESS_PROXY_URL to the egress proxy to force sandbox traffic through it.",
     );
   }
-  if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN) {
+  if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN && !env.DEPLOY_APPS_DOMAIN) {
     console.warn(
-      "[config] DEPLOY_PROVIDER=porter without PORTER_DEPLOY_APPS_DOMAIN — every publish will be refused because the app would have no address; enable sandbox ingress on the cluster, point a wildcard DNS record at it, and set PORTER_DEPLOY_APPS_DOMAIN.",
+      "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps use hostnames assigned by the cluster and are reachable signed-in at /d/<app>/; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",
     );
   }
   for (const [selected, label] of [
@@ -1062,7 +1110,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     deployGitDir: env.DEPLOY_GIT_DIR ? resolve(env.DEPLOY_GIT_DIR) : join(dataDir, "deploy-git"),
     deployDialTimeoutMs:
       numEnvStrict("DEPLOY_DIAL_TIMEOUT_MS", env.DEPLOY_DIAL_TIMEOUT_MS) ?? CONFIG_DEFAULTS.deployDialTimeoutMs,
-    ...deployAppsEnv(env),
+    ...deployAppsEnv(env, publicUrl),
     deepIdleMachineMs:
       numEnvStrict("DEEP_IDLE_MACHINE_MS", env.DEEP_IDLE_MACHINE_MS) ?? CONFIG_DEFAULTS.deepIdleMachineMs,
     devIdleMachineMs: numEnvStrict("DEV_IDLE_MACHINE_MS", env.DEV_IDLE_MACHINE_MS) ?? CONFIG_DEFAULTS.devIdleMachineMs,
@@ -1097,8 +1145,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
     porterSandbox: porterSandboxEnv(env),
-    porterDeploy: porterDeployEnv(env),
-    awsDeploy: awsDeployEnv(env),
+    porterDeploy: {
+      ...porterDeployEnv(env),
+      ...(deployAppsDomain && !env.PORTER_DEPLOY_APPS_DOMAIN ? { appsDomain: deployAppsDomain } : {}),
+    },
+    awsDeploy: {
+      ...awsDeployEnv(env),
+      ...(deployAppsDomain && !env.AWS_DEPLOY_APPS_DOMAIN ? { appsDomain: deployAppsDomain } : {}),
+    },
+    ...(deployAppsDomain ? { deployAppsDomain } : {}),
     flyDeploy: flyDeployEnv(env),
   };
 }
