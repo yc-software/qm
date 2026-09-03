@@ -527,10 +527,10 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
           swallowAs("smolmachines-sandbox: kill in-flight exec", undefined),
         );
       };
-      if (signal.aborted) fireKill();
       const onAbort = () => fireKill();
       signal.addEventListener("abort", onAbort, { once: true });
       try {
+        signal.throwIfAborted();
         return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
       } finally {
         signal.removeEventListener("abort", onAbort);

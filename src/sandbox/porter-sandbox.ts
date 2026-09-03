@@ -393,10 +393,10 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       const fireKill = () => {
         execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("porter-sandbox: kill in-flight exec", undefined));
       };
-      if (signal.aborted) fireKill();
       const onAbort = () => fireKill();
       signal.addEventListener("abort", onAbort, { once: true });
       try {
+        signal.throwIfAborted();
         return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
       } finally {
         signal.removeEventListener("abort", onAbort);

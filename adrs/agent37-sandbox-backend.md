@@ -15,7 +15,7 @@ What the PR adds
 What it does not do
 
 - No idle reaping and no snapshot to the workspace. The instance stays running until destroy; the disk is the machine's own and survives stop and start.
-- No image plumbing. The default template, `agent37-qm-computer`, is built from your `sandbox-base` image and will be published on our side before this merges, so the tools qm expects are the tools it gets. Any other Agent37 template can be named with `AGENT37_TEMPLATE`.
+- No image plumbing. The default uses Agent37's `agent37-codex` system template. Any other Agent37 template can be named with `AGENT37_TEMPLATE`.
 - No new CLI target. `qm init` still deploys the core to Docker, Fly or AWS; this only changes where the computers live.
 
 Tests run against an in-process fake of our API, so CI needs no Agent37 account. We would rather this live upstream than in a fork, and we will keep it green as the sandbox contract moves.

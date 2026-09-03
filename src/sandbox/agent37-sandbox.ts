@@ -22,6 +22,7 @@ import {
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv, proxyExportPrefix } from "./sandbox-env.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../auth/capability-token.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
+import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { CAPABILITY_HEADER } from "../api/contract.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
@@ -41,6 +42,7 @@ const WORKSPACE_BASENAME = "workspace";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const INLINE_LIMIT = 128 * 1024;
+const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 const READ_CHUNK = 256 * 1024;
 const WRITE_CHUNK_B64 = 64 * 1024;
 const MISSING_RC = 44;
@@ -52,7 +54,7 @@ const START_TIMEOUT_MS = 830_000;
 const READY_TIMEOUT_MS = 300_000;
 const READY_POLL_MS = 2_000;
 const DEFAULT_AGENT37_BASE_URL = "https://api.agent37.com";
-const DEFAULT_TEMPLATE = "agent37-qm-computer";
+const DEFAULT_TEMPLATE = "agent37-codex";
 const DEFAULT_CPUS = 2;
 const DEFAULT_MEMORY_GB = 4;
 const DEFAULT_DISK_GB = 8;
@@ -90,6 +92,7 @@ export interface Agent37SandboxOptions {
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   fetchImpl?: typeof fetch;
+  advisoryLock?: AdvisoryLock;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
@@ -105,6 +108,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     disk: opts.diskGb ?? DEFAULT_DISK_GB,
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
+  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
 
@@ -266,6 +270,9 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     const code = Number.parseInt(header[0]!, 10);
     const outLen = Number.parseInt(header[1]!, 10);
     const errLen = Number.parseInt(header[2]!, 10);
+    if (![code, outLen, errLen].every(Number.isSafeInteger) || outLen < 0 || errLen < 0) {
+      throw new Error(`agent37 exec ${name}: bad envelope sizes: ${header.join(" ")}`);
+    }
     let outBuf: Buffer;
     let errBuf: Buffer;
     if (outLen <= INLINE_LIMIT && errLen <= INLINE_LIMIT) {
@@ -279,11 +286,17 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
         );
       }
     } else {
-      outBuf = await readSpooled(name, out, outLen);
-      errBuf = await readSpooled(name, err, errLen);
-      await postExec(name, `rm -f ${shq(out)} ${shq(err)} ${shq(rcf)}`, 60).catch(
-        swallowAs("agent37-sandbox: spool cleanup", undefined),
-      );
+      try {
+        if (outLen > MAX_EXEC_OUTPUT_BYTES - errLen) {
+          throw new Error(`agent37 exec ${name}: output exceeds ${MAX_EXEC_OUTPUT_BYTES} bytes`);
+        }
+        outBuf = await readSpooled(name, out, outLen);
+        errBuf = await readSpooled(name, err, errLen);
+      } finally {
+        await postExec(name, `rm -f ${shq(out)} ${shq(err)} ${shq(rcf)}`, 60).catch(
+          swallowAs("agent37-sandbox: spool cleanup", undefined),
+        );
+      }
     }
     return { stdout: outBuf.toString("utf8"), stderr: errBuf.toString("utf8"), code, timedOut: code === 124 };
   }
@@ -352,23 +365,25 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     name: string,
     onStatus?: (text: string) => void,
   ): Promise<{ coldStart: boolean }> {
-    return provisionQueue(key, async () => {
-      if (idByName.has(name)) return { coldStart: false };
-      const existing = await findInstance(name);
-      if (existing) {
-        idByName.set(name, existing.id);
-        if (existing.status !== "running") await ensureRunning(existing.id);
-        return { coldStart: false };
-      }
-      try {
-        onStatus?.("Creating the sandbox…");
-      } catch (error) {
-        void error;
-      }
-      const info = await createInstance(name);
-      idByName.set(name, info.id);
-      return { coldStart: true };
-    });
+    return provisionQueue(key, () =>
+      advisoryLock.withLock(`agent37-provision:${key}`, async () => {
+        if (idByName.has(name)) return { coldStart: false };
+        const existing = await findInstance(name);
+        if (existing) {
+          idByName.set(name, existing.id);
+          if (existing.status !== "running") await ensureRunning(existing.id);
+          return { coldStart: false };
+        }
+        try {
+          onStatus?.("Creating the sandbox…");
+        } catch (error) {
+          void error;
+        }
+        const info = await createInstance(name);
+        idByName.set(name, info.id);
+        return { coldStart: true };
+      }),
+    );
   }
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
@@ -540,10 +555,10 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       const fireKill = () => {
         execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("agent37-sandbox: kill in-flight exec", undefined));
       };
-      if (signal.aborted) fireKill();
       const onAbort = () => fireKill();
       signal.addEventListener("abort", onAbort, { once: true });
       try {
+        signal.throwIfAborted();
         return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
       } finally {
         signal.removeEventListener("abort", onAbort);

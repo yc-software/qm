@@ -659,6 +659,7 @@ export function buildApp(
   const buildAgent37 = (): Sandbox =>
     createAgent37Sandbox(workspace, {
       ...config.agent37Sandbox,
+      advisoryLock,
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,

@@ -112,7 +112,7 @@ export function installFakeAgent37(): FakeAgent37 {
   const info = (m: FakeInstance) => ({
     id: m.id,
     status: m.status,
-    template: m.template ?? "agent37-qm-computer",
+    template: m.template ?? "agent37-codex",
     resources: m.resources ?? {},
     name: m.name,
     auto_sleep: m.autoSleep === true,

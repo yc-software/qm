@@ -4227,6 +4227,14 @@ test("env.core.SANDBOX_BACKEND adopts the deployment's substrate; the default is
     env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "sprites" } },
   };
   assert.equal(serviceEnvironment(adopted, "core").SANDBOX_BACKEND, "sprites");
+  const agent37: QmConfig = {
+    ...config,
+    sandbox: undefined,
+    env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "agent37" } },
+  };
+  const agent37Env = serviceEnvironment(agent37, "core");
+  assert.equal(agent37Env.SANDBOX_BACKEND, "agent37");
+  assert.equal(agent37Env.AWS_SANDBOX_IMAGE, undefined);
 });
 
 test("env.core.S3_BUCKET adopts a pre-existing snapshot bucket; the derived object store remains the default", () => {

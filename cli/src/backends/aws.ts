@@ -252,6 +252,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
     ...(service === "core" ? securityScreenEnv(config) : {}),
   };
   if (service === "core") {
+    const sandboxBackend = config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
     const stores = {
       DEPLOY_PROVIDER: "aws",
       AWS_DEPLOY_REGION: aws.region,
@@ -262,9 +263,9 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       S3_BUCKET: config.env.core?.S3_BUCKET?.trim() || awsObjectStoreBucket(config),
       S3_REGION: aws.region,
     };
-    if (usesFlySandboxes(config)) {
+    if (sandboxBackend && sandboxBackend !== "aws") {
       Object.assign(env, sandboxCoreEnv(config).env, {
-        SANDBOX_BACKEND: config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "sprites",
+        SANDBOX_BACKEND: sandboxBackend,
         ...stores,
       });
     } else {

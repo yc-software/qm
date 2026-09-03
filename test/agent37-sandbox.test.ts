@@ -9,6 +9,7 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { installFakeAgent37, FAKE_AGENT37_API_KEY, type FakeAgent37 } from "./support/fake-agent37.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
@@ -123,6 +124,16 @@ test("instance is reused across provisions and warm start is reported", async ()
   assert.equal(fake.names().filter((n) => n === a.id).length, 1);
 });
 
+test("a shared advisory lock prevents duplicate instances across core replicas", async () => {
+  const advisoryLock = createMemoryAdvisoryLock();
+  const [a, b] = await Promise.all([
+    make({ advisoryLock }).provision(layers),
+    make({ advisoryLock }).provision(layers),
+  ]);
+  assert.equal(a.id, b.id);
+  assert.equal(fake.names().filter((name) => name === a.id).length, 1);
+});
+
 test("exec on a sleeping instance wakes it and retries", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "keep.txt", "still here\n");
@@ -195,6 +206,25 @@ test("large command output survives the API's output cap exactly", async () => {
   assert.equal(r.stdout, "x".repeat(900 * 1024));
 });
 
+test("command output is bounded and spool files are removed on rejection", async () => {
+  const h = await sandbox.provision(layers);
+  await assert.rejects(
+    sandbox.run(h, `python3 -c "print('x' * (${17 * 1024 * 1024}), end='')"`),
+    /output exceeds 16777216 bytes/,
+  );
+  const leftovers = await sandbox.run(h, "ls /home/node/.qm-exec-* 2>/dev/null | wc -l");
+  assert.equal(leftovers.stdout.trim(), "2", "only the inspection command's stdout/stderr spools exist");
+});
+
+test("an already-aborted command is never executed", async () => {
+  const h = await sandbox.provision(layers);
+  const before = fake.execScripts().length;
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(sandbox.run(h, "touch should-not-exist", { signal: controller.signal }), /aborted/i);
+  assert.equal(fake.execScripts().length, before);
+});
+
 test("an instance already named after the scope is adopted instead of duplicated", async () => {
   await fake.fetchImpl("https://api.agent37.com/v1/instances", {
     method: "POST",
@@ -220,7 +250,7 @@ test("timeouts beyond the API's sync exec ceiling run detached and poll to compl
 test("create requests the template, the default shape and no auto sleep", async () => {
   const h = await sandbox.provision(layers);
   const created = fake.instance(h.id);
-  assert.equal(created?.template, "agent37-qm-computer");
+  assert.equal(created?.template, "agent37-codex");
   assert.equal(created?.autoSleep, false);
   assert.deepEqual(created?.resources, { cpu: 2, memory: 4, disk: 8 });
 });

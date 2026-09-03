@@ -45,6 +45,19 @@ test("first provision launches a body (cold) and run() execs over the daemon", a
   assert.equal(r.stdout.trim(), "hello");
 });
 
+test("an already-aborted command neither resumes the body nor executes", async () => {
+  const fake = installFakeMicrovm();
+  const sb = makeSandbox(fake);
+  const h = await sb.provision(rw(scopeId("personal", "U-aborted")));
+  await sb.teardown(h);
+  const commandCount = fake.commands.length;
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(sb.run(h, "echo should-not-run", { signal: controller.signal }), /aborted/i);
+  assert.equal(fake.bodies.get(h.id)!.state, "SUSPENDED");
+  assert.equal(fake.commands.length, commandCount);
+});
+
 test("declared credential paths are symlinked outside the snapshotted home", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake, {
