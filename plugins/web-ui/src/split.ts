@@ -1152,11 +1152,11 @@ class GroupActions implements IHeaderActionsRenderer {
                       type="button"
                       role="menuitem"
                       @click=${() => {
-                      this.menuOpen = false;
-                      this.draw();
-                      if (maximized) props.api.exitMaximized();
-                      else props.api.maximize();
-                    }}
+                        this.menuOpen = false;
+                        this.draw();
+                        if (maximized) props.api.exitMaximized();
+                        else props.api.maximize();
+                      }}
                     >
                       ${icon(maximized ? Shrink : Expand, 15)}<span
                         >${maximized ? "Restore to grid (Esc)" : "Focus over the grid"}</span
