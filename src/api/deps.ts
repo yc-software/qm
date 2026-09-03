@@ -14,6 +14,7 @@ import type { EgressAuditSink } from "../admin/egress-audit-sink.ts";
 import type { BrokerFetch } from "./credential-broker.ts";
 import type { GitHttpFetch } from "./git-http-broker.ts";
 import type { AdminService } from "../admin/admin-service.ts";
+import type { InviteMailer } from "../admin/invite-email.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -99,6 +100,9 @@ export interface ServerDeps {
   harnessId?: string;
   harnessCarriedModelAuth?: ModelProvider;
   admin?: AdminService;
+  inviteMailer?: InviteMailer;
+  emailAuthPrincipals?: readonly string[];
+  emailAuthDomain?: string;
   rateLimiter?: RateLimiter;
   sessions?: SessionStore;
   screenSecurity?: SecurityScreenProbe;

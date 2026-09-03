@@ -392,13 +392,27 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     name: "AUTH_EMAIL_FROM",
     service: "auth",
     required: true,
-    description: 'Verified sender for sign-in links, e.g. "Acme <no-reply@acme.com>".',
+    description: 'Verified sender for sign-in links and external-user invitations, e.g. "Acme <no-reply@acme.com>".',
+  },
+  {
+    name: "AUTH_EMAIL_FROM",
+    service: "core",
+    required: false,
+    description:
+      "Sender for external-user invitations sent from the admin Users tab or by chatting with QM; the same verified sender the sign-in broker uses.",
   },
   {
     name: "RESEND_API_KEY",
     service: "auth",
     required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "resend" } },
-    description: "Resend API key used to deliver sign-in links.",
+    description: "Resend API key used to deliver sign-in links and external-user invitations.",
+  },
+  {
+    name: "RESEND_API_KEY",
+    service: "core",
+    required: false,
+    description:
+      "Lets core email invitations to external users, added from the admin Users tab or by chatting with QM, through Resend.",
   },
   {
     name: "SMTP_HOST",

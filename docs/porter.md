@@ -123,6 +123,10 @@ Nothing generates the inter-service wiring for you — `cli/src/services.ts` has
 | admin        | `ADMIN_BASE_PATH=/admin`                                                                                                                                                                                                                                                                                                                          |
 | auth         | `AUTH_ISSUER=<portal>/idp`, `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, `AUTH_REDIRECT_URI=<portal>/auth/callback`, `AUTH_TOKEN_SECRET`, `AUTH_SIGNING_JWK` (a P-256 private JWK), `AUTH_EMAIL_FROM`, and `AUTH_EMAIL_TRANSPORT` with a `RESEND_API_KEY` or SMTP credentials — without a mail transport nobody can sign in                            |
 
+Core also reads `RESEND_API_KEY` and `AUTH_EMAIL_FROM` when they are set — optional there,
+they let admins email external-user invitations from the admin Users tab or by chatting
+with QM.
+
 `src/deployment/secret-schema.ts` is the authoritative list of what each service
 requires; when a boot refusal names a variable this table doesn't, that file is the place
 to look.

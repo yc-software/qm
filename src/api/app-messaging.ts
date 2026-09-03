@@ -15,6 +15,8 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
+import type { DirectoryMember } from "../directory/directory-store.ts";
+import { externalMemberActive } from "../identity/external-members.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
@@ -89,11 +91,21 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
-  const emailAuthMembers = deps.emailAuthMembers ?? [];
+  const emailMembers = async (): Promise<DirectoryMember[]> => {
+    const externals = (await deps.identity.listExternalMembers()).filter((member) => externalMemberActive(member));
+    return [
+      ...(deps.emailAuthMembers ?? []),
+      ...externals.map((member) => ({
+        principalId: member.email,
+        displayName: member.email,
+        type: "internal" as const,
+      })),
+    ];
+  };
   const mergedDirectoryMembers = async () => {
-    const stored = await deps.directory.list();
+    const [stored, viaEmail] = await Promise.all([deps.directory.list(), emailMembers()]);
     const seen = new Set(stored.map((member) => personKey(member.principalId)));
-    return [...stored, ...emailAuthMembers.filter((member) => !seen.has(personKey(member.principalId)))];
+    return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
   };
 
   return {
@@ -404,7 +416,7 @@ export function createMessagingMethods(
       const stored = await deps.directory.resolve(query);
       if (stored.kind !== "none") return stored;
       const key = personKey(query);
-      const member = emailAuthMembers.find(
+      const member = (await emailMembers()).find(
         (candidate) => personKey(candidate.principalId) === key || personKey(candidate.displayName) === key,
       );
       return member ? { kind: "one", member } : { kind: "none" };
@@ -421,7 +433,7 @@ export function createMessagingMethods(
     async directoryMember(principalId) {
       return (
         (await deps.directory.get(principalId)) ??
-        emailAuthMembers.find((member) => personKey(member.principalId) === personKey(principalId)) ??
+        (await emailMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ??
         null
       );
     },

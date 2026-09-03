@@ -144,6 +144,11 @@ verified work email, lowercased; sign-in fails unless the IdP marks the email ve
 (the IdP's opaque subject, e.g. the Slack U… id — only for deployments still keyed on Slack ids).
 `OIDC_ALLOWED_EMAIL_DOMAIN` — with `email`, additionally reject any account outside this domain
 (checked against the email suffix and Google's `hd` claim).
+An address those rules reject still signs in when an org admin has invited it as an
+external user: the callback asks core over the signed core client
+(`GET /v1/auth/broker/email-allowed`) and accepts an active invitation, `hd` notwithstanding.
+An address the env rules permit never triggers the lookup; core unreachable means not allowed.
+Deployments keyed on `sub` never consult it, so external users cannot sign in there.
 
 ### Google Workspace SSO with the email principal
 

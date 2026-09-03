@@ -55,6 +55,18 @@ store; the broker refuses to start if any of it is missing or a placeholder.
 The signing key is single, not a set: rotating it means redeploying, and links
 minted by the previous key stop verifying at that moment.
 
+## Invited external users
+
+An address an org admin has invited as an external user (Admin → Users, or by
+asking the agent) may sign in until its expiry even though it is on neither
+`AUTH_ALLOWED_EMAILS` nor `AUTH_ALLOWED_EMAIL_DOMAIN`. The env list is checked
+first and settles the answer on its own; only an address it does not cover is
+looked up in core over the signed core client (`GET
+/v1/auth/broker/email-allowed`), at every step — when the link is requested,
+when it is opened, and when the code is exchanged — so a revoked or expired
+invitation stops working at once. A lookup that fails or times out counts as not
+allowed. One of the two env variables is still required at boot.
+
 ## Email transport
 
 `AUTH_EMAIL_TRANSPORT` selects one of two, and the broker refuses to start

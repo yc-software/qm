@@ -476,6 +476,8 @@
         margin: 0 0 6px;
       }
       input[type="text"],
+      input[type="email"],
+      input[type="date"],
       input[type="password"],
       input[type="number"],
       textarea,
@@ -10891,6 +10893,21 @@
             "err",
           );
       }
+      async function revokeExternalUser(m) {
+        const question =
+          m.status === "active"
+            ? 'Revoke access for "' + m.email + '"? They will no longer be able to sign in.'
+            : 'Remove "' + m.email + '" from the list?';
+        if (!confirm(question)) return;
+        const r = await api("DELETE", "/api/external-users/" + encodeURIComponent(m.email));
+        if (r.ok) renderData();
+        else
+          setStatus(
+            "st-external",
+            r.status === 403 ? "Only an org admin may revoke." : r.data?.message || "Revoke failed.",
+            "err",
+          );
+      }
       function keychainGrantStatus(g) {
         const expired = g.expiresAt && g.expiresAt <= Date.now();
         if (expired && g.status === "active") return ["expired", "warn"];
@@ -11087,6 +11104,7 @@
       function renderUsers(root, d) {
         const users = d.users || [];
         const grants = d.grants || [];
+        const externalUsers = d.externalUsers || [];
         let filterVal = "";
         defaultShell({
           stats: [
@@ -11218,6 +11236,97 @@
         impCard.querySelector(".body").append(impDatalist, impSt);
         root.appendChild(impCard);
 
+        const inviteEmail = d.inviteEmail || {};
+        const emailInput = document.createElement("input");
+        emailInput.type = "email";
+        emailInput.placeholder = "name@example.com";
+        emailInput.spellcheck = false;
+        emailInput.autocapitalize = "none";
+        const roleSelect = document.createElement("select");
+        roleSelect.append(new Option("Member", "member"), new Option("Org admin", "org_admin"));
+        const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+        const expiresInput = document.createElement("input");
+        expiresInput.type = "date";
+        expiresInput.min = isoDay(Date.now());
+        expiresInput.value = isoDay(Date.now() + 30 * 86400000);
+        const inviteBtn = document.createElement("button");
+        inviteBtn.className = "primary";
+        inviteBtn.type = "button";
+        inviteBtn.textContent = "Send invite";
+        inviteBtn.onclick = async () => {
+          const email = emailInput.value.trim();
+          if (!email) return setStatus("st-external", "Email required.", "err");
+          if (!expiresInput.value) return setStatus("st-external", "Expiry date required.", "err");
+          inviteBtn.disabled = true;
+          const r = await api("POST", "/api/external-users", {
+            email,
+            role: roleSelect.value,
+            expiresAt: expiresInput.value,
+          });
+          inviteBtn.disabled = false;
+          if (!r.ok)
+            return setStatus(
+              "st-external",
+              r.status === 403 ? "Only an org admin may invite." : r.data?.message || "Invite failed.",
+              "err",
+            );
+          const member = r.data.member;
+          const expires = " (expires " + fmtTime(member.expiresAt) + ")";
+          await renderData();
+          setStatus(
+            "st-external",
+            r.data.emailSent
+              ? "Invite sent to " + member.email + expires
+              : r.data.emailProblem
+                ? "Added " +
+                  member.email +
+                  ", but no invitation email was sent: " +
+                  r.data.emailProblem +
+                  "." +
+                  (r.data.signInUrl ? " Share " + r.data.signInUrl + " with them." : "")
+                : "Updated " + member.email + " — " + labelRole(member.role) + expires,
+            r.data.emailSent || !r.data.emailProblem ? "ok" : "dirty",
+            true,
+          );
+        };
+        const inviteForm = document.createElement("div");
+        inviteForm.className = "grant-form";
+        inviteForm.append(
+          mkField("grow", "Email", emailInput),
+          mkField("", "Role", roleSelect),
+          mkField("", "Expires", expiresInput),
+          inviteBtn,
+        );
+        const inviteNote = document.createElement("p");
+        inviteNote.className = inviteEmail.configured === false ? "hint flag-warn" : "hint";
+        const signInHint = inviteEmail.signInUrl ? " Sign-in link to share: " + inviteEmail.signInUrl : "";
+        inviteNote.textContent =
+          inviteEmail.configured === false
+            ? (inviteEmail.problem || "Invitation emails are not configured") +
+              ". The user is still added; share the sign-in link yourself." +
+              signInHint
+            : "Invitation emails go out through Resend — core needs RESEND_API_KEY and AUTH_EMAIL_FROM. Without them the user is still added and you share the sign-in link yourself.";
+        const invite = document.createElement("div");
+        invite.className = "hidden";
+        invite.style.margin = "0 0 14px";
+        invite.append(inviteForm, inviteNote);
+        const addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.className = "rowbtn";
+        addBtn.textContent = "+";
+        addBtn.title = "Add external user";
+        addBtn.setAttribute("aria-label", "Add external user");
+        addBtn.setAttribute("aria-expanded", "false");
+        addBtn.onclick = () => {
+          const open = !invite.classList.toggle("hidden");
+          addBtn.setAttribute("aria-expanded", String(open));
+          if (open) emailInput.focus();
+        };
+        const externalSt = document.createElement("p");
+        externalSt.className = "status";
+        externalSt.id = "st-external";
+        externalSt.style.margin = "10px 0 0";
+
         const lists = document.createElement("div");
         lists.className = "list-root";
         root.appendChild(lists);
@@ -11229,6 +11338,7 @@
           const filteredUsers = users.filter((u) =>
             matches([u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"]),
           );
+          const filteredExternal = externalUsers.filter((m) => matches([m.email, m.role, m.invitedBy || "", m.status]));
 
           const admins = actionTable(
             ["Principal", "Role", "Scope", "Granted by", ""],
@@ -11289,11 +11399,40 @@
             (u) => go({ view: "user", scope, session: null, principal: u.principalId }),
             "No users match.",
           );
+          const usersCard = dataCard(
+            "Users",
+            "Everyone who has used the agent — click a row for their activity, artifacts, and config.",
+            roster,
+          );
+          usersCard.querySelector(".head h2").append(" ", addBtn);
+          usersCard.querySelector(".body").prepend(invite);
+          usersCard.querySelector(".body").appendChild(externalSt);
+          lists.appendChild(usersCard);
+
+          const external = actionTable(
+            ["Email", "Role", "Expires", "Invited by", "Status", ""],
+            filteredExternal,
+            (m) => [
+              { text: m.email, cls: "mono" },
+              nodeCell(mutedText(labelRole(m.role))),
+              (m.status === "active" ? "Ends " : "Ended ") + isoDay(m.expiresAt) + " (UTC)",
+              m.invitedBy || "-",
+              { badge: m.status === "active" ? "Active" : "Expired", kind: m.status === "active" ? "ok" : "warn" },
+              m.status === "active"
+                ? { action: { label: "Revoke", danger: true, run: () => revokeExternalUser(m) } }
+                : Date.now() - m.expiresAt >= 86400000
+                  ? { action: { label: "Remove", run: () => revokeExternalUser(m) } }
+                  : "",
+            ],
+            externalUsers.length
+              ? "No external users match."
+              : "No external users. Use + on the Users card to invite one.",
+          );
           lists.appendChild(
             dataCard(
-              "Users",
-              "Everyone who has used the agent — click a row for their activity, artifacts, and config.",
-              roster,
+              "External users",
+              "Outside collaborators invited by email. They sign in at the portal with that address until it expires.",
+              external,
             ),
           );
         };

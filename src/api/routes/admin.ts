@@ -17,10 +17,12 @@ import { listSandboxRoutes, migrateSandboxScope } from "./admin/sandbox.ts";
 import {
   createAdminGrant,
   getUserDetail,
+  inviteExternalUser,
   listKeychainStatus,
   listUsers,
   resetUserToBrandNew,
   revokeAdminGrant,
+  revokeExternalUser,
   searchDirectory,
   setUserOnboarding,
   startImpersonation,
@@ -127,6 +129,8 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/admin/users/:principalId/reset", auth: "either", handle: resetUserToBrandNew },
   { method: "POST", path: "/v1/admin/grants", auth: "either", handle: createAdminGrant },
   { method: "DELETE", path: "/v1/admin/grants/:principalId", auth: "either", handle: revokeAdminGrant },
+  { method: "POST", path: "/v1/admin/external-users", auth: "either", handle: inviteExternalUser },
+  { method: "DELETE", path: "/v1/admin/external-users/:email", auth: "either", handle: revokeExternalUser },
   { method: "POST", path: "/v1/admin/impersonate/stop", auth: "either", handle: stopImpersonation },
   { method: "POST", path: "/v1/admin/impersonate", auth: "either", handle: startImpersonation },
 ];

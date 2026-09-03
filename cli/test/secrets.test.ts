@@ -335,6 +335,24 @@ test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a port
   );
 });
 
+test("the invitation-email pair reaches core as optional secrets on every topology", () => {
+  for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
+    const alone = secretByName(makeConfig(), name);
+    assert.equal(alone.required, false);
+    assert.deepEqual([...secretDestinations(alone).keys()], ["core"]);
+    assert.match(alone.description, /admin Users tab or by chatting with QM/);
+    assert.match(renderEnvExample(makeConfig()), new RegExp(`^# ${name}=  # optional$`, "m"));
+
+    const broker = makeConfig({
+      services: ["core", "portal", "auth"],
+      env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
+    });
+    const shared = secretByName(broker, name);
+    assert.equal(shared.required, true);
+    assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["auth", "core"]);
+  }
+});
+
 test("a fly deployment tells core which sandbox substrate to boot", () => {
   const config = makeConfig({
     target: "fly",

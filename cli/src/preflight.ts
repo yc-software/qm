@@ -278,9 +278,9 @@ export async function emailTransportPreflight(config: QmConfig, secrets: Readonl
     return;
   }
   if (value("RESEND_API_KEY")) {
-    warn(
-      'RESEND_API_KEY is set but env.auth.AUTH_EMAIL_TRANSPORT is "smtp" — the value is unused; ' +
-        'remove it or set the transport to "resend"',
+    step(
+      'RESEND_API_KEY is set but env.auth.AUTH_EMAIL_TRANSPORT is "smtp" — the sign-in broker ignores it; ' +
+        "core still uses it to email external-user invitations",
     );
   }
   const host = value("SMTP_HOST");

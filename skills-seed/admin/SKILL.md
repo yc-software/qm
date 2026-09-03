@@ -1,6 +1,6 @@
 ---
 name: admin
-description: Act for an org admin — the admin API (scope directory, per-scope config & SOUL, any scope's memory, transcripts & captured prompts, files, user roster, audit/errors/metrics/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
+description: Act for an org admin — the admin API (scope directory, per-scope config & SOUL, any scope's memory, transcripts & captured prompts, files, user roster & external users, audit/errors/metrics/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
 ---
 
 # admin — act for an org admin, from chat
@@ -91,6 +91,24 @@ GET /v1/admin/egress?scope=    GET /v1/admin/retention
 GET /v1/admin/users            → roster + admin status (org-wide)
 ```
 
+## External users
+
+Outside collaborators, admitted by email with a role and an expiry; they sign in at the
+portal with that address until it lapses. Listed alongside the roster:
+
+```bash
+GET /v1/admin/users                          → externalUsers: [{email, role, expiresAt, invitedBy, status: active|expired}]
+POST /v1/admin/external-users                {"email":"ana@partner.com","expiresAt":"2026-12-31"}   role defaults to member; expiresAt required (a bare date means end of that day UTC; ISO date-time or epoch ms also work)
+DELETE /v1/admin/external-users/<email>      → revokes access now; the row stays listed as expired (a DELETE a day after expiry removes it)
+```
+
+Confirm with the admin before inviting or revoking — say who, which role, and until
+when. The invitation email needs Resend configured on core (`RESEND_API_KEY` +
+`AUTH_EMAIL_FROM`); without it the user is still added. When the response has
+`emailSent:false`, tell the admin why (`emailProblem`) and hand them `signInUrl` to pass
+along themselves. The `org_admin` role for externals is portal-only, like every other
+grant change — don't offer it.
+
 ## Admin grants (promote / revoke)
 
 Not available through you: who governs the org changes only in the admin dashboard,
@@ -108,5 +126,12 @@ where the admin acts directly. If asked, point them there — don't try the API
   recurring in this room, to turn on this scope's `admin-session-reads` flag — from
   their DM, never from here).
 - `403 … grant changes (promote/revoke) are portal-only` — point them at the dashboard.
+- `403 granting or removing org admin for an external user is portal-only …` — same
+  answer: the dashboard.
+- `409 that address already belongs to a member of the org …` — org email domain, Slack
+  directory, sign-in allow-list, or someone who has already used the agent. They are not
+  external; point the admin at Users / Admins for that person instead.
+- `409 that address holds an org admin grant of its own …` — the admin manages that grant
+  under Admins in the dashboard first.
 - `403 capability token not valid for this route` — this core predates agent admin
   access; the user must use the admin dashboard.
