@@ -14,7 +14,15 @@ import {
   writeState,
 } from "../lib/lease.ts";
 import { slotPorts, slotTokens, poolStore } from "../lib/pool.ts";
-import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEnvFromMain } from "../lib/envctx.ts";
+import {
+  assembleEnv,
+  callerEnvWithRuntimeModelKeys,
+  completeDevSecuritySecrets,
+  currentBranch,
+  gitHead,
+  persistableCallerEnv,
+  seedEnvFromMain,
+} from "../lib/envctx.ts";
 import { ensureDeps } from "../lib/deps.ts";
 import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
@@ -307,10 +315,11 @@ function persistState(): void {
 async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   phase("env", "start");
   seedEnvFromMain(worktree, log);
+  const callerEnv = callerEnvWithRuntimeModelKeys(spec.callerEnv);
   const assembled = await assembleEnv({
     worktree,
-    callerEnv: spec.callerEnv,
-    allowMock: spec.callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
+    callerEnv,
+    allowMock: callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
     log,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
@@ -678,10 +687,11 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     : "";
   const newSpec: BootSpec = { ...spec, callerEnv, canaryChannel: freshCanary };
   if (dryRun) {
+    const runtimeCallerEnv = callerEnvWithRuntimeModelKeys(callerEnv);
     const assembled = await assembleEnv({
       worktree,
-      callerEnv,
-      allowMock: callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
+      callerEnv: runtimeCallerEnv,
+      allowMock: runtimeCallerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
       log,
     });
     const dryEnvSha = computeEnvSha(assembled.env);
@@ -696,7 +706,8 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
       dryRun: true,
     };
   }
-  writeFileSync(join(lock, "boot-spec.json"), JSON.stringify(newSpec, null, 2), { mode: 0o600 });
+  const persistedSpec = { ...newSpec, callerEnv: persistableCallerEnv(callerEnv) };
+  writeFileSync(join(lock, "boot-spec.json"), JSON.stringify(persistedSpec, null, 2), { mode: 0o600 });
   const inputs = await assembleAndPrepare(newSpec);
   const newEnvSha = computeEnvSha(inputs.baseEnv);
   const newGitSha = gitHead(worktree);

@@ -28,7 +28,12 @@ import {
   writeHeartbeat,
   writeMeta,
 } from "../scripts/dev/lib/lease.ts";
-import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
+import {
+  assembleEnv,
+  callerEnvWithRuntimeModelKeys,
+  completeDevSecuritySecrets,
+  persistableCallerEnv,
+} from "../scripts/dev/lib/envctx.ts";
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
 import { loadConfig, OPENCODE_RUNTIME_VERSION, providerKeysPresent } from "../src/config.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
@@ -321,6 +326,91 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(mock.harness, "mock");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;
   else process.env.QM_DEV_ENV = prevLive;
+  rmSync(worktree, { recursive: true, force: true });
+});
+
+test("persisted caller env keeps model secret references but omits model API key values", () => {
+  const callerEnv = {
+    ANTHROPIC_API_KEY: "anthropic-value",
+    OPENAI_API_KEY: "  op://Development/OpenAI/credential  ",
+    DEV_INSTANCE_ORG_ID: "acme",
+  };
+  const persisted = persistableCallerEnv(callerEnv);
+  assert.deepEqual(persisted, {
+    OPENAI_API_KEY: "op://Development/OpenAI/credential",
+    DEV_INSTANCE_ORG_ID: "acme",
+  });
+  assert.equal(callerEnv.ANTHROPIC_API_KEY, "anthropic-value");
+  assert.doesNotMatch(JSON.stringify(persisted), /anthropic-value/);
+});
+
+test("runtime model keys restore omitted values without replacing persisted references", () => {
+  const callerEnv = callerEnvWithRuntimeModelKeys(
+    {
+      OPENAI_API_KEY: "op://Development/OpenAI/credential",
+      DEV_INSTANCE_ORG_ID: "acme",
+    },
+    {
+      ANTHROPIC_API_KEY: "anthropic-runtime-value",
+      OPENAI_API_KEY: "openai-runtime-value",
+    },
+  );
+  assert.deepEqual(callerEnv, {
+    ANTHROPIC_API_KEY: "anthropic-runtime-value",
+    OPENAI_API_KEY: "op://Development/OpenAI/credential",
+    DEV_INSTANCE_ORG_ID: "acme",
+  });
+});
+
+test("env assembly resolves model API key references through 1Password without logging values", async () => {
+  const worktree = mkdtempSync(join(tmpdir(), "qm-wt-"));
+  mkdirSync(join(worktree, ".git"));
+  writeFileSync(join(worktree, ".env"), "");
+  const liveEnv = join(worktree, "dev.env");
+  writeFileSync(liveEnv, "");
+  const previousLiveEnv = process.env.QM_DEV_ENV;
+  process.env.QM_DEV_ENV = liveEnv;
+  const logLines: string[] = [];
+  const references: string[] = [];
+  const assembled = await assembleEnv({
+    worktree,
+    callerEnv: {
+      HARNESS: "codex",
+      OPENAI_API_KEY: "op://Development/OpenAI/credential",
+    },
+    allowMock: false,
+    log: (message) => logLines.push(message),
+    probeLoginShell: async () => "",
+    resolveOnePasswordSecret: async (reference) => {
+      references.push(reference);
+      return "openai-resolved-value";
+    },
+  });
+  assert.equal(assembled.env.OPENAI_API_KEY, "openai-resolved-value");
+  assert.equal(assembled.openaiKeySource, "your shell export via 1Password");
+  assert.deepEqual(references, ["op://Development/OpenAI/credential"]);
+  assert.doesNotMatch(logLines.join("\n"), /openai-resolved-value/);
+
+  await assert.rejects(
+    assembleEnv({
+      worktree,
+      callerEnv: { ANTHROPIC_API_KEY: "op://Development/Anthropic/credential" },
+      allowMock: false,
+      log: (message) => logLines.push(message),
+      probeLoginShell: async () => "",
+      resolveOnePasswordSecret: async () => {
+        throw new Error("op://Development/Anthropic/credential");
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /ANTHROPIC_API_KEY could not be resolved/);
+      assert.doesNotMatch(error.message, /Development\/Anthropic/);
+      return true;
+    },
+  );
+  if (previousLiveEnv === undefined) delete process.env.QM_DEV_ENV;
+  else process.env.QM_DEV_ENV = previousLiveEnv;
   rmSync(worktree, { recursive: true, force: true });
 });
 

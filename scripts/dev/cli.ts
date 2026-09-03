@@ -28,7 +28,7 @@ import {
   supervisorAlive,
   takenSummary,
 } from "./lib/lease.ts";
-import { callerEnvSnapshot, currentBranch, repoRoot } from "./lib/envctx.ts";
+import { callerEnvSnapshot, currentBranch, persistableCallerEnv, repoRoot } from "./lib/envctx.ts";
 import { killTree, pidAlive, portHolders, spawnDetached } from "./lib/proc.ts";
 import {
   resolveSocketPath,
@@ -243,7 +243,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
         slot,
         worktree,
         branch,
-        callerEnv,
+        callerEnv: persistableCallerEnv(callerEnv),
         watch: !opts["no-watch"] && callerEnv.DEV_INSTANCE_WATCH !== "0",
         sandbox: opts.sandbox as "local" | "sprites" | "smolmachines" | "porter" | "auto",
         canaryChannel,

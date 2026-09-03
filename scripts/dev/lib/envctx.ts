@@ -24,6 +24,56 @@ const DEV_SECURITY_SECRET_KEYS = [
   "PORTAL_SESSION_SECRET",
 ] as const;
 
+const MODEL_API_KEY_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const;
+
+function onePasswordReference(value: string | undefined): string {
+  const reference = value?.trim() ?? "";
+  return reference.startsWith("op://") ? reference : "";
+}
+
+export function persistableCallerEnv(callerEnv: Record<string, string>): Record<string, string> {
+  const persisted = { ...callerEnv };
+  for (const key of MODEL_API_KEY_NAMES) {
+    const reference = onePasswordReference(persisted[key]);
+    if (reference) persisted[key] = reference;
+    else delete persisted[key];
+  }
+  return persisted;
+}
+
+export function callerEnvWithRuntimeModelKeys(
+  callerEnv: Record<string, string>,
+  runtimeEnv: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const runtimeCallerEnv = { ...callerEnv };
+  for (const key of MODEL_API_KEY_NAMES) {
+    if (!runtimeCallerEnv[key] && runtimeEnv[key]) runtimeCallerEnv[key] = runtimeEnv[key];
+  }
+  return runtimeCallerEnv;
+}
+
+async function readOnePasswordSecret(reference: string): Promise<string> {
+  const result = await run("op", ["read", "--no-newline", reference], { timeoutMs: 15_000 });
+  if (result.code !== 0 || !result.stdout) throw new Error("1Password CLI could not read the secret");
+  return result.stdout;
+}
+
+async function resolveModelApiKey(
+  key: (typeof MODEL_API_KEY_NAMES)[number],
+  value: string | undefined,
+  resolver: (reference: string) => Promise<string>,
+): Promise<{ value: string | undefined; fromOnePassword: boolean }> {
+  const reference = onePasswordReference(value);
+  if (!reference) return { value, fromOnePassword: false };
+  try {
+    const resolved = await resolver(reference);
+    if (!resolved) throw new Error("empty secret");
+    return { value: resolved, fromOnePassword: true };
+  } catch {
+    throw new Error(`${key} could not be resolved by the 1Password CLI`);
+  }
+}
+
 export function completeDevSecuritySecrets(env: Record<string, string>, seed: string): void {
   for (const key of DEV_SECURITY_SECRET_KEYS) {
     if (!env[key]) env[key] = sha256Hex(`qm-dev\0${seed}\0${key}`);
@@ -95,6 +145,7 @@ export async function assembleEnv(opts: {
   allowMock: boolean;
   log: (msg: string) => void;
   probeLoginShell?: () => Promise<string>;
+  resolveOnePasswordSecret?: (reference: string) => Promise<string>;
 }): Promise<AssembledEnv> {
   const warnings: string[] = [];
   const liveEnvFile = liveEnvPath();
@@ -126,6 +177,14 @@ export async function assembleEnv(opts: {
     env.OPENAI_API_KEY = wtEnv.OPENAI_API_KEY;
     openaiKeySource = "the worktree .env";
   }
+
+  const resolver = opts.resolveOnePasswordSecret ?? readOnePasswordSecret;
+  const anthropicKey = await resolveModelApiKey("ANTHROPIC_API_KEY", env.ANTHROPIC_API_KEY, resolver);
+  if (anthropicKey.value) env.ANTHROPIC_API_KEY = anthropicKey.value;
+  if (anthropicKey.fromOnePassword) anthropicKeySource = `${anthropicKeySource} via 1Password`;
+  const openaiKey = await resolveModelApiKey("OPENAI_API_KEY", env.OPENAI_API_KEY, resolver);
+  if (openaiKey.value) env.OPENAI_API_KEY = openaiKey.value;
+  if (openaiKey.fromOnePassword) openaiKeySource = `${openaiKeySource} via 1Password`;
 
   if (!env.CODEX_AUTH_FILE && wtEnv.CODEX_AUTH_FILE) env.CODEX_AUTH_FILE = wtEnv.CODEX_AUTH_FILE;
   let codexAuthSource = "";

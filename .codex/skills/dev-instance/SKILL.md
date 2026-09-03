@@ -161,6 +161,17 @@ The launcher reads values from, in priority order: exported shell env, the machi
 worktree's `.env` (seeded from the main checkout in linked worktrees). Slack pool tokens
 default to `~/.config/qm/slack-pool`.
 
+For a local model API key stored in 1Password, export its secret reference instead of its
+value. The local supervisor resolves the reference with `op read` when it assembles the
+runtime environment. The durable `boot-spec.json` stores the `op://` reference, not the
+resolved value. A raw `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` export still works, but the
+launcher omits its value from `boot-spec.json`.
+
+```bash
+export ANTHROPIC_API_KEY='op://Development/Anthropic API/credential'
+bash scripts/dev-instance.sh up
+```
+
 When a cloud sandbox backend is configured it also validates that provider's access at
 startup, refreshes a stale provider token from the provider CLI's own logged-in session
 where it can, and — if a tunnel binary is present — opens a quick tunnel so sandbox
