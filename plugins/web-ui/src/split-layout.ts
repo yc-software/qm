@@ -49,6 +49,14 @@ export function serializedTileCount(layout: unknown): number {
   return tiles;
 }
 
+export type NewChatPlacement = "replace" | "tile" | "stack";
+
+export function newChatPlacement(paneCount: number, tileCount: number): NewChatPlacement {
+  if (paneCount <= 1 || paneCount >= MAX_PANES) return "replace";
+  if (tileCount > 1 && tileCount < MAX_TILES) return "tile";
+  return "stack";
+}
+
 export function dropAddsTile(drop: { edge: boolean; wholeTile: boolean; sourceTilePanes: number }): boolean {
   if (!drop.edge || drop.wholeTile) return false;
   return drop.sourceTilePanes !== 1;

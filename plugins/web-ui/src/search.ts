@@ -8,10 +8,10 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CornerDownLeft, Search } from "lucide";
 import { api, type CoreSession } from "./core-bridge";
-import { mainConversation } from "./conversations";
 import { recencyGroup } from "./session-list";
 import { openSession, refreshSessions, sessionsState, sessionTitle } from "./sessions";
 import { icon } from "./ui";
+import { startNewChat } from "./split";
 
 interface ChatSearchHit {
   sessionId: string;
@@ -204,9 +204,8 @@ function askQm(): void {
   const q = searchState.query.trim();
   if (!q) return;
   closeChatSearch();
-  const conv = mainConversation();
-  conv.newChat();
-  void conv.state.agent?.prompt(
+  const conv = startNewChat();
+  void conv?.state.agent?.prompt(
     `Find my previous session based on the following search query, give me a link when you've identified it: ${q}`,
   );
 }

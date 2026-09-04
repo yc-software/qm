@@ -35,6 +35,7 @@ import {
   dropAddsTile,
   MAX_PANES,
   MAX_TILES,
+  newChatPlacement,
   serializedTileCount,
   v1PaneSeeds,
   layoutNeedsSessionList,
@@ -492,23 +493,25 @@ function roomForAnotherPane(): boolean {
   return false;
 }
 
-function splitPane(paneId: string, edge: SplitEdge, params: PaneParams): void {
-  if (!dockApi || !roomForAnotherPane()) return;
+function splitPane(paneId: string, edge: SplitEdge, params: PaneParams): IDockviewPanel | null {
+  if (!dockApi || !roomForAnotherPane()) return null;
   if (dockApi.groups.length >= MAX_TILES) {
-    if (tabIntoPane(paneId, params)) canvasToast(`${MAX_TILES} tiles is the limit — opened as a tab`);
-    return;
+    const stacked = tabIntoPane(paneId, params);
+    if (stacked) canvasToast(`${MAX_TILES} tiles is the limit — opened as a tab`);
+    return stacked;
   }
   const fresh = addPane(params, { referencePanel: paneId, direction: edgeToDirection(edge) });
   fresh.api.setActive();
   persist();
+  return fresh;
 }
 
-function tabIntoPane(paneId: string, params: PaneParams): boolean {
-  if (!dockApi || !roomForAnotherPane()) return false;
+function tabIntoPane(paneId: string, params: PaneParams): IDockviewPanel | null {
+  if (!dockApi || !roomForAnotherPane()) return null;
   const fresh = addPane(params, { referencePanel: paneId, direction: "within" });
   fresh.api.setActive();
   persist();
-  return true;
+  return fresh;
 }
 
 export function addBlankPane(scopeId?: string): boolean {
@@ -523,24 +526,45 @@ export function addBlankPane(scopeId?: string): boolean {
   return true;
 }
 
-function replaceFocusedPane(params: PaneParams): boolean {
+function replaceFocusedPane(params: PaneParams): IDockviewPanel | null {
   if (appState.currentView !== "chats") switchView("chats");
-  if (!mountRestoredCanvas() || !dockApi) return false;
+  if (!mountRestoredCanvas() || !dockApi) return null;
   const target = dockApi.getPanel(splitState.focusedId ?? "") ?? dockApi.activePanel ?? dockApi.panels[0];
-  if (!target) return false;
+  if (!target) return null;
   const fresh = addPane(params, { referencePanel: target.id, direction: "within" });
   dockApi.removePanel(target);
   fresh.api.setActive();
   persist();
-  return true;
+  return fresh;
+}
+
+function startNewChatPane(params: PaneParams): IDockviewPanel | null {
+  if (appState.currentView !== "chats") switchView("chats");
+  if (!mountRestoredCanvas() || !dockApi) return null;
+  const target = dockApi.getPanel(splitState.focusedId ?? "") ?? dockApi.activePanel ?? dockApi.panels[0];
+  if (!target) return null;
+  const placement = newChatPlacement(dockApi.panels.length, dockApi.groups.length);
+  if (placement === "replace") return replaceFocusedPane(params);
+  if (placement === "tile") {
+    const r = target.group.element.getBoundingClientRect();
+    return splitPane(target.id, r.width >= r.height ? "right" : "bottom", params);
+  }
+  return tabIntoPane(target.id, params);
+}
+
+// Every New-chat action lands here, so one rule places them all: the pane's own
+// conversation is handed back for the callers that seed it with a prompt or a draft.
+export function startNewChat(scopeId?: string): Conversation | null {
+  const panel = startNewChatPane(scopeId ? { scopeId } : {});
+  return (panel && paneContents.get(panel.id)?.conversation) ?? null;
 }
 
 export function openBlankInFocusedPane(scopeId?: string): boolean {
-  return replaceFocusedPane(scopeId ? { scopeId } : {});
+  return startNewChatPane(scopeId ? { scopeId } : {}) !== null;
 }
 
 export function openThreadInFocusedPane(threadRef: string, scopeId?: string): boolean {
-  return replaceFocusedPane({ threadRef, ...(scopeId ? { scopeId } : {}) });
+  return startNewChatPane({ threadRef, ...(scopeId ? { scopeId } : {}) }) !== null;
 }
 
 function paneSplitWithBlank(panel: IDockviewPanel): void {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { MAX_TILES, v1PaneSeeds } from "../src/split-layout.ts";
+import { MAX_PANES, MAX_TILES, newChatPlacement, v1PaneSeeds } from "../src/split-layout.ts";
 
 const leaf = (sessionId: string | null = null, threadRef: string | null = null): object => ({
   kind: "leaf",
@@ -49,4 +49,20 @@ test("a conversation can be dropped onto a pane's tab strip to become a tab", ()
     new Set(["center", "left", "right", "top", "bottom"]),
     "the body zones must not restate the strip",
   );
+});
+
+test("a new chat replaces the only pane a viewer is looking at", () => {
+  assert.equal(newChatPlacement(1, 1), "replace");
+});
+
+test("a new chat joins the arrangement the viewer already built", () => {
+  assert.equal(newChatPlacement(2, 1), "stack");
+  assert.equal(newChatPlacement(2, 2), "tile");
+  assert.equal(newChatPlacement(MAX_TILES, MAX_TILES), "stack");
+  assert.equal(newChatPlacement(MAX_TILES + 1, MAX_TILES), "stack");
+});
+
+test("a full canvas replaces instead of overflowing", () => {
+  assert.equal(newChatPlacement(MAX_PANES, 1), "replace");
+  assert.equal(newChatPlacement(MAX_PANES, MAX_TILES), "replace");
 });

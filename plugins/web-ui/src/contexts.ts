@@ -31,9 +31,9 @@ import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, fieldSelect, formatBytes, icon, initials, relTime, toggleFormMenu } from "./ui";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
-import { mainConversation } from "./conversations";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
 import { activityOf } from "./session-list";
+import { openBlankInFocusedPane } from "./split";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
 import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron-format";
@@ -1474,7 +1474,7 @@ function selectContext(scopeId: string | null): void {
 }
 
 function startChatIn(c: CoreContext): void {
-  mainConversation().newChat(c.kind === "personal" ? undefined : { scopeId: c.scopeId, name: c.name });
+  openBlankInFocusedPane(c.kind === "personal" ? undefined : c.scopeId);
 }
 
 async function openFromContext(s: CoreSession): Promise<void> {

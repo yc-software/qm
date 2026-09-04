@@ -7,8 +7,8 @@ import { copyText, fieldSelect, icon, relTime } from "./ui";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
+import { startNewChat } from "./split";
 import { appState } from "./shell";
-import { mainConversation } from "./conversations";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import {
   withDeploymentDetailNotice,
@@ -850,8 +850,8 @@ async function openLiveEdit(d: DeploymentView, button: HTMLButtonElement): Promi
 }
 
 function deployWithAgent(): void {
-  const conv = mainConversation();
-  conv.newChat();
+  const conv = startNewChat();
+  if (!conv) return;
   conv.composer.state.draft = "Deploy an app for me. ";
   conv.drawActiveChat(conv.state.agent);
   conv.composer.focusComposerEnd();

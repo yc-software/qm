@@ -18,8 +18,13 @@ const fn = (src: string, name: string): string => {
 };
 
 test("the canvas owns ordinary new-chat actions even with one pane", () => {
-  const replace = fn(split, "openBlankInFocusedPane");
-  assert.match(replace, /replaceFocusedPane/);
+  const entry = fn(split, "openBlankInFocusedPane");
+  assert.match(entry, /startNewChatPane/);
+  const placed = fn(split, "startNewChatPane");
+  assert.match(placed, /newChatPlacement\(dockApi\.panels\.length, dockApi\.groups\.length\)/);
+  assert.match(placed, /replaceFocusedPane/);
+  assert.match(placed, /splitPane/);
+  assert.match(placed, /tabIntoPane/);
   assert.match(shell, /openBlankInFocusedPane\(\);/);
   assert.doesNotMatch(shell, /if \(!addBlankPane\(\)\) mainConversation/);
 
@@ -30,6 +35,26 @@ test("the canvas owns ordinary new-chat actions even with one pane", () => {
   const close = fn(split, "reconcileAfterClose");
   assert.match(close, /if \(dockApi\.panels\.length === 0\) addPane\(\{\}\)/);
   assert.doesNotMatch(close, /exitSplitIfActive|maximizePane|mainConversation/);
+});
+
+// Every way a person starts a new chat is the same action, so they all go through the
+// canvas's placement rule. None of them may claim the full window and tear the canvas down.
+test("every New-chat entry point goes through the canvas", () => {
+  const entries = {
+    "contexts.ts": read("contexts.ts"),
+    "sessions.ts": sessions,
+    "search.ts": read("search.ts"),
+    "crons.ts": read("crons.ts"),
+    "deploys.ts": read("deploys.ts"),
+  };
+  for (const [name, src] of Object.entries(entries)) {
+    assert.doesNotMatch(src, /\.newChat\(/, `${name} must not start a chat outside the canvas`);
+    assert.match(src, /startNewChat\(|openBlankInFocusedPane\(/, `${name} must start it in a pane`);
+  }
+  // The seeding callers need the placed pane's own conversation back.
+  const seeded = fn(split, "startNewChat");
+  assert.match(seeded, /startNewChatPane/);
+  assert.match(seeded, /paneContents\.get\(panel\.id\)\?\.conversation/);
 });
 
 test("a pane opened from a project's + starts its chat in that project", () => {

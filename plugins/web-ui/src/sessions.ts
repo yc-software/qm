@@ -540,7 +540,7 @@ export function drawChatsPage(): void {
         drawChatsPage();
       },
       onRefresh: () => void renderChatsPage(),
-      action: { label: "New chat", onClick: () => mainConversation().newChat() },
+      action: { label: "New chat", onClick: () => openBlankInFocusedPane() },
       search: {
         value: chatsPageQuery,
         placeholder: "Search chats…",
