@@ -67,6 +67,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
         { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
         { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+        { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "openai" },
         { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
       ],
     });
