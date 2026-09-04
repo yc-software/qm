@@ -1056,3 +1056,20 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.equal(await built.projects.membership(groupRef, "member"), true);
   assert.ok(!(await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
 });
+
+test("a project can add a signed-in principal on a deployment whose directory is never populated", async () => {
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "projects-web-only-")),
+      emailAuthPrincipals: ["dana@acme.com"],
+    }),
+  );
+  const session = await built.sessions.getOrCreateByThread("web:rex", "dm", "personal:rex@acme.com");
+  await built.sessions.addParticipant(session.id, "rex@acme.com");
+
+  const project = (await built.app.createProject("dana@acme.com", "demo"))!;
+  const added = await built.app.addProjectMember(project.id, "dana@acme.com", "rex@acme.com");
+
+  assert.equal(added.status, "ok");
+  assert.ok(added.project!.memberIds.includes("rex@acme.com"));
+});

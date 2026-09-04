@@ -601,6 +601,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   return {
     adminBase,
     adminLink,
+    directoryMember: (principalId: string) => app.directoryMember(principalId),
     withAdminLink,
     resolveReachTargetFor,
     approvalRecordIsCurrent,
