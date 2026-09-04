@@ -232,6 +232,18 @@ test("an OpenAI base model and the Codex harness agree on one required key", () 
   assert.equal(matches[0]!.required, true);
 });
 
+test("a secret-backed Codex credential replaces the OpenAI API key requirement", () => {
+  const credentialBacked = makeConfig({
+    modelProvider: "openai",
+    env: { core: { HARNESS: "codex" } },
+    secretEnv: { core: { CODEX_AUTH_CREDENTIAL: "CODEX_AUTH_CREDENTIAL" } },
+  });
+  assert.ok(!computedSecrets(credentialBacked).some((secret) => secret.name === "OPENAI_API_KEY"));
+  const credential = secretByName(credentialBacked, "CODEX_AUTH_CREDENTIAL");
+  assert.equal(credential.required, true);
+  assert.deepEqual(runtimeSecretNames("core", credential), ["CODEX_AUTH_CREDENTIAL"]);
+});
+
 test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavior", () => {
   const deferred = makeConfig();
   assert.equal(secretByName(deferred, "ANTHROPIC_API_KEY").required, false);
