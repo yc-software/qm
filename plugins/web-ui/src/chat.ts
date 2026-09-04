@@ -519,6 +519,12 @@ export function createChatSurface(
     if (agent !== chatState.agent || !chatState.threadRef || agent.state.isStreaming) return;
     if (chatState.resolvingApprovals.size > 0) return;
     chatState.resolvingApprovals.add(decision.requestId);
+    let resolving = true;
+    const releaseSubmission = (): void => {
+      if (!resolving) return;
+      resolving = false;
+      if (agent === chatState.agent) chatState.resolvingApprovals.delete(decision.requestId);
+    };
     ctx.composer.state.error = "";
     drawActiveChat(agent);
     try {
@@ -526,7 +532,7 @@ export function createChatSurface(
       const runId = await resolveApproval(decision);
       if (chatState.normalStreamFn && chatState.onWork)
         await resumeRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork, runId, undefined, () => {
-          chatState.resolvingApprovals.delete(decision.requestId);
+          releaseSubmission();
           drawActiveChat(agent);
         });
     } catch (err) {
@@ -535,8 +541,8 @@ export function createChatSurface(
         drawActiveChat(agent);
       }
     } finally {
+      releaseSubmission();
       if (agent === chatState.agent) {
-        chatState.resolvingApprovals.delete(decision.requestId);
         clearLiveWork();
         try {
           await refreshSessions({ silent: true });

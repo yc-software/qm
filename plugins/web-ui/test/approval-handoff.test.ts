@@ -54,6 +54,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
   let decision = deferred<Response>();
   let continuation = deferred<Response>();
   const handoff = deferred<void>();
+  let refreshGate: ReturnType<typeof deferred<void>> | undefined;
   let submitted = false;
   const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
   const originalFetch = globalThis.fetch;
@@ -81,6 +82,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     if (path.endsWith("/approvals")) return Response.json({ approvals: pending });
     if (path.startsWith("/api/sessions/s1")) {
       if (submitted) await handoff.promise;
+      await refreshGate?.promise;
       return Response.json({ session: row, entries, earlierEntries: 0 });
     }
     if (path === "/api/sessions") return Response.json({ sessions: [row] });
@@ -202,6 +204,35 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       await until(() => host.querySelector<HTMLTextAreaElement>("textarea")?.disabled === false);
     });
 
+    await t.test("settling a previous run cannot clear a repeated approval's submission", async () => {
+      submitted = false;
+      pending = [approval];
+      decision = deferred<Response>();
+      continuation = deferred<Response>();
+      mount();
+      click("Allow once");
+      decision.resolve(Response.json({ runId: "r1" }));
+      await until(() => chat.state.agent!.state.isStreaming && chat.hasLiveRun());
+      refreshGate = deferred<void>();
+      continuation.resolve(
+        Response.json({ status: "done", result: { status: "pending_approval", pendingApprovals: pending } }),
+      );
+      await until(() => !chat.state.agent!.state.isStreaming && !!host.querySelector(".approval-btn"));
+      decision = deferred<Response>();
+      click("Allow once");
+      assert.equal(chat.state.resolvingApprovals.size, 1);
+      refreshGate.resolve();
+      refreshGate = undefined;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      try {
+        assert.equal(chat.state.resolvingApprovals.size, 1);
+        assert.equal(host.querySelector<HTMLTextAreaElement>("textarea")?.disabled, true);
+      } finally {
+        decision.resolve(Response.json({ error: "new request failed" }, { status: 503 }));
+        await until(() => chat.state.resolvingApprovals.size === 0);
+      }
+    });
+
     await t.test("a late response cannot clear a new pane's pending submission", async () => {
       submitted = false;
       pending = [approval];
@@ -222,6 +253,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     });
   } finally {
     handoff.resolve();
+    refreshGate?.resolve();
     decision.resolve(Response.json({ error: "test complete" }, { status: 503 }));
     continuation.resolve(Response.json({ status: "done", result: { status: "ok", reply: "done" } }));
     conv?.state.agent?.abort();
