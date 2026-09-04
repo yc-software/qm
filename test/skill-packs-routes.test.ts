@@ -569,6 +569,118 @@ test("re-import archives removed/renamed/now-ineligible skills and keeps unchang
   }
 });
 
+test("a pack's authCredentialSlug can be set, replaced and cleared, and is validated on both routes", async () => {
+  const repo = makeFixtureRepo();
+  const s = start();
+  const packOf = async (id: string): Promise<any> =>
+    (await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }))).packs.find((p: any) => p.id === id);
+  const register = (body: unknown): Promise<Response> =>
+    fetch(`${s.base}/v1/admin/skill-packs`, { method: "POST", headers: ADMIN, body: JSON.stringify(body) });
+  const patch = (id: string, body: unknown): Promise<Response> =>
+    fetch(`${s.base}/v1/admin/skill-packs/${id}`, { method: "PATCH", headers: ADMIN, body: JSON.stringify(body) });
+
+  try {
+    const reg = await json(await register({ url: repo.dir, ref: repo.sha }));
+    const id = reg.pack.id as string;
+    assert.equal(reg.pack.authCredentialSlug, undefined, "registered without one");
+
+    assert.equal(
+      (await json(await patch(id, { authCredentialSlug: "repo-token" }))).pack.authCredentialSlug,
+      "repo-token",
+    );
+    assert.equal((await packOf(id)).authCredentialSlug, "repo-token", "and it is what the store returns");
+
+    assert.equal(
+      (await json(await patch(id, { authCredentialSlug: "other-token" }))).pack.authCredentialSlug,
+      "other-token",
+      "a wrong credential can be corrected without deleting the pack",
+    );
+
+    assert.equal(
+      (await json(await patch(id, { syncMode: "tracked" }))).pack.authCredentialSlug,
+      "other-token",
+      "a patch that does not mention it leaves it alone",
+    );
+
+    assert.equal((await json(await patch(id, { authCredentialSlug: null }))).pack.authCredentialSlug, undefined);
+    assert.equal((await packOf(id)).authCredentialSlug, undefined, "null clears it in the store");
+
+    await patch(id, { authCredentialSlug: "repo-token" });
+    assert.equal(
+      (await json(await patch(id, { authCredentialSlug: "   " }))).pack.authCredentialSlug,
+      undefined,
+      "so does a blank string",
+    );
+
+    assert.equal((await patch(id, { authCredentialSlug: 7 })).status, 400, "a non-string is refused");
+
+    await patch(id, { authCredentialSlug: "repo-token" });
+
+    assert.equal((await patch(id, { authCredentialSlug: "Repo-Token" })).status, 400, "uppercase is not storable");
+    assert.equal((await patch(id, { authCredentialSlug: "-leading" })).status, 400, "nor is a leading dash");
+    assert.equal(
+      (await patch(id, { authCredentialSlug: "a".repeat(64) })).status,
+      400,
+      "nor is one over 63 characters",
+    );
+    assert.equal((await packOf(id)).authCredentialSlug, "repo-token", "and a refused patch changed nothing");
+
+    assert.equal((await register({ url: repo.dir, authCredentialSlug: "Repo-Token" })).status, 400);
+    const padded = await json(await register({ url: repo.dir, ref: repo.sha, authCredentialSlug: " repo-token " }));
+    assert.equal(padded.pack.authCredentialSlug, "repo-token", "a padded slug is trimmed rather than stored unusable");
+  } finally {
+    await s.close();
+    rmSync(repo.dir, { recursive: true, force: true });
+  }
+});
+
+test("PATCH refuses a malformed config instead of silently deleting the stored one", async () => {
+  const repo = makeFixtureRepo();
+  const s = start();
+  const patch = (id: string, body: unknown): Promise<Response> =>
+    fetch(`${s.base}/v1/admin/skill-packs/${id}`, { method: "PATCH", headers: ADMIN, body: JSON.stringify(body) });
+
+  try {
+    const reg = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ url: repo.dir, ref: repo.sha, config: { exclude: ["trusted/*"] } }),
+      }),
+    );
+    const id = reg.pack.id as string;
+    assert.deepEqual(reg.pack.config.exclude, ["trusted/*"]);
+
+    assert.equal((await patch(id, { config: "oops" })).status, 400);
+    assert.equal((await patch(id, { config: ["oops"] })).status, 400);
+
+    assert.equal((await patch(id, { config: { exclude: "trusted/*" } })).status, 400);
+    assert.equal((await patch(id, { config: { skillGlobs: [7] } })).status, 400);
+    assert.equal((await patch(id, { config: { fieldOverrides: ["nope"] } })).status, 400);
+
+    const after = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
+    assert.deepEqual(
+      after.packs.find((p: any) => p.id === id).config.exclude,
+      ["trusted/*"],
+      "the exclude globs survive a refused patch — losing them silently re-imports what was excluded",
+    );
+
+    assert.equal((await json(await patch(id, { config: null }))).pack.config, undefined, "null still clears it");
+
+    const badRegister = (body: unknown): Promise<Response> =>
+      fetch(`${s.base}/v1/admin/skill-packs`, { method: "POST", headers: ADMIN, body: JSON.stringify(body) });
+    assert.equal(
+      (await badRegister({ url: repo.dir, ref: repo.sha, config: "oops" })).status,
+      400,
+      "register refuses it too rather than registering an unconfigured pack",
+    );
+    assert.equal((await badRegister({ url: repo.dir, ref: repo.sha, config: { exclude: "trusted/*" } })).status, 400);
+  } finally {
+    await s.close();
+    rmSync(repo.dir, { recursive: true, force: true });
+  }
+});
+
 test("sync refreshes IMPORTED skills (update + archive) but does NOT add un-imported ones; PATCH flips syncMode", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-sync-"));
   const env = {
