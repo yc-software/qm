@@ -20,7 +20,7 @@ export interface MemoryRevision {
   at: number;
 }
 
-export interface MemoryHead {
+interface MemoryHead {
   content: string;
   revision: string;
   updatedAt?: number;

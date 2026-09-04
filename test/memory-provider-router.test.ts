@@ -20,6 +20,9 @@ function provider(name: string, calls: string[]): MemoryService {
       return `${name} notebook`;
     },
     async replace() {},
+    async purge(scope) {
+      calls.push(`${name}:purge:${scope}`);
+    },
   };
 }
 
@@ -111,4 +114,27 @@ test("external capture failures degrade to the remaining provider", async () => 
     ],
   });
   await assert.rejects(strictMemory.capture("org:acme", ["fact"], 1, "U1", { mode: "automatic" }), /offline/);
+});
+
+test("purge reaches every provider routed to the scope and reports a refusal", async () => {
+  const calls: string[] = [];
+  const notebook = provider("notebook", calls);
+  const brain = provider("brain", calls);
+  const routes = [
+    { provider: "notebook", scopes: ["org"], capture: "off" as const },
+    { provider: "brain", scopes: ["org"], capture: "off" as const, manage: false },
+  ];
+  await createRoutedMemoryService({ providers: { notebook, brain }, routes }).purge("org:acme");
+  assert.deepEqual(calls, ["notebook:purge:org:acme", "brain:purge:org:acme"]);
+
+  calls.length = 0;
+  const refusing = provider("brain", calls);
+  refusing.purge = async () => {
+    throw new Error("cannot erase a scope");
+  };
+  await assert.rejects(
+    createRoutedMemoryService({ providers: { notebook, brain: refusing }, routes }).purge("org:acme"),
+    /memory purge did not complete for org:acme: cannot erase a scope/,
+  );
+  assert.deepEqual(calls, ["notebook:purge:org:acme"], "the notebook is still erased");
 });

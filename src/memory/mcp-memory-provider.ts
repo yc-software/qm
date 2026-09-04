@@ -78,5 +78,9 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
     async replace() {
       throw new Error("MCP memory providers do not support notebook replacement");
     },
+
+    async purge() {
+      throw new Error("MCP memory providers cannot erase a scope; erase it in the provider itself");
+    },
   };
 }

@@ -1,5 +1,6 @@
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryRevision, MemoryService } from "./memory-service.ts";
+import { errMessage } from "../util/errors.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -98,6 +99,12 @@ export function createRoutedMemoryService(opts: {
     async read(scopeId) {
       const manager = managerFor(scopeId);
       return manager ? manager.read(scopeId) : "";
+    },
+
+    async purge(scopeId) {
+      const settled = await Promise.allSettled(routesFor(scopeId).map((route) => providerFor(route).purge(scopeId)));
+      const failures = settled.flatMap((r) => (r.status === "rejected" ? [errMessage(r.reason)] : []));
+      if (failures.length) throw new Error(`memory purge did not complete for ${scopeId}: ${failures.join("; ")}`);
     },
 
     async replace(scopeId, content, author) {

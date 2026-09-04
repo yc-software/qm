@@ -85,5 +85,9 @@ export function createMemorableMemoryProvider(deps: MemorableProviderDeps): Memo
     async replace() {
       throw new Error("Memorable procedures are not an editable notebook");
     },
+
+    async purge() {
+      throw new Error("Memorable procedures cannot be erased through QM; erase them in Memorable");
+    },
   };
 }
