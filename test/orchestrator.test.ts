@@ -89,6 +89,40 @@ test("internal DM turn runs end-to-end and records the session", async () => {
   assert.deepEqual(types, ["user", "assistant"]);
 });
 
+test("a queued turn exposes its stable run and attempt identifiers to the agent", async (t) => {
+  const built = freshApp({ workers: 1 });
+  built.runtime.start();
+  t.after(() => built.runtime.stop());
+  const queued = await built.app.turn(dm("!sysprompt", { surface: "web", async: true }));
+  assert.equal(queued.status, "queued");
+  assert.ok(queued.runId);
+  const run = await built.runs.waitFor(queued.runId);
+
+  assert.equal(run.status, "done");
+  assert.match(run.result?.reply ?? "", new RegExp(`QM run ID: ${queued.runId}`));
+  assert.match(run.result?.reply ?? "", new RegExp(`QM attempt ID: ${queued.runId}:1`));
+});
+
+test("a queued retry keeps its run identifier and advances its attempt identifier", async (t) => {
+  const built = freshApp({ workers: 1 });
+  built.runtime.start();
+  t.after(() => built.runtime.stop());
+  const queued = await built.app.turn(dm("!work-then-boom", { surface: "web", async: true }));
+  assert.equal(queued.status, "queued");
+  assert.ok(queued.runId);
+  const run = await built.runs.waitFor(queued.runId);
+
+  assert.equal(run.status, "done");
+  assert.ok(run.result?.sessionId);
+  const requests = await built.sessions.listLlmRequests(run.result.sessionId);
+  assert.equal(requests.length, 2);
+  const prompts = requests.map((request) => JSON.stringify(request.promptEnvelope));
+  assert.match(prompts[0] ?? "", new RegExp(`QM run ID: ${queued.runId}`));
+  assert.match(prompts[0] ?? "", new RegExp(`QM attempt ID: ${queued.runId}:1`));
+  assert.match(prompts[1] ?? "", new RegExp(`QM run ID: ${queued.runId}`));
+  assert.match(prompts[1] ?? "", new RegExp(`QM attempt ID: ${queued.runId}:2`));
+});
+
 test("org turn wall-clock governance reaches the harness and a per-turn cap only tightens", async () => {
   const { app, config } = freshApp();
   await config.setTurnWallClockSec(scopeId("org", "default-org"), 120);
@@ -1430,6 +1464,65 @@ test("a delivered file is recorded as a durable entry and surfaced to the next t
 
   const t3 = await app.turn(dm("ok thanks for that"));
   assert.doesNotMatch(t3.reply ?? "", /you delivered to this conversation in your previous turn/);
+});
+
+test("a web project conversation publishes its turn outbox into the durable Files store", async () => {
+  const built = freshApp();
+  const project = await built.app.createProject("U1", "Launch");
+  assert.ok(project);
+  const projectRef = project.scopeId.slice("group:".length);
+  const result = await built.app.turn(
+    dm('!run mkdir -p "$AGENT_OUTBOX"; printf evidence > "$AGENT_OUTBOX/audit.md"', {
+      surface: "web",
+      conversation: {
+        kind: "group",
+        threadRef: "web:U1:project-audit",
+        channelRef: projectRef,
+        audience: [internalActor],
+      },
+    }),
+  );
+
+  assert.equal(result.status, "ok");
+  assert.deepEqual(
+    (result.attachments ?? []).map((attachment) => attachment.name),
+    ["audit.md"],
+  );
+  const files = await built.app.listFilesForViewer("U1", undefined, project.scopeId);
+  assert.deepEqual(
+    files.owned.map((file) => file.name),
+    ["audit.md"],
+  );
+});
+
+test("a queued web project conversation persists its turn outbox in the run result", async (t) => {
+  const built = freshApp({ workers: 1 });
+  built.runtime.start();
+  t.after(() => built.runtime.stop());
+  const project = await built.app.createProject("U1", "Queued Launch");
+  assert.ok(project);
+  const projectRef = project.scopeId.slice("group:".length);
+  const queued = await built.app.turn(
+    dm('!run mkdir -p "$AGENT_OUTBOX"; printf evidence > "$AGENT_OUTBOX/queued-audit.md"', {
+      surface: "web",
+      async: true,
+      conversation: {
+        kind: "group",
+        threadRef: "web:U1:project-queued-audit",
+        channelRef: projectRef,
+        audience: [internalActor],
+      },
+    }),
+  );
+  assert.equal(queued.status, "queued");
+  assert.ok(queued.runId);
+  const run = await built.runs.waitFor(queued.runId);
+
+  assert.equal(run.status, "done");
+  assert.deepEqual(
+    (run.result?.attachments ?? []).map((attachment) => attachment.name),
+    ["queued-audit.md"],
+  );
 });
 
 test("a file posted in a GROUP conversation is granted read to the conversation scope", async () => {

@@ -1647,6 +1647,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
         }
         systemPrompt += memoryBlock;
+        if (input.runId) {
+          const attempt = input.attempt ?? 1;
+          systemPrompt += `\n\n## Current QM run\nQM run ID: ${input.runId}\nQM attempt ID: ${input.runId}:${attempt}`;
+        }
         if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;
 
         const isRetry = (input.attempt ?? 1) > 1;
@@ -2802,7 +2806,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const totalMs = Date.now() - turnStart;
 
         const noOutbound = { attachments: [], oversized: [], empty: [], dropped: 0 };
-        const harvestOutbox = conversation.kind === "dm";
+        const harvestOutbox = conversation.kind === "dm" || input.surface === "web";
         const outboundScoped =
           harvestOutbox && box.used && box.handle
             ? await collectOutbound(deps.sandbox, box.handle, blobTransfer, fileRegistration, turnOutboxDir)

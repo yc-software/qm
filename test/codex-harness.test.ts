@@ -98,10 +98,15 @@ rl.on("line", (line) => {
     send({ method: "thread/tokenUsage/updated", params: { threadId: "child-1", tokenUsage: { total: { inputTokens: 70 }, last: { inputTokens: 70 } } } });
     send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "collabAgentToolCall", id: "collab-1", tool: "spawnAgent", status: "completed", senderThreadId: "thread-1", receiverThreadIds: ["child-1"], prompt: "return ALPHA", agentsStates: { "child-1": { status: "completed", message: "ALPHA" } } } } });
     send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 250 }, last: { inputTokens: 150 } } } });
+    if (JSON.stringify(msg.params.input).includes("tool-only completion")) return send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [], itemsView: "notLoaded" } } });
+    if (JSON.stringify(msg.params.input).includes("surface-only completion")) return send({ id: "surface-call", method: "item/tool/call", params: { threadId: "thread-1", turnId: "turn-1", callId: "surface-1", tool: "web", arguments: { action: "post", text: "posted result" } } });
+    if (JSON.stringify(msg.params.input).includes("surface-read completion")) return send({ id: "surface-call", method: "item/tool/call", params: { threadId: "thread-1", turnId: "turn-1", callId: "surface-1", tool: "web", arguments: { action: "read_thread" } } });
+    if (JSON.stringify(msg.params.input).includes("surface-failed-post completion")) return send({ id: "surface-call", method: "item/tool/call", params: { threadId: "thread-1", turnId: "turn-1", callId: "surface-1", tool: "web", arguments: { action: "post", text: "unsent result" } } });
     send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta: "hello" } });
     send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", id: "item-1", text: "hello", phase: "final_answer", memoryCitation: null } } });
     return send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [], itemsView: "notLoaded" } } });
   }
+  if (msg.id === "surface-call" && msg.result) return send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [], itemsView: "notLoaded" } } });
   if (msg.method === "turn/interrupt" || msg.method === "turn/steer") return send({ id: msg.id, result: {} });
 });
 `,
@@ -491,6 +496,123 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
   assert.deepEqual(
     (await tasks.list()).map(({ title, status }) => ({ title, status })),
     [{ title: "return ALPHA", status: "completed" }],
+  );
+});
+
+test("Codex rejects a tool-only completion that has no terminal response", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-empty-final-test-"));
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: testHarnessEnv(dir) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  await assert.rejects(
+    harness.turns.runTurn({
+      session: { id: "empty-final" } as Session,
+      input: "tool-only completion",
+      systemPrompt: "return a final answer",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) => {
+        const saved = {
+          ...entry,
+          sessionId: "empty-final",
+          seq: entries.length + 1,
+          createdAt: Date.now(),
+        } as SessionEntry;
+        entries.push(saved);
+        return saved;
+      },
+      recordModelCall: () => {},
+    }),
+    /Codex completed without a final response/,
+  );
+  assert.equal(
+    entries.some((entry) => entry.type === "assistant"),
+    false,
+  );
+});
+
+test("Codex accepts a surface-only completion after posting its result", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-surface-final-test-"));
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: testHarnessEnv(dir) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const posted: string[] = [];
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const result = await harness.turns.runTurn({
+    session: { id: "surface-final" } as Session,
+    input: "surface-only completion",
+    systemPrompt: "post the result",
+    history: [],
+    tools: {
+      post: async (text: string) => {
+        posted.push(text);
+        return { ok: true, deliveryId: "delivery-1" };
+      },
+    } as HarnessTurnInput["tools"],
+    surfaceTools: true,
+    surfaceName: "web",
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) => {
+      const saved = {
+        ...entry,
+        sessionId: "surface-final",
+        seq: entries.length + 1,
+        createdAt: Date.now(),
+      } as SessionEntry;
+      entries.push(saved);
+      return saved;
+    },
+    recordModelCall: () => {},
+  });
+
+  assert.deepEqual(posted, ["posted result"]);
+  assert.equal(result.reply, "");
+  assert.equal(
+    entries.some((entry) => entry.type === "assistant"),
+    false,
+  );
+});
+
+test("Codex rejects empty surface completions without a successful write action", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-surface-empty-test-"));
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: testHarnessEnv(dir) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const run = (input: string, tools: Partial<HarnessTurnInput["tools"]>) =>
+    harness.turns.runTurn({
+      session: { id: input } as Session,
+      input,
+      systemPrompt: "deliver a result",
+      history: [],
+      tools: tools as HarnessTurnInput["tools"],
+      surfaceTools: true,
+      surfaceName: "web",
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) => ({ ...entry, sessionId: input, seq: 1, createdAt: Date.now() }) as SessionEntry,
+      recordModelCall: () => {},
+    });
+
+  await assert.rejects(
+    run("surface-read completion", { readThread: async () => ({ ok: true, messages: [] }) }),
+    /Codex completed without a final response/,
+  );
+  await assert.rejects(
+    run("surface-failed-post completion", { post: async () => ({ ok: false, message: "delivery failed" }) }),
+    /Codex completed without a final response/,
   );
 });
 

@@ -679,6 +679,7 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   assert.equal(posted.ok, true);
   assert.equal(posted.deliveryId, "d1");
   assert.equal(posted.tool, "slack");
+  assert.equal(ref.surfaceActionSucceeded, true);
 
   await call(slack, { action: "read_thread" });
   const read = emitted.find((e) => e.type === "tool_result" && e.payload.action === "read_thread")!.payload;
@@ -797,6 +798,7 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
   assert.equal(emitted.find((e) => e.type === "tool_call" && e.payload.action === "react")!.payload.ts, "173.4");
   assert.equal(emitted.find((e) => e.type === "tool_call" && e.payload.action === "edit")!.payload.ref, "173.4");
   assert.equal(emitted.find((e) => e.type === "tool_call" && e.payload.action === "delete")!.payload.ref, "173.4");
+  assert.equal(ref.surfaceActionSucceeded, true);
 });
 
 test("post replies HERE only (placement via ts/broadcast, cross-targets rejected); reach carries every audience", async () => {
@@ -857,6 +859,7 @@ test("edit/delete surface an own-messages-only failure as a tool_result, not a t
   assert.match(delOut.content[0]!.text, /not deleted.*your own messages/);
   assert.equal(emitted.find((e) => e.type === "tool_result" && e.payload.action === "edit")!.payload.ok, false);
   assert.equal(emitted.find((e) => e.type === "tool_result" && e.payload.action === "delete")!.payload.ok, false);
+  assert.equal(ref.surfaceActionSucceeded, undefined);
 });
 
 test("post reports a clean sentinel when the surface isn't wired this turn", async () => {
@@ -924,6 +927,7 @@ test("the surface tool's pull-query actions return pointers/data (not raw bytes)
     const pair = emitted.filter((e) => e.payload.action === n).map((e) => e.type);
     assert.ok(pair.includes("tool_call") && pair.includes("tool_result"), `${n} emits call + result`);
   }
+  assert.equal(ref.surfaceActionSucceeded, undefined);
 });
 
 test("an unknown action returns a crisp error text, not a throw", async () => {
@@ -1090,6 +1094,15 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
   assert.notEqual(noop.terminate, true, "a person is waiting — the tool must not end the turn");
   assert.equal(ref.silentRequested, false);
   assert.match(noop.content[0]?.text ?? "", /no-op/);
+});
+
+test("stay_silent marks a surface turn terminal", async () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const tool = createPiTools(ref, { surfaceTools: true }).find((candidate) => candidate.name === "stay_silent");
+  assert.ok(tool);
+  const result = await call(tool, { reason: "nothing useful to add" });
+  assert.equal(ref.silentRequested, true);
+  assert.equal((result as { terminate?: boolean }).terminate, true);
 });
 
 test("pauseStampAfterToolCall stamps terminate onto sibling results once silence is requested", async () => {

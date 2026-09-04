@@ -64,6 +64,7 @@ export interface ToolContextRef {
   abortSignal?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
+  surfaceActionSucceeded?: boolean;
   /** The session's registered goal, if any (rehydrated across turns). */
   goal?: GoalRecord | null;
   /** Continuation round counter — a blocked claim counts once per round. */
@@ -310,6 +311,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
 }
 
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently"]);
+const SURFACE_WRITE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested">,
@@ -332,6 +334,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
   const controlTools = !!opts?.controlTools;
   const credentialExecServices = opts?.credentialExecServices ?? ref.current?.credentialExecServices ?? [];
   const surfaceTools = !!opts?.surfaceTools;
+  const surfaceName = opts?.surfaceName ?? "slack";
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
@@ -365,6 +368,8 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     sourceScopeId?: ScopeId | null,
     display?: Record<string, unknown>,
   ): Promise<T> => {
+    if (summary.tool === surfaceName && summary.ok === true && SURFACE_WRITE_ACTIONS.has(String(summary.action)))
+      ref.surfaceActionSucceeded = true;
     const t = ret.content
       .filter((c) => c.type === "text")
       .map((c) => c.text ?? "")
@@ -2230,7 +2235,6 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     },
   });
 
-  const surfaceName = opts?.surfaceName ?? "slack";
   const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
   const surface = defineTool({
     name: surfaceName,
@@ -2678,7 +2682,13 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       if (!tc) return text("[error] no active tool context");
       await recordCall(callId, { tool: "stay_silent" });
       const r = await tc.staySilent(params.reason);
-      return recordResult(callId, { tool: "stay_silent", ok: true }, text(r.message));
+      ref.silentRequested = true;
+      try {
+        return await recordResult(callId, { tool: "stay_silent", ok: true }, { ...text(r.message), terminate: true });
+      } catch (error) {
+        ref.silentRequested = false;
+        throw error;
+      }
     },
   });
 
