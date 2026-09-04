@@ -84,8 +84,19 @@ async function slackApi(
   }
 }
 
-async function slackCheck(botToken: string, appToken: string, configDir?: string): Promise<void> {
-  const auth = await slackApi("https://slack.com/api/auth.test", { headers: { authorization: `Bearer ${botToken}` } });
+function slackApiBase(raw?: string): string {
+  const base = (raw?.trim() || "https://slack.com").replace(/\/+$/, "");
+  return base.endsWith("/api") ? `${base}/` : `${base}/api/`;
+}
+
+async function slackCheck(
+  botToken: string,
+  appToken: string | undefined,
+  configDir?: string,
+  apiUrl?: string,
+): Promise<void> {
+  const base = slackApiBase(apiUrl);
+  const auth = await slackApi(`${base}auth.test`, { headers: { authorization: `Bearer ${botToken}` } });
   if (!auth.res.ok || !auth.body.ok)
     throw new CliError(`Slack bot token rejected (${auth.body.error ?? auth.res.status})`);
   const granted = new Set(
@@ -99,7 +110,8 @@ async function slackCheck(botToken: string, appToken: string, configDir?: string
     throw new CliError(
       `Slack app is missing scopes: ${missing.join(", ")}; update from slack-app-manifest.yml and reinstall`,
     );
-  const socket = await slackApi("https://slack.com/api/apps.connections.open", {
+  if (!appToken) return;
+  const socket = await slackApi(`${base}apps.connections.open`, {
     method: "POST",
     headers: { authorization: `Bearer ${appToken}`, "content-type": "application/x-www-form-urlencoded" },
   });
@@ -165,13 +177,16 @@ export async function doctorCommon(
   if (config.services.includes("slack")) {
     const bot = deploymentSecretValue("SLACK_BOT_TOKEN", secrets.get("SLACK_BOT_TOKEN"));
     const app = deploymentSecretValue("SLACK_APP_TOKEN", secrets.get("SLACK_APP_TOKEN"));
-    if (Boolean(bot) !== Boolean(app)) {
+    const eventsMode = config.env.slack?.SLACK_EVENTS_MODE?.trim() === "http" ? "http" : "socket";
+    if ((!bot && app) || (eventsMode === "socket" && Boolean(bot) !== Boolean(app))) {
       throw new CliError(
-        "Slack setup needs both SLACK_BOT_TOKEN and SLACK_APP_TOKEN, or neither when setup is deferred",
+        eventsMode === "http"
+          ? "Slack HTTP setup needs SLACK_BOT_TOKEN without SLACK_APP_TOKEN, or neither when setup is deferred"
+          : "Slack setup needs both SLACK_BOT_TOKEN and SLACK_APP_TOKEN, or neither when setup is deferred",
       );
     }
-    if (bot && app) {
-      await slackCheck(bot, app, opts.configDir);
+    if (bot) {
+      await slackCheck(bot, eventsMode === "socket" ? app : undefined, opts.configDir, config.env.slack?.SLACK_API_URL);
       if (opts.requiredSecretValues) {
         step("Slack tokens and manifest scopes: ok");
       } else if (config.target === "aws") {

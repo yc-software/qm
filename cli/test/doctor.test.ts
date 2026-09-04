@@ -370,6 +370,30 @@ test("slackCheck passes when granted scopes are a superset of the manifest's", a
   }
 });
 
+test("Slack doctor validates an HTTP events broker without a Socket Mode token", async () => {
+  const dir = manifestDir();
+  const priorFetch = globalThis.fetch;
+  const seen: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    seen.push(`${String(input)} ${new Headers(init?.headers).get("authorization")}`);
+    return authOk("chat:write, users:read");
+  }) as typeof fetch;
+  try {
+    const brokerConfig = slackConfig();
+    brokerConfig.env = {
+      slack: {
+        SLACK_EVENTS_MODE: "http",
+        SLACK_API_URL: "https://broker.example.test/slack",
+      },
+    };
+    await doctorCommon(brokerConfig, new Map([["SLACK_BOT_TOKEN", "broker-token"]]), { configDir: dir });
+    assert.deepEqual(seen, ["https://broker.example.test/slack/api/auth.test Bearer broker-token"]);
+  } finally {
+    globalThis.fetch = priorFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Slack doctor validates deployment-file tokens before conflicting ambient tokens", async () => {
   const dir = manifestDir();
   const priorFetch = globalThis.fetch;
