@@ -142,14 +142,108 @@ test("resolveRef rejects an arg-smuggling ref before invoking git", async () => 
   );
 });
 
-test("resolvePackAuth: an explicit host-bound slug honors the configured injection", async () => {
+const basic = (secret: string, user = "x-access-token") =>
+  `Basic ${Buffer.from(`${user}:${secret}`, "utf8").toString("base64")}`;
+
+test("resolvePackAuth: a slug with no injection configured authenticates the way git over HTTPS does", async () => {
   const sources = {
     serviceCredential: async (s: string) => ({ secret: "svc:" + s, host: "github.com", enabled: true }),
     connectorToken: async () => "connector",
   };
   assert.deepEqual(
     await resolvePackAuth(sources, { url: "https://github.com/o/r", authCredentialSlug: "dep", createdBy: "u1" }),
-    { header: "Authorization", value: "Bearer svc:dep", secret: "svc:dep" },
+    { header: "Authorization", value: basic("svc:dep"), secret: "svc:dep" },
+  );
+});
+
+test("resolvePackAuth: an explicit host-bound slug honors the configured injection", async () => {
+  const sources = {
+    serviceCredential: async (s: string) => ({
+      secret: "svc:" + s,
+      host: "github.com",
+      enabled: true,
+      injection: { header: "X-Auth", scheme: "token " },
+    }),
+    connectorToken: async () => "connector",
+  };
+  assert.deepEqual(
+    await resolvePackAuth(sources, { url: "https://github.com/o/r", authCredentialSlug: "dep", createdBy: "u1" }),
+    { header: "X-Auth", value: "token svc:dep", secret: "svc:dep" },
+  );
+});
+
+test("resolvePackAuth: a configured scheme is separated from the secret whether or not it was padded", async () => {
+  const withScheme = (scheme: string) => ({
+    serviceCredential: async (slug: string) => ({
+      secret: "svc:" + slug,
+      host: "github.com",
+      enabled: true,
+      injection: { scheme },
+    }),
+    connectorToken: async () => "connector",
+  });
+  const pack = { url: "https://github.com/o/r", authCredentialSlug: "dep", createdBy: "u1" };
+
+  assert.equal((await resolvePackAuth(withScheme("token "), pack))!.value, "token svc:dep");
+  assert.equal(
+    (await resolvePackAuth(withScheme("token"), pack))!.value,
+    "token svc:dep",
+    "an unpadded prefix gets the separator, as it does through the credential broker",
+  );
+});
+
+test("resolvePackAuth: a custom header keeps the scheme-prefixed form, because Basic is only meaningful on Authorization", async () => {
+  const sources = {
+    serviceCredential: async (slug: string) => ({
+      secret: "svc:" + slug,
+      host: "gitlab.example",
+      enabled: true,
+      injection: { header: "PRIVATE-TOKEN" },
+    }),
+    connectorToken: async () => "connector",
+  };
+  assert.deepEqual(
+    await resolvePackAuth(sources, {
+      url: "https://gitlab.example/o/r",
+      authCredentialSlug: "dep",
+      createdBy: "u1",
+    }),
+    { header: "PRIVATE-TOKEN", value: "Bearer svc:dep", secret: "svc:dep" },
+  );
+});
+
+test("resolvePackAuth: an empty configured scheme on a custom header sends the secret alone", async () => {
+  const sources = {
+    serviceCredential: async (s: string) => ({
+      secret: "svc:" + s,
+      host: "gitlab.example",
+      enabled: true,
+      injection: { header: "PRIVATE-TOKEN", scheme: "" },
+    }),
+    connectorToken: async () => "connector",
+  };
+  assert.deepEqual(
+    await resolvePackAuth(sources, {
+      url: "https://gitlab.example/o/r",
+      authCredentialSlug: "dep",
+      createdBy: "u1",
+    }),
+    { header: "PRIVATE-TOKEN", value: "svc:dep", secret: "svc:dep" },
+  );
+});
+
+test("resolvePackAuth: the Basic username follows the host where the host demands one", async () => {
+  const sources = {
+    serviceCredential: async (s: string) => ({ secret: "svc:" + s, host: "bitbucket.org", enabled: true }),
+    connectorToken: async () => "connector",
+  };
+  assert.deepEqual(
+    await resolvePackAuth(sources, {
+      url: "https://bitbucket.org/o/r",
+      authCredentialSlug: "dep",
+      createdBy: "u1",
+    }),
+    { header: "Authorization", value: basic("svc:dep", "x-token-auth"), secret: "svc:dep" },
   );
 });
 
@@ -210,7 +304,7 @@ test("resolvePackAuth: a github repo with no slug reuses the registrant's connec
   };
   assert.deepEqual(await resolvePackAuth(sources, { url: "https://github.com/o/r.git", createdBy: "alice" }), {
     header: "Authorization",
-    value: "Bearer ghtok",
+    value: basic("ghtok"),
     secret: "ghtok",
   });
   assert.deepEqual(calls, [["api.github.com", "alice"]], "looks up the registrant's api.github.com connector token");

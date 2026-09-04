@@ -1,6 +1,7 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
+import { credentialAuthValue, gitAuthHeader } from "../util/auth-header.ts";
 import type { DecryptedServiceCredential, ServiceCredentialReader } from "../credentials/keychain.ts";
 
 interface BrokerFetchResponse {
@@ -84,11 +85,13 @@ export function brokerPathAllowed(pathname: string, prefixes?: string[]): boolea
   );
 }
 
-export function brokerCredentialAuthHeader(rec: DecryptedServiceCredential): [string, string] {
+function brokerCredentialAuthHeader(rec: DecryptedServiceCredential): [string, string] {
   const injHeader = rec.injection?.header || "Authorization";
-  const rawScheme = rec.injection?.scheme ?? "Bearer ";
-  const injScheme = rawScheme && !/\s$/.test(rawScheme) ? `${rawScheme} ` : rawScheme;
-  return [injHeader, `${injScheme}${rec.secret}`];
+  return [injHeader, credentialAuthValue(rec.injection?.scheme ?? "Bearer ", rec.secret)];
+}
+
+export function gitCredentialAuthHeader(rec: DecryptedServiceCredential): [string, string] {
+  return gitAuthHeader(rec.injection, rec.secret, rec.host);
 }
 
 export async function brokerCredentialCall(opts: {
