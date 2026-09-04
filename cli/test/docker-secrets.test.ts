@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
@@ -37,12 +37,12 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + "\\n");
 if (args[0] === "version") { console.log("25.0"); process.exit(0); }
 if (args[0] === "run") {
-  const i = args.indexOf("--env-file");
-  if (i !== -1) {
-    const path = args[i + 1];
-    const mode = (fs.statSync(path).mode & 0o777).toString(8);
-    fs.appendFileSync(${JSON.stringify(envCopy)}, "mode=" + mode + "\\n" + fs.readFileSync(path, "utf8") + "---\\n");
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] !== "-e" || args[i + 1].includes("=")) continue;
+    const name = args[i + 1];
+    fs.appendFileSync(${JSON.stringify(envCopy)}, name + "=" + (process.env[name] ?? "") + "\\n");
   }
+  fs.appendFileSync(${JSON.stringify(envCopy)}, "---\\n");
   console.log("cid");
   process.exit(0);
 }
@@ -60,7 +60,7 @@ process.exit(0);
   return { argvLog, envCopy };
 }
 
-test("docker up delivers secrets via a 0600 env-file, never on the docker argv", { timeout: 60_000 }, async () => {
+test("docker up keeps secret values off the docker argv", { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-"));
   const priorPath = process.env.PATH;
   const priorDb = process.env.DATABASE_URL;
@@ -148,7 +148,8 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       "a BYO DATABASE_URL (it embeds a password) must not reach the docker argv",
     );
     assert.ok(!argv.includes("config-placeholder"), "non-secret config env cannot shadow or expose secret values");
-    assert.ok(argv.includes("--env-file"), "secrets travel via --env-file");
+    assert.ok(!argv.includes("--env-file"), "docker runs do not need a temporary env file");
+    assert.ok(argv.includes('"CORE_SIGNING_SECRET"'), "secret names travel as name-only -e flags");
     assert.ok(argv.includes("FLY_SANDBOX_APP_NAME=sekrit-sandboxes"), "non-secret env still flows as -e");
     assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
     assert.ok(argv.includes("LINEAR_REGION=us"), "undeclared plugin env still flows as -e");
@@ -176,12 +177,12 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       !envFiles.includes("config-placeholder"),
       "secret-store values win over colliding config env on services and plugins",
     );
-    assert.ok(envFiles.includes("DATABASE_URL=postgres://external/db"), "DATABASE_URL routes through the env-file");
+    assert.ok(envFiles.includes("DATABASE_URL=postgres://external/db"), "DATABASE_URL reaches docker");
     assert.ok(
       envFiles.includes(`FLY_RESIDENT_ENV_SB_TOKEN=${SECRETS.SB_TOKEN}`),
-      "secretEnv values route through the file",
+      "secretEnv values reach docker",
     );
-    assert.ok(envFiles.includes(`PLUG_TOKEN=${SECRETS.PLUG_TOKEN}`), "plugin secrets route through the file");
+    assert.ok(envFiles.includes(`PLUG_TOKEN=${SECRETS.PLUG_TOKEN}`), "plugin secrets reach docker");
     assert.match(
       envFiles,
       new RegExp(`^ANTHROPIC_API_KEY=${ambientAnthropic}$`, "m"),
@@ -204,7 +205,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     assert.match(
       envFiles,
       new RegExp(`^EXTRA_API_KEY=${SECRETS.EXTRA_API_KEY}$`, "m"),
-      "config secretEnv extras route through the file",
+      "config secretEnv extras reach docker",
     );
     assert.match(
       envFiles,
@@ -212,15 +213,8 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       "a secretEnv alias delivers the stored value under its declared env name",
     );
     assert.match(envFiles, new RegExp(`^SECURITY_SCREEN_PROXY_TOKEN=${SECRETS.EXAMPLE_SCREEN_TOKEN}$`, "m"));
-    assert.ok(!envFiles.includes("FLY_RESIDENT_ENV_TZ"), "literal sandbox env is not in the secret file");
-    for (const mode of envFiles.match(/^mode=.*$/gm) ?? []) assert.equal(mode, "mode=600");
-
-    for (const line of readFileSync(fake.argvLog, "utf8").split("\n").filter(Boolean)) {
-      const args = JSON.parse(line) as string[];
-      const index = args.indexOf("--env-file");
-      if (index !== -1)
-        assert.ok(!existsSync(args[index + 1]!), "the env-file is removed once the container is created");
-    }
+    assert.ok(!envFiles.includes("FLY_RESIDENT_ENV_TZ"), "literal sandbox env is absent from secret delivery");
+    assert.equal(process.env.CORE_SIGNING_SECRET, undefined, "secret delivery does not mutate the parent environment");
   } finally {
     console.log = log;
     console.warn = warn;
@@ -277,14 +271,14 @@ test(
 
       const argv = readFileSync(fake.argvLog, "utf8");
       assert.ok(!argv.includes(password), "the pg password must not reach the docker argv");
-      assert.ok(!argv.includes("POSTGRES_PASSWORD"), "POSTGRES_PASSWORD travels via the env-file, not -e");
+      assert.ok(argv.includes('"POSTGRES_PASSWORD"'), "POSTGRES_PASSWORD travels as a name-only -e flag");
       assert.ok(!argv.includes("postgres://"), "the derived DATABASE_URL must not reach the docker argv");
 
       const envFiles = readFileSync(fake.envCopy, "utf8");
-      assert.ok(envFiles.includes(`POSTGRES_PASSWORD=${password}`), "pg gets its password via the env-file");
+      assert.ok(envFiles.includes(`POSTGRES_PASSWORD=${password}`), "pg gets its password through the docker process env");
       assert.ok(
         envFiles.includes(`DATABASE_URL=postgres://postgres:${password}@pg:5432/qm`),
-        "the core gets DATABASE_URL via the env-file",
+        "the core gets DATABASE_URL through the docker process env",
       );
     } finally {
       console.log = log;
@@ -350,7 +344,7 @@ test(
 );
 
 test(
-  "a multi-line secret value fails loudly, naming the key (docker --env-file cannot carry newlines)",
+  "a multi-line secret value is delivered through the docker process environment",
   { timeout: 60_000 },
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-nl-"));
@@ -374,14 +368,18 @@ test(
         join(dir, ".env"),
         `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n`,
       );
-      fakeDocker(dir);
+      const fake = fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;
       process.env.DATABASE_URL = "postgres://external/db";
       process.env.CORE_SIGNING_SECRET = "-----BEGIN KEY-----\nabc\n-----END KEY-----";
       console.log = (): void => {};
       console.warn = console.log;
       const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
-      await assert.rejects(dockerUp(config, dir, {}), /CORE_SIGNING_SECRET contains a newline/);
+      await dockerUp(config, dir, {});
+      assert.ok(
+        readFileSync(fake.envCopy, "utf8").includes("CORE_SIGNING_SECRET=-----BEGIN KEY-----\nabc\n-----END KEY-----"),
+        "name-only delivery preserves multi-line secret values",
+      );
     } finally {
       console.log = log;
       console.warn = warn;
