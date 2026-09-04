@@ -1,0 +1,13 @@
+Right now QM doesn't seem to support a chatgpt subscription for codex access.
+It only allows for an openai API key directly. OpenAI's official codex documentation
+says: “you can copy your cached credentials to the headless machine.”
+https://learn.chatgpt.com/docs/auth?surface=app
+  
+It is a rather minor change to allow users to import their valid auth.json 
+so they can use their current chatgpt subscription for codex agents/models.
+
+Some small changes are also needed so that when using this type of subscription
+new chats can be created using the codex harness and model.
+
+I did this myself on my fork, feel free to have a look if you need inspiration:
+https://github.com/moeadham/qm/commit/7ffc3c9950e289767fc96826fb49938d366304fc
