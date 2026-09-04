@@ -582,6 +582,41 @@ test("allowUnavailable swallows an unreachable core but NOT a local config error
   }
 });
 
+test("allowUnavailable defers an intentionally suspended core but no other HTTP failure", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-sync-"));
+  let response = { status: 503, body: '{"error":"tenant_suspended"}' };
+  const { server, port } = await startCoreStub(() => response, []);
+  try {
+    writeLayer(dir);
+    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
+      syncDeploymentLayer({
+        config: makeConfig("http://example.invalid"),
+        transport: dockerDeploymentLayerTransport,
+        configDir: dir,
+        sandboxDir: join(dir, "sandbox"),
+        allowUnavailable: true,
+      }),
+    );
+    response = { status: 503, body: '{"error":"billing_unavailable"}' };
+    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
+      assert.rejects(
+        () =>
+          syncDeploymentLayer({
+            config: makeConfig("http://example.invalid"),
+            transport: dockerDeploymentLayerTransport,
+            configDir: dir,
+            sandboxDir: join(dir, "sandbox"),
+            allowUnavailable: true,
+          }),
+        /deployment layer sync failed \(503\): {"error":"billing_unavailable"}/,
+      ),
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function fakeFly(dir: string, body: string): string {
   const bin = join(dir, "fake-fly.cjs");
   writeFileSync(bin, `#!/usr/bin/env node\nconst fs = require("node:fs");\n${body}\n`);

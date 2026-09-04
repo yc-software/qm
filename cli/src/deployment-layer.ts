@@ -308,6 +308,10 @@ export async function syncDeploymentLayerBody(
     }
     throw new CliError(`could not sync deployment layer: ${errMessage(error)}`);
   }
+  if (opts.allowUnavailable && response.status === 503 && response.body === '{"error":"tenant_suspended"}') {
+    step(`deployment layer: core is suspended; deployment succeeded and sync is deferred until the next up`);
+    return;
+  }
   if (response.status < 200 || response.status >= 300)
     throw new CliError(`deployment layer sync failed (${response.status}): ${response.body}`);
   let parsed: unknown;
