@@ -50,6 +50,13 @@ interface ModelEntry {
     cacheWrite?: number;
     contextWindow: number;
     maxTokens: number;
+    tiers?: readonly {
+      inputTokensAbove: number;
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+    }[];
   };
 }
 
@@ -99,6 +106,22 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     base: true,
     auxiliary: true,
     clone: { ...GPT_56_CLONE, input: 1, output: 6 },
+  },
+  {
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
+    fastMode: false,
+    webui: true,
+    base: true,
+    clone: {
+      template: "gpt-5.5",
+      input: 10,
+      output: 50,
+      cacheWrite: 12.5,
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      tiers: [{ inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 }],
+    },
   },
   { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, webui: true, base: true },
   { id: "claude-opus-4-7", name: "Claude Opus 4.7", fastMode: true, webui: false, base: false },
@@ -193,6 +216,7 @@ export function resolveModel(id: string): PiModel | undefined {
             output: entry.clone.output,
             cacheRead: entry.clone.input / 10,
             cacheWrite: entry.clone.cacheWrite ?? 0,
+            ...(entry.clone.tiers ? { tiers: entry.clone.tiers.map((tier) => ({ ...tier })) } : {}),
           },
         })
       : undefined;

@@ -38,6 +38,10 @@ const MODEL_CATALOG: Record<string, ModelMeta> = {
     label: "Fable 5",
     buttonLabel: "Fable 5",
   },
+  "gpt-6-astra": {
+    label: "GPT-6 Astra",
+    buttonLabel: "Astra",
+  },
   "gpt-5.6-sol": {
     label: "GPT-5.6 Sol",
     buttonLabel: "5.6 Sol",

@@ -7,6 +7,7 @@ const CLONE_TEMPLATES: Readonly<Record<string, { template: string; name: string 
   "claude-fable-5": { template: "claude-opus-4-8", name: "Claude Fable 5" },
   "claude-opus-5": { template: "claude-opus-4-8", name: "Claude Opus 5" },
   "claude-sonnet-5": { template: "claude-sonnet-4-6", name: "Claude Sonnet 5" },
+  "gpt-6-astra": { template: "gpt-5.5", name: "GPT-6 Astra" },
   "gpt-5.6-sol": { template: "gpt-5.5", name: "GPT-5.6 Sol" },
   "gpt-5.6-terra": { template: "gpt-5.5", name: "GPT-5.6 Terra" },
   "gpt-5.6-luna": { template: "gpt-5.5", name: "GPT-5.6 Luna" },
