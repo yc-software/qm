@@ -150,6 +150,43 @@ function scrub(s: string, auth: GitAuth | undefined): string {
   return auth ? s.split(auth.secret).join("***").split(auth.value).join("***") : s;
 }
 
+const CREDENTIAL_REFUSED_RE =
+  /could not read (Username|Password)|terminal prompts disabled|Authentication failed|invalid credentials|error: 40[13]/i;
+
+const REPOSITORY_MISSING_RE = /[Rr]epository ['"]?[^'"]*['"]? ?not found|error: 404/;
+
+function credentialDiagnosis(
+  pack: Pick<SkillPack, "authCredentialSlug">,
+  auth: GitAuth | undefined,
+  resolverConfigured: boolean,
+): string {
+  if (auth) {
+    return pack.authCredentialSlug
+      ? `the credential this pack names (${pack.authCredentialSlug}) was sent as the ${auth.header} header and the server refused it`
+      : `a connector token for this host was sent as the ${auth.header} header and the server refused it`;
+  }
+  if (!resolverConfigured) {
+    return "no credential was sent: this deployment resolves none for skill packs, so a pack can only reach a public repository";
+  }
+  return pack.authCredentialSlug
+    ? `no credential was sent: the one this pack names (${pack.authCredentialSlug}) is missing, disabled, or delivered by environment rather than through the broker`
+    : "no credential was sent: this pack names none, and no connector token was available for its host";
+}
+
+function scrubbedCause(e: unknown, auth: GitAuth | undefined): { cause: unknown } {
+  if (!auth || !(e instanceof Error)) return { cause: e };
+  const safe = new Error(scrub(e.message, auth));
+  safe.name = e.name;
+  return { cause: safe };
+}
+
+function appended(message: string, diagnosis: string): string {
+  if (CREDENTIAL_REFUSED_RE.test(message)) return diagnosis;
+  if (REPOSITORY_MISSING_RE.test(message))
+    return `a repository that does not exist and one the credential cannot see are answered the same way, so ${diagnosis}`;
+  return "";
+}
+
 export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher {
   const gitBin = opts.gitBin ?? "git";
   const timeoutMs = opts.timeoutMs ?? 60_000;
@@ -188,6 +225,7 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
     cwd: string,
     auth: GitAuth | undefined,
     config: Array<[string, string]> = [],
+    diagnosis?: string,
   ): Promise<string> {
     try {
       return (
@@ -201,8 +239,10 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
       ).stdout;
     } catch (e) {
       if ((e as { killed?: boolean }).killed)
-        throw new Error(`git ${args[0]} timed out after ${timeoutMs}ms`, { cause: e });
-      throw new Error(scrub(errMessage(e), auth), { cause: e });
+        throw new Error(`git ${args[0]} timed out after ${timeoutMs}ms`, scrubbedCause(e, auth));
+      const message = scrub(errMessage(e), auth).trimEnd();
+      const extra = diagnosis ? appended(message, diagnosis) : "";
+      throw new Error(extra ? `${extra} — ${message}` : message, scrubbedCause(e, auth));
     }
   }
 
@@ -249,7 +289,13 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
       const work = await mkdtemp(join(tmpdir(), "qm-skill-src-"));
       const repoDir = join(work, "repo");
       try {
-        await git(["clone", "--no-checkout", "--quiet", repo.url, "repo"], work, auth, repo.gitConfig);
+        await git(
+          ["clone", "--no-checkout", "--quiet", repo.url, "repo"],
+          work,
+          auth,
+          repo.gitConfig,
+          credentialDiagnosis(pack, auth, opts.resolveAuth !== undefined),
+        );
         await git(["checkout", "--detach", "--quiet", ref || "HEAD"], repoDir, undefined);
         const commit = (await git(["rev-parse", "HEAD"], repoDir, undefined)).trim();
         const files = await readTree(repoDir);
@@ -267,7 +313,13 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
       const target = ref && BRANCH_RE.test(ref) && !SHA_RE.test(ref) ? ref : "HEAD";
       const work = await mkdtemp(join(tmpdir(), "qm-skill-ref-"));
       try {
-        const out = await git(["ls-remote", repo.url, target], work, auth, repo.gitConfig);
+        const out = await git(
+          ["ls-remote", repo.url, target],
+          work,
+          auth,
+          repo.gitConfig,
+          credentialDiagnosis(pack, auth, opts.resolveAuth !== undefined),
+        );
         const sha =
           out
             .split("\n")
