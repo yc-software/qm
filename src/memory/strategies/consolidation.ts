@@ -178,8 +178,8 @@ export function createConsolidatingMemory(
   const perScope = createKeyedQueue<ScopeId>();
   const memory: MemoryService = {
     ...base,
-    async capture(s, facts, at, author) {
-      const added = await perScope(s, () => base.capture(s, facts, at, author));
+    async capture(s, facts, at, author, context) {
+      const added = await perScope(s, () => base.capture(s, facts, at, author, context));
       if (added > 0) void perScope(s, () => consolidator.maybeMaintain(s)).catch(() => {});
       return added;
     },

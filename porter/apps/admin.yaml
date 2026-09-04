@@ -1,0 +1,15 @@
+version: v2
+name: qm-admin
+build:
+  method: docker
+  context: .
+  dockerfile: ./deploy/admin/Dockerfile
+services:
+  - name: admin
+    type: web
+    private: true
+    run: node src/index.ts
+    instances: 1
+    cpuCores: 0.25
+    ramMegabytes: 512
+    port: 8080

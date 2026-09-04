@@ -64,6 +64,8 @@ export interface Burst {
   autonomous?: boolean;
   conversationScopeId: ScopeId;
   conversationLabel?: string;
+  sessionId?: string;
+  idempotencyKey?: string;
   turns: Array<{ input: string; reply: string }>;
   timer?: NodeJS.Timeout;
 }
@@ -76,6 +78,8 @@ export type TurnEndCtx = {
   autonomous?: boolean;
   conversationScopeId?: ScopeId;
   conversationLabel?: string;
+  sessionId?: string;
+  idempotencyKey?: string;
 };
 
 export function isAutonomousBurst(burst: Pick<Burst, "actorId" | "autonomous">): boolean {
@@ -89,7 +93,17 @@ export function createBurstBuffer(
   onError?: (e: unknown, burst: Burst) => void,
 ): (ctx: TurnEndCtx) => Promise<void> {
   const bursts = new Map<string, Burst>();
-  return async ({ scopeId, input, reply, actorId, autonomous, conversationScopeId, conversationLabel }) => {
+  return async ({
+    scopeId,
+    input,
+    reply,
+    actorId,
+    autonomous,
+    conversationScopeId,
+    conversationLabel,
+    sessionId,
+    idempotencyKey,
+  }) => {
     const burst: Burst = {
       scopeId,
       conversationScopeId: conversationScopeId ?? scopeId,
@@ -97,6 +111,8 @@ export function createBurstBuffer(
       ...(actorId !== undefined ? { actorId } : {}),
       ...(autonomous !== undefined ? { autonomous } : {}),
       ...(conversationLabel !== undefined ? { conversationLabel } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
     };
     if (quietMs <= 0) return flush(burst);
 
@@ -135,7 +151,16 @@ export function createPerTurnStrategy(deps: {
     const facts = await extractFacts(deps.harness, burst.turns, { autonomous });
     if (!facts.length) return;
     const at = Date.now();
-    await deps.memory.capture(burst.scopeId, facts, at);
+    await deps.memory.capture(burst.scopeId, facts, at, burst.actorId, {
+      mode: "automatic",
+      ...(burst.actorId ? { actorId: burst.actorId } : {}),
+      conversationScopeId: burst.conversationScopeId,
+      input: burst.turns.map((turn) => turn.input).join("\n\n"),
+      reply: burst.turns.map((turn) => turn.reply).join("\n\n"),
+      ...(autonomous ? { autonomous: true } : {}),
+      ...(burst.sessionId ? { sessionId: burst.sessionId } : {}),
+      ...(burst.idempotencyKey ? { idempotencyKey: burst.idempotencyKey } : {}),
+    });
     if (autonomous) return;
     await ccCaptureToPersonal(
       deps.memory,
@@ -144,6 +169,13 @@ export function createPerTurnStrategy(deps: {
       facts,
       at,
       burst.conversationLabel,
+      {
+        mode: "automatic",
+        ...(burst.actorId ? { actorId: burst.actorId } : {}),
+        conversationScopeId: burst.conversationScopeId,
+        ...(burst.sessionId ? { sessionId: burst.sessionId } : {}),
+        ...(burst.idempotencyKey ? { idempotencyKey: `${burst.idempotencyKey}:personal` } : {}),
+      },
     );
   }
 

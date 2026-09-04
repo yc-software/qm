@@ -7,6 +7,7 @@ const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "u
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const bridge = readFileSync(new URL("../src/core-bridge.ts", import.meta.url), "utf8");
 const server = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
+const shell = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("a mid-turn Enter queues the message — it no longer steers the running turn", () => {
   assert.match(composer, /if \(agent\.state\.isStreaming\) return queueDraft\(agent\);/);
@@ -162,6 +163,34 @@ test("the strip renders core's queue, refreshed from the same read that names th
   assert.match(chat, /setQueuedRuns\(threadRef, activeRun\.queued\)/);
   assert.match(bridge, /queued\?: QueuedRun\[\]/);
   assert.match(server, /json\(res, 200, \{ runId, run, \.\.\.\(waiting\.length \? \{ queued: waiting \} : \{\}\) \}\)/);
+});
+
+test("the queued strip sits behind and outside the composer form", () => {
+  assert.match(chat, /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent\)/);
+  const composerMarkup = composer.slice(composer.indexOf('<form class="composer-wrap"'), composer.indexOf("</form>"));
+  assert.doesNotMatch(composerMarkup, /queuedStrip\(agent\)/);
+  const queuedRule = shell.match(/(?:^|\n)\.queued-strip \{[^}]*\}/)?.[0] ?? "";
+  const composerRule = shell.match(/(?:^|\n)\.composer-wrap \{[^}]*\}/)?.[0] ?? "";
+  assert.match(queuedRule, /z-index: 0;/);
+  assert.match(queuedRule, /width: min\(calc\(var\(--content-w\) - 24px\), calc\(100% - 56px\)\);/);
+  assert.match(queuedRule, /margin: 0 auto -10px;/);
+  assert.match(composerRule, /position: relative;\s*z-index: 1;/);
+  const midWidth = shell.slice(
+    shell.indexOf("@container chat (max-width: 860px)"),
+    shell.indexOf("@container chat (max-width: 470px)"),
+  );
+  const narrow = shell.slice(
+    shell.indexOf("@container chat (max-width: 470px)"),
+    shell.indexOf('[data-density="card"]', shell.indexOf("@container chat (max-width: 470px)")),
+  );
+  assert.match(
+    midWidth,
+    /\.queued-strip \{[^}]*margin-right: max\(28px, calc\(22px \+ env\(safe-area-inset-right\)\)\);[^}]*margin-left: max\(28px, calc\(22px \+ env\(safe-area-inset-left\)\)\);[^}]*\}/,
+  );
+  assert.match(
+    narrow,
+    /\.queued-strip \{[^}]*margin-right: calc\(22px \+ env\(safe-area-inset-right\)\);[^}]*margin-left: calc\(22px \+ env\(safe-area-inset-left\)\);[^}]*\}/,
+  );
 });
 
 // Nothing is sent when a turn settles: core already started the next queued run. The client's only

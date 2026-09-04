@@ -32,9 +32,19 @@ export async function authorizeAdmin(
   }
   const grants = await deps.admin.listGrants();
   const actor = adminActorFrom(ctx);
+  if (actor && !(await activePrincipal(deps, actor.id))) {
+    sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
+    return null;
+  }
   if (actor && adminStatusFromGrants(grants, actor.id).isAdmin) return actor;
   sendJson(res, 403, { error: "forbidden", message: "admin grant required for this scope" });
   return null;
+}
+
+export async function activePrincipal(deps: ServerDeps, principalId: string): Promise<boolean> {
+  if (!deps.identity) return true;
+  await deps.identity.refresh();
+  return deps.identity.classify(principalId).type === "internal";
 }
 
 export async function requireScopedAdmin(

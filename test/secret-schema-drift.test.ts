@@ -35,7 +35,15 @@ test("AWS deployment app domains reject a missing or placeholder gate secret", (
   assert.deepEqual(
     validateCoreSecretEnv({
       AWS_DEPLOY_APPS_DOMAIN: "apps.example.com",
-      AWS_DEPLOY_GATE_SECRET: "real-secret",
+      AWS_DEPLOY_GATE_SECRET: "short",
+    } as NodeJS.ProcessEnv),
+    ["AWS_DEPLOY_GATE_SECRET"],
+    "a guessable gate secret would let anyone forge owner tokens, so strength is enforced",
+  );
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      AWS_DEPLOY_APPS_DOMAIN: "apps.example.com",
+      AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
     } as NodeJS.ProcessEnv),
     [],
   );
@@ -95,4 +103,21 @@ test("production rejects weak encryption key material for managed credentials", 
   } as NodeJS.ProcessEnv;
   assert.deepEqual(validateCoreSecretEnv(env), []);
   assert.deepEqual(validateCoreSecretEnv({ ...env, CONNECTOR_SECRET_KEY: "short" }), ["CONNECTOR_SECRET_KEY"]);
+});
+
+test("both porter roles share PORTER_DEPLOY_API_TOKEN", () => {
+  assert.deepEqual(validateCoreSecretEnv({ SANDBOX_BACKEND: "porter" } as NodeJS.ProcessEnv), [
+    "PORTER_DEPLOY_API_TOKEN",
+  ]);
+  assert.deepEqual(validateCoreSecretEnv({ DEPLOY_PROVIDER: "porter" } as NodeJS.ProcessEnv), [
+    "PORTER_DEPLOY_API_TOKEN",
+  ]);
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      SANDBOX_BACKEND: "porter",
+      DEPLOY_PROVIDER: "porter",
+      PORTER_DEPLOY_API_TOKEN: "t-1",
+    } as NodeJS.ProcessEnv),
+    [],
+  );
 });

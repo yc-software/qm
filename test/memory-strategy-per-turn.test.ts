@@ -123,3 +123,37 @@ test("debounced: autonomous and live turns from the same actor flush as separate
     "two flushes, one per burst, each under its own rules",
   );
 });
+
+test("automatic capture carries the full turn and delivery context", async () => {
+  const captures: Array<Parameters<ReturnType<typeof freshMemory>["memory"]["capture"]>> = [];
+  const { memory } = freshMemory();
+  const wrapped = {
+    ...memory,
+    async capture(...args: Parameters<typeof memory.capture>) {
+      captures.push(args);
+      return memory.capture(...args);
+    },
+  };
+  const strategy = createPerTurnStrategy({
+    harness: { oneShot: () => Promise.resolve("- Durable fact") },
+    memory: wrapped,
+  });
+  await strategy.onTurnEnd!({
+    scopeId: SCOPE,
+    conversationScopeId: "channel:C1",
+    actorId: "U1",
+    sessionId: "session-1",
+    idempotencyKey: "run-1",
+    input: "question",
+    reply: "answer",
+  });
+  assert.deepEqual(captures[0]?.[4], {
+    mode: "automatic",
+    actorId: "U1",
+    conversationScopeId: "channel:C1",
+    input: "question",
+    reply: "answer",
+    sessionId: "session-1",
+    idempotencyKey: "run-1",
+  });
+});

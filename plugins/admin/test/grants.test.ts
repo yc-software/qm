@@ -63,6 +63,36 @@ test("DELETE /api/grants/:id forwards the path + query to the core", async () =>
   assert.equal(c.actor, "U-admin@acme");
 });
 
+test("POST /api/external-users forwards the invite to the core with the actor + a signature", async () => {
+  const invite = { email: "dana@partner.example", role: "member", expiresAt: "2026-10-02T23:59:59.999Z" };
+  const r = await fetch(`${base}/api/external-users`, {
+    method: "POST",
+    headers: { cookie: ADMIN, "content-type": "application/json" },
+    body: JSON.stringify(invite),
+  });
+  assert.equal(r.status, 200);
+  const c = calls.at(-1)!;
+  assert.equal(c.method, "POST");
+  assert.equal(c.url, "/v1/admin/external-users");
+  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.signed, true);
+  assert.deepEqual(JSON.parse(c.body), invite);
+});
+
+test("DELETE /api/external-users/:email forwards the encoded address to the core", async () => {
+  const r = await fetch(`${base}/api/external-users/${encodeURIComponent("dana@partner.example")}`, {
+    method: "DELETE",
+    headers: { cookie: ADMIN },
+  });
+  assert.equal(r.status, 200);
+  const c = calls.at(-1)!;
+  assert.equal(c.method, "DELETE");
+  assert.equal(c.url, "/v1/admin/external-users/dana%40partner.example");
+  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.signed, true);
+  assert.equal(c.body, "");
+});
+
 test("GET /api/users forwards to /v1/admin/users", async () => {
   const r = await fetch(`${base}/api/users`, { headers: { cookie: ADMIN } });
   assert.equal(r.status, 200);
@@ -90,6 +120,17 @@ test("grants/users require a signed-in cookie → 401 when absent (no core hop)"
     401,
   );
   assert.equal((await fetch(`${base}/api/grants/U1?scope=org:acme&role=org_admin`, { method: "DELETE" })).status, 401);
+  assert.equal(
+    (
+      await fetch(`${base}/api/external-users`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      })
+    ).status,
+    401,
+  );
+  assert.equal((await fetch(`${base}/api/external-users/dana%40partner.example`, { method: "DELETE" })).status, 401);
   assert.equal((await fetch(`${base}/api/users`)).status, 401);
   assert.equal((await fetch(`${base}/api/keychain`)).status, 401);
   assert.equal(calls.length, before, "a signed-out request is rejected at the surface, never forwarded");

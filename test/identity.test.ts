@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
+import type { ExternalMember } from "../src/identity/external-members.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const id = createIdentityService();
@@ -91,6 +92,36 @@ test("a running instance refreshes deactivations written by another instance", a
   assert.equal(reader.classify("U-leaver").type, "internal");
   await reader.refresh();
   assert.equal(reader.classify("U-leaver").type, "guest");
+});
+
+test("external members written by one instance reach another over the same backing", async () => {
+  const externalMembers = createMemoryMap<ExternalMember>();
+  const writer = createIdentityService(undefined, { externalMembers });
+  const reader = createIdentityService(undefined, { externalMembers });
+  await reader.hydrate();
+  const now = Date.now();
+  const member = (expiresAt: number): ExternalMember => ({
+    email: "pat@partner.example",
+    role: "member",
+    expiresAt,
+    invitedBy: "admin-alice",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await writer.putExternalMember(member(now + 60_000));
+  assert.equal(reader.externalMember("pat@partner.example"), undefined);
+  await reader.refresh();
+  assert.equal(reader.externalMember("Pat@Partner.example")?.expiresAt, now + 60_000);
+  assert.equal(reader.classify("pat@partner.example").type, "internal");
+
+  await writer.putExternalMember(member(now - 1));
+  await reader.refresh();
+  assert.equal(reader.classify("pat@partner.example").type, "internal", "within the TTL the cache is served");
+  await reader.refresh(true);
+  assert.equal(reader.classify("pat@partner.example").type, "guest", "a forced refresh reads the store");
+  const late = createIdentityService(undefined, { externalMembers });
+  await late.hydrate();
+  assert.equal(late.classify("pat@partner.example").type, "guest");
 });
 
 test("a directory sync deactivates dropped members and self-heals when they reappear", async () => {

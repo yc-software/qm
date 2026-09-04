@@ -15,6 +15,15 @@ The **Users** tab (org-wide, org_admin-only, like Retention) lists everyone who 
 used the agent (from session metadata — no content) with admin status joined, plus the
 authoritative grant list, and lets an org_admin **promote** a principal to org_admin
 or **revoke** — every mutation attributed and audited, the last org_admin protected.
+The **+** on the Users card invites an **external user** (an address outside the org's
+Slack / email domain) with a role and an expiry; they get an invitation email and sign in
+at the portal with that address until it expires. Invitation emails go out through Resend
+when core has `RESEND_API_KEY` and `AUTH_EMAIL_FROM`; without them the user is still added
+and the dashboard shows the sign-in link for you to share. External users are listed in
+their own card, where **Revoke** ends access immediately and leaves the row listed as
+expired; a day after expiry, **Remove** drops the row. An address that already belongs to an
+org member (the org's email domain, the Slack directory, the sign-in allow-list, or anyone who
+has used the agent) cannot be invited.
 (`org_admin` is the only supported role for now; `team_admin` was removed — team-scoped admin
 observability is future work. See `src/admin/admin-service.ts`.) Metrics
 shows TTFT + turn/queue/execution-latency
@@ -72,6 +81,7 @@ status) · `POST /api/logout` ·
 `GET /api/sessions/:id?scope=` (transcript) · `GET /api/sessions/:id/llm?scope=`
 (captured model requests) · `GET /api/files/read?id=` + `GET /api/files/download?id=` (document content) ·
 `GET /api/retention` (org-wide) · `GET /api/users` (org-wide; roster + grants) ·
-`POST /api/grants` (promote) · `DELETE /api/grants/:principalId?scope=&role=` (revoke) — all
-proxied to the core's `/v1/admin/…` with the admin actor injected. Grant mutation is
-**org_admin-only** (enforced in the core, not the surface).
+`POST /api/grants` (promote) · `DELETE /api/grants/:principalId?scope=&role=` (revoke) ·
+`POST /api/external-users` (invite) · `DELETE /api/external-users/:email` (revoke) — all
+proxied to the core's `/v1/admin/…` with the admin actor injected. Grant and external-user
+mutation is **org_admin-only** (enforced in the core, not the surface).

@@ -1,0 +1,135 @@
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if $svc.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "qm.fullname" $root }}-{{ $name }}
+  labels:
+    {{- include "qm.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ $svc.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "qm.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret-env: {{ include (print $root.Template.BasePath "/secret.yaml") $root | sha256sum }}
+      labels:
+        {{- include "qm.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ $name }}
+          image: "{{ $root.Values.image.repository }}{{ $root.Values.image.separator | default "/" }}{{ $svc.image }}:{{ $svc.tag | default $root.Values.image.tag | default $root.Chart.AppVersion }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          {{- with $svc.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: {{ ternary "http" "proxy" (eq $svc.type "web") }}
+              containerPort: {{ $svc.port }}
+          {{- $wired := dict }}
+          {{- $svcHost := printf "%s-%%s.%s.svc.cluster.local" (include "qm.fullname" $root) $root.Release.Namespace }}
+          {{- if ne $name "core" }}
+          {{- $_ := set $wired "CORE_API_URL" (printf "http://%s:%v" (printf $svcHost "core") (index $root.Values.services "core").port) }}
+          {{- end }}
+          {{- $authEnabled := (index $root.Values.services "auth").enabled }}
+          {{- $authUpstream := printf "http://%s:%v" (printf $svcHost "auth") (index $root.Values.services "auth").port }}
+          {{- $base := trimSuffix "/" ($root.Values.publicUrl | default "") }}
+          {{- $issuer := printf "%s/idp" $base }}
+          {{- if eq $name "portal" }}
+          {{- $_ := set $wired "WEB_UI_UPSTREAM" (printf "http://%s:%v" (printf $svcHost "web-ui") (index $root.Values.services "web-ui").port) }}
+          {{- $_ := set $wired "ADMIN_UPSTREAM" (printf "http://%s:%v" (printf $svcHost "admin") (index $root.Values.services "admin").port) }}
+          {{- if $authEnabled }}
+          {{- $_ := set $wired "AUTH_BROKER_UPSTREAM" $authUpstream }}
+          {{- $_ := set $wired "AUTH_BROKER_PREFIX" "/idp" }}
+          {{- end }}
+          {{- end }}
+          {{- if $root.Values.publicUrl }}
+          {{- if eq $name "core" }}
+          {{- $_ := set $wired "AGENT_API_URL" $root.Values.publicUrl }}
+          {{- $_ := set $wired "PUBLIC_WEB_URL" $root.Values.publicUrl }}
+          {{- end }}
+          {{- if eq $name "portal" }}
+          {{- $_ := set $wired "PORTAL_PUBLIC_URL" $root.Values.publicUrl }}
+          {{- if $authEnabled }}
+          {{- $_ := set $wired "OIDC_ISSUER" $issuer }}
+          {{- $_ := set $wired "OIDC_AUTH_ENDPOINT" (printf "%s/authorize" $issuer) }}
+          {{- $_ := set $wired "OIDC_TOKEN_ENDPOINT" (printf "%s/token" $authUpstream) }}
+          {{- $_ := set $wired "OIDC_USERINFO_ENDPOINT" (printf "%s/userinfo" $authUpstream) }}
+          {{- $_ := set $wired "OIDC_JWKS_URI" (printf "%s/.well-known/jwks.json" $authUpstream) }}
+          {{- $_ := set $wired "OIDC_SCOPES" "openid email" }}
+          {{- $_ := set $wired "OIDC_PRINCIPAL_CLAIM" "email" }}
+          {{- with $root.Values.env.AUTH_ALLOWED_EMAIL_DOMAIN }}
+          {{- $_ := set $wired "OIDC_ALLOWED_EMAIL_DOMAIN" . }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- if and (eq $name "auth") $authEnabled }}
+          {{- $_ := set $wired "AUTH_ISSUER" $issuer }}
+          {{- $_ := set $wired "AUTH_REDIRECT_URI" (printf "%s/auth/callback" $base) }}
+          {{- end }}
+          {{- if eq $name "web-ui" }}{{- $_ := set $wired "WEB_UI_PUBLIC_URL" $root.Values.publicUrl }}{{- end }}
+          {{- end }}
+          {{- if or $wired $root.Values.env $svc.env }}
+          env:
+            {{- range $k, $v := $wired }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- range $k, $v := $root.Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- range $k, $v := $svc.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if or (include "qm.hasSecretEnv" $root) $root.Values.envFrom }}
+          envFrom:
+            {{- if include "qm.hasSecretEnv" $root }}
+            - secretRef:
+                name: {{ include "qm.fullname" $root }}-env
+            {{- end }}
+            {{- with $root.Values.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- if $svc.healthPath }}
+          readinessProbe:
+            httpGet:
+              path: {{ $svc.healthPath }}
+              port: {{ $svc.port }}
+          livenessProbe:
+            httpGet:
+              path: {{ $svc.healthPath }}
+              port: {{ $svc.port }}
+          {{- else }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ $svc.port }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ $svc.port }}
+          {{- end }}
+          {{- with $svc.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $svc.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
+{{- end }}

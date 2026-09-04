@@ -100,7 +100,13 @@ export function createHarnessRouter(
   const lastHarness = new Map<string, HarnessId>();
   return {
     profile: utility.profile,
-    models: utility.models,
+    models: {
+      ...utility.models,
+      async screenSecurity(input) {
+        const adapter = input.harnessId && isHarnessId(input.harnessId) ? adapters.get(input.harnessId) : utility;
+        return adapter?.models.screenSecurity?.(input);
+      },
+    },
     tools: utility.tools,
     turns: {
       async runTurn(input) {

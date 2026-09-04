@@ -27,6 +27,8 @@ jobs:
             dockerfile: deploy/portal/Dockerfile
           - name: auth
             dockerfile: deploy/auth/Dockerfile
+          - name: egress-proxy
+            dockerfile: deploy/egress-proxy/Dockerfile
           - name: sandbox-base
             dockerfile: fly/Dockerfile
             build-args: INSTALL_BROWSER_ENGINE=1

@@ -410,6 +410,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
 
     async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
       const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
+      execOpts?.signal?.throwIfAborted();
       await ensureRunning(handle.id);
       const exports = Object.entries(handle.env ?? {})
         .map(([k, v]) => `export ${k}=${shq(v)}`)

@@ -4,7 +4,14 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 
 const IDENTITY_TTL_MS = 60_000;
 
-const FORWARD_REQUEST_HEADERS = ["content-type", "accept", "accept-language", "user-agent", "accept-encoding"];
+const FORWARD_REQUEST_HEADERS = [
+  "content-type",
+  "accept",
+  "accept-language",
+  "user-agent",
+  "accept-encoding",
+  "sec-fetch-dest",
+];
 
 const DROP_RESPONSE_HEADERS = new Set([
   "connection",

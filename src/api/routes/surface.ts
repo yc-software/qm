@@ -673,7 +673,9 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
     const results: Array<{ scopeId: string; fact: string }> = [];
     for (const scope of scopes) {
       if (results.length >= limit) break;
-      for (const fact of await deps.memory.query(scope, b.query, limit - results.length)) {
+      for (const fact of await deps.memory.query(scope, b.query, limit - results.length, {
+        actorId: capability.actorId,
+      })) {
         results.push({ scopeId: scope, fact });
       }
     }
@@ -707,7 +709,10 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
   if (method === "POST" && pathname === "/v1/memory/facts") {
     const facts = parseFacts(body);
     if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-    const added = await deps.memory.capture(write, facts, Date.now(), capability.actorId);
+    const added = await deps.memory.capture(write, facts, Date.now(), capability.actorId, {
+      mode: "explicit",
+      actorId: capability.actorId,
+    });
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.capture",

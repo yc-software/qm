@@ -197,8 +197,12 @@ test("init --email-transport smtp scaffolds smtp keys only and a matching config
     for (const line of ["SMTP_HOST=", "SMTP_USERNAME=", "SMTP_PASSWORD="]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line}`);
     }
-    assert.ok(!env.includes("RESEND_API_KEY"), "the unselected resend transport's key stays out of .env.example");
-    assert.ok(!readFileSync(join(dir, ".env"), "utf8").includes("RESEND_API_KEY"), "and out of .env");
+    assert.ok(
+      env.split("\n").includes("# RESEND_API_KEY=  # optional"),
+      "the unselected resend transport's key stays optional: core alone uses it for external-user invitations",
+    );
+    assert.ok(!env.split("\n").includes("RESEND_API_KEY="), "and is never required");
+    assert.ok(!readFileSync(join(dir, ".env"), "utf8").split("\n").includes("RESEND_API_KEY="), "in .env either");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

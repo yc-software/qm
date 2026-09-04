@@ -192,6 +192,16 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
   );
 });
 
+test("the Agent37 key is required for either sandbox route", () => {
+  for (const config of [
+    makeConfig({ env: { core: { SANDBOX_BACKEND: "agent37" } } }),
+    makeConfig({ env: { core: { SANDBOX_SECONDARY_BACKEND: "agent37" } } }),
+    makeConfig({ sandbox: { backend: "agent37" } }),
+  ]) {
+    assert.equal(secretByName(config, "AGENT37_API_KEY").required, true);
+  }
+});
+
 test("naming a base model provider makes that provider's key a required deployment secret", () => {
   for (const [provider, key] of [
     ["anthropic", "ANTHROPIC_API_KEY"],
@@ -333,6 +343,24 @@ test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a port
     ["admin", "core", "portal", "web-ui"],
     "core verifies with PORTAL_IDENTITY_SECRET, so a surface left without it signs with a different key and every request it makes is rejected",
   );
+});
+
+test("the invitation-email pair reaches core as optional secrets on every topology", () => {
+  for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
+    const alone = secretByName(makeConfig(), name);
+    assert.equal(alone.required, false);
+    assert.deepEqual([...secretDestinations(alone).keys()], ["core"]);
+    assert.match(alone.description, /admin Users tab or by chatting with QM/);
+    assert.match(renderEnvExample(makeConfig()), new RegExp(`^# ${name}=  # optional$`, "m"));
+
+    const broker = makeConfig({
+      services: ["core", "portal", "auth"],
+      env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
+    });
+    const shared = secretByName(broker, name);
+    assert.equal(shared.required, true);
+    assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["auth", "core"]);
+  }
 });
 
 test("a fly deployment tells core which sandbox substrate to boot", () => {

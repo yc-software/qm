@@ -68,8 +68,26 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
       }
     }
   }
+  if (
+    deps.deployAppsDomain &&
+    deps.deployGateSecret &&
+    deps.deployAppsSessionSecret &&
+    method === "GET" &&
+    String(req.headers["sec-fetch-dest"] ?? "") === "document"
+  ) {
+    const d = await app.getDeployment(id).catch(() => null);
+    const slug = d?.name ?? d?.id;
+    if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
+      res.writeHead(302, {
+        location: `https://${slug}.${deps.deployAppsDomain}${subPath}${url.search}`,
+        "cache-control": "no-store",
+      });
+      res.end();
+      return;
+    }
+  }
   const reach = await app.reachDeployment(id, principal);
-  return proxyReach(ctx, reach, subPath);
+  return proxyReach(ctx, reach, subPath, { sandbox: true });
 }
 
 function adminDeploymentProxyParts(pathname: string): { id: string; subPath: string } | null {
@@ -116,7 +134,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
     scopeLabel: deployment.ownerScopeId,
   });
   const reach = await app.reachDeployment(parts.id, "", { bypassAcl: true });
-  return proxyReach(ctx, reach, parts.subPath);
+  return proxyReach(ctx, reach, parts.subPath, { sandbox: true });
 }
 
 const GATEWAY_AUTH_HEADERS = [
@@ -170,8 +188,11 @@ function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string
   return out;
 }
 
+const APP_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+
 function gatewaySafeResponseHeaders(
   headers: Record<string, string | string[] | number | undefined>,
+  sandbox = false,
 ): Record<string, string | string[]> {
   const normalized: Record<string, string | string[] | undefined> = {};
   for (const [rawName, value] of Object.entries(headers)) {
@@ -186,6 +207,13 @@ function gatewaySafeResponseHeaders(
     const kept = values.filter((cookie) => !/^\s*(?:dpl_access|dpl_owner|portal_session)\s*=/i.test(cookie));
     if (kept.length) out["set-cookie"] = kept;
     else delete out["set-cookie"];
+  }
+  delete out["clear-site-data"];
+  if (sandbox) {
+    const existing = out["content-security-policy"];
+    out["content-security-policy"] = existing
+      ? [...(Array.isArray(existing) ? existing : [existing]), APP_SANDBOX_CSP]
+      : APP_SANDBOX_CSP;
   }
   return out;
 }
@@ -252,6 +280,7 @@ function proxyReachHttp2(
   subPath: string,
   headers: Record<string, string | string[]>,
   bufferedBody: Buffer | null,
+  sandbox: boolean,
 ): void {
   const { req, res, deps, url, method } = ctx;
   const { host, port, tls } = endpoint.endpoint;
@@ -356,7 +385,7 @@ function proxyReachHttp2(
       markUpstreamUp(`${host}:${port}`);
       armThrottleShield(`${host}:${port}`, Number(responseHeaders[":status"] ?? 0), up);
       const status = Number(responseHeaders[":status"] ?? 502);
-      const safeHeaders = gatewaySafeResponseHeaders(responseHeaders);
+      const safeHeaders = gatewaySafeResponseHeaders(responseHeaders, sandbox);
       res.writeHead(status, safeHeaders);
       up.pipe(res, { end: false });
     });
@@ -446,6 +475,7 @@ async function proxyReach(
   ctx: BaseCtx,
   reach: Awaited<ReturnType<App["reachDeployment"]>>,
   subPath: string,
+  opts?: { sandbox?: boolean },
 ): Promise<void> {
   const { req, res, deps, url, method } = ctx;
   if (res.destroyed) return;
@@ -491,7 +521,7 @@ async function proxyReach(
   }
   if (res.destroyed) return;
   if (reach.endpoint.httpVersion === "2") {
-    proxyReachHttp2(ctx, reach, subPath, headers, bufferedBody);
+    proxyReachHttp2(ctx, reach, subPath, headers, bufferedBody, opts?.sandbox ?? false);
     return;
   }
   const htmlNav = wantsWarmingPage(req, method);
@@ -500,7 +530,7 @@ async function proxyReach(
     markUpstreamUp(upstreamKey);
     upRes.on("error", () => res.destroy());
     armThrottleShield(upstreamKey, upRes.statusCode ?? 0, upRes);
-    const headers = gatewaySafeResponseHeaders(upRes.headers);
+    const headers = gatewaySafeResponseHeaders(upRes.headers, opts?.sandbox ?? false);
     res.writeHead(upRes.statusCode ?? 502, headers);
     upRes.pipe(res);
   });
@@ -1154,11 +1184,14 @@ async function deploymentOwnerUrl(ctx: ApiCtx): Promise<void> {
   if (!sub) return sendJson(res, 403, { error: "forbidden", message: "an identified caller is required" });
   const gateSecret = deps.deployGateSecret;
   const appsDomain = deps.deployAppsDomain;
-  if (!gateSecret || !appsDomain)
-    return sendJson(res, 503, { error: "unavailable", message: "deployment subdomains are not configured" });
   const deployment = await app.getDeployment(params.id!);
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   const slug = deployment.name ?? deployment.id;
+  if (!gateSecret || !appsDomain)
+    return sendJson(res, 503, {
+      error: "unavailable",
+      message: `app subdomains are not configured — this app is reachable signed-in at /d/${slug}/; set DEPLOY_APPS_DOMAIN (with AWS_DEPLOY_GATE_SECRET) to enable per-app subdomains and live editing`,
+    });
   if (!(await app.canManageDeployment(deployment.id, sub, ctx.capability?.scopeId)))
     return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can edit it live" });
   const exp = Date.now() + OWNER_LINK_TTL_MS;

@@ -95,6 +95,7 @@ export async function startHarness(
     env?: Record<string, string | undefined>;
     claims?: ClaimStore & { calls: string[][] };
     brandName?: () => string;
+    emailAllowed?: (email: string) => Promise<boolean>;
   } = {},
 ): Promise<Harness> {
   const cfg = readConfig(testEnv(options.env));
@@ -109,6 +110,7 @@ export async function startHarness(
     claims,
     mailer,
     ...(options.brandName ? { brandName: options.brandName } : {}),
+    emailAllowed: options.emailAllowed ?? (async () => false),
     now: () => now.ms,
     onBackgroundTask: (task) => pending.push(task),
   });

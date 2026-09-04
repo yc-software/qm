@@ -1513,20 +1513,23 @@ a.chat-row-open {
   margin-top: 9px;
 }
 .queued-strip {
+  position: relative;
+  z-index: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-top: 9px;
+  width: min(calc(var(--content-w) - 24px), calc(100% - 56px));
+  margin: 0 auto -10px;
 }
 .queued-chip {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 28px;
-  padding: 4px 6px 4px 8px;
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  background: var(--background);
+  min-height: 38px;
+  padding: 6px 6px 14px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 14px 14px 10px 10px;
+  background: color-mix(in srgb, var(--background) 88%, var(--secondary));
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.2;
@@ -2364,6 +2367,7 @@ a.chat-row-open {
 
 .composer-wrap {
   position: relative;
+  z-index: 1;
   width: min(var(--content-w), calc(100% - 32px));
   margin: 0 auto max(18px, calc(10px + env(safe-area-inset-bottom)));
   padding: 12px;
@@ -7208,6 +7212,11 @@ h3.ambient-field-label {
     margin-right: max(16px, calc(10px + env(safe-area-inset-right)));
     margin-left: max(16px, calc(10px + env(safe-area-inset-left)));
   }
+  .queued-strip {
+    width: auto;
+    margin-right: max(28px, calc(22px + env(safe-area-inset-right)));
+    margin-left: max(28px, calc(22px + env(safe-area-inset-left)));
+  }
 }
 @container chat (max-width: 470px) {
   .custom-chat-shell {
@@ -7220,6 +7229,10 @@ h3.ambient-field-label {
     margin-bottom: calc(10px + env(safe-area-inset-bottom));
     margin-left: calc(10px + env(safe-area-inset-left));
     border-radius: 18px;
+  }
+  .queued-strip {
+    margin-right: calc(22px + env(safe-area-inset-right));
+    margin-left: calc(22px + env(safe-area-inset-left));
   }
   .live-work-dock {
     margin-right: calc(10px + env(safe-area-inset-right));
@@ -7976,4 +7989,57 @@ h3.ambient-field-label {
 .mc-cta {
   margin-top: 16px;
   align-self: flex-start;
+}
+
+.playground-card {
+  overflow: hidden;
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+.playground-header,
+.playground-title,
+.playground-actions,
+.playground-actions a {
+  display: flex;
+  align-items: center;
+}
+.playground-header {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.playground-title {
+  min-width: 0;
+  gap: 7px;
+}
+.playground-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.playground-actions {
+  gap: 4px;
+}
+.playground-actions a {
+  gap: 4px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-decoration: none;
+}
+.playground-actions a:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.playground-frame {
+  display: block;
+  width: 100%;
+  height: 360px;
+  border: 0;
+  background: white;
 }

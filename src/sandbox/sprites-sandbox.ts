@@ -447,10 +447,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       const fireKill = () => {
         execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("sprites-sandbox: kill in-flight exec", undefined));
       };
-      if (signal.aborted) fireKill();
       const onAbort = () => fireKill();
       signal.addEventListener("abort", onAbort, { once: true });
       try {
+        signal.throwIfAborted();
         return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
       } finally {
         signal.removeEventListener("abort", onAbort);

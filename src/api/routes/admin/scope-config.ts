@@ -17,8 +17,13 @@ import {
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
-import { adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
-import { ADMIN_RESOURCES, ADMIN_RESOURCE_BY_ID, adminResourceManifest } from "../admin-resources.ts";
+import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
+import {
+  ADMIN_RESOURCES,
+  ADMIN_RESOURCE_BY_ID,
+  adminResourceManifest,
+  defaultAutoFlaggerConfig,
+} from "../admin-resources.ts";
 import { type ApiCtx } from "../route.ts";
 import {
   composePolicy,
@@ -111,7 +116,8 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
   const actor = adminActorFrom(ctx);
-  if (!actor) return sendJson(res, 200, { isAdmin: false, permissions: [] });
+  if (!actor || !(await activePrincipal(deps, actor.id)))
+    return sendJson(res, 200, { isAdmin: false, permissions: [] });
   const status = await deps.admin.adminStatusOf(actor);
   const permissions = status.isAdmin ? ["admin"] : [];
   audit(deps, {
@@ -331,6 +337,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     harnessDefault: deps.harnessId ?? "pi",
     harnessOptions: HARNESS_IDS.filter((id) => id !== "mock"),
     modelsByHarness: Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)])),
+    autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
     browseModelOptions: SELECTABLE_BASE_MODELS.filter((m) =>
       modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
     ),

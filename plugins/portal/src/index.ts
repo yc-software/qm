@@ -38,7 +38,8 @@ import {
   FORWARD_WEBHOOK_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { coreClaimStore, withinRateLimit } from "../../chassis/src/claims.ts";
+import { coreClaimStore, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
+import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import { json, escapeHtml, serveEmojiFavicon } from "../../chassis/src/http.ts";
@@ -56,8 +57,10 @@ const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
 const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 28800);
 const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(86400, SESSION_TTL_S));
 const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
-const COOKIE_DOMAIN = process.env.PORTAL_COOKIE_DOMAIN || undefined;
-const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || undefined;
+const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
+const COOKIE_DOMAIN =
+  process.env.PORTAL_COOKIE_DOMAIN ||
+  (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN) : undefined);
 const IS_PROD = process.env.NODE_ENV === "production";
 const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
 const ORIGIN = (() => {
@@ -70,8 +73,10 @@ const ORIGIN = (() => {
 const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
 const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPortalUrl(PUBLIC_URL);
 const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USER || "dev-admin";
-const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED === "1";
 const PLAYGROUND = process.env.PORTAL_PLAYGROUND === "1";
+const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED
+  ? process.env.PORTAL_DEPLOYMENTS_ENABLED === "1"
+  : !PLAYGROUND;
 function playgroundIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
@@ -297,6 +302,11 @@ function hostOf(raw: string): string {
   } catch {
     return "";
   }
+}
+
+export function derivedCookieDomain(portalHost: string, appsDomain: string): string | undefined {
+  const host = portalHost.toLowerCase();
+  return host.includes(".") && appsDomain.toLowerCase().endsWith(`.${host}`) ? host : undefined;
 }
 
 export function hostIsWithinDomain(host: string, domain: string): boolean {
@@ -804,6 +814,9 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
     limit: PLAYGROUND_MINTS_PER_IP,
     windowS: PLAYGROUND_MINT_WINDOW_S,
     nowMs: Date.now(),
+  }).catch((e) => {
+    if (e instanceof ClaimStoreUnavailableError) return false;
+    throw e;
   });
   if (!allowed) return null;
   const now = Math.floor(Date.now() / 1000);
@@ -1055,6 +1068,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   if (isDeployment) {
+    if (session.anon) return json(res, 403, { error: "forbidden", message: "sign in to view deployed apps" });
     const rest = pathname.slice(`/${seg}/`.length);
     const slash = rest.indexOf("/");
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
@@ -1174,7 +1188,9 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
-    sub = resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info });
+    sub = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
+      coreEmailAllowed(CORE, CORE_SIGNING_SECRET, email, "portal"),
+    );
     const rawName = info.name ?? claims.name;
     if (typeof rawName === "string") name = rawName.trim().slice(0, 200);
   } catch (e) {
@@ -1204,6 +1220,11 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
 
 export function bootChecks(): void {
   const problems: string[] = [];
+  if (!AUTH_BROKER_UPSTREAM && originOf(OIDC.authEndpoint) && originOf(OIDC.authEndpoint) === originOf(PUBLIC_URL)) {
+    problems.push(
+      "OIDC_AUTH_ENDPOINT is on the portal's own origin but AUTH_BROKER_UPSTREAM is unset — every sign-in would redirect from /auth/login back into the portal forever; wire AUTH_BROKER_UPSTREAM to the auth service or point OIDC_AUTH_ENDPOINT at a real identity provider",
+    );
+  }
   if (LOCAL_AUTH_BYPASS_REQUESTED && IS_PROD) {
     problems.push("PORTAL_LOCAL_AUTH_BYPASS may not be enabled in production");
   }
@@ -1227,7 +1248,7 @@ export function bootChecks(): void {
     }
     if (COOKIE_DOMAIN || APPS_DOMAIN) {
       problems.push(
-        "PORTAL_PLAYGROUND requires PORTAL_COOKIE_DOMAIN and PORTAL_APPS_DOMAIN unset — a domain-wide cookie would carry anonymous sessions to app subdomains, which never see the anon flag",
+        "PORTAL_PLAYGROUND requires PORTAL_COOKIE_DOMAIN and the apps domain (PORTAL_APPS_DOMAIN / DEPLOY_APPS_DOMAIN) unset — a domain-wide cookie would carry anonymous sessions to app subdomains, which never see the anon flag",
       );
     }
     if (DEPLOYMENTS_ENABLED) {
@@ -1238,7 +1259,7 @@ export function bootChecks(): void {
   }
   if (APPS_DOMAIN && !COOKIE_DOMAIN) {
     problems.push(
-      "PORTAL_APPS_DOMAIN requires PORTAL_COOKIE_DOMAIN (app returnTo without a domain-wide session cookie loops sign-in forever)",
+      `the apps domain (${APPS_DOMAIN}) is not a subdomain of the portal host, so the cookie domain cannot be derived — set PORTAL_COOKIE_DOMAIN to the parent domain covering both (app returnTo without a domain-wide session cookie loops sign-in forever)`,
     );
   }
   if (COOKIE_DOMAIN && !hostIsWithinDomain(hostOf(PUBLIC_URL), COOKIE_DOMAIN)) {

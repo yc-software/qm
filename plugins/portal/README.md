@@ -98,10 +98,18 @@ or every visitor (and every crawler that accepts HTML) shares the socket
 address's one bucket.
 
 Because playground authority must never leave this origin, the portal refuses
-to boot with `PORTAL_PLAYGROUND` alongside `PORTAL_COOKIE_DOMAIN`,
-`PORTAL_APPS_DOMAIN`, or `PORTAL_DEPLOYMENTS_ENABLED` — a domain-wide cookie or
-the deployment proxy would hand anonymous sessions to surfaces that never see
-the `anon` flag. Anonymous sessions are also refused the `/connect/*` and
+to boot with `PORTAL_PLAYGROUND` alongside `PORTAL_COOKIE_DOMAIN`, an apps
+domain (`PORTAL_APPS_DOMAIN` / `DEPLOY_APPS_DOMAIN`), or an explicit
+`PORTAL_DEPLOYMENTS_ENABLED=1` — a domain-wide cookie or the deployment proxy
+would hand anonymous sessions to surfaces that never see the `anon` flag. The
+deployment proxy (`/d/<app>/`), on by default for signed-in portals, turns
+itself off under the playground, and anonymous sessions are refused it at
+request time too. Outside the playground, `PORTAL_APPS_DOMAIN` defaults to
+`DEPLOY_APPS_DOMAIN`, and `PORTAL_COOKIE_DOMAIN` to the portal host itself when
+the apps domain sits directly under it (`apps.<portal host>`), so one core-side
+variable configures both processes. Any other layout needs an explicit
+`PORTAL_COOKIE_DOMAIN` — deriving a shared parent by guesswork risks landing on
+a public suffix browsers refuse. Anonymous sessions are also refused the `/connect/*` and
 `/drop/*` flows, so a visitor can't attach real OAuth tokens or dropped secrets
 to a throwaway principal that a cleared cookie orphans.
 
@@ -136,6 +144,11 @@ verified work email, lowercased; sign-in fails unless the IdP marks the email ve
 (the IdP's opaque subject, e.g. the Slack U… id — only for deployments still keyed on Slack ids).
 `OIDC_ALLOWED_EMAIL_DOMAIN` — with `email`, additionally reject any account outside this domain
 (checked against the email suffix and Google's `hd` claim).
+An address those rules reject still signs in when an org admin has invited it as an
+external user: the callback asks core over the signed core client
+(`GET /v1/auth/broker/email-allowed`) and accepts an active invitation, `hd` notwithstanding.
+An address the env rules permit never triggers the lookup; core unreachable means not allowed.
+Deployments keyed on `sub` never consult it, so external users cannot sign in there.
 
 ### Google Workspace SSO with the email principal
 

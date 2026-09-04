@@ -282,6 +282,7 @@ async function coreWhoami(principal: string): Promise<{ isAdmin: boolean; role?:
 
 const WRITES = new Map<string, string[]>([
   ["grants", ["POST", "DELETE"]],
+  ["external-users", ["POST", "DELETE"]],
   ["memory", ["PUT"]],
   ["crons", ["PUT"]],
   ["skills", ["DELETE"]],
@@ -401,6 +402,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
       const scopeId = decodeURIComponent(rest);
       return forward(req, res, principal, "GET", `/v1/admin/scopes/${encodeURIComponent(scopeId)}`);
+    }
+    if (method === "POST" && rest.endsWith("/auto-flagger/test")) {
+      const scope = decodeURIComponent(rest.slice(0, -"/auto-flagger/test".length));
+      const corePath = `/v1/admin/scopes/${encodeURIComponent(scope)}/auto-flagger/test`;
+      return forward(req, res, principal, "POST", corePath, await readBody(req));
     }
     if (method === "PUT") {
       const slash = rest.lastIndexOf("/");

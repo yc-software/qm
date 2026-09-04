@@ -476,6 +476,8 @@
         margin: 0 0 6px;
       }
       input[type="text"],
+      input[type="email"],
+      input[type="date"],
       input[type="password"],
       input[type="number"],
       textarea,
@@ -4077,6 +4079,52 @@
                     ><span class="status" id="st-security-posture"></span>
                   </div>
                 </section>
+                <section class="card hidden" id="card-auto-flagger">
+                  <div class="head">
+                    <h2>Auto flagger</h2>
+                    <p>
+                      Model and classification rubric used to screen external context and tool results in Auto mode. The
+                      security boundary and required verdict format remain fixed.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <label for="auto-flagger-harness">Harness</label>
+                    <select id="auto-flagger-harness" style="max-width: 360px"></select>
+                    <label for="auto-flagger-model">Model</label>
+                    <select id="auto-flagger-model" style="max-width: 440px"></select>
+                    <label for="auto-flagger-rubric">Classification rubric</label>
+                    <textarea id="auto-flagger-rubric" rows="10" style="width: 100%"></textarea>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="auto-flagger">Apply</button>
+                    <button id="auto-flagger-test" type="button">Test</button>
+                    <label
+                      for="auto-flagger-window"
+                      style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
+                      >on the last
+                      <input
+                        id="auto-flagger-window"
+                        type="number"
+                        min="1"
+                        max="500"
+                        step="1"
+                        value="100"
+                        style="width: 78px"
+                      />
+                      screenings</label
+                    >
+                    <label
+                      style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
+                      title="Also replay the configuration in effect today, so the flag rates are comparable"
+                      ><input type="checkbox" id="auto-flagger-compare" /> compare with current</label
+                    >
+                    <button id="auto-flagger-reset" type="button">Restore default</button>
+                    <span class="status" id="st-auto-flagger"></span>
+                  </div>
+                  <div class="foot" id="auto-flagger-test-result" hidden>
+                    <span class="status" id="st-auto-flagger-test"></span>
+                  </div>
+                </section>
                 <section class="card setting-row hidden" id="card-approval-grant-modes">
                   <div class="head">
                     <h2>Approval grant options</h2>
@@ -6401,6 +6449,38 @@
         const showSecurityPosture = "securityPosture" in (r.data || {});
         $("card-security-posture").classList.toggle("hidden", !showSecurityPosture);
         if (showSecurityPosture) $("security-posture").value = r.data.securityPosture || "auto";
+        const showAutoFlagger = scope.startsWith("org:") && "autoFlagger" in (r.data || {});
+        $("card-auto-flagger").classList.toggle("hidden", !showAutoFlagger);
+        if (showAutoFlagger) {
+          const current = r.data.autoFlagger || r.data.autoFlaggerDefault;
+          const harness = $("auto-flagger-harness");
+          const model = $("auto-flagger-model");
+          const harnessOptions = r.data.harnessOptions || [];
+          const modelsByHarness = r.data.modelsByHarness || {};
+          harness.textContent = "";
+          harnessOptions.forEach((id) => {
+            const option = document.createElement("option");
+            option.value = id;
+            option.textContent = { pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" }[id] || id;
+            harness.appendChild(option);
+          });
+          harness.value = current.harnessId;
+          const syncAutoFlaggerModels = () => {
+            const options = modelsByHarness[harness.value] || [];
+            const prior = model.value || current.modelId;
+            model.textContent = "";
+            options.forEach((entry) => {
+              const option = document.createElement("option");
+              option.value = entry.id;
+              option.textContent = entry.name + " (" + entry.id + ")";
+              model.appendChild(option);
+            });
+            model.value = options.some((entry) => entry.id === prior) ? prior : (options[0] || {}).id || "";
+          };
+          harness.oninput = syncAutoFlaggerModels;
+          syncAutoFlaggerModels();
+          $("auto-flagger-rubric").value = current.rubric;
+        }
         const showGrantModes = "approvalGrantModes" in (r.data || {});
         $("card-approval-grant-modes").classList.toggle("hidden", !showGrantModes);
         if (showGrantModes) {
@@ -8157,6 +8237,11 @@
       $("egress-deny").addEventListener("input", renderEgressValidation);
       const SAVE = {
         "security-posture": () => ({ posture: $("security-posture").value }),
+        "auto-flagger": () => ({
+          harnessId: $("auto-flagger-harness").value,
+          modelId: $("auto-flagger-model").value,
+          rubric: $("auto-flagger-rubric").value,
+        }),
         "approval-grant-modes": () => ({
           session: $("approval-grant-session").checked,
           always: $("approval-grant-always").checked,
@@ -8196,6 +8281,7 @@
       };
       const SAVE_ST = {
         "security-posture": "st-security-posture",
+        "auto-flagger": "st-auto-flagger",
         "approval-grant-modes": "st-approval-grant-modes",
         "command-policy": "st-policy",
         soul: "st-soul",
@@ -8218,6 +8304,7 @@
       };
       const SAVE_RELOADS = new Set([
         "soul",
+        "auto-flagger",
         "external-slack-participants",
         "runtime",
         "approved-harnesses",
@@ -8230,6 +8317,25 @@
         "branding",
       ]);
       const sectionSnapshots = new Map();
+      function autoFlaggerTestSummary(data) {
+        if (!data.sampled) return data.message || "No past screenings to replay yet.";
+        const pct = (value) => (value == null ? "n/a" : (value * 100).toFixed(1) + "%");
+        const parts = ["Flagged " + data.flagged + " of " + data.scored + " scored (" + pct(data.flagRate) + ")"];
+        if (data.baseline) {
+          parts.push(
+            "current rubric flags " +
+              pct(data.baseline.flagRate) +
+              " · " +
+              plural(data.baseline.changed, "verdict") +
+              " changed",
+          );
+        }
+        if (data.unscreened) parts.push(plural(data.unscreened, "sample") + " came back unscreened");
+        if (data.errors) parts.push(plural(data.errors, "sample") + " errored");
+        if (data.partial) parts.push("stopped at the time limit — partial result");
+        parts.push("sampled " + data.sampled + " · " + Math.round(data.durationMs / 100) / 10 + "s");
+        return parts.join(" · ");
+      }
       function sectionButton(key) {
         return document.querySelector('[data-save="' + key + '"]');
       }
@@ -8307,6 +8413,43 @@
         return Promise.resolve(true);
       }
       let governanceSaveSeq = 0;
+      $("auto-flagger-test").onclick = async () => {
+        const button = $("auto-flagger-test");
+        const windowField = $("auto-flagger-window");
+        const requested = Number(windowField.value);
+        if (!Number.isInteger(requested) || requested < 1 || requested > 500) {
+          return setStatus("st-auto-flagger-test", "Window must be a whole number between 1 and 500.", "err", true);
+        }
+        $("auto-flagger-test-result").hidden = false;
+        setStatus(
+          "st-auto-flagger-test",
+          "Replaying the last " + requested + " screenings through this rubric…",
+          "",
+          true,
+        );
+        button.disabled = true;
+        try {
+          const r = await api("POST", "/api/scopes/" + encodeURIComponent(scope) + "/auto-flagger/test", {
+            window: requested,
+            compare: $("auto-flagger-compare").checked,
+            harnessId: $("auto-flagger-harness").value,
+            modelId: $("auto-flagger-model").value,
+            rubric: $("auto-flagger-rubric").value,
+          });
+          if (!r.ok) {
+            return setStatus("st-auto-flagger-test", r.data?.message || "Test run failed.", "err", true);
+          }
+          setStatus("st-auto-flagger-test", autoFlaggerTestSummary(r.data), r.data.errors ? "warn" : "ok", true);
+        } finally {
+          button.disabled = false;
+        }
+      };
+      $("auto-flagger-reset").onclick = async () => {
+        const r = await api("PUT", "/api/scopes/" + encodeURIComponent(scope) + "/auto-flagger", { reset: true });
+        if (!r.ok) return setStatus("st-auto-flagger", r.data?.message || "Reset failed.", "err");
+        await loadScope();
+        setStatus("st-auto-flagger", "Default restored", "ok");
+      };
       document.querySelectorAll("[data-save]").forEach((btn) => {
         btn.onclick = async () => {
           const key = btn.dataset.save;
@@ -10750,6 +10893,21 @@
             "err",
           );
       }
+      async function revokeExternalUser(m) {
+        const question =
+          m.status === "active"
+            ? 'Revoke access for "' + m.email + '"? They will no longer be able to sign in.'
+            : 'Remove "' + m.email + '" from the list?';
+        if (!confirm(question)) return;
+        const r = await api("DELETE", "/api/external-users/" + encodeURIComponent(m.email));
+        if (r.ok) renderData();
+        else
+          setStatus(
+            "st-external",
+            r.status === 403 ? "Only an org admin may revoke." : r.data?.message || "Revoke failed.",
+            "err",
+          );
+      }
       function keychainGrantStatus(g) {
         const expired = g.expiresAt && g.expiresAt <= Date.now();
         if (expired && g.status === "active") return ["expired", "warn"];
@@ -10946,6 +11104,7 @@
       function renderUsers(root, d) {
         const users = d.users || [];
         const grants = d.grants || [];
+        const externalUsers = d.externalUsers || [];
         let filterVal = "";
         defaultShell({
           stats: [
@@ -11077,6 +11236,97 @@
         impCard.querySelector(".body").append(impDatalist, impSt);
         root.appendChild(impCard);
 
+        const inviteEmail = d.inviteEmail || {};
+        const emailInput = document.createElement("input");
+        emailInput.type = "email";
+        emailInput.placeholder = "name@example.com";
+        emailInput.spellcheck = false;
+        emailInput.autocapitalize = "none";
+        const roleSelect = document.createElement("select");
+        roleSelect.append(new Option("Member", "member"), new Option("Org admin", "org_admin"));
+        const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+        const expiresInput = document.createElement("input");
+        expiresInput.type = "date";
+        expiresInput.min = isoDay(Date.now());
+        expiresInput.value = isoDay(Date.now() + 30 * 86400000);
+        const inviteBtn = document.createElement("button");
+        inviteBtn.className = "primary";
+        inviteBtn.type = "button";
+        inviteBtn.textContent = "Send invite";
+        inviteBtn.onclick = async () => {
+          const email = emailInput.value.trim();
+          if (!email) return setStatus("st-external", "Email required.", "err");
+          if (!expiresInput.value) return setStatus("st-external", "Expiry date required.", "err");
+          inviteBtn.disabled = true;
+          const r = await api("POST", "/api/external-users", {
+            email,
+            role: roleSelect.value,
+            expiresAt: expiresInput.value,
+          });
+          inviteBtn.disabled = false;
+          if (!r.ok)
+            return setStatus(
+              "st-external",
+              r.status === 403 ? "Only an org admin may invite." : r.data?.message || "Invite failed.",
+              "err",
+            );
+          const member = r.data.member;
+          const expires = " (expires " + fmtTime(member.expiresAt) + ")";
+          await renderData();
+          setStatus(
+            "st-external",
+            r.data.emailSent
+              ? "Invite sent to " + member.email + expires
+              : r.data.emailProblem
+                ? "Added " +
+                  member.email +
+                  ", but no invitation email was sent: " +
+                  r.data.emailProblem +
+                  "." +
+                  (r.data.signInUrl ? " Share " + r.data.signInUrl + " with them." : "")
+                : "Updated " + member.email + " — " + labelRole(member.role) + expires,
+            r.data.emailSent || !r.data.emailProblem ? "ok" : "dirty",
+            true,
+          );
+        };
+        const inviteForm = document.createElement("div");
+        inviteForm.className = "grant-form";
+        inviteForm.append(
+          mkField("grow", "Email", emailInput),
+          mkField("", "Role", roleSelect),
+          mkField("", "Expires", expiresInput),
+          inviteBtn,
+        );
+        const inviteNote = document.createElement("p");
+        inviteNote.className = inviteEmail.configured === false ? "hint flag-warn" : "hint";
+        const signInHint = inviteEmail.signInUrl ? " Sign-in link to share: " + inviteEmail.signInUrl : "";
+        inviteNote.textContent =
+          inviteEmail.configured === false
+            ? (inviteEmail.problem || "Invitation emails are not configured") +
+              ". The user is still added; share the sign-in link yourself." +
+              signInHint
+            : "Invitation emails go out through Resend — core needs RESEND_API_KEY and AUTH_EMAIL_FROM. Without them the user is still added and you share the sign-in link yourself.";
+        const invite = document.createElement("div");
+        invite.className = "hidden";
+        invite.style.margin = "0 0 14px";
+        invite.append(inviteForm, inviteNote);
+        const addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.className = "rowbtn";
+        addBtn.textContent = "+";
+        addBtn.title = "Add external user";
+        addBtn.setAttribute("aria-label", "Add external user");
+        addBtn.setAttribute("aria-expanded", "false");
+        addBtn.onclick = () => {
+          const open = !invite.classList.toggle("hidden");
+          addBtn.setAttribute("aria-expanded", String(open));
+          if (open) emailInput.focus();
+        };
+        const externalSt = document.createElement("p");
+        externalSt.className = "status";
+        externalSt.id = "st-external";
+        externalSt.style.margin = "10px 0 0";
+
         const lists = document.createElement("div");
         lists.className = "list-root";
         root.appendChild(lists);
@@ -11088,6 +11338,7 @@
           const filteredUsers = users.filter((u) =>
             matches([u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"]),
           );
+          const filteredExternal = externalUsers.filter((m) => matches([m.email, m.role, m.invitedBy || "", m.status]));
 
           const admins = actionTable(
             ["Principal", "Role", "Scope", "Granted by", ""],
@@ -11148,11 +11399,40 @@
             (u) => go({ view: "user", scope, session: null, principal: u.principalId }),
             "No users match.",
           );
+          const usersCard = dataCard(
+            "Users",
+            "Everyone who has used the agent — click a row for their activity, artifacts, and config.",
+            roster,
+          );
+          usersCard.querySelector(".head h2").append(" ", addBtn);
+          usersCard.querySelector(".body").prepend(invite);
+          usersCard.querySelector(".body").appendChild(externalSt);
+          lists.appendChild(usersCard);
+
+          const external = actionTable(
+            ["Email", "Role", "Expires", "Invited by", "Status", ""],
+            filteredExternal,
+            (m) => [
+              { text: m.email, cls: "mono" },
+              nodeCell(mutedText(labelRole(m.role))),
+              (m.status === "active" ? "Ends " : "Ended ") + isoDay(m.expiresAt) + " (UTC)",
+              m.invitedBy || "-",
+              { badge: m.status === "active" ? "Active" : "Expired", kind: m.status === "active" ? "ok" : "warn" },
+              m.status === "active"
+                ? { action: { label: "Revoke", danger: true, run: () => revokeExternalUser(m) } }
+                : Date.now() - m.expiresAt >= 86400000
+                  ? { action: { label: "Remove", run: () => revokeExternalUser(m) } }
+                  : "",
+            ],
+            externalUsers.length
+              ? "No external users match."
+              : "No external users. Use + on the Users card to invite one.",
+          );
           lists.appendChild(
             dataCard(
-              "Users",
-              "Everyone who has used the agent — click a row for their activity, artifacts, and config.",
-              roster,
+              "External users",
+              "Outside collaborators invited by email. They sign in at the portal with that address until it expires.",
+              external,
             ),
           );
         };

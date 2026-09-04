@@ -97,6 +97,16 @@ verified address; for a whole team, the operator requests production access
 from the SES console (usually granted within a day) or verifies each
 recipient.
 
+## Invitation emails for external users
+
+Admins invite people outside the organization from the admin Users tab or by
+chatting with QM. Core emails those invitations through Resend, so the CLI
+delivers `RESEND_API_KEY` and `AUTH_EMAIL_FROM` to core as well as to the
+broker. Both are optional on core: without them the invitation is still created
+and the admin shares the sign-in link by hand. Core also receives
+`AUTH_ALLOWED_EMAIL_DOMAIN`, so an address in the organization's own domain is
+refused as an external user; those people sign in directly.
+
 ## Who may sign in
 
 Set one of these, or the broker refuses to start:

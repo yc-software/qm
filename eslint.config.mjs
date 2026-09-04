@@ -8,6 +8,7 @@ export default tseslint.config(
       "**/node_modules/",
       "**/dist/",
       "**/dist-web/",
+      "data/",
       "deploy/layers/",
       "docs/",
       "plugins/web-ui/public/",

@@ -1108,6 +1108,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     prompt: string,
     instrumentation?: Pick<HarnessTurnInput, "recordModelCall" | "recordLlmRequest">,
     signal?: AbortSignal,
+    modelOverride?: string,
   ): Promise<string | undefined> => {
     const session = { id: `oneshot-${randomBytes(8).toString("hex")}` } as HarnessTurnInput["session"];
     const scope = { kind: "org", id: "oneshot" } as unknown as ScopeId;
@@ -1121,6 +1122,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       scopeLabel: scope,
       orgScopeId: scope,
       ...(signal ? { cancel: signal } : {}),
+      ...(modelOverride ? { model: modelOverride } : {}),
       emit: async (entry) => {
         const saved = {
           ...entry,
@@ -1156,13 +1158,21 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       resetSession: () => {},
       oneShot: single,
       judge: single,
-      screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest }) =>
+      screenSecurity: async ({
+        payload,
+        modelId,
+        systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT,
+        signal,
+        recordModelCall,
+        recordLlmRequest,
+      }) =>
         parseSecurityScreenVerdict(
           await single(
-            SECURITY_SCREEN_SYSTEM_PROMPT,
+            systemPrompt,
             payload,
             { recordModelCall, ...(recordLlmRequest ? { recordLlmRequest } : {}) },
             signal,
+            modelId,
           ),
         ),
       generateTitle: async (transcript) =>

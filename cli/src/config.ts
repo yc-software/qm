@@ -45,7 +45,7 @@ export interface PluginEntry {
 }
 
 export interface SandboxConfig {
-  backend?: "local" | "sprites" | "aws";
+  backend?: "local" | "sprites" | "aws" | "agent37";
   app?: string;
   image?: string;
   baseImage?: string;
@@ -234,6 +234,10 @@ export function sandboxCoreEnv(
   if (localSandboxActive(config)) {
     env.SANDBOX_BACKEND = "local";
     if (sb.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
+    return { env, missingSecrets };
+  }
+  if (sb.backend === "agent37") {
+    env.SANDBOX_BACKEND = "agent37";
     return { env, missingSecrets };
   }
   if (sb.app) {
@@ -1335,9 +1339,14 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   };
   const out: SandboxConfig = {};
   if (o["backend"] !== undefined) {
-    if (o["backend"] !== "local" && o["backend"] !== "sprites" && o["backend"] !== "aws") {
+    if (
+      o["backend"] !== "local" &&
+      o["backend"] !== "sprites" &&
+      o["backend"] !== "aws" &&
+      o["backend"] !== "agent37"
+    ) {
       throw new CliError(
-        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), or "aws" (Lambda MicroVM sandboxes)`,
+        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), "aws" (Lambda MicroVM sandboxes), or "agent37"`,
       );
     }
     out.backend = o["backend"];
@@ -1392,6 +1401,14 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     if (stray.length) {
       throw new CliError(
         `${path}: "sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore ${stray.map((key) => `"sandbox.${key}"`).join(", ")} (Fly layer-image settings) — remove them or set "sandbox.backend": "sprites"`,
+      );
+    }
+  }
+  if (out.backend === "agent37") {
+    const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
+    if (stray.length) {
+      throw new CliError(
+        `${path}: "sandbox.backend": "agent37" ignores ${stray.map((key) => `"sandbox.${key}"`).join(", ")} — remove them`,
       );
     }
   }

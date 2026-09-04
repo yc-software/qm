@@ -36,6 +36,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         url: `/d/${input.name ?? "dep-1"}/`,
       };
     },
+    async createPlayground(input) {
+      return { kind: "playground", artifactId: "playground-1", title: input.title };
+    },
     async memorySearch(q) {
       return q.includes("billing") ? ["(2026-05-31) Owns the billing service"] : [];
     },
@@ -333,6 +336,38 @@ const call = (tool: ReturnType<typeof createPiTools>[number] | undefined, params
   assert.ok(tool);
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
 };
+
+test("miniapp records a typed artifact without requiring a reply directive", async () => {
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (entry) => {
+      emitted.push(entry as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const miniapp = createPiTools(ref, { surfaceName: "web" }).find((tool) => tool.name === "miniapp");
+  const result = await call(miniapp, { title: "Demo", html: "<button>Go</button>" });
+
+  assert.equal((result as { content: Array<{ text: string }> }).content[0]?.text, 'Created playground "Demo".');
+  const payload = emitted.find((entry) => entry.type === "tool_result" && entry.payload.tool === "miniapp")?.payload;
+  assert.deepEqual(payload?.display?.artifact, {
+    kind: "playground",
+    artifactId: "playground-1",
+    title: "Demo",
+  });
+});
+
+test("miniapp is offered only on the web surface", () => {
+  assert.equal(
+    createPiTools({ current: fakeToolContext() }).some((tool) => tool.name === "miniapp"),
+    false,
+  );
+  assert.equal(
+    createPiTools({ current: fakeToolContext() }, { surfaceName: "web" }).some((tool) => tool.name === "miniapp"),
+    true,
+  );
+});
 
 test("each pi tool emits a tool_call then a tool_result", async () => {
   const emitted: Emitted[] = [];

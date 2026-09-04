@@ -115,6 +115,7 @@ function strictPostAllowed(pathname: string, body: unknown): boolean {
     pathname === "/v1/projects" ||
     pathname === "/v1/conversations" ||
     pathname === "/v1/memory/search" ||
+    pathname === "/v1/search" ||
     pathname === "/v1/memory/restore" ||
     pathname.startsWith("/v1/run-signals/") ||
     /^\/v1\/conversations\/[^/]+\/fork$/.test(pathname)

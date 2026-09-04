@@ -157,7 +157,10 @@ test("email preflight fails check on rejected SMTP credentials and warns on stra
       ),
     );
     assert.ok(okLines.some((line) => line.includes("credentials accepted")));
-    assert.ok(okLines.some((line) => line.includes("RESEND_API_KEY is set but")));
+    assert.ok(
+      okLines.some((line) => line.includes("RESEND_API_KEY is set but") && line.includes("external-user invitations")),
+      "a Resend key beside an SMTP broker is core's invitation sender, not a stray value",
+    );
     await assert.rejects(
       () =>
         emailTransportPreflight(

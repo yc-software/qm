@@ -183,10 +183,25 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
     const facts = await extractFacts(deps.harness, burst.turns, { autonomous });
     if (!facts.length) return;
     const at = Date.now();
-    await memory.capture(burst.scopeId, facts, at);
+    await memory.capture(burst.scopeId, facts, at, burst.actorId, {
+      mode: "automatic",
+      ...(burst.actorId ? { actorId: burst.actorId } : {}),
+      conversationScopeId: burst.conversationScopeId,
+      input: burst.turns.map((turn) => turn.input).join("\n\n"),
+      reply: burst.turns.map((turn) => turn.reply).join("\n\n"),
+      ...(autonomous ? { autonomous: true } : {}),
+      ...(burst.sessionId ? { sessionId: burst.sessionId } : {}),
+      ...(burst.idempotencyKey ? { idempotencyKey: burst.idempotencyKey } : {}),
+    });
     const ccTarget = autonomous ? null : ccTargetFor(burst.conversationScopeId, burst.actorId);
     if (!ccTarget) return;
-    await ccCaptureToPersonal(memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel);
+    await ccCaptureToPersonal(memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel, {
+      mode: "automatic",
+      ...(burst.actorId ? { actorId: burst.actorId } : {}),
+      conversationScopeId: burst.conversationScopeId,
+      ...(burst.sessionId ? { sessionId: burst.sessionId } : {}),
+      ...(burst.idempotencyKey ? { idempotencyKey: `${burst.idempotencyKey}:personal` } : {}),
+    });
   }
 
   const strategy: MemoryStrategy = {

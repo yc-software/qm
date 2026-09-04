@@ -1,4 +1,5 @@
 import { sendJson } from "../http.ts";
+import { externalMemberActive } from "../../identity/external-members.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -47,6 +48,19 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { claimed: null });
 }
 
+async function emailAllowed(ctx: ApiCtx): Promise<void> {
+  const { res, deps, url } = ctx;
+  const email = (url.searchParams.get("email") ?? "").trim();
+  if (!email) return sendJson(res, 400, { error: "bad_request", message: "email required" });
+  if (!deps.identity) return sendJson(res, 200, { allowed: false });
+  await deps.identity.refresh();
+  const member = deps.identity.externalMember(email);
+  const allowed =
+    member !== undefined && externalMemberActive(member) && deps.identity.classify(email).type === "internal";
+  return sendJson(res, 200, { allowed, ...(allowed ? { expiresAt: member.expiresAt } : {}) });
+}
+
 export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/auth/broker/claim", auth: "source", handle: claimBrokerNonce },
+  { method: "GET", path: "/v1/auth/broker/email-allowed", auth: "source", handle: emailAllowed },
 ];

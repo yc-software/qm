@@ -20,6 +20,8 @@ export interface MemoryStrategy {
     autonomous?: boolean;
     conversationScopeId?: ScopeId;
     conversationLabel?: string;
+    sessionId?: string;
+    idempotencyKey?: string;
   }): Promise<void>;
   maintain?(scopeId: ScopeId): Promise<void>;
   promptLines?(): string[];

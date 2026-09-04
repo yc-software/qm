@@ -6,3 +6,4 @@ data/
 .ci-instance/
 test/live-slack/out/
 deploy/stacks/.generated/
+deploy/helm/templates/

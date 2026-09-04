@@ -31,16 +31,25 @@ test("runtime schema conditions reference env vars the CLI schema also condition
     "SANDBOX_BACKEND",
     "DEPLOY_PROVIDER",
     "AWS_DEPLOY_APPS_DOMAIN",
+    "DEPLOY_APPS_DOMAIN",
     "GOOGLE_OAUTH_CLIENT_ID",
     "DROPBOX_OAUTH_CLIENT_ID",
     "LINEAR_OAUTH_CLIENT_ID",
   ];
   const cliConditionEnv = new Set<string>();
-  for (const spec of FIRST_PARTY_SECRET_SPECS) {
-    if (typeof spec.required === "boolean") continue;
-    const when = spec.required.when as { name?: string; names?: string[] };
+  interface CliCondition {
+    name?: string;
+    names?: string[];
+    conditions?: CliCondition[];
+  }
+  const collect = (when: CliCondition): void => {
     if (when.name) cliConditionEnv.add(when.name);
     for (const name of when.names ?? []) cliConditionEnv.add(name);
+    for (const nested of when.conditions ?? []) collect(nested);
+  };
+  for (const spec of FIRST_PARTY_SECRET_SPECS) {
+    if (typeof spec.required === "boolean") continue;
+    collect(spec.required.when as CliCondition);
   }
   const missing = runtimeConditionEnv.filter((name) => !cliConditionEnv.has(name));
   assert.deepEqual(

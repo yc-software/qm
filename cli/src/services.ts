@@ -154,6 +154,7 @@ export function brokerWiring(
       ...(o.allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {}),
     };
   }
+  if (service === "core") return o.allowedEmailDomain ? { AUTH_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {};
   if (service === "auth") {
     return {
       AUTH_ISSUER: issuer,
@@ -164,16 +165,19 @@ export function brokerWiring(
   return {};
 }
 
-const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
-  CORE_API_URL: s.coreUrl,
-  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal, s.brand),
-  ...(s.hasAuth
+const brokerEnv = (service: string, s: ServiceCtx): Record<string, string> =>
+  s.hasAuth
     ? brokerWiring(service, {
         publicUrl: s.publicUrl,
         authBaseUrl: s.authUrl,
         ...(s.authAllowedEmailDomain ? { allowedEmailDomain: s.authAllowedEmailDomain } : {}),
       })
-    : {}),
+    : {};
+
+const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
+  CORE_API_URL: s.coreUrl,
+  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal, s.brand),
+  ...brokerEnv(service, s),
 });
 
 const CATALOG: Record<ServiceName, ServiceDef> = {
@@ -186,6 +190,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     fly: {
       managed: (s) => ({
         ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal, s.brand),
+        ...brokerEnv("core", s),
         FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix,
       }),
       stackKeys: [

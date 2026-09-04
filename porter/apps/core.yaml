@@ -1,0 +1,18 @@
+version: v2
+name: qm-core
+build:
+  method: docker
+  context: .
+  dockerfile: ./deploy/core/Dockerfile
+services:
+  - name: core
+    type: web
+    private: true
+    run: node src/index.ts
+    instances: 1
+    cpuCores: 1
+    ramMegabytes: 2048
+    port: 8080
+    healthCheck:
+      enabled: true
+      httpPath: /healthz

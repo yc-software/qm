@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp, deploymentView } from "../src/api/app.ts";
+import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createToolContext, type ToolContext } from "../src/tools/primitives.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
@@ -43,7 +44,11 @@ function makeDeploy(): { deploy: DeployService; acl: AclStore } {
 
 function apiHarness(directory?: Dir) {
   const { deploy, acl } = makeDeploy();
-  const app = createApp({ deploy, ...(directory ? { directory } : {}) } as unknown as Parameters<typeof createApp>[0]);
+  const app = createApp({
+    deploy,
+    identity: createIdentityService(),
+    ...(directory ? { directory } : {}),
+  } as unknown as Parameters<typeof createApp>[0]);
   return { app, deploy, acl };
 }
 

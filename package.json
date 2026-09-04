@@ -35,6 +35,8 @@
     "build:aws-image": "node scripts/aws-build-sandbox-image.ts",
     "sandbox:local:build": "bash scripts/local-sandbox-build.sh",
     "deploy:fly-image": "flyctl deploy --remote-only --build-only --push --image-label latest --app \"${FLY_SANDBOX_APP_NAME:?Set FLY_SANDBOX_APP_NAME to your operator-owned app}\" -c fly/fly.toml --dockerfile fly/Dockerfile . --yes",
+    "sandbox:porter:build": "docker build --platform linux/amd64 -t \"${PORTER_SANDBOX_IMAGE:?Set PORTER_SANDBOX_IMAGE to the registry tag to publish}\" porter && docker push \"$PORTER_SANDBOX_IMAGE\"",
+    "deploy:porter-runner-image": "docker build --platform linux/amd64 -t \"${PORTER_DEPLOY_RUNNER_IMAGE:?Set PORTER_DEPLOY_RUNNER_IMAGE to the registry tag to publish}\" -f deploy/porter-runner/Dockerfile . && docker push \"$PORTER_DEPLOY_RUNNER_IMAGE\"",
     "test:pg": "node --test --test-concurrency=1 test/postgres-store.test.ts test/postgres-grant-store.test.ts test/postgres-admin-grants.test.ts test/postgres-file-artifact-store.test.ts test/postgres-directory-store.test.ts test/postgres-map.test.ts test/cron-queue.test.ts test/postgres-metrics-sink.test.ts test/postgres-error-log.test.ts test/postgres-audit-log.test.ts test/postgres-budget.test.ts test/postgres-rate-limiter.test.ts test/postgres-credential-usage-sink.test.ts test/postgres-config-store.test.ts test/postgres-delivery-store.test.ts test/postgres-replay-dedupe.test.ts test/postgres-egress-audit-sink.test.ts test/postgres-memory-service.test.ts test/run-signal-store.test.ts test/postgres-run-activity-store.test.ts test/leader-lease.test.ts test/advisory-lock.test.ts test/persistence-init-retry.test.ts test/migrate-principals.test.ts test/postgres-surface-cache.test.ts test/postgres-instance-registry.test.ts",
     "livetest": "node scripts/api-livetest.ts",
     "bench:memory": "node --env-file-if-exists=.env scripts/memory-bench.ts",
@@ -67,12 +69,13 @@
     "@smithy/signature-v4": "^5.6.6",
     "croner": "^10.0.1",
     "emoji-datasource": "^16.0.0",
-    "fastify": "^5.10.0",
+    "fastify": "^5.12.1",
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
     "opencode-ai": "1.17.18",
     "pg": "^8.13.1",
     "pg-boss": "^12.26.1",
+    "porter-sandbox": "^0.1.41",
     "tar-stream": "^3.2.0",
     "typebox": "^1.1.38",
     "zod": "4.4.3"
@@ -81,14 +84,14 @@
     "@hono/node-server": "2.0.10",
     "hono": "4.12.34",
     "@fastify/ajv-compiler": {
-      "fast-uri": "3.1.5"
+      "fast-uri": "3.1.7"
     },
     "ajv": {
-      "fast-uri": "3.1.5"
+      "fast-uri": "3.1.7"
     },
     "brace-expansion": "5.0.9",
     "fast-json-stringify": {
-      "fast-uri": "4.1.2"
+      "fast-uri": "4.1.4"
     },
     "protobufjs": "7.6.5"
   },

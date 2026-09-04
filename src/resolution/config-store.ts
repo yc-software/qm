@@ -112,6 +112,14 @@ export interface PersistedBrowseModel {
   scopeId: ScopeId;
   modelId: string;
 }
+interface AutoFlaggerConfig {
+  harnessId: string;
+  modelId: string;
+  rubric: string;
+}
+export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
+  scopeId: ScopeId;
+}
 export interface PersistedTurnWallClock {
   scopeId: ScopeId;
   sec: number;
@@ -209,6 +217,8 @@ export interface ScopedConfigStore {
   setBrowseMaxSteps(id: ScopeId, steps: number | null): void;
   getBrowseModel(id: ScopeId): string | null;
   setBrowseModel(id: ScopeId, modelId: string | null): void;
+  getAutoFlaggerConfig(): AutoFlaggerConfig | null;
+  setAutoFlaggerConfig(config: AutoFlaggerConfig | null): void;
   getTurnWallClockSecDurable(id: ScopeId): Promise<number | null>;
   setTurnWallClockSec(id: ScopeId, sec: number | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
@@ -245,6 +255,7 @@ export function createMemoryConfigStore(
     branding?: DurableMap<PersistedBranding>;
     browseMaxSteps?: DurableMap<PersistedBrowseMaxSteps>;
     browseModels?: DurableMap<PersistedBrowseModel>;
+    autoFlaggerConfigs?: DurableMap<PersistedAutoFlaggerConfig>;
     turnWallClocks?: DurableMap<PersistedTurnWallClock>;
     deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
     connectorSecretKey?: Buffer | string;
@@ -272,6 +283,7 @@ export function createMemoryConfigStore(
   const branding = new Map<ScopeId, OrgBranding>();
   const browseMaxSteps = new Map<ScopeId, number>();
   const browseModels = new Map<ScopeId, string>();
+  let autoFlaggerConfig: AutoFlaggerConfig | null = null;
   const turnWallClocks = new Map<ScopeId, number>();
   const soulStore = opts.souls ?? createMemoryMap<PersistedSoul>();
   const soulHistoryStore = opts.soulHistory ?? createMemoryMap<PersistedSoulRevision>();
@@ -293,6 +305,7 @@ export function createMemoryConfigStore(
   const brandingStore = opts.branding ?? createMemoryMap<PersistedBranding>();
   const browseMaxStepsStore = opts.browseMaxSteps ?? createMemoryMap<PersistedBrowseMaxSteps>();
   const browseModelStore = opts.browseModels ?? createMemoryMap<PersistedBrowseModel>();
+  const autoFlaggerStore = opts.autoFlaggerConfigs ?? createMemoryMap<PersistedAutoFlaggerConfig>();
   const turnWallClockStore = opts.turnWallClocks ?? createMemoryMap<PersistedTurnWallClock>();
   const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
   const persistWarn = (what: string) => (e: unknown) =>
@@ -446,6 +459,14 @@ export function createMemoryConfigStore(
           for (const r of await brandingStore.all()) branding.set(r.scopeId, r.branding);
           for (const r of await browseMaxStepsStore.all()) browseMaxSteps.set(r.scopeId, r.steps);
           for (const r of await browseModelStore.all()) browseModels.set(r.scopeId, r.modelId);
+          const storedAutoFlagger = await autoFlaggerStore.get(org);
+          autoFlaggerConfig = storedAutoFlagger
+            ? {
+                harnessId: storedAutoFlagger.harnessId,
+                modelId: storedAutoFlagger.modelId,
+                rubric: storedAutoFlagger.rubric,
+              }
+            : null;
           for (const r of await turnWallClockStore.all()) turnWallClocks.set(r.scopeId, r.sec);
         })();
       }
@@ -893,6 +914,17 @@ export function createMemoryConfigStore(
         persist(`browseModel:${id}`, "browse model", () => browseModelStore.put(id, { scopeId: id, modelId }));
       }
     },
+    getAutoFlaggerConfig: () => autoFlaggerConfig,
+    setAutoFlaggerConfig(config) {
+      autoFlaggerConfig = config;
+      if (config === null) {
+        persist(`autoFlagger:${org}`, "Auto flagger config", () => autoFlaggerStore.delete(org));
+      } else {
+        persist(`autoFlagger:${org}`, "Auto flagger config", () =>
+          autoFlaggerStore.put(org, { scopeId: org, ...config }),
+        );
+      }
+    },
     getTurnWallClockSecDurable: async (id) => (await turnWallClockStore.get(id))?.sec ?? null,
     async setTurnWallClockSec(id, sec) {
       await writeQueue(`turnWallClock:${id}`, () =>
@@ -986,6 +1018,7 @@ export function createMemoryConfigStore(
         interactiveFastModeRow,
         individualModelAuthRow,
         channelHeaderPinRow,
+        autoFlaggerRow,
       ] = await Promise.all([
         soulStore.get(id),
         commandPolicyStore.get(id),
@@ -1001,6 +1034,7 @@ export function createMemoryConfigStore(
         id === org ? interactiveFastModeStore.get(org) : null,
         id === org ? individualModelAuthStore.get(org) : null,
         channelHeaderPinStore.get(id),
+        id === org ? autoFlaggerStore.get(org) : null,
       ]);
       let refreshedSoul = soul;
       const legacyHistory = legacySoulHistory.get(id) ?? [];
@@ -1040,6 +1074,10 @@ export function createMemoryConfigStore(
       if (id === org) orgAmbient = orgAmbientRow?.on ?? true;
       if (id === org) interactiveFastMode = interactiveFastModeRow?.on ?? false;
       if (id === org) individualModelAuth = individualModelAuthRow?.on ?? false;
+      if (id === org)
+        autoFlaggerConfig = autoFlaggerRow
+          ? { harnessId: autoFlaggerRow.harnessId, modelId: autoFlaggerRow.modelId, rubric: autoFlaggerRow.rubric }
+          : null;
       if (brandingRow) branding.set(id, brandingRow.branding);
       else branding.delete(id);
       if (channelHeaderPinRow) channelHeaderPin.set(id, channelHeaderPinRow.on);
@@ -1062,6 +1100,7 @@ export function createMemoryConfigStore(
               `orgAmbient:${org}`,
               `interactiveFastMode:${org}`,
               `individualModelAuth:${org}`,
+              `autoFlagger:${org}`,
             ]
           : []),
         `channelHeaderPin:${id}`,

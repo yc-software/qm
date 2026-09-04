@@ -3,6 +3,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
   Permission,
+  Principal,
   ScopeId,
   Session,
   SessionEntry,
@@ -10,6 +11,7 @@ import type {
   TurnResult,
 } from "../types.ts";
 import type { OutgoingAttachment } from "../types.ts";
+import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -96,6 +98,7 @@ import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../harness/harness-router.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectStore } from "../projects/project-store.ts";
+import type { SearchHit } from "../search/core-search.ts";
 
 interface DeploymentVersionView {
   version: number;
@@ -287,6 +290,11 @@ export interface App {
   ): Promise<{ entry: SessionEntry } | null>;
   listSessions(principalId: string): Promise<Session[]>;
   searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
+  search(
+    query: string,
+    principals: readonly Principal[],
+    limit?: number,
+  ): Promise<{ hits: SearchHit[]; failedBackends: string[] }>;
   sessionBackground(sessionId: string, viewer: string): Promise<SessionBackgroundView | null>;
   readSessionBackgroundOutput(
     sessionId: string,
@@ -509,6 +517,7 @@ export interface AppDeps {
   identity: IdentityService;
   publicWebUrl?: string;
   sessions: SessionStore;
+  screenSecurity?: SecurityScreenProbe;
   orchestrator: Orchestrator;
   runs: RunStore;
   leaseTtlMs: number;

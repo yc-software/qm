@@ -26,10 +26,36 @@ interface MemoryHead {
   updatedAt?: number;
 }
 
+export interface MemoryRecallContext {
+  query?: string;
+  actorId?: string;
+  sessionId?: string;
+  conversationScopeId?: ScopeId;
+  maxChars?: number;
+  autonomous?: boolean;
+}
+
+export interface MemoryCaptureContext {
+  mode: "explicit" | "automatic";
+  actorId?: string;
+  sessionId?: string;
+  conversationScopeId?: ScopeId;
+  input?: string;
+  reply?: string;
+  autonomous?: boolean;
+  idempotencyKey?: string;
+}
+
 export interface MemoryService {
-  recall(scopeId: ScopeId): Promise<string>;
-  capture(scopeId: ScopeId, facts: string[], at: number, author?: string): Promise<number>;
-  query(scopeId: ScopeId, q: string, limit?: number): Promise<string[]>;
+  recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<string>;
+  capture(
+    scopeId: ScopeId,
+    facts: string[],
+    at: number,
+    author?: string,
+    context?: MemoryCaptureContext,
+  ): Promise<number>;
+  query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<string[]>;
   read(scopeId: ScopeId): Promise<string>;
   replace(scopeId: ScopeId, content: string, author?: string): Promise<void>;
   readHead?(scopeId: ScopeId): Promise<MemoryHead>;
@@ -180,6 +206,7 @@ export async function ccCaptureToPersonal(
   facts: string[],
   at: number,
   sourceLabel?: string,
+  context?: MemoryCaptureContext,
 ): Promise<number> {
   const target = ccTargetFor(origin, actorId);
   if (!target || !facts.length) return 0;
@@ -191,5 +218,5 @@ export async function ccCaptureToPersonal(
     .slice(0, 60);
   const source = clean || (kind === "channel" ? "a channel" : "a group conversation");
   const tagged = facts.map((f) => `${f} (said in ${source})`);
-  return memory.capture(target, tagged, at, `cc:${origin}`);
+  return memory.capture(target, tagged, at, `cc:${origin}`, context);
 }

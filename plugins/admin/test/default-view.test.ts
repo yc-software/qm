@@ -157,6 +157,26 @@ test("governance renders simple settings as compact rows with contextual actions
   assert.match(html, /"turnWallClockSec" in r\.data/);
 });
 
+test("the Auto flagger can be tested against past screenings before it is applied", () => {
+  assert.match(html, /id="auto-flagger-test"/);
+  assert.match(html, /id="auto-flagger-window"[\s\S]*?max="500"/);
+  assert.match(html, /id="auto-flagger-compare"/);
+  assert.match(html, /id="st-auto-flagger-test"/);
+  assert.match(html, /auto-flagger\/test/, "the button posts to the test endpoint, not the save endpoint");
+  assert.match(html, /window: requested/, "the chosen window is what gets replayed");
+  assert.match(html, /rubric: \$\("auto-flagger-rubric"\)\.value/, "the draft in the box is what gets tested");
+  assert.match(html, /Flagged " \+ data\.flagged/, "the result reports a flag count and rate");
+});
+
+test("governance exposes Auto flagger runtime and rubric controls", () => {
+  assert.match(html, /id="card-auto-flagger"/);
+  assert.match(html, /id="auto-flagger-harness"/);
+  assert.match(html, /id="auto-flagger-model"/);
+  assert.match(html, /id="auto-flagger-rubric"/);
+  assert.match(html, /id="auto-flagger-reset"/);
+  assert.match(html, /data-save="auto-flagger"/);
+});
+
 test("compact governance rows preserve policy detail and collapse before they overflow", () => {
   assert.doesNotMatch(html, /#view-governance \.setting-row > \.head p[^}]*line-clamp/);
   assert.doesNotMatch(html, /#view-governance \.setting-row > \.foot \.status[^}]*white-space:\s*nowrap/);

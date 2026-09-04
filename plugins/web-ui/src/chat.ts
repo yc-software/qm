@@ -101,6 +101,7 @@ import { backgroundLabel, clearWorking, conversationBackground, isAbandonedNewCh
 import { liveTurnThreadRef } from "./working-dot";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
+import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playground";
 
 installMarkdownSanitizer();
 
@@ -1090,7 +1091,8 @@ export function createChatSurface(
             </div>
           </section>
           <div class="chat-bottom-dock">
-            ${backgroundActivityStrip()} ${liveWorkDock(agent)} ${ctx.composer.composerForm(agent)}
+            ${backgroundActivityStrip()} ${liveWorkDock(agent)} ${ctx.composer.queuedStrip(agent)}
+            ${ctx.composer.composerForm(agent)}
           </div>
         </div>
       `,
@@ -1457,6 +1459,27 @@ export function createChatSurface(
     </a>`;
   }
 
+  function playgroundCard(playground: PlaygroundArtifact): TemplateResult {
+    const src = withBase(playgroundPath(playground.artifactId));
+    const source = withBase(playgroundPath(playground.artifactId, true));
+    return html`<section class="playground-card">
+      <header class="playground-header">
+        <span class="playground-title">${icon(Rocket, 16)}<strong>${playground.title}</strong></span>
+        <nav class="playground-actions" aria-label="Playground actions">
+          <a href=${source} target="_blank" rel="noreferrer">${icon(FileText, 14)} Source</a>
+          <a href=${src} target="_blank" rel="noreferrer">${icon(Maximize2, 14)} Open</a>
+        </nav>
+      </header>
+      <iframe
+        class="playground-frame"
+        src=${src}
+        title=${playground.title}
+        sandbox="allow-scripts allow-forms allow-pointer-lock"
+        referrerpolicy="no-referrer"
+      ></iframe>
+    </section>`;
+  }
+
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const parts: TemplateResult[] = [];
     for (const chunk of message.content) {
@@ -1479,6 +1502,9 @@ export function createChatSurface(
           </details>`,
         );
       }
+    }
+    for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
+      parts.push(playgroundCard(playground));
     }
     if (
       parts.length === 0 &&

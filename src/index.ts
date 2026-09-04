@@ -1,6 +1,9 @@
+import { randomBytes } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import { loadConfig } from "./config.ts";
 import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
+import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage } from "./util/errors.ts";
 import { slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
@@ -29,6 +32,32 @@ server.listen(config.port, () => {
       `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });
+
+if (config.deployAppsDomain) {
+  const domain = config.deployAppsDomain;
+  const probe = `qm-probe-${randomBytes(4).toString("hex")}.${domain}`;
+  void lookup(probe).catch(() => {
+    console.warn(
+      `[qm] app subdomains are configured but *.${domain} does not resolve (probed ${probe}) — ` +
+        `add a wildcard DNS record for *.${domain} pointing at this instance's ingress, or apps will only be reachable at /d/<app>/`,
+    );
+  });
+}
+
+if (config.databaseUrl && !config.adminGrants) {
+  console.warn(
+    "[qm] ADMIN_GRANTS is unset with a durable store — if this deployment has never named an admin, the admin console is unreachable and cannot be unlocked from inside the product; set ADMIN_GRANTS=<email>:org_admin (ignore this if an admin was already promoted in the Users tab).",
+  );
+}
+
+if (config.deployProvider === "docker") {
+  void dockerDaemonFailure().then((failure) => {
+    if (failure)
+      console.warn(
+        `[qm] publishing is unavailable: the docker deploy provider is selected but no Docker daemon is reachable from core (${failure}) — make a daemon reachable, or set DEPLOY_PROVIDER to fly or aws`,
+      );
+  });
+}
 
 if (config.backgroundWorkEnabled) {
   built.scheduler.start(1000);

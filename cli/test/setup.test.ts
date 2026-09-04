@@ -141,7 +141,9 @@ test("the broker's operator secrets replace the external-IdP ones", () => {
   const external = configFor(["core", "web-ui", "admin", "portal"]);
   const externalNames = pendingSecrets(external, new Map()).todo.map((secret) => secret.name);
   assert.ok(externalNames.includes("OIDC_CLIENT_SECRET"));
-  assert.ok(!externalNames.includes("AUTH_EMAIL_FROM"));
+  for (const name of ["AUTH_EMAIL_FROM", "RESEND_API_KEY"]) {
+    assert.ok(!externalNames.includes(name), `${name} is core's optional invitation sender, never a setup prompt`);
+  }
 
   const broker = configFor(
     ["core", "web-ui", "admin", "portal", "auth"],

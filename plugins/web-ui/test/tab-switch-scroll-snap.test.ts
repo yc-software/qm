@@ -20,7 +20,29 @@ test("responsive pane summaries do not replace the transcript scroller", () => {
   );
 });
 
-test("hidden panes retain their last meaningful density", () => {
+test("hidden panes retain their last meaningful density, and every measure writes the attribute", () => {
   const fn = split.match(/private syncDensity\(\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
-  assert.match(fn, /if \(!next\s*\|\|\s*next === this\.density\) return;/);
+  assert.match(fn, /if \(!next\) return;/, "an unmeasurable pane keeps its last density");
+  assert.doesNotMatch(
+    fn,
+    /next === this\.density\) return;/,
+    "the DOM write must not be skipped when the measured tier equals the starting one",
+  );
+  const write = fn.indexOf("this.element.dataset.density");
+  const gate = fn.indexOf("if (!changed) return;");
+  assert.ok(write >= 0, "the tier is published to the DOM");
+  assert.ok(
+    gate > write,
+    "only the redraw callbacks are gated on an actual change — a pane that mounts at its starting tier still gets the attribute",
+  );
+});
+
+test("pane composer sizing hangs off the density attribute, so writing it is load-bearing", () => {
+  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+  const block = css.match(/\[data-density\] \.composer-input \{[^}]*\}/)?.[0] ?? "";
+  assert.match(
+    block,
+    /min-height: 0;/,
+    "without the attribute the pane composer falls back to the main-window min-height",
+  );
 });

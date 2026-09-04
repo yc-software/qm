@@ -11,7 +11,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
   const root = read("cli/templates/deployment/deployment.md");
   for (const phrase of [
     "Before cloud mutation",
-    "Fly.io or AWS",
+    "Fly.io, AWS, or Porter",
     "deployment repository",
     "npm ci",
     "slack render",
@@ -36,6 +36,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
     ".codex/skills/deploy-qm/agents/openai.yaml",
     ".codex/skills/deploy-qm/references/fly.md",
     ".codex/skills/deploy-qm/references/aws.md",
+    ".codex/skills/deploy-qm/references/porter.md",
     ".codex/skills/deploy-qm/references/slack.md",
     ".codex/skills/deploy-qm/references/email.md",
   ]) {
@@ -47,6 +48,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
     "cli/templates/deployment/SKILL.md",
     "cli/templates/deployment/references/fly.md",
     "cli/templates/deployment/references/aws.md",
+    "cli/templates/deployment/references/porter.md",
     "cli/templates/deployment/references/slack.md",
     "cli/templates/deployment/references/email.md",
   ]) {
@@ -74,6 +76,27 @@ test("the deploy skill tells an agent where the sign-in email transport comes fr
   assert.match(
     read(".codex/skills/deploy-qm/references/email.md"),
     /cli\/templates\/deployment\/references\/email\.md/,
+  );
+});
+
+test("the porter reference walks the dashboard steps an agent cannot skip", () => {
+  const porter = read("cli/templates/deployment/references/porter.md");
+  for (const phrase of [
+    "dashboard.porter.run/cloud-accounts",
+    "Admin-role",
+    "PERMISSION_DENIED",
+    "ADMIN_GRANTS",
+    "AUTH_ALLOWED_EMAILS",
+    "porter apply",
+    "linux/amd64",
+  ]) {
+    assert.ok(porter.includes(phrase), `porter reference covers ${phrase}`);
+  }
+  assert.match(porter, /operator links one themselves/, "cloud-account linking is called out as the operator's step");
+  assert.match(read("cli/templates/deployment/deployment.md"), /references\/porter\.md/);
+  assert.match(
+    read(".codex/skills/deploy-qm/references/porter.md"),
+    /cli\/templates\/deployment\/references\/porter\.md/,
   );
 });
 

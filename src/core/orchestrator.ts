@@ -832,7 +832,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let recallMs = 0;
       for (const recallScope of recallScopes) {
         const recallStart = Date.now();
-        const body = (await deps.memory.recall(recallScope)).trim();
+        const body = (
+          await deps.memory.recall(recallScope, {
+            query: input.text,
+            actorId: actor.id,
+            conversationScopeId: scopeId,
+            maxChars: 6_000,
+            ...(automatedTurn ? { autonomous: true } : {}),
+          })
+        ).trim();
         recallMs += Date.now() - recallStart;
         if (!body) continue;
         recalledSections.push(recallScopes.length === 1 ? body : `### ${recallScope}\n${body}`);
@@ -3003,6 +3011,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 actorId: actor.id,
                 ...(automatedTurn ? { autonomous: true } : {}),
                 ...(conversationLabel ? { conversationLabel } : {}),
+                sessionId: session.id,
+                idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
               });
             } catch (e) {
               deps.errors?.record({

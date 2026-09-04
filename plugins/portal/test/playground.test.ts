@@ -159,6 +159,7 @@ test("boot refuses playground configurations that leak or brick", () => {
   };
   delete baseEnv.PORTAL_COOKIE_DOMAIN;
   delete baseEnv.PORTAL_APPS_DOMAIN;
+  delete baseEnv.DEPLOY_APPS_DOMAIN;
   delete baseEnv.PORTAL_DEPLOYMENTS_ENABLED;
   delete baseEnv.PORTAL_PLAYGROUND_MINTS_PER_IP;
   delete baseEnv.PORTAL_PLAYGROUND_MINT_WINDOW_S;
@@ -171,7 +172,11 @@ test("boot refuses playground configurations that leak or brick", () => {
     [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "lots" }, /between 1 and 64/],
     [{ PORTAL_PLAYGROUND_MINT_WINDOW_S: "30" }, /between 60 and 86400/],
     [{ PORTAL_PLAYGROUND_MINT_WINDOW_S: "172800" }, /between 60 and 86400/],
-    [{ PORTAL_COOKIE_DOMAIN: "qm.example.com" }, /PORTAL_COOKIE_DOMAIN and PORTAL_APPS_DOMAIN unset/],
+    [{ PORTAL_COOKIE_DOMAIN: "qm.example.com" }, /the apps domain \(PORTAL_APPS_DOMAIN \/ DEPLOY_APPS_DOMAIN\) unset/],
+    [
+      { DEPLOY_APPS_DOMAIN: "apps.qm.example.com" },
+      /the apps domain \(PORTAL_APPS_DOMAIN \/ DEPLOY_APPS_DOMAIN\) unset/,
+    ],
     [{ PORTAL_DEPLOYMENTS_ENABLED: "1" }, /PORTAL_DEPLOYMENTS_ENABLED unset/],
   ];
   for (const [extra, pattern] of bad) {

@@ -79,8 +79,8 @@ uses Bolt; the web UI builds with Vite and renders with Lit.
 The core itself is generic. Everything specific to one company — org config, custom tools
 and skills, sandbox image, infrastructure — lives in a **deployment directory** that the
 [`qm` CLI](./cli/README.md) validates and deploys. Every substrate (harness, session
-store, sandbox, memory) sits behind an interface, so production implementations swap in
-via one wiring file.
+store, sandbox, memory) sits behind an interface. Memory can also be routed by scope to
+[external providers](./docs/memory-providers.md) while retaining the built-in notebook.
 
 ## Security and secrets
 
@@ -176,6 +176,7 @@ messages, and screenshots for organization identifiers before it pushes. Nothing
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
+- [`docs/porter.md`](./docs/porter.md) — running qm on Porter
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`plugins/`](./plugins) — the surfaces (Slack, web UI, admin, portal)
 

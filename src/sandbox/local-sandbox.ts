@@ -440,10 +440,10 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       const fireKill = () => {
         execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("local-sandbox: kill in-flight exec", undefined));
       };
-      if (signal.aborted) fireKill();
       const onAbort = () => fireKill();
       signal.addEventListener("abort", onAbort, { once: true });
       try {
+        signal.throwIfAborted();
         return await execRaw(handle.id, killableScript(script, killUid), timeoutSec, signal);
       } finally {
         signal.removeEventListener("abort", onAbort);
