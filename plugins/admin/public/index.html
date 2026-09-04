@@ -5023,6 +5023,7 @@
       const HISTORY_PAGE_SIZE = 50;
 
       const TRANSCRIPT_PAGE_SIZE = 500;
+      const SKILLS_PAGE_SIZE = 20;
       const DEFAULT_VIEW = "history";
       let scope = "org:acme";
       let view = DEFAULT_VIEW;
@@ -5650,7 +5651,7 @@
         if (st.view === "history" && st.session && st.turn != null) p.set("turn", String(st.turn));
         if (st.view === "history" && !st.session && st.historyKind && st.historyKind !== "conversation")
           p.set("kind", st.historyKind);
-        if (st.view === "history" && !st.session && st.page > 1) p.set("page", st.page);
+        if (((st.view === "history" && !st.session) || st.view === "skills") && st.page > 1) p.set("page", st.page);
         if (st.view === "slack" && st.container) p.set("container", st.container);
         if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
         if (st.view === "judgments" && st.container) p.set("container", st.container);
@@ -6152,7 +6153,19 @@
       }
 
       const scopeSearchState = {};
-      function wireScopeSearch({ key, indexWrap, listWrap, rows, names, noMatch, total, shell, placeholder }) {
+      function wireScopeSearch({
+        key,
+        indexWrap,
+        listWrap,
+        rows,
+        names,
+        noMatch,
+        total,
+        shell,
+        placeholder,
+        include,
+        afterFilter,
+      }) {
         const own = orgOwnView();
         const prev = scopeSearchState[key];
         const st =
@@ -6166,11 +6179,12 @@
           }
           let hits = 0;
           rows.forEach((row, i) => {
-            const hit = !q || names[i].includes(q);
+            const hit = (!q || names[i].includes(q)) && (!include || include(i));
             row.classList.toggle("hidden", !hit);
             if (hit) hits += 1;
           });
           noMatch.classList.toggle("hidden", !total || hits > 0);
+          if (afterFilter) afterFilter(hits);
         };
         const active = document.activeElement;
         const hadFocus = !!(active && active.closest(".shell-search"));
@@ -9655,6 +9669,11 @@
         };
         return rm;
       }
+      let skillsSourceFilter = "all";
+      function skillSourceOf(s) {
+        if (s.pack) return "pack";
+        return (s.createdBy || "").indexOf("system:") === 0 ? "builtin" : "own";
+      }
       function renderSkills(root, d) {
         const index = orgWideView() && !orgOwnView();
 
@@ -9715,13 +9734,59 @@
         const noMatch = document.createElement("p");
         noMatch.className = "empty hidden";
         noMatch.textContent = "No skills match.";
+
+        const tableRows = [...t.querySelectorAll("tbody tr")];
+        const sourceCounts = { pack: 0, builtin: 0, own: 0 };
+        skills.forEach((s) => {
+          sourceCounts[skillSourceOf(s)] += 1;
+        });
+        if (skillsSourceFilter !== "all" && !sourceCounts[skillsSourceFilter]) skillsSourceFilter = "all";
+        const sourceSeg = document.createElement("div");
+        sourceSeg.className = "segmented";
+        const sourceOpt = (value, label) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "seg" + (skillsSourceFilter === value ? " active" : "");
+          b.textContent = label;
+          b.onclick = () => {
+            if (skillsSourceFilter === value) return;
+            skillsSourceFilter = value;
+            renderData();
+          };
+          sourceSeg.appendChild(b);
+        };
+        sourceOpt("all", "All (" + skills.length + ")");
+        if (sourceCounts.pack) sourceOpt("pack", "Packs (" + sourceCounts.pack + ")");
+        if (sourceCounts.builtin) sourceOpt("builtin", "Built-in (" + sourceCounts.builtin + ")");
+        if (sourceCounts.own) sourceOpt("own", "Own (" + sourceCounts.own + ")");
+
+        const pagerWrap = document.createElement("div");
+        const applyPage = (hits) => {
+          const pages = Math.max(1, Math.ceil(hits / SKILLS_PAGE_SIZE));
+          const cur = Math.min(page, pages);
+          const start = (cur - 1) * SKILLS_PAGE_SIZE;
+          let shown = -1;
+          tableRows.forEach((row) => {
+            if (row.classList.contains("hidden")) return;
+            shown += 1;
+            row.classList.toggle("hidden", shown < start || shown >= start + SKILLS_PAGE_SIZE);
+          });
+          pagerWrap.textContent = "";
+          if (hits > SKILLS_PAGE_SIZE)
+            pagerWrap.appendChild(
+              pager(hits, SKILLS_PAGE_SIZE, start, (n) =>
+                go({ view, scope, own: urlToState().own || null, session: null, page: n }),
+              ),
+            );
+        };
+
         const tableWrap = document.createElement("div");
-        tableWrap.append(t, noMatch);
+        tableWrap.append(t, noMatch, pagerWrap);
         wireScopeSearch({
           key: "skills",
           indexWrap: scopeWrap,
           listWrap: tableWrap,
-          rows: [...t.querySelectorAll("tbody tr")],
+          rows: tableRows,
           names,
           noMatch,
           total: skills.length,
@@ -9736,8 +9801,11 @@
                 }),
             title: index ? VIEW_TITLE.skills : shortName(scope),
             count,
+            actions: [sourceSeg],
           },
           placeholder: index ? "Search all skills…" : "Search skills…",
+          include: (i) => skillsSourceFilter === "all" || skillSourceOf(skills[i]) === skillsSourceFilter,
+          afterFilter: applyPage,
         });
         const card = bareDataCard(tableWrap);
         if (scopeWrap) card.querySelector(".body").prepend(scopeWrap);
