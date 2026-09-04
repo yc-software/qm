@@ -24,7 +24,7 @@ export interface WebhookView {
   url: string;
 }
 
-type WebhookScheme = "hmac-sha256" | "github" | "slack" | "stripe";
+type WebhookScheme = "hmac-sha256" | "github" | "slack" | "stripe" | "linear";
 
 const WEBHOOK_SCHEMES: Array<{ value: WebhookScheme; label: string; guidance: string }> = [
   {
@@ -46,6 +46,11 @@ const WEBHOOK_SCHEMES: Array<{ value: WebhookScheme; label: string; guidance: st
     value: "stripe",
     label: "Stripe",
     guidance: "Use the endpoint signing secret shown by Stripe for this destination.",
+  },
+  {
+    value: "linear",
+    label: "Linear",
+    guidance: "Use the webhook signing secret shown by Linear. Payloads older than one minute are rejected.",
   },
 ];
 
