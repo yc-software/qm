@@ -266,20 +266,29 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
               reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope),
             );
             await api.terminate(stored.microvmId).catch(() => {});
+            client.evict(stored.microvmId);
           }
         }
         const body = await launchBody(scope);
         scopeByMicrovm.set(body.id, scope);
-        const hydrated = await hydrateHome(scope, body.id);
-        await store.put(scope, {
-          microvmId: body.id,
-          endpoint: body.endpoint,
-          ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
-          createdAtMs: Date.now(),
-          ...(hydrated ? { lastSnapshotMs: Date.now() } : {}),
-          orgId: configOrgId(),
-        });
-        return { id: body.id, endpoint: body.endpoint, coldStart: !hydrated };
+        try {
+          const hydrated = await hydrateHome(scope, body.id);
+          await store.put(scope, {
+            microvmId: body.id,
+            endpoint: body.endpoint,
+            ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
+            createdAtMs: Date.now(),
+            ...(hydrated ? { lastSnapshotMs: Date.now() } : {}),
+            orgId: configOrgId(),
+          });
+          return { id: body.id, endpoint: body.endpoint, coldStart: !hydrated };
+        } catch (e) {
+          scopeByMicrovm.delete(body.id);
+          endpointById.delete(body.id);
+          client.evict(body.id);
+          await api.terminate(body.id).catch(() => {});
+          throw e;
+        }
       }),
     );
   }
@@ -504,6 +513,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
             await snapshotHome(scope, rec.microvmId);
           }
           await api.terminate(rec.microvmId);
+          client.evict(rec.microvmId);
           await store.delete(scope);
           reaped++;
         } catch (e) {
