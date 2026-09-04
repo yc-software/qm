@@ -3,13 +3,18 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
-let providerConfigured = false;
+let deploymentState: "unconfigured" | "provider" | "grok" = "unconfigured";
 
 const upstream = createServer((req: IncomingMessage, res) => {
   if (req.url?.startsWith("/v1/surface-config")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(
-      JSON.stringify({ webuiModels: [], baseModel: "m", harnessId: "pi", modelProviderConfigured: providerConfigured }),
+      JSON.stringify({
+        webuiModels: [],
+        baseModel: deploymentState === "grok" ? "grok-4.6" : "m",
+        harnessId: deploymentState === "grok" ? "grok" : "pi",
+        modelProviderConfigured: deploymentState !== "unconfigured",
+      }),
     );
   }
   if (req.url === "/api/whoami") {
@@ -81,7 +86,18 @@ test("unconfigured deployment: the admin surface itself is reachable, so onboard
 });
 
 test("once a provider is configured, admin HTML navigation proxies to web-ui again", async () => {
-  providerConfigured = true;
+  deploymentState = "provider";
+  await new Promise((r) => setTimeout(r, 5_200));
+  const r = await fetch(`${base}/`, {
+    headers: { accept: "text/html", cookie: sessionCookie("U-admin") },
+    redirect: "manual",
+  });
+  assert.equal(r.status, 200);
+  assert.equal(((await r.json()) as { url: string }).url, "/");
+});
+
+test("subscription-only Grok reaches the web UI connect flow instead of admin onboarding", async () => {
+  deploymentState = "grok";
   await new Promise((r) => setTimeout(r, 5_200));
   const r = await fetch(`${base}/`, {
     headers: { accept: "text/html", cookie: sessionCookie("U-admin") },

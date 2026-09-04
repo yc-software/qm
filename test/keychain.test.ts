@@ -351,6 +351,41 @@ describe("connectors are grantable like any keychain record", () => {
     ]);
   });
 
+  it("deleting a connector while its OAuth refresh is in flight cannot restore it", async () => {
+    let refreshStarted!: () => void;
+    let finishRefresh!: () => void;
+    const started = new Promise<void>((resolve) => {
+      refreshStarted = resolve;
+    });
+    const finish = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const k = createKeychain({
+      creds: createMemoryMap<Rec>(),
+      grants: createMemoryMap(),
+      asks: createMemoryMap(),
+      key: KEY,
+      refreshConnector: async () => {
+        refreshStarted();
+        await finish;
+        return { accessToken: "ya29.fresh", expiresAt: Date.now() + 3_600_000 };
+      },
+    });
+    await k.setConnectorToken(GMAIL, "alex@x", {
+      accessToken: "ya29.stale",
+      refreshToken: "rt",
+      expiresAt: Date.now() - 1,
+    });
+    const refreshing = k.connectorAccessToken(GMAIL, "alex@x");
+    await started;
+
+    await k.deleteConnectorToken(GMAIL, "alex@x");
+    finishRefresh();
+
+    assert.equal(await refreshing, null);
+    assert.deepEqual(await k.connectorTokenStatus(GMAIL, "alex@x"), { connected: false });
+  });
+
   it("a standing connector grant auto-injects the host token; a once grant does not", async () => {
     const k = kc();
     await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });

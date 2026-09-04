@@ -1,8 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { fetchRuntimeConfig, updateRuntimeConfig, type RuntimeConfig } from "./core-bridge";
 import {
-  EFFORT_LEVELS,
   effortLabel,
+  effortLevelsForHarness,
   harnessSupportsEffort,
   runtimeModelOptions,
   type EffortLevel,
@@ -76,14 +76,6 @@ function selectedValue(config: RuntimeConfig): string {
   return config.scopeOverride ? `${config.scopeOverride.harnessId}:${config.scopeOverride.modelId}` : INHERIT;
 }
 
-function effortLevelsFor(harnessId: string): Array<{ value: EffortLevel; label: string }> {
-  return EFFORT_LEVELS.filter(({ value }) => {
-    if (value === "ultracode") return harnessId === "pi";
-    if (value === "max") return harnessId !== "codex";
-    return true;
-  });
-}
-
 function selectedEffort(config: RuntimeConfig): string {
   return config.scopeOverride?.effortLevel ?? "auto";
 }
@@ -107,7 +99,9 @@ async function choose(scope: string, value: string, effort?: string): Promise<vo
         : {
             harnessId,
             modelId: value.slice(sep + 1),
-            ...(effort && effortLevelsFor(harnessId).some((o) => o.value === effort) ? { effortLevel: effort } : {}),
+            ...(effort && effortLevelsForHarness(harnessId).some((o) => o.value === effort)
+              ? { effortLevel: effort }
+              : {}),
           },
     );
     if (seq !== loadSeq) return;
@@ -151,7 +145,7 @@ export function contextModelSection(scopeId: string): TemplateResult | typeof no
   const isSlack = scopeId.startsWith("channel:");
   const pinnedHarness = selected === INHERIT ? null : selected.slice(0, selected.indexOf(":"));
   const effort = contextModelState.pendingEffort ?? selectedEffort(config);
-  const effortOptions = pinnedHarness ? effortLevelsFor(pinnedHarness) : [];
+  const effortOptions = pinnedHarness ? effortLevelsForHarness(pinnedHarness) : [];
   const showEffort = pinnedHarness !== null && harnessSupportsEffort(pinnedHarness);
   return html`
     <section class="context-panel context-model" aria-labelledby="context-model-title">
@@ -171,7 +165,9 @@ export function contextModelSection(scopeId: string): TemplateResult | typeof no
         onChange: (value) => {
           const nextHarness = value.slice(0, value.indexOf(":"));
           const carry =
-            value !== INHERIT && effortLevelsFor(nextHarness).some((o) => o.value === effort) ? effort : undefined;
+            value !== INHERIT && effortLevelsForHarness(nextHarness).some((o) => o.value === effort)
+              ? effort
+              : undefined;
           void choose(scopeId, value, carry);
         },
         options: [

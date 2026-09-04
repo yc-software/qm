@@ -4,6 +4,7 @@ import { createMockHarness } from "../src/harness/mock-harness.ts";
 import { createOpenCodeHarness } from "../src/harness/opencode-harness.ts";
 import { createCodexHarness } from "../src/harness/codex-harness.ts";
 import { createClaudeHarness } from "../src/harness/claude-harness.ts";
+import { createGrokHarness } from "../src/harness/grok-harness.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 
 test("harness adapters declare their native control and tool transports", async (t) => {
@@ -12,6 +13,7 @@ test("harness adapters declare their native control and tool transports", async 
   const opencode = createOpenCodeHarness();
   const codex = createCodexHarness();
   const claude = createClaudeHarness();
+  const grok = createGrokHarness();
   t.after(async () => {
     await pi.turns.close?.();
     await opencode.turns.close?.();
@@ -24,8 +26,9 @@ test("harness adapters declare their native control and tool transports", async 
       opencode.profile.controlTransport,
       codex.profile.controlTransport,
       claude.profile.controlTransport,
+      grok.profile.controlTransport,
     ],
-    ["mock", "in-process", "http", "json-rpc", "sdk"],
+    ["mock", "in-process", "http", "json-rpc", "sdk", "json-rpc"],
   );
   assert.deepEqual(
     [
@@ -34,8 +37,9 @@ test("harness adapters declare their native control and tool transports", async 
       opencode.profile.toolTransport,
       codex.profile.toolTransport,
       claude.profile.toolTransport,
+      grok.profile.toolTransport,
     ],
-    ["mock", "in-process", "plugin", "dynamic", "in-process-mcp"],
+    ["mock", "in-process", "plugin", "dynamic", "in-process-mcp", "mcp"],
   );
   assert.equal(pi.profile.capabilities.has("fast-mode"), true);
   assert.equal(opencode.profile.capabilities.has("fast-mode"), false);

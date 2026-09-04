@@ -9,13 +9,14 @@
  * reads its own override.
  */
 
-export const PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
+export const PROVIDER_IDS = ["anthropic", "openai", "openrouter", "xai"] as const;
 type ProviderId = (typeof PROVIDER_IDS)[number];
 
-const PROVIDER_BASE_URL_ENV: Record<ProviderId, string> = {
+const PROVIDER_BASE_URL_ENV: Record<ProviderId, string | null> = {
   anthropic: "ANTHROPIC_BASE_URL",
   openai: "OPENAI_BASE_URL",
   openrouter: "OPENROUTER_BASE_URL",
+  xai: null,
 };
 
 export type ProviderBaseUrls = Partial<Record<ProviderId, string>>;
@@ -46,6 +47,7 @@ export function providerBaseUrlsFromEnv(env: NodeJS.ProcessEnv): ProviderBaseUrl
   const urls: ProviderBaseUrls = {};
   for (const provider of PROVIDER_IDS) {
     const envName = PROVIDER_BASE_URL_ENV[provider];
+    if (!envName) continue;
     const raw = env[envName];
     if (raw?.trim()) urls[provider] = parseProviderBaseUrl(envName, raw);
   }
@@ -61,5 +63,7 @@ export function setProviderBaseUrls(urls: ProviderBaseUrls): void {
 
 /** The override for a provider, if one is configured. */
 export function providerBaseUrl(provider: string): string | undefined {
-  return (PROVIDER_IDS as readonly string[]).includes(provider) ? configured[provider as ProviderId] : undefined;
+  if (!(PROVIDER_IDS as readonly string[]).includes(provider)) return undefined;
+  const id = provider as ProviderId;
+  return PROVIDER_BASE_URL_ENV[id] ? configured[id] : undefined;
 }

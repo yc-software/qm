@@ -19,7 +19,7 @@ Each person and each room has its own scoped memory, files, keychain view, permi
 crons, web apps, and durable sandbox.
 
 It's built with open source in mind. Pick your own harness and model and switch between
-them — Pi, OpenCode, Codex, and Claude Code all drive the same core, so a deployment
+them — Pi, OpenCode, Codex, Claude Code, and Grok Build all drive the same core, so a deployment
 isn't tied to any single vendor.
 
 ## Features
@@ -54,7 +54,7 @@ flowchart LR
 
   subgraph CORE["Headless core"]
     API["API · identity · policy · scheduler"]
-    LOOP["Agent loop<br/>(Pi, OpenCode, Claude Code)"]
+    LOOP["Agent loop<br/>(Pi, OpenCode, Codex, Claude Code, Grok Build)"]
     API <--> LOOP
   end
 
@@ -98,6 +98,16 @@ can only tighten:
 
 The predeclared command policy — approval rules and hard denials for things like
 recursive deletes or destructive SQL — applies in every posture, Dangerous included.
+
+Grok Build uses a person's connected xAI subscription through a short-lived, isolated
+CLI process when individual model authorization is enabled. The production image installs
+the Apache-2.0-licensed Grok Build 1.0.13 release, verifies its architecture-specific binary
+and package digests, includes its release notices and Apache license, and ships system-level
+privacy requirements. Operators
+must enforce a core-workload egress allowlist for `cli-chat-proxy.grok.com` and `auth.x.ai`
+because Grok's own sandbox is not a network boundary. Users' browsers must be able to open
+the xAI device-approval page at `accounts.x.ai`. Confirm that current xAI subscription terms
+permit server-side use before deployment.
 
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.

@@ -56,7 +56,7 @@ SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
 npm start
 ```
 
-(`OPENAI_API_KEY` or `OPENROUTER_API_KEY` works in place of `ANTHROPIC_API_KEY`; the base
+(`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `XAI_API_KEY` works in place of `ANTHROPIC_API_KEY`; the base
 model follows whichever provider you configure.)
 
 (Or put the tokens in the repo-root `.env` — `npm start` loads it via

@@ -22,7 +22,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
   const watchArgs = i.watch ? ["--watch"] : [];
   const base = { ...i.baseEnv, ...i.sandboxEnv };
   const siblingBase = Object.fromEntries(
-    Object.entries(base).filter(([key]) => key !== "HOME" && key !== "CODEX_HOME"),
+    Object.entries(base).filter(([key]) => key !== "HOME" && key !== "CODEX_HOME" && key !== "GROK_HOME"),
   );
   siblingBase.CODEX_AUTH_FILE = "";
   const orgId = i.baseEnv.DEV_INSTANCE_ORG_ID || "acme";

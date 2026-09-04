@@ -32,7 +32,7 @@ function start(modelCredentialFetch: typeof fetch = async () => new Response(nul
     refreshCustomProviders: built.refreshCustomProviders,
     modelCredentialFetch,
     harnessId: "pi",
-    providerKeys: { anthropic: true, openai: false, openrouter: false },
+    providerKeys: { anthropic: true, openai: false, openrouter: false, xai: false },
     admin: built.admin,
     auditLog: built.auditLog,
   });

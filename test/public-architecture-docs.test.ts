@@ -20,7 +20,7 @@ test(".env.example declares no model provider key, real or placeholder", () => {
   for (const line of read(".env.example").split("\n")) {
     assert.doesNotMatch(
       line,
-      /^\s*(ANTHROPIC|OPENAI|OPENROUTER)_API_KEY=/,
+      /^\s*(ANTHROPIC|OPENAI|OPENROUTER|XAI)_API_KEY=/,
       `${line.trim()} makes loadConfig report that provider as configured (config.ts does a bare truthiness check, ` +
         `so a placeholder counts), and the deployment then advertises a provider whose key cannot authenticate`,
     );

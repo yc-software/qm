@@ -14,13 +14,13 @@ import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routin
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
 
-const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
+const apikey = (provider: "anthropic" | "openai" | "xai", apiKey: string): UserModelCredential => ({
   provider,
   kind: "apikey",
   apiKey,
   updatedAt: 0,
 });
-const oauth = (provider: "anthropic" | "openai"): UserModelCredential => ({
+const oauth = (provider: "anthropic" | "openai" | "xai"): UserModelCredential => ({
   provider,
   kind: "oauth",
   oauth: {},
@@ -145,6 +145,49 @@ test("stale subscription tokens refresh once (single-flight) inside the keychain
   assert.equal(refreshCalls, 1);
 });
 
+test("xAI refresh material stays in keychain custody while turns receive access-only auth", async () => {
+  const { store } = testStore();
+  await store.setOAuth("u1", "xai", {
+    accessToken: "xai-access",
+    refreshToken: "xai-refresh",
+    idToken: "unused-identity-token",
+    expiresAt: Date.now() + 3_600_000,
+  });
+  assert.deepEqual(await store.connections("u1"), [{ provider: "xai", kind: "oauth" }]);
+  const derived = await store.derivedOAuth("u1", "xai");
+  assert.equal(derived?.accessToken, "xai-access");
+  assert.equal(derived?.idToken, undefined);
+  assert.equal(derived?.accountId, undefined);
+  assert.ok(!("refreshToken" in (derived ?? {})));
+});
+
+test("expired xAI OAuth without refresh capacity is no longer advertised as connected", async () => {
+  const { store } = testStore();
+  await store.setOAuth("u1", "xai", { accessToken: "expired", expiresAt: Date.now() - 1_000 });
+  assert.deepEqual(await store.connections("u1"), []);
+  assert.equal(await store.derivedOAuth("u1", "xai"), null);
+});
+
+test("a failed xAI refresh keeps an unexpired connection available for retry", async () => {
+  const keychain = createKeychain({
+    creds: createMemoryMap(),
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: deriveConnectorKey(KEY_MATERIAL),
+    refreshConnector: async () => {
+      throw new Error("invalid_grant");
+    },
+  });
+  const store = createUserModelCredentialStore({ keychain });
+  await store.setOAuth("u1", "xai", {
+    accessToken: "expiring",
+    refreshToken: "invalid-refresh",
+    expiresAt: Date.now() + 5 * 60_000,
+  });
+  assert.equal(await store.derivedOAuth("u1", "xai"), null);
+  assert.deepEqual(await store.connections("u1"), [{ provider: "xai", kind: "oauth" }]);
+});
+
 test("routing: anthropic api key -> pi harness with a claude model", () => {
   const r = resolveIndividualAuthRouting(apikey("anthropic", "sk-ant-x"), null, undefined);
   assert.equal(r?.kind, "apikey");
@@ -170,6 +213,19 @@ test("routing: openai OAuth login -> codex harness (not pi)", () => {
 test("routing: requested model provider wins when that provider is connected", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
   assert.equal(r?.harness, "codex");
+});
+
+test("routing: xAI OAuth login -> Grok Build harness", () => {
+  const r = resolveIndividualAuthRouting(null, null, undefined, "pi", oauth("xai"));
+  assert.equal(r?.kind, "oauth");
+  assert.equal(r?.harness, "grok");
+  assert.equal(r?.model, "grok-4.6");
+});
+
+test("the preferred native harness chooses its matching connected subscription", () => {
+  const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), undefined, "grok", oauth("xai"));
+  assert.equal(r?.provider, "xai");
+  assert.equal(r?.harness, "grok");
 });
 
 test("routing: openai OAuth + pi org -> pi harness on the Codex subscription provider", () => {

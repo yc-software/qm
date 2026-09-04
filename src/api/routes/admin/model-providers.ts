@@ -1,6 +1,7 @@
 import { isModelProvider, type ModelProvider } from "../../../model/pi-models.ts";
 import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
 import { selectableModelCatalog } from "../../../model/model-catalog.ts";
+import { individualAuthModelConnectable } from "../../../core/individual-auth-routing.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
@@ -22,6 +23,11 @@ const VALIDATION_REQUESTS: Record<
   openrouter: {
     baseUrl: "https://openrouter.ai/api/v1",
     path: "/key",
+    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
+  },
+  xai: {
+    baseUrl: "https://api.x.ai/v1",
+    path: "/models",
     headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
   },
 };
@@ -58,11 +64,25 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
     resource: "model-providers",
     scopeLabel: orgScope(ctx.deps),
   });
+  const [providers, models, individualModelAuthConfigured] = await Promise.all([
+    ctx.deps.modelCredentials.statuses(),
+    selectableModelCatalog(ctx.deps.modelCredentialFetch),
+    ctx.deps.config?.getIndividualModelAuthDurable() ?? false,
+  ]);
+  const individualModelAuth = Boolean(ctx.deps.userModelCredentials && individualModelAuthConfigured);
+  const harnessId = ctx.deps.harnessId ?? "pi";
   return sendJson(ctx.res, 200, {
-    providers: await ctx.deps.modelCredentials.statuses(),
-    models: await selectableModelCatalog(ctx.deps.modelCredentialFetch),
+    providers,
+    models,
     ...(ctx.deps.harnessCarriedModelAuth
-      ? { harnessAuth: { harnessId: ctx.deps.harnessId ?? "pi", provider: ctx.deps.harnessCarriedModelAuth } }
+      ? { harnessAuth: { harnessId, provider: ctx.deps.harnessCarriedModelAuth } }
+      : {}),
+    ...(individualModelAuth
+      ? {
+          individualAuthModels: models
+            .filter((model) => individualAuthModelConnectable(model.id, harnessId))
+            .map((model) => model.id),
+        }
       : {}),
   });
 }

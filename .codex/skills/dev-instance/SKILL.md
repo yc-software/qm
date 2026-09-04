@@ -118,12 +118,20 @@ actions the supervisor tears itself down and frees the slot
 The dev instance should exercise the real system:
 
 - real LLM: needs a model credential for the harness you run. Core supports several
-  (`HARNESS=pi|opencode|codex|claude`); the launcher picks one from the credentials it
+  (`HARNESS=pi|opencode|codex|claude|grok`); the launcher picks one from the credentials it
   finds and honours an explicit `HARNESS`. Set the key your chosen harness expects. For
   Codex, a ChatGPT OAuth session is also supported: `HARNESS=codex` discovers a valid
   `$HOME/.codex/auth.json`, or you can set `CODEX_AUTH_FILE` to another auth file. Core
   refreshes OAuth tokens centrally and hands the Codex child ephemeral material (no
-  refresh token). Pass `DEV_INSTANCE_ALLOW_MOCK=1` for a deliberate no-model wiring
+  refresh token). `HARNESS=grok` discovers the verified raw 1.0.13 binary at
+  `/usr/local/bin/grok` or `~/.grok/bin/grok-1.0.13`; set `GROK_BIN` for another path.
+  On Linux, the launcher needs `bwrap` and exposes the tracked
+  `deploy/core/grok-requirements.toml` at Grok's required system path through an
+  ephemeral mount namespace; it never changes the host's `/etc`.
+  It never copies the developer's Grok authentication. Connect xAI from the running web
+  UI and enable individual model authorization so the keychain supplies a short-lived
+  access token while retaining refresh material.
+  Pass `DEV_INSTANCE_ALLOW_MOCK=1` for a deliberate no-model wiring
   check. The auth-file path is for local dev instances; deployed production processes
   use an API key or a keychain credential (`CODEX_AUTH_CREDENTIAL` /
   `CLAUDE_AUTH_CREDENTIAL`), whose secret lives encrypted in its owner's keychain.

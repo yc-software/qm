@@ -69,7 +69,10 @@ test("custom models are gated to pi and mock harnesses", () => {
 
 test("a registered custom model is serviceable regardless of built-in key availability", () => {
   setCustomProviders([GATEWAY]);
-  assert.equal(modelServiceable("acme-large", { anthropic: false, openai: false, openrouter: false }), true);
+  assert.equal(
+    modelServiceable("acme-large", { anthropic: false, openai: false, openrouter: false, xai: false }),
+    true,
+  );
 });
 
 test("catalog lists custom models; clearing the registry removes them", () => {

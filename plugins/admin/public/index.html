@@ -4431,9 +4431,8 @@
                   <div class="head">
                     <h2>Individual authorization for AI usage</h2>
                     <p>
-                      Org-wide, default off. When on, each user must connect their own Claude or Codex account (API key
-                      or subscription login) before using the assistant. The org's shared model credentials are not used
-                      for their turns.
+                      Org-wide, default off. When on, each user must connect their own Claude, ChatGPT, or Grok account
+                      before using the assistant. The org's shared model credentials are not used for their turns.
                     </p>
                   </div>
                   <div class="body">
@@ -4442,7 +4441,7 @@
                       <span class="setting-switch" aria-hidden="true"></span>
                       <span class="setting-copy"
                         ><strong>Require each user to connect their own model account</strong
-                        ><small>New users are prompted to sign in with Claude or Codex on first use.</small></span
+                        ><small>New users are prompted to connect Claude, ChatGPT, or Grok on first use.</small></span
                       >
                     </label>
                   </div>
@@ -6538,7 +6537,8 @@
           approvedHarnesses.forEach((id) => {
             const o = document.createElement("option");
             o.value = id;
-            o.textContent = { pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" }[id] || id;
+            o.textContent =
+              { pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code", grok: "Grok Build" }[id] || id;
             harness.appendChild(o);
           });
           harness.value = approvedHarnesses.includes(current.harnessId) ? current.harnessId : approvedHarnesses[0];
@@ -6574,7 +6574,8 @@
             cb.value = id;
             cb.checked = approvedHarnesses.includes(id);
             const span = document.createElement("span");
-            span.textContent = { pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" }[id] || id;
+            span.textContent =
+              { pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code", grok: "Grok Build" }[id] || id;
             row.appendChild(cb);
             row.appendChild(span);
             list.appendChild(row);
@@ -7278,6 +7279,7 @@
         anthropic: "Anthropic",
         openai: "OpenAI",
         openrouter: "OpenRouter — hosted open models",
+        xai: "xAI",
       };
       function onboardingProviderForModel(modelId) {
         const owning = Object.entries(onboardingModels).find(([, models]) =>
@@ -7344,7 +7346,9 @@
         const baseStatus = onboardingModelStatuses.find((item) => item.provider === baseProvider);
         const harnessAuth = models.data.harnessAuth;
         const baseHarnessAuth = Boolean(harnessAuth && harnessAuth.provider === baseProvider);
-        const baseReady = Boolean(baseModel) && (Boolean(baseStatus?.configured) || baseHarnessAuth);
+        const baseIndividualAuth = Boolean(models.data.individualAuthModels?.includes(baseModel));
+        const baseReady =
+          Boolean(baseModel) && (Boolean(baseStatus?.configured) || baseHarnessAuth || baseIndividualAuth);
         onboardingBadge("onboarding-model-badge", baseReady ? "Ready" : "Needs a key", baseReady);
         $("onboarding-model-summary").textContent = !baseModel
           ? "No base model is configured yet — pick a provider and model below."
@@ -7352,10 +7356,15 @@
             ? baseModel + " · " + (baseStatus.source === "admin" ? "admin-managed key" : "deployment key")
             : baseHarnessAuth
               ? baseModel + " · authenticated by the " + harnessAuth.harnessId + " harness — no API key needed."
-              : baseModel +
-                " cannot run until its " +
-                (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
-                " key is configured.";
+              : baseIndividualAuth
+                ? baseModel +
+                  " · each user connects their own " +
+                  (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
+                  " account."
+                : baseModel +
+                  " cannot run until its " +
+                  (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
+                  " key is configured.";
         renderOnboardingProviderOptions(baseProvider);
         renderOnboardingModelOptions(baseModel);
 

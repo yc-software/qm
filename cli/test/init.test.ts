@@ -68,7 +68,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     for (const line of ["CORE_SIGNING_SECRET=", "SKILL_SIGNING_SECRET=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line}`);
     }
-    for (const line of ["# OPENROUTER_API_KEY=  # optional"]) {
+    for (const line of ["# OPENROUTER_API_KEY=  # optional", "# XAI_API_KEY=  # optional"]) {
       assert.ok(env.split("\n").includes(line), `.env.example should offer ${line}`);
     }
     // OPENAI_API_KEY answers to two independent rules; the catalog lists both so neither
@@ -169,6 +169,7 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     }
     for (const line of [
       "# OPENROUTER_API_KEY=  # optional",
+      "# XAI_API_KEY=  # optional",
       "# SLACK_APP_TOKEN=  # optional",
       "# SLACK_BOT_TOKEN=  # optional",
     ]) {
@@ -277,6 +278,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     }
     for (const name of [
       "# OPENROUTER_API_KEY=  # optional",
+      "# XAI_API_KEY=  # optional",
       "# SLACK_BOT_TOKEN=  # optional",
       "# SLACK_APP_TOKEN=  # optional",
     ]) {

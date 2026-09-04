@@ -63,6 +63,26 @@ test("doctor allows deferred Slack setup but rejects a partial token pair", asyn
   );
 });
 
+test("doctor checks xAI API keys against api.x.ai", async () => {
+  const priorFetch = globalThis.fetch;
+  let seenUrl = "";
+  let seenAuth = "";
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    seenUrl = String(input);
+    seenAuth = new Headers(init?.headers).get("authorization") ?? "";
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  try {
+    const { sandbox: _sandbox, ...withoutSandbox } = config;
+    void _sandbox;
+    await doctorCommon({ ...withoutSandbox, modelProvider: "xai" }, new Map([["XAI_API_KEY", "xai-test-key"]]));
+    assert.equal(seenUrl, "https://api.x.ai/v1/models");
+    assert.equal(seenAuth, "Bearer xai-test-key");
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});
+
 test("doctor rejects missing and placeholder portal OIDC client ids and tenant gates", async () => {
   const { sandbox: _sandbox, ...withoutSandbox } = config;
   void _sandbox;

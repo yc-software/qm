@@ -1,17 +1,19 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { liveEnvPath } from "./pool.ts";
 import { bestEffort, readEnvFile, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
 import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/harness/codex-auth-file.ts";
+import { DEFAULT_GROK_BINARY, GROK_VERSION } from "../../../src/harness/grok-home.ts";
 
 export interface AssembledEnv {
   env: Record<string, string>;
   anthropicKeySource: string;
   openaiKeySource: string;
   codexAuthSource: string;
-  harness: "pi" | "mock" | "opencode" | "codex" | "claude";
+  harness: "pi" | "mock" | "opencode" | "codex" | "claude" | "grok";
   liveEnvFile: string;
   warnings: string[];
 }
@@ -136,8 +138,16 @@ export async function assembleEnv(opts: {
     codexAuthSource = codexAuthCandidate;
   }
 
-  let harness: "pi" | "mock" | "opencode" | "codex" | "claude";
-  if (opts.callerEnv.HARNESS === "codex" || opts.callerEnv.HARNESS === "claude") {
+  if (!env.GROK_BIN && wtEnv.GROK_BIN) env.GROK_BIN = wtEnv.GROK_BIN;
+  if (!env.GROK_BIN) {
+    const discovered = [DEFAULT_GROK_BINARY, join(homedir(), ".grok", "bin", `grok-${GROK_VERSION}`)].find(
+      (candidate) => existsSync(candidate),
+    );
+    if (discovered) env.GROK_BIN = discovered;
+  }
+
+  let harness: "pi" | "mock" | "opencode" | "codex" | "claude" | "grok";
+  if (opts.callerEnv.HARNESS === "codex" || opts.callerEnv.HARNESS === "claude" || opts.callerEnv.HARNESS === "grok") {
     harness = opts.callerEnv.HARNESS;
     env.HARNESS = harness;
     if (harness === "codex" && !env.OPENAI_API_KEY && !codexOAuthConfigured) {
@@ -145,6 +155,10 @@ export async function assembleEnv(opts: {
         "HARNESS=codex needs OPENAI_API_KEY or a readable ChatGPT OAuth auth.json via CODEX_AUTH_FILE (or ~/.codex/auth.json)",
       );
     }
+    if (harness === "grok" && (!env.GROK_BIN || !existsSync(env.GROK_BIN))) {
+      throw new Error("HARNESS=grok needs the verified Grok 1.0.13 binary at /usr/local/bin/grok or GROK_BIN");
+    }
+    if (harness === "grok") env.GROK_DEV_LAUNCHER = join(opts.worktree, "scripts/dev/grok-policy-launcher.sh");
   } else if (env.ANTHROPIC_API_KEY) {
     harness = opts.callerEnv.HARNESS === "opencode" ? "opencode" : "pi";
     env.HARNESS = harness;

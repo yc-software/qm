@@ -3,13 +3,15 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { brandMark, brandName } from "./ui";
 
-type ProviderKey = "claude" | "chatgpt";
+type ProviderKey = "claude" | "chatgpt" | "grok";
 type ConnKind = "apikey" | "oauth";
 
 interface ProviderMeta {
   key: ProviderKey;
   name: string;
-  apiName: "anthropic" | "openai";
+  apiName: "anthropic" | "openai" | "xai";
+  subscriptionFlow: "paste" | "device";
+  approvalHost: string;
   mark: TemplateResult;
   markClass: string;
   keyPlaceholder: string;
@@ -30,11 +32,17 @@ const OPENAI_MARK = html`<svg viewBox="0 0 24 24" width="18" height="18" fill="c
   />
 </svg>`;
 
+const XAI_MARK = html`<svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+  <path d="M4 4 20 20M20 4 4 20" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+</svg>`;
+
 const PROVIDERS: ProviderMeta[] = [
   {
     key: "claude",
     name: "Claude",
     apiName: "anthropic",
+    subscriptionFlow: "paste",
+    approvalHost: "claude.ai",
     mark: ANTHROPIC_MARK,
     markClass: "mc-mark-claude",
     keyPlaceholder: "sk-ant-…",
@@ -46,12 +54,27 @@ const PROVIDERS: ProviderMeta[] = [
     key: "chatgpt",
     name: "ChatGPT",
     apiName: "openai",
+    subscriptionFlow: "device",
+    approvalHost: "chatgpt.com",
     mark: OPENAI_MARK,
     markClass: "mc-mark-chatgpt",
     keyPlaceholder: "sk-…",
     subscription: "ChatGPT Plus or Pro",
     keyConsole: "platform.openai.com",
     keyConsoleUrl: "https://platform.openai.com",
+  },
+  {
+    key: "grok",
+    name: "Grok",
+    apiName: "xai",
+    subscriptionFlow: "device",
+    approvalHost: "x.ai",
+    mark: XAI_MARK,
+    markClass: "mc-mark-grok",
+    keyPlaceholder: "xai-…",
+    subscription: "Grok account with Build access",
+    keyConsole: "console.x.ai",
+    keyConsoleUrl: "https://console.x.ai",
   },
 ];
 
@@ -65,7 +88,7 @@ interface DevicePrompt {
 
 interface StatusResponse {
   individualModelAuth: boolean;
-  connections: { provider: "anthropic" | "openai"; kind: ConnKind }[];
+  connections: { provider: "anthropic" | "openai" | "xai"; kind: ConnKind }[];
 }
 
 type Mode = "gate" | "manager";
@@ -73,7 +96,7 @@ type Method = "subscription" | "apikey";
 type Flow =
   | { kind: "pick" }
   | { kind: "claude"; authorizeUrl: string; verifier: string; code: string }
-  | { kind: "chatgpt"; device: DevicePrompt }
+  | { kind: "device"; provider: ProviderKey; device: DevicePrompt }
   | { kind: "apikey"; value: string };
 
 interface State {
@@ -92,7 +115,7 @@ interface State {
 
 let s: State;
 let overlay: HTMLElement | null = null;
-let deviceCache: DevicePrompt | null = null;
+const deviceCache: Partial<Record<ProviderKey, DevicePrompt>> = {};
 
 function fresh(mode: Mode): State {
   return {
@@ -135,7 +158,8 @@ async function load(): Promise<void> {
     s.required = status.individualModelAuth === true;
     s.connections = {};
     for (const c of status.connections ?? []) {
-      s.connections[c.provider === "anthropic" ? "claude" : "chatgpt"] = c.kind;
+      const provider = PROVIDERS.find((candidate) => candidate.apiName === c.provider);
+      if (provider) s.connections[provider.key] = c.kind;
     }
     s.error = "";
   } catch (e) {
@@ -157,7 +181,7 @@ function friendly(e: unknown): string {
 
 function afterConnect(): void {
   stopPolling();
-  deviceCache = null;
+  if (s.open) delete deviceCache[s.open];
   if (s.mode === "gate") {
     location.reload();
     return;
@@ -173,20 +197,22 @@ async function pickSubscription(p: ProviderMeta): Promise<void> {
   s.busy = true;
   paint();
   try {
-    if (p.key === "claude") {
-      const start = await api<{ authorizeUrl: string; verifier: string }>("/api/user-model-auth/claude/start", {
+    if (p.subscriptionFlow === "paste") {
+      const start = await api<{ authorizeUrl: string; verifier: string }>(`/api/user-model-auth/${p.key}/start`, {
         method: "POST",
       });
       s.flow = { kind: "claude", ...start, code: "" };
     } else {
-      if (!deviceCache || deviceCache.expiresAt - 30_000 <= Date.now()) {
-        deviceCache = await api<DevicePrompt>("/api/user-model-auth/chatgpt/start", { method: "POST" });
+      let device = deviceCache[p.key];
+      if (!device || device.expiresAt - 30_000 <= Date.now()) {
+        device = await api<DevicePrompt>(`/api/user-model-auth/${p.key}/start`, { method: "POST" });
+        deviceCache[p.key] = device;
       }
       stopPolling();
-      s.flow = { kind: "chatgpt", device: deviceCache };
+      s.flow = { kind: "device", provider: p.key, device };
       s.busy = false;
       paint();
-      pollChatGPT();
+      s.pollTimer = setTimeout(() => void pollDevice(p), device.intervalMs || 5000);
       return;
     }
   } catch (e) {
@@ -237,30 +263,45 @@ async function finishClaude(): Promise<void> {
   }
 }
 
-async function pollChatGPT(): Promise<void> {
-  if (s.flow.kind !== "chatgpt") return;
+async function pollDevice(p: ProviderMeta): Promise<void> {
+  if (s.flow.kind !== "device" || s.flow.provider !== p.key) return;
   const device = s.flow.device;
   if (Date.now() > device.expiresAt) {
-    deviceCache = null;
+    delete deviceCache[p.key];
     resetFlow();
     s.error = "That code expired — start the sign-in again.";
     paint();
     return;
   }
   try {
-    const r = await api<{ status: string }>("/api/user-model-auth/chatgpt/poll", {
+    const r = await api<{ status: string; intervalMs?: number }>(`/api/user-model-auth/${p.key}/poll`, {
       method: "POST",
-      body: JSON.stringify({ deviceAuthId: device.deviceAuthId, userCode: device.userCode }),
+      body: JSON.stringify({ deviceAuthId: device.deviceAuthId }),
     });
     if (r.status === "connected") return afterConnect();
+    if (r.status === "denied") {
+      delete deviceCache[p.key];
+      resetFlow();
+      s.error = "Sign-in was denied. Start again when you're ready.";
+      paint();
+      return;
+    }
+    if (r.status === "expired") {
+      delete deviceCache[p.key];
+      resetFlow();
+      s.error = "That code expired — start the sign-in again.";
+      paint();
+      return;
+    }
+    if (r.intervalMs) device.intervalMs = r.intervalMs;
   } catch (e) {
     s.error = friendly(e);
-    deviceCache = null;
+    delete deviceCache[p.key];
     resetFlow();
     paint();
     return;
   }
-  if (s.flow.kind === "chatgpt") s.pollTimer = setTimeout(pollChatGPT, device.intervalMs || 5000);
+  if (s.flow.kind === "device") s.pollTimer = setTimeout(() => void pollDevice(p), device.intervalMs || 5000);
 }
 
 async function saveKey(p: ProviderMeta): Promise<void> {
@@ -342,8 +383,8 @@ function claudeSteps(): TemplateResult {
   `;
 }
 
-function chatgptSteps(): TemplateResult {
-  if (s.flow.kind !== "chatgpt") return html``;
+function deviceSteps(p: ProviderMeta): TemplateResult {
+  if (s.flow.kind !== "device" || s.flow.provider !== p.key) return html``;
   const device = s.flow.device;
   return html`
     <ol class="mc-steps">
@@ -359,7 +400,9 @@ function chatgptSteps(): TemplateResult {
         </button>
       </li>
       <li>
-        <a class="btn" href=${device.verificationUrl} target="_blank" rel="noopener">Open chatgpt.com and paste it ↗</a>
+        <a class="btn" href=${device.verificationUrl} target="_blank" rel="noopener"
+          >Open ${p.approvalHost} and paste it ↗</a
+        >
       </li>
       <li>
         <span class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Waiting for your approval…</span>
@@ -396,7 +439,7 @@ function apikeySteps(p: ProviderMeta): TemplateResult {
 
 function connectBody(p: ProviderMeta): TemplateResult {
   let subscriptionSteps: TemplateResult | typeof nothing = nothing;
-  if (s.method === "subscription") subscriptionSteps = p.key === "claude" ? claudeSteps() : chatgptSteps();
+  if (s.method === "subscription") subscriptionSteps = p.subscriptionFlow === "paste" ? claudeSteps() : deviceSteps(p);
   return html`
     <div class="mc-connect">
       ${methodRow(

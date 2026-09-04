@@ -29,7 +29,7 @@ export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): McpToolDescriptor[];
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
-  call(name: string, args: Record<string, unknown>, principalId?: string): Promise<string>;
+  call(name: string, args: Record<string, unknown>, principalId?: string, signal?: AbortSignal): Promise<string>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   /** Probe a server config without persisting it. Returns its tool names. */
@@ -117,13 +117,13 @@ export function createMcpToolService(opts: {
 
   return {
     toolDefs: () => snapshot,
-    async call(name, args, principalId) {
+    async call(name, args, principalId, signal) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
-        const result = await clientFor(server).callTool(def.remoteName, args);
+        const result = await clientFor(server).callTool(def.remoteName, args, signal);
         record("call", `${def.serverId}/${def.remoteName}`, "ok", principalId);
         const text = mcpResultText(result) || JSON.stringify(result.structuredContent ?? "") || "";
         return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}\n[truncated]` : text;

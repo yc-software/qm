@@ -43,6 +43,11 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
     "(the key starts with sk-or-).",
     "Only one provider key is needed — set the one whose model you want as the base model.",
   ],
+  XAI_API_KEY: [
+    "Create an API key at https://console.x.ai/team/default/api-keys",
+    "Only one provider key is needed — set the one whose model you want as the base model.",
+    "This API key is separate from Grok subscription sign-in.",
+  ],
   SLACK_BOT_TOKEN: [
     "Create the Slack app from the scaffolded manifest:",
     "  1. Open https://api.slack.com/apps -> Create New App -> From a manifest.",

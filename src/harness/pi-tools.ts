@@ -511,6 +511,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     callId: string,
     params: { command: string; computer?: string; timeout_seconds?: number; purpose?: string },
     route?: { scratch?: boolean; ownerAuth?: boolean; reachTarget?: string },
+    signal?: AbortSignal,
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
@@ -559,12 +560,13 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     }
     await recordCall(callId, { tool: "execute", command: params.command, ...scopeNote });
     try {
+      const abortSignal = signal ?? ref.abortSignal;
       const execOpts = {
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
         ...(route?.ownerAuth ? { ownerAuth: true } : {}),
         ...(route?.reachTarget !== undefined ? { reachTarget: route.reachTarget } : {}),
-        ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
+        ...(abortSignal ? { signal: abortSignal } : {}),
       };
       const r = await tc.execute(params.command, Object.keys(execOpts).length ? execOpts : undefined);
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
@@ -671,6 +673,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       scope?: string;
       durable?: boolean;
     },
+    signal?: AbortSignal,
   ) => {
     const scope = (params.scope ?? "scoped").trim();
     const keyword = scope.toLowerCase();
@@ -680,7 +683,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
         await recordCall(callId, { tool: "execute", command: params.command, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scoped_ephemeral" }, SCOPED_EPHEMERAL_ERROR);
       }
-      return runExecute(callId, params, { scratch: false });
+      return runExecute(callId, params, { scratch: false }, signal);
     }
     if (keyword === "scratch") {
       if (!scratchExec) {
@@ -695,7 +698,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
         await recordCall(callId, { tool: "execute", command: params.command, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scratch_durable" }, SCRATCH_DURABLE_ERROR);
       }
-      return runExecute(callId, params, { scratch: true });
+      return runExecute(callId, params, { scratch: true }, signal);
     }
     if (keyword === "owner") {
       if (!ownerAuthExec) {
@@ -714,9 +717,9 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
           "[error] an owner-auth box is invocation-only and cannot be durable — drop `durable`.",
         );
       }
-      return runExecute(callId, params, { ownerAuth: true });
+      return runExecute(callId, params, { ownerAuth: true }, signal);
     }
-    return runExecute(callId, params, { reachTarget: scope });
+    return runExecute(callId, params, { reachTarget: scope }, signal);
   };
 
   let execute: ToolDefinition;
@@ -736,7 +739,8 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
             }
           : {}),
       }),
-      execute: (callId, params) => runScopedExecute(callId, params as Parameters<typeof runScopedExecute>[1]),
+      execute: (callId, params, signal) =>
+        runScopedExecute(callId, params as Parameters<typeof runScopedExecute>[1], signal),
     });
   } else if (scratchExec || ownerAuthExec) {
     execute = defineTool({
@@ -760,7 +764,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
         ),
         durable: Type.Optional(Type.Boolean({ description: DURABLE_PARAM_DESC })),
       }),
-      execute: (callId, params) => runScopedExecute(callId, params),
+      execute: (callId, params, signal) => runScopedExecute(callId, params, signal),
     });
   } else {
     execute = defineTool({
@@ -768,7 +772,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       label: "execute",
       description: legacyDescription,
       parameters: Type.Object(executeBaseParams),
-      execute: (callId, params) => runExecute(callId, params),
+      execute: (callId, params, signal) => runExecute(callId, params, undefined, signal),
     });
   }
 
@@ -2736,7 +2740,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
       args: Type.Array(Type.String()),
       timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: execCeilingSec })),
     }),
-    async execute(callId, params: { service: string; args: string[]; timeout_seconds?: number }) {
+    async execute(callId, params: { service: string; args: string[]; timeout_seconds?: number }, signal) {
       const tc = ref.current;
       await recordCall(callId, { tool: "credential_exec", service: params.service, args: params.args });
       if (!tc?.credentialExec) {
@@ -2748,9 +2752,10 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
         );
       }
       try {
+        const abortSignal = signal ?? ref.abortSignal;
         const result = await tc.credentialExec(params.service, params.args, {
           ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
-          ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
+          ...(abortSignal ? { signal: abortSignal } : {}),
         });
         const parts = [result.stdout, result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
         return recordResult(
@@ -2807,12 +2812,16 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
         // MCP servers publish plain JSON Schema for their inputs; pi's tool
         // schemas are JSON Schema too, so pass it through structurally.
         parameters: (d.inputSchema ?? { type: "object", properties: {} }) as never,
-        async execute(callId, params) {
+        async execute(callId, params, signal) {
           const tc = ref.current;
           if (!tc) return text("[error] no active tool context");
           await recordCall(callId, { tool: d.name, mcpServer: d.serverId, args: params });
           try {
-            const out = await tc.callMcpTool(d.name, (params ?? {}) as Record<string, unknown>);
+            const out = await tc.callMcpTool(
+              d.name,
+              (params ?? {}) as Record<string, unknown>,
+              signal ?? ref.abortSignal,
+            );
             return recordExternalResult(
               callId,
               { tool: d.name, mcpServer: d.serverId },
@@ -3044,7 +3053,8 @@ function withToolApprovalGate(
   const inner = tool.execute.bind(tool);
   return {
     ...tool,
-    async execute(callId: string, params: unknown) {
+    async execute(...args: Parameters<ToolDefinition["execute"]>) {
+      const [callId] = args;
       const gate = ref.toolApprovalGate;
       if (gate && !gate(tool.name)) {
         ref.pendingApprovals?.push({
@@ -3072,7 +3082,7 @@ function withToolApprovalGate(
           true,
         );
       }
-      return (inner as (callId: string, params: unknown) => unknown)(callId, params);
+      return inner(...args);
     },
   } as ToolDefinition;
 }
@@ -3081,10 +3091,10 @@ function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
   const inner = tool.execute.bind(tool);
   return {
     ...tool,
-    async execute(callId: string, params: unknown) {
+    async execute(...args: Parameters<ToolDefinition["execute"]>) {
       const start = Date.now();
       try {
-        return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
+        return await inner(...args);
       } finally {
         try {
           ref.onGapWork?.({ phase: "tool_body", tool: tool.name, start, end: Date.now() });

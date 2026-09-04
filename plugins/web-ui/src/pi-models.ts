@@ -1,7 +1,6 @@
 import { getModel } from "@earendil-works/pi-ai";
 import type { Api, Model } from "@earendil-works/pi-ai";
-
-const KNOWN_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
+import { KNOWN_PROVIDERS } from "./model-providers.ts";
 
 const CLONE_TEMPLATES: Readonly<Record<string, { template: string; name: string }>> = {
   "claude-fable-5": { template: "claude-opus-4-8", name: "Claude Fable 5" },
@@ -10,6 +9,7 @@ const CLONE_TEMPLATES: Readonly<Record<string, { template: string; name: string 
   "gpt-5.6-sol": { template: "gpt-5.5", name: "GPT-5.6 Sol" },
   "gpt-5.6-terra": { template: "gpt-5.5", name: "GPT-5.6 Terra" },
   "gpt-5.6-luna": { template: "gpt-5.5", name: "GPT-5.6 Luna" },
+  "grok-4.6": { template: "grok-4.5", name: "Grok 4.6" },
 };
 
 type PiModel = Model<Api>;

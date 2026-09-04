@@ -187,6 +187,12 @@ import { createOAuthFlowStore, type OAuthFlowStore } from "./connectors/oauth-fl
 import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts";
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
+import {
+  createXaiDeviceLoginStore,
+  refreshXaiTokens,
+  type StoredXaiDeviceLogin,
+  type XaiDeviceLoginStore,
+} from "./model/xai-device-login.ts";
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import { setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
@@ -200,6 +206,7 @@ import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-h
 import { keychainCodexAuthStore } from "./harness/codex-auth-store.ts";
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
+import { createGrokHarness, grokHarnessConfigOptions } from "./harness/grok-harness.ts";
 import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
@@ -358,6 +365,7 @@ export interface BuiltApp {
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
+  xaiDeviceLogins: XaiDeviceLoginStore;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
@@ -415,6 +423,7 @@ export function buildApp(
     securityScreener?: SecurityScreener;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
+    xaiOAuthFetch?: typeof fetch;
   } = {},
 ): BuiltApp {
   if (config.databaseUrl && !config.connectorSecretKey) {
@@ -454,6 +463,7 @@ export function buildApp(
       ...(config.anthropicApiKey ? { anthropic: config.anthropicApiKey } : {}),
       ...(config.openaiApiKey ? { openai: config.openaiApiKey } : {}),
       ...(config.openrouterApiKey ? { openrouter: config.openrouterApiKey } : {}),
+      ...(config.xaiApiKey ? { xai: config.xaiApiKey } : {}),
     },
   });
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
@@ -780,6 +790,10 @@ export function buildApp(
           const fresh = await refreshClaudeTokens(token.refreshToken);
           return oauthTokenFromUserTokens(fresh);
         }
+        if (token.refreshToken && host === "auth.x.ai") {
+          const fresh = await refreshXaiTokens(token.refreshToken, overrides.xaiOAuthFetch);
+          return oauthTokenFromUserTokens(fresh);
+        }
         return base(host, token, ctx);
       };
     })(),
@@ -800,6 +814,11 @@ export function buildApp(
   // Per-user AI accounts live in the keychain itself (unified custody):
   // same encryption, ownership, admin visibility, and removal flows as
   // every other personal credential.
+  const xaiDeviceLogins = createXaiDeviceLoginStore({
+    backing: artifactMap<StoredXaiDeviceLogin>("xai_device_logins"),
+    key: deriveConnectorKey(credentialKey.current, "xai-device-login"),
+    ...(overrides.xaiOAuthFetch ? { fetcher: overrides.xaiOAuthFetch } : {}),
+  });
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
   const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
@@ -837,10 +856,11 @@ export function buildApp(
     console.error("[wiring] custom provider hydration failed:", errMessage(e)),
   );
   const resolveModelProviderKeys = async () => {
-    const [anthropic, openai, openrouter, enabledCustom] = await Promise.all([
+    const [anthropic, openai, openrouter, xai, enabledCustom] = await Promise.all([
       modelCredentials.resolve("anthropic"),
       modelCredentials.resolve("openai"),
       modelCredentials.resolve("openrouter"),
+      modelCredentials.resolve("xai"),
       customProviders.enabled(),
     ]);
     const customKeys = Object.fromEntries(
@@ -863,6 +883,7 @@ export function buildApp(
       ...(anthropic ? { anthropic } : {}),
       ...(openai ? { openai } : {}),
       ...(openrouter ? { openrouter } : {}),
+      ...(xai ? { xai } : {}),
       ...customKeys,
     };
   };
@@ -936,6 +957,14 @@ export function buildApp(
           : {}),
         signals: runSignals,
         tasks,
+        mcpTools,
+      }),
+    ],
+    [
+      "grok",
+      createGrokHarness({
+        ...grokHarnessConfigOptions(config),
+        signals: runSignals,
         mcpTools,
       }),
     ],
@@ -1693,6 +1722,7 @@ export function buildApp(
     modelGateway,
     modelCredentials,
     userModelCredentials,
+    xaiDeviceLogins,
     customProviders,
     refreshCustomProviders,
     mcpServers,
@@ -1767,6 +1797,7 @@ export function serverDeps(
     providerKeys: providerKeysPresent(config),
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,
+    xaiDeviceLogins: built.xaiDeviceLogins,
     customProviders: built.customProviders,
     refreshCustomProviders: built.refreshCustomProviders,
     mcpServers: built.mcpServers,

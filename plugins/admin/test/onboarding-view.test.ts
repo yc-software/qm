@@ -39,14 +39,17 @@ interface FakeElement {
   appendChild(option: { value?: string; textContent?: string }): void;
 }
 
-async function runLoadOnboarding(modelProviders: unknown): Promise<Record<string, FakeElement>> {
+async function runLoadOnboarding(
+  modelProviders: unknown,
+  scopeConfig: Record<string, unknown> = { baseModel: "claude-opus-5" },
+): Promise<Record<string, FakeElement>> {
   const src = slice("let onboardingModels = {};", '$("onboarding-model-provider").onchange') + "\nloadOnboarding();";
   const elements: Record<string, FakeElement> = {};
   const fixtures: Record<string, unknown> = {
     "/api/model-providers": modelProviders,
     "/api/slack-installation": { configured: false },
     "/api/connector-catalog": { catalog: [] },
-    "/api/scopes/org%3Adefault-org": { baseModel: "claude-opus-5" },
+    "/api/scopes/org%3Adefault-org": scopeConfig,
   };
   const context = vm.createContext({
     $: (id: string) =>
@@ -79,6 +82,7 @@ const UNCONFIGURED_PROVIDERS = [
   { provider: "anthropic", configured: false, source: "absent" },
   { provider: "openai", configured: false, source: "absent" },
   { provider: "openrouter", configured: false, source: "absent" },
+  { provider: "xai", configured: false, source: "absent" },
 ];
 const ANTHROPIC_MODELS = [{ id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" }];
 
@@ -106,12 +110,30 @@ test("without harness auth an unconfigured provider still needs a key", async ()
   assert.match(elements["onboarding-model-summary"]!.textContent, /cannot run until its Anthropic key is configured/);
 });
 
+test("individual Grok authorization makes onboarding ready without an organization xAI key", async () => {
+  const elements = await runLoadOnboarding(
+    {
+      providers: UNCONFIGURED_PROVIDERS,
+      models: [{ id: "grok-4.6", name: "Grok 4.6", provider: "xai" }],
+      individualAuthModels: ["grok-4.6"],
+    },
+    { baseModel: "grok-4.6", individualModelAuth: true },
+  );
+  assert.equal(elements["onboarding-model-badge"]!.textContent, "Ready");
+  assert.equal(elements["onboarding-model-badge"]!.className, "badge ok");
+  assert.equal(
+    elements["onboarding-model-summary"]!.textContent,
+    "grok-4.6 · each user connects their own xAI account.",
+  );
+});
+
 test("a stored key keeps its summary even when the harness also carries auth", async () => {
   const elements = await runLoadOnboarding({
     providers: [
       { provider: "anthropic", configured: true, source: "admin" },
       { provider: "openai", configured: false, source: "absent" },
       { provider: "openrouter", configured: false, source: "absent" },
+      { provider: "xai", configured: false, source: "absent" },
     ],
     models: ANTHROPIC_MODELS,
     harnessAuth: { harnessId: "claude", provider: "anthropic" },

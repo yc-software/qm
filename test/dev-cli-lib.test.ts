@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { envSha, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
@@ -275,6 +276,28 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(claude.harness, "claude");
   assert.equal(claude.env.HARNESS, "claude");
 
+  const grok = await assembleEnv({
+    worktree,
+    callerEnv: { HARNESS: "grok", GROK_BIN: "/bin/true" },
+    allowMock: false,
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(grok.harness, "grok");
+  assert.equal(grok.env.HARNESS, "grok");
+  assert.equal(grok.env.GROK_BIN, "/bin/true");
+  assert.equal(grok.env.GROK_DEV_LAUNCHER, join(worktree, "scripts/dev/grok-policy-launcher.sh"));
+  await assert.rejects(
+    assembleEnv({
+      worktree,
+      callerEnv: { HARNESS: "grok", GROK_BIN: join(worktree, "missing-grok") },
+      allowMock: false,
+      log,
+      probeLoginShell: async () => "",
+    }),
+    /HARNESS=grok needs the verified Grok 1\.0\.13 binary/,
+  );
+
   const fromLiveEnv = await assembleEnv({
     worktree,
     callerEnv: {},
@@ -377,8 +400,8 @@ test("OpenCode config is strict, pinned, and inherits the Pi model", () => {
     /OPENAI_API_KEY/,
   );
   rmSync(source, { recursive: true, force: true });
-  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use mock, pi, opencode, codex, or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use mock, pi, opencode, codex, or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use mock, pi, opencode, codex, claude, or grok/);
+  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use mock, pi, opencode, codex, claude, or grok/);
 });
 
 test("envSha is order-independent and value-sensitive", () => {
@@ -416,6 +439,7 @@ test("supervised children share the selected dev org", () => {
       CODEX_AUTH_FILE: "/tmp/codex-auth.json",
       HOME: "/tmp/home",
       CODEX_HOME: "/tmp/home/.codex",
+      GROK_HOME: "/tmp/home/.grok",
     },
     watch: false,
     webUiBasePath: "/",
@@ -436,10 +460,45 @@ test("supervised children share the selected dev org", () => {
     assert.equal(spec.env.CODEX_AUTH_FILE, "");
     assert.equal(spec.env.HOME, undefined);
     assert.equal(spec.env.CODEX_HOME, undefined);
+    assert.equal(spec.env.GROK_HOME, undefined);
   }
   for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
   inputs.baseEnv = {};
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
+});
+
+test("Grok dev launcher exposes the tracked system policy in an ephemeral mount namespace", (t) => {
+  const worktree = mkdtempSync(join(tmpdir(), "qm-grok-dev-policy-test-"));
+  t.after(() => rmSync(worktree, { recursive: true, force: true }));
+  const policy = join(worktree, "deploy/core/grok-requirements.toml");
+  const launcher = join(worktree, "scripts/dev/grok-policy-launcher.sh");
+  mkdirSync(join(worktree, "deploy/core"), { recursive: true });
+  mkdirSync(join(worktree, "scripts/dev"), { recursive: true });
+  writeFileSync(policy, "test-policy\n");
+  writeFileSync(launcher, readFileSync(join(process.cwd(), "scripts/dev/grok-policy-launcher.sh")));
+  chmodSync(launcher, 0o700);
+  const before = existsSync("/etc/grok/requirements.toml")
+    ? readFileSync("/etc/grok/requirements.toml", "utf8")
+    : undefined;
+  const result = spawnSync(
+    launcher,
+    [
+      process.execPath,
+      "-e",
+      'process.stdout.write(require("node:fs").readFileSync("/etc/grok/requirements.toml", "utf8"))',
+    ],
+    { cwd: worktree, encoding: "utf8" },
+  );
+  if (result.stderr.includes("needs bubblewrap")) {
+    t.skip(result.stderr.trim());
+    return;
+  }
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "test-policy\n");
+  assert.equal(
+    existsSync("/etc/grok/requirements.toml") ? readFileSync("/etc/grok/requirements.toml", "utf8") : undefined,
+    before,
+  );
 });
 
 test("child specs omit Slack env when no Slack tokens are supplied", () => {

@@ -19,6 +19,7 @@ const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alic
 function start(
   config: Parameters<typeof testConfig>[0] = {},
   modelCredentialFetch: typeof fetch = async () => new Response(null, { status: 200 }),
+  serverHarnessId?: string,
 ): {
   base: string;
   built: BuiltApp;
@@ -33,9 +34,10 @@ function start(
     config: built.config,
     modelCredentials: built.modelCredentials,
     modelCredentialFetch,
-    harnessId: config.harness ?? "pi",
+    harnessId: serverHarnessId ?? config.harness ?? "pi",
     ...(harnessCarriedModelAuth(appConfig) ? { harnessCarriedModelAuth: harnessCarriedModelAuth(appConfig) } : {}),
     providerKeys: providerKeysPresent(appConfig),
+    userModelCredentials: built.userModelCredentials,
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -57,6 +59,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { provider: "anthropic", configured: true, source: "environment" },
         { provider: "openai", configured: false, source: "absent" },
         { provider: "openrouter", configured: false, source: "absent" },
+        { provider: "xai", configured: false, source: "absent" },
       ],
       models: [
         { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
@@ -67,6 +70,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
         { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
         { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+        { id: "grok-4.6", name: "Grok 4.6", provider: "xai" },
         { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
       ],
     });
@@ -127,6 +131,26 @@ test("OpenRouter validation uses an authenticated endpoint", async () => {
     assert.equal(response.status, 400);
     assert.equal(requested, "https://openrouter.ai/api/v1/key");
     assert.equal(await srv.built.modelCredentials.resolve("openrouter"), null);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("xAI API keys validate against api.x.ai rather than the Grok subscription proxy", async () => {
+  let requested = "";
+  const srv = start({}, async (input) => {
+    requested = String(input);
+    return new Response(null, { status: 401 });
+  });
+  try {
+    const response = await fetch(`${srv.base}/v1/admin/model-providers/xai`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ apiKey: "not-a-real-key" }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal(requested, "https://api.x.ai/v1/models");
+    assert.equal(await srv.built.modelCredentials.resolve("xai"), null);
   } finally {
     await srv.close();
   }
@@ -412,6 +436,85 @@ test("surface-config reports whether any model provider is configured", async ()
     await srv.built.modelCredentials.set("anthropic", "working-admin-key", "admin-alice@default-org");
     const after = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(((await after.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("subscription-only Grok is configurable when durable individual authorization is enabled", async () => {
+  const srv = start({ modelId: "grok-4.6" }, undefined, "grok");
+  try {
+    const before = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(((await before.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, false);
+
+    srv.built.config.setIndividualModelAuth(true);
+    await srv.built.config.flushScope("org:default-org");
+
+    const surface = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(((await surface.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+
+    const providers = await fetch(`${srv.base}/v1/admin/model-providers`, { headers: ADMIN });
+    const providerBody = (await providers.json()) as { individualAuthModels?: string[] };
+    assert.deepEqual(providerBody.individualAuthModels, ["grok-4.6"]);
+
+    const scope = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+    const scopeBody = (await scope.json()) as {
+      baseModelOptions: Array<{ id: string }>;
+      modelsByHarness: Record<string, Array<{ id: string }>>;
+      browseModelOptions: Array<{ id: string }>;
+    };
+    assert.deepEqual(
+      scopeBody.baseModelOptions.map((model) => model.id),
+      ["grok-4.6"],
+    );
+    assert.deepEqual(
+      scopeBody.modelsByHarness.grok?.map((model) => model.id),
+      ["grok-4.6"],
+    );
+    assert.deepEqual(scopeBody.browseModelOptions, []);
+
+    const baseModel = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/base-model`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ modelId: "grok-4.6" }),
+    });
+    assert.equal(baseModel.status, 200);
+
+    const browseModel = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/browse-model`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ modelId: "grok-4.6" }),
+    });
+    assert.equal(browseModel.status, 400);
+
+    const runtime = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/runtime`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "grok", modelId: "grok-4.6" }),
+    });
+    assert.equal(runtime.status, 200);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("browse omits and rejects Grok even when an xAI deployment key is configured", async () => {
+  const srv = start({ xaiApiKey: "deployment-xai-key" });
+  try {
+    const scope = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+    const options = ((await scope.json()) as { browseModelOptions: Array<{ id: string }> }).browseModelOptions;
+    assert.equal(
+      options.some((model) => model.id === "grok-4.6"),
+      false,
+    );
+
+    const response = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/browse-model`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ modelId: "grok-4.6" }),
+    });
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /isn't supported by browse/);
   } finally {
     await srv.close();
   }

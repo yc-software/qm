@@ -17,6 +17,7 @@ import {
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
+import { deploymentModelServiceable } from "../../core/individual-auth-routing.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
@@ -1059,12 +1060,14 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
 async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
-  const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
-    deps.config.getWebuiModelsDurable(orgScope(deps)),
-    deps.config.getBaseModelDurable(orgScope(deps)),
-    deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
-    resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
-  ]);
+  const [webuiModels, baseModel, externalSlackParticipants, branding, individualModelAuthConfigured] =
+    await Promise.all([
+      deps.config.getWebuiModelsDurable(orgScope(deps)),
+      deps.config.getBaseModelDurable(orgScope(deps)),
+      deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
+      resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
+      deps.config.getIndividualModelAuthDurable(),
+    ]);
   const harnessId = deps.harnessId ?? "pi";
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
   const configuredKeys = deps.providerKeys ?? managedKeys;
@@ -1082,12 +1085,16 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     ...(branding.mark ? { mark: branding.mark } : {}),
     ...(branding.selfLabel ? { selfLabel: branding.selfLabel } : {}),
   };
+  const individualModelAuth = Boolean(deps.userModelCredentials && individualModelAuthConfigured);
   return sendJson(res, 200, {
     webuiModels: configuredPicker.length ? configuredPicker : allowed,
     baseModel: resolvedBase,
     harnessId,
     ...(providerStatus && {
-      modelProviderConfigured: Object.values(providerStatus).some(Boolean) || Boolean(deps.harnessCarriedModelAuth),
+      modelProviderConfigured:
+        Object.values(providerStatus).some(Boolean) ||
+        Boolean(deps.harnessCarriedModelAuth) ||
+        deploymentModelServiceable(resolvedBase, harnessId, providerStatus, individualModelAuth),
     }),
     externalSlackParticipants,
     ...(Object.keys(resolvedBranding).length ? { branding: resolvedBranding } : {}),

@@ -97,11 +97,10 @@ export function createModelCredentialStore(input: {
 
     async availability() {
       const statuses = await this.statuses();
-      return {
-        anthropic: statuses.find((status) => status.provider === "anthropic")!.configured,
-        openai: statuses.find((status) => status.provider === "openai")!.configured,
-        openrouter: statuses.find((status) => status.provider === "openrouter")!.configured,
-      };
+      return Object.fromEntries(statuses.map((status) => [status.provider, status.configured])) as Record<
+        ModelProvider,
+        boolean
+      >;
     },
   };
 }

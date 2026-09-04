@@ -38,6 +38,7 @@ import {
   defaultEffortForModel,
   defaultModelValue,
   effortLabel,
+  effortLevelsForHarness,
   getHarnessOptions,
   getModelOptions,
   getModelOptionsForHarness,
@@ -580,7 +581,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                             label: effortLabel(composerState.effortLevel),
                             title: "Effort",
                             selected: composerState.effortLevel,
-                            options: EFFORT_LEVELS,
+                            options: effortLevelsForHarness(selectedModel.harnessId),
                             disabled: inputBlocked,
                             onSelect: (value: string) => selectEffort(value as EffortLevel, agent),
                           })
@@ -876,7 +877,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                       ? html`
                           <div class="menu-title">Effort</div>
                           <div class="settings-seg" role="group" aria-label="Effort">
-                            ${EFFORT_LEVELS.map(
+                            ${effortLevelsForHarness(selected.harnessId).map(
                               (option) => html`
                                 <button
                                   class="settings-chip ${option.value === composerState.effortLevel ? "active" : ""}"
@@ -1578,7 +1579,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const previousDefaultEffort = defaultEffortForModel(currentModelOption().model);
     if (ctx.chat.state.threadRef) rememberThreadPick(ctx.chat.state.threadRef, option.value);
     agent.state.model = option.model;
-    if (composerState.effortLevel === previousDefaultEffort) {
+    if (
+      composerState.effortLevel === previousDefaultEffort ||
+      !effortLevelsForHarness(option.harnessId).some(({ value: level }) => level === composerState.effortLevel)
+    ) {
       composerState.effortLevel = defaultEffortForModel(option.model);
       persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel);
     }
