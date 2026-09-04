@@ -2453,15 +2453,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
             ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
-            ...(input.surfaceTools && surfaceToolDeps
-              ? {
-                  surfaceTools: true,
-                  surfaceName:
-                    input.origin.kind === "automation" && input.origin.destination
-                      ? "slack"
-                      : (input.surface ?? "slack"),
-                }
-              : {}),
+            surfaceName:
+              input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack"),
+            ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
             ...(isPollFire ? { pollFire: true } : {}),
             ...(effectiveTurnWallClockMs !== undefined ? { turnWallClockMs: effectiveTurnWallClockMs } : {}),
             ...(securityPolicy.inboundScreening === "external"

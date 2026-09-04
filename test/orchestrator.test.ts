@@ -3412,3 +3412,9 @@ test("denying a quarantine release upholds the block", async () => {
   const rerun = await built.app.turn(dm(cmd));
   assert.match(rerun.reply ?? "", /quarantined by Auto security posture/, "the payload stays out of context");
 });
+
+test("a turn carries its surface name to the harness, DM or not", async () => {
+  const built = freshApp();
+  assert.equal((await built.app.turn(dm("!surfacename", { surface: "web" }))).reply, "surface:web");
+  assert.equal((await built.app.turn(dm("!surfacename", { surface: "slack" }))).reply, "surface:slack");
+});
