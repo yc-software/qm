@@ -79,7 +79,7 @@ export interface DirectoryStore {
 export const MAX_CANDIDATES = 10;
 export const normDirectoryQuery = (s: string): string => s.trim().toLowerCase().replace(/^[@#]/, "");
 
-function pickMatch<T>(
+export function pickMatch<T>(
   items: T[],
   query: string,
   id: (t: T) => string,

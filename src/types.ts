@@ -2,6 +2,12 @@ import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 
 export type PrincipalType = "internal" | "guest";
 
+export const PRINCIPAL_TYPES = ["internal", "guest"] as const satisfies readonly PrincipalType[];
+
+export function isPrincipalType(value: unknown): value is PrincipalType {
+  return typeof value === "string" && (PRINCIPAL_TYPES as readonly string[]).includes(value);
+}
+
 export interface Principal {
   id: string;
   type: PrincipalType;

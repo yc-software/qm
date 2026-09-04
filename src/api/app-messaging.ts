@@ -15,7 +15,7 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
-import type { DirectoryMember } from "../directory/directory-store.ts";
+import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
@@ -91,19 +91,32 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
-  const emailMembers = async (): Promise<DirectoryMember[]> => {
-    const externals = (await deps.identity.listExternalMembers()).filter((member) => externalMemberActive(member));
-    return [
+  // Principals identity knows about that the Slack directory never sees: the email
+  // allow-list, invited external users, and anyone who has signed in. On a Slack-less
+  // deployment these are the only members there are.
+  const identityMembers = async (): Promise<DirectoryMember[]> => {
+    const [externals, participants] = await Promise.all([
+      deps.identity.listExternalMembers(),
+      deps.sessions?.listParticipants() ?? [],
+    ]);
+    const candidates: DirectoryMember[] = [
       ...(deps.emailAuthMembers ?? []),
-      ...externals.map((member) => ({
-        principalId: member.email,
-        displayName: member.email,
-        type: "internal" as const,
-      })),
+      ...externals
+        .filter((member) => externalMemberActive(member))
+        .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
+      ...participants
+        .filter((w) => deps.identity.classify(w.principalId).type === "internal")
+        .map((w) => ({ principalId: w.principalId, displayName: w.principalId, type: "internal" as const })),
     ];
+    const byKey = new Map<string, DirectoryMember>();
+    for (const member of candidates) {
+      const key = personKey(member.principalId);
+      if (key && !byKey.has(key)) byKey.set(key, member);
+    }
+    return [...byKey.values()];
   };
   const mergedDirectoryMembers = async () => {
-    const [stored, viaEmail] = await Promise.all([deps.directory.list(), emailMembers()]);
+    const [stored, viaEmail] = await Promise.all([deps.directory.list(), identityMembers()]);
     const seen = new Set(stored.map((member) => personKey(member.principalId)));
     return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
   };
@@ -415,11 +428,15 @@ export function createMessagingMethods(
     async resolveRecipient(query) {
       const stored = await deps.directory.resolve(query);
       if (stored.kind !== "none") return stored;
-      const key = personKey(query);
-      const member = (await emailMembers()).find(
-        (candidate) => personKey(candidate.principalId) === key || personKey(candidate.displayName) === key,
+      const match = pickMatch(
+        await identityMembers(),
+        query,
+        (member) => member.principalId,
+        (member) => member.displayName,
       );
-      return member ? { kind: "one", member } : { kind: "none" };
+      if (match.kind === "one") return { kind: "one", member: match.item };
+      if (match.kind === "ambiguous") return { kind: "ambiguous", candidates: match.items };
+      return { kind: "none" };
     },
     resolveChannel(query) {
       return deps.directory.resolveChannel(query);
@@ -433,7 +450,7 @@ export function createMessagingMethods(
     async directoryMember(principalId) {
       return (
         (await deps.directory.get(principalId)) ??
-        (await emailMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ??
+        (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ??
         null
       );
     },

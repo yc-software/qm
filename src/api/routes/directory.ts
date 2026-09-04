@@ -1,4 +1,4 @@
-import type { PrincipalType } from "../../types.ts";
+import { isPrincipalType, PRINCIPAL_TYPES, type PrincipalType } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
@@ -48,6 +48,12 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
       message: "members[], channels[], and/or groupMembers[] required",
     });
   }
+  if (Array.isArray(b.members) && b.members.some((m) => isObj(m) && !isPrincipalType(m.type))) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: `member type must be one of: ${PRINCIPAL_TYPES.join(", ")}`,
+    });
+  }
   if (typeof b.workspaceUrl === "string" && /^https:\/\/[^\s/]+$/.test(b.workspaceUrl.replace(/\/+$/, ""))) {
     await app.setDirectoryWorkspaceUrl(b.workspaceUrl.replace(/\/+$/, ""));
   }
@@ -56,10 +62,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     const members = b.members
       .filter(
         (m): m is { principalId: string; displayName: string; type: PrincipalType; slackId?: string } =>
-          isObj(m) &&
-          typeof m.principalId === "string" &&
-          typeof m.displayName === "string" &&
-          typeof m.type === "string",
+          isObj(m) && typeof m.principalId === "string" && typeof m.displayName === "string" && isPrincipalType(m.type),
       )
       .map((m) => ({
         principalId: m.principalId,
