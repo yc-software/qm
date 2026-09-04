@@ -13,6 +13,13 @@ test("pane composer collapses to a single line — keyed off the pane, not a who
   assert.match(composer, /Math\.max\(ctx\.pane \? 0 : 48, content\)/);
 });
 
+test("a pane's composer tracks the transcript column instead of the whole surface", () => {
+  const block = css.match(/\[data-density\] \.composer-wrap \{[^}]*\}/)?.[0] ?? "";
+  assert.doesNotMatch(block, /width:/, "the column width comes from the surface-width rules, not the tier");
+  assert.doesNotMatch(block, /margin(-inline|-left|-right)?:/, "so do the side gutters");
+  assert.match(block, /margin-bottom: 10px;/, "the tier only tightens the dock's own chrome");
+});
+
 test("phone touch layout cannot inflate a pane's composer controls", () => {
   assert.match(
     css,

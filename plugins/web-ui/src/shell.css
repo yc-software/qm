@@ -7254,8 +7254,10 @@ h3.ambient-field-label {
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 2px;
-  width: auto;
-  margin: 0 10px 10px;
+  /* Chrome only: the column width and side gutters stay with the rules above, which key off
+     the surface's own width — a pane that fills a wide window centres the composer on the
+     transcript column instead of stretching across it, and a narrow one still runs full-bleed. */
+  margin-bottom: 10px;
   padding: 6px 8px;
   border-radius: 16px;
 }
