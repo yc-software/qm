@@ -2184,7 +2184,7 @@ export function createChatSurface(
     if (row.approval) {
       const p = (row.approval.payload ?? {}) as ToolPayload;
       return html`<div class="tool-row tool-approval">
-        <span class="tool-icon">${icon(Wrench, 15)}</span>
+        <span class="tool-icon">${icon(Wrench, 13)}</span>
         <span class="tool-label"
           >Approval
           needed${p.reason ? html` <span class="tool-detail">${firstLine(p.reason, 90)}</span>` : nothing}</span
@@ -2207,7 +2207,7 @@ export function createChatSurface(
     const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
     const detail = [base, why, attempts].filter(Boolean).join(" · ");
     const classes = ["tool-row", `tool-${kind}`].join(" ");
-    const head = html`<span class="tool-icon">${icon(meta.icon, 15)}</span>
+    const head = html`<span class="tool-icon">${icon(meta.icon, 13)}</span>
       <span class="tool-label">${label}${detail ? html` <span class="tool-detail">${detail}</span>` : nothing}</span>`;
     if (tool === "execute" && row.result && (result.stdout || result.stderr)) {
       return html`<details class="${classes} tool-expandable">
