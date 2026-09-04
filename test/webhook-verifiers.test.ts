@@ -127,6 +127,38 @@ test("hmac-sha256 dedup key is the signed body, ignoring the unsigned x-delivery
   );
 });
 
+test("linear verifier accepts a valid linear-signature and rejects a forged one", () => {
+  const v = getVerifier("linear")!;
+  const rawBody = JSON.stringify({ action: "create", type: "Issue", webhookTimestamp: Date.now() });
+  const good = { secret: SECRET, headers: { "linear-signature": hmac(rawBody) }, rawBody };
+  assert.equal(v.verify(good), true);
+  assert.equal(v.verify({ ...good, rawBody: rawBody + "x" }), false);
+  assert.equal(v.verify({ ...good, headers: { "linear-signature": hmac(rawBody + "x") } }), false);
+  assert.equal(v.verify({ ...good, secret: undefined }), false);
+  assert.equal(v.verify({ ...good, headers: {} }), false);
+});
+
+test("linear verifier rejects a correctly signed payload whose webhookTimestamp is stale", () => {
+  const v = getVerifier("linear")!;
+  const stale = JSON.stringify({ action: "create", type: "Issue", webhookTimestamp: Date.now() - 2 * 60 * 1000 });
+  assert.equal(v.verify({ secret: SECRET, headers: { "linear-signature": hmac(stale) }, rawBody: stale }), false);
+  const untimed = JSON.stringify({ action: "create", type: "Issue" });
+  assert.equal(v.verify({ secret: SECRET, headers: { "linear-signature": hmac(untimed) }, rawBody: untimed }), true);
+});
+
+test("linear dedup key is the signed body, ignoring the unsigned linear-delivery header", () => {
+  const v = getVerifier("linear")!;
+  const rawBody = JSON.stringify({ action: "create", webhookTimestamp: 1 });
+  assert.equal(
+    v.deliveryId({ headers: { "linear-delivery": "a" }, rawBody }),
+    v.deliveryId({ headers: { "linear-delivery": "b" }, rawBody }),
+  );
+  assert.notEqual(
+    v.deliveryId({ headers: {}, rawBody }),
+    v.deliveryId({ headers: {}, rawBody: JSON.stringify({ action: "update", webhookTimestamp: 1 }) }),
+  );
+});
+
 test("an unknown scheme has no verifier", () => {
   assert.equal(getVerifier("paypal"), null);
   assert.equal(getVerifier("none"), null);

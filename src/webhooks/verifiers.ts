@@ -108,7 +108,29 @@ const hmacSha256: Verifier = {
   },
 };
 
-const VERIFIERS: Record<WebhookScheme, Verifier> = { github, slack, stripe, "hmac-sha256": hmacSha256 };
+const LINEAR_TS_TOLERANCE_MS = 60 * 1000;
+
+const linear: Verifier = {
+  verify({ secret, headers, rawBody }) {
+    if (!secret) return false;
+    const sig = header(headers, "linear-signature");
+    if (!sig) return false;
+    if (!constantTimeEqual(sig, hmacHex(secret, rawBody))) return false;
+    let body: unknown;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return true;
+    }
+    if (!isObj(body) || typeof body.webhookTimestamp !== "number") return true;
+    return Math.abs(Date.now() - body.webhookTimestamp) <= LINEAR_TS_TOLERANCE_MS;
+  },
+  deliveryId({ rawBody }) {
+    return bodyHash(rawBody);
+  },
+};
+
+const VERIFIERS: Record<WebhookScheme, Verifier> = { github, slack, stripe, linear, "hmac-sha256": hmacSha256 };
 
 export type WebhookScheme = Webhook["verification"]["scheme"];
 
