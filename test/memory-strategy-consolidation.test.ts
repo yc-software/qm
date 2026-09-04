@@ -203,6 +203,7 @@ test("degrades to capture-only when the store can't round-trip a rewrite: logs o
     query: () => Promise.resolve([]),
     read: () => Promise.resolve(body),
     replace: () => Promise.resolve(),
+    purge: () => Promise.resolve(),
   };
   const logs: string[] = [];
   const calls: Array<{ system: string; prompt: string }> = [];
@@ -236,6 +237,7 @@ test("a stale marker from an earlier consolidation does not mask a no-op replace
     query: () => Promise.resolve([]),
     read: () => Promise.resolve(body),
     replace: () => Promise.resolve(),
+    purge: () => Promise.resolve(),
   };
   const logs: string[] = [];
   const consolidator = createConsolidator({ harness: oneShotHarness("NONE"), memory, log: (m) => logs.push(m) })!;

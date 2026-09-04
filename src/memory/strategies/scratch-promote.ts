@@ -176,6 +176,15 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
       const seen = new Set<string>();
       return [...fromNotebook, ...fromLogs].filter((l) => !seen.has(l) && (seen.add(l), true)).slice(0, limit);
     },
+
+    purge: (scopeId) =>
+      perScope(scopeId, async () => {
+        await base.purge(scopeId);
+        for (const abs of await workspace.list(scopeId)) {
+          const rel = relative(workspace.scopeDir(scopeId), abs);
+          if (rel.startsWith(`${LOG_DIR}/`)) await workspace.remove(scopeId, rel);
+        }
+      }),
   };
 
   async function flushBurst(burst: Burst): Promise<void> {

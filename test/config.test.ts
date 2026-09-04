@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { baseModelProviders, boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
+import {
+  baseModelProviders,
+  boolEnv,
+  loadConfig,
+  loadMemoryServiceConfig,
+  numEnv,
+  CONFIG_DEFAULTS,
+} from "../src/config.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -10,8 +17,76 @@ const productionEnv = {
   CAPABILITY_SECRET: "capabilities",
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
+  MEMORY_TOMBSTONE_SECRET: "memory-tombstone-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
 } as const;
+
+const memoryServiceEnv = {
+  MEMORY_SERVICE_DATABASE_URL: "postgres://memory",
+  MEMORY_SERVICE_SIGNING_SECRET: "memory-signing-secret-0123456789abcdef",
+  MEMORY_SERVICE_TOMBSTONE_SECRET: "memory-tombstone-secret-0123456789abcdef",
+  MEMORY_SERVICE_INTEGRATION_ID: "wulo-work",
+  MEMORY_SERVICE_ALLOWED_SCOPE_KINDS: "personal,org",
+  MEMORY_SERVICE_ALLOWED_SCOPE_PREFIXES: "personal:7:user:,org:7:",
+} as const;
+
+test("memory service config is explicit, scoped, and uses an independent secret", () => {
+  const config = loadMemoryServiceConfig(memoryServiceEnv);
+  assert.equal(config.databaseUrl, "postgres://memory");
+  assert.equal(config.integrationId, "wulo-work");
+  assert.equal(config.tombstoneSecret, memoryServiceEnv.MEMORY_SERVICE_TOMBSTONE_SECRET);
+  assert.deepEqual([...config.allowedScopeKinds], ["personal", "org"]);
+  assert.deepEqual(config.allowedScopePrefixes, ["personal:7:user:", "org:7:"]);
+  assert.equal(config.port, CONFIG_DEFAULTS.port);
+
+  assert.throws(() => loadMemoryServiceConfig({}), /MEMORY_SERVICE_DATABASE_URL is required/);
+  assert.throws(
+    () => loadMemoryServiceConfig({ ...memoryServiceEnv, MEMORY_SERVICE_SIGNING_SECRET: "short" }),
+    /must be at least 32 characters/,
+  );
+  assert.throws(
+    () => loadMemoryServiceConfig({ ...memoryServiceEnv, MEMORY_SERVICE_TOMBSTONE_SECRET: "short" }),
+    /must be at least 32 characters/,
+  );
+  assert.throws(
+    () =>
+      loadMemoryServiceConfig({
+        ...memoryServiceEnv,
+        MEMORY_SERVICE_TOMBSTONE_SECRET: memoryServiceEnv.MEMORY_SERVICE_SIGNING_SECRET,
+      }),
+    /must be distinct/,
+  );
+  const memoryDatabaseCredential = "postgres://memory-user:memory-password@database.internal/memory";
+  assert.throws(
+    () =>
+      loadMemoryServiceConfig({
+        ...memoryServiceEnv,
+        MEMORY_SERVICE_DATABASE_URL: memoryDatabaseCredential,
+        MEMORY_SERVICE_TOMBSTONE_SECRET: memoryDatabaseCredential,
+      }),
+    /must be distinct from the database credential/,
+  );
+  assert.throws(
+    () =>
+      loadMemoryServiceConfig({
+        ...memoryServiceEnv,
+        CORE_SIGNING_SECRET: memoryServiceEnv.MEMORY_SERVICE_SIGNING_SECRET,
+      }),
+    /must be distinct/,
+  );
+  assert.throws(
+    () => loadMemoryServiceConfig({ ...memoryServiceEnv, MEMORY_SERVICE_ALLOWED_SCOPE_KINDS: "personal,root" }),
+    /unsupported scope kind/,
+  );
+  assert.throws(
+    () => loadMemoryServiceConfig({ ...memoryServiceEnv, MEMORY_SERVICE_ALLOWED_SCOPE_PREFIXES: "team:7:" }),
+    /must match an allowed scope kind/,
+  );
+  assert.throws(
+    () => loadMemoryServiceConfig({ ...memoryServiceEnv, MEMORY_SERVICE_ALLOWED_SCOPE_PREFIXES: "personal:7" }),
+    /must match an allowed scope kind/,
+  );
+});
 
 test("ORG_BRAND_* parses into a validated branding default", () => {
   assert.equal(loadConfig({}).brandingDefault, undefined);
@@ -40,16 +115,21 @@ test("store kinds default to memory and accept postgres", () => {
   assert.equal(def.sessionStore, "memory");
   assert.equal(def.runStore, "memory");
 
-  const pg = loadConfig({ SESSION_STORE: "postgres", DATABASE_URL: "postgres://test" });
+  const pgEnv = {
+    DATABASE_URL: "postgres://test",
+    MEMORY_TOMBSTONE_SECRET: "memory-tombstone-secret-0123456789abcdef",
+  };
+  const pg = loadConfig({ ...pgEnv, SESSION_STORE: "postgres" });
   assert.equal(pg.sessionStore, "postgres");
   assert.equal(pg.runStore, "postgres", "runStore mirrors sessionStore when unset");
 
-  assert.equal(
-    loadConfig({ SESSION_STORE: "postgres", RUN_STORE: "memory", DATABASE_URL: "postgres://test" }).runStore,
-    "memory",
-  );
+  assert.equal(loadConfig({ ...pgEnv, SESSION_STORE: "postgres", RUN_STORE: "memory" }).runStore, "memory");
   assert.throws(
-    () => loadConfig({ SESSION_STORE: "postgres" }),
+    () =>
+      loadConfig({
+        SESSION_STORE: "postgres",
+        MEMORY_TOMBSTONE_SECRET: "memory-tombstone-secret-0123456789abcdef",
+      }),
     /missing or insecure required core secrets: DATABASE_URL/,
   );
 });
@@ -253,6 +333,20 @@ test("production refuses missing, placeholder, or weak signing keys", () => {
   assert.throws(
     () => loadConfig({ ...productionEnv, CAPABILITY_SECRET: "replace-me" }),
     /core secrets: CAPABILITY_SECRET$/,
+  );
+  assert.throws(
+    () => loadConfig({ ...productionEnv, MEMORY_TOMBSTONE_SECRET: productionEnv.CORE_SIGNING_SECRET }),
+    /MEMORY_TOMBSTONE_SECRET must differ from the database credential and every other core secret/,
+  );
+  const databaseCredential = "postgres://core-user:core-password@database.internal/core";
+  assert.throws(
+    () =>
+      loadConfig({
+        ...productionEnv,
+        DATABASE_URL: databaseCredential,
+        MEMORY_TOMBSTONE_SECRET: databaseCredential,
+      }),
+    /MEMORY_TOMBSTONE_SECRET must differ from the database credential/,
   );
 });
 

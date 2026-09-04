@@ -170,6 +170,18 @@ test("maintain with readHead but no replaceIfRevision falls back to plain read a
   assert.equal(await workspace.read(SCOPE, MEMORY_FILE), `${promoted}\n`);
 });
 
+test("purge removes both the curated notebook and retained scratch logs", async () => {
+  const { workspace, memory } = fresh();
+  await memory.replace(SCOPE, "# Memory\n\n- (2026-01-01) long-term fact");
+  await memory.capture(SCOPE, ["recent scratch fact"], TODAY);
+
+  await memory.purge(SCOPE);
+
+  assert.equal(await workspace.read(SCOPE, MEMORY_FILE), null);
+  assert.equal(await workspace.read(SCOPE, logPath(TODAY)), null);
+  assert.equal(await memory.recall(SCOPE), "");
+});
+
 test("maintain promotes: one-shot judges the window, rewrites MEMORY.md, leaves the log untouched", async () => {
   const calls: Array<{ system: string; prompt: string }> = [];
   const promoted = "# Memory\n\n- (2026-06-10) Durable graduated fact";

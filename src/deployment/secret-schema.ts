@@ -29,6 +29,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "CAPABILITY_SECRET", requiredWhen: "production" },
   { name: "CONNECTOR_SECRET_KEY", requiredWhen: "production" },
   { name: "CORE_SIGNING_SECRET", requiredWhen: "production" },
+  { name: "MEMORY_TOMBSTONE_SECRET", requiredWhen: "postgres" },
   { name: "PORTAL_IDENTITY_SECRET", requiredWhen: "production" },
   { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
   { name: "AUTH_ALLOWED_EMAILS", requiredWhen: "email-auth" },
@@ -51,7 +52,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
   codex: (env) => env.HARNESS?.trim() === "codex" && !env.CODEX_AUTH_FILE?.trim() && !env.CODEX_AUTH_CREDENTIAL?.trim(),
-  postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
+  postgres: (env) => Boolean(env.DATABASE_URL) || env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
   sprites: (env) => env.SANDBOX_BACKEND === "sprites" || env.SANDBOX_SECONDARY_BACKEND === "sprites",
   smolmachines: (env) => env.SANDBOX_BACKEND === "smolmachines" || env.SANDBOX_SECONDARY_BACKEND === "smolmachines",
   porter: (env) => env.SANDBOX_BACKEND === "porter" || env.SANDBOX_SECONDARY_BACKEND === "porter",
@@ -87,6 +88,7 @@ function isInvalidSecret(name: string, value: string | undefined): boolean {
   return (
     (name === "CONNECTOR_SECRET_KEY" ||
       name === "CORE_SIGNING_SECRET" ||
+      name === "MEMORY_TOMBSTONE_SECRET" ||
       name === "SKILL_SIGNING_SECRET" ||
       name === "AWS_DEPLOY_GATE_SECRET") &&
     !isStrongSigningSecret(candidate)

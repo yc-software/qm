@@ -83,6 +83,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
+    name: "MEMORY_TOMBSTONE_SECRET",
+    service: "core",
+    required: true,
+    description: "Stable HMAC key for non-identifying memory erasure tombstones; rotate only with a migration.",
+    generate: MINT_LOCALLY,
+  },
+  {
     name: "CAPABILITY_SECRET",
     service: "core",
     required: true,

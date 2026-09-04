@@ -84,6 +84,7 @@ else if (a[0] === "secrets" && a[1] === "list") {
       "CORE_SIGNING_SECRET",
       "FLY_DEPLOY_API_TOKEN",
       "FLY_API_TOKEN",
+      "MEMORY_TOMBSTONE_SECRET",
       "PORTAL_IDENTITY_SECRET",
       "SECURITY_SCREEN_PROXY_TOKEN",
       "SKILL_SIGNING_SECRET",

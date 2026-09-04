@@ -608,9 +608,14 @@ export function buildApp(
   const files: FileArtifactStore = config.databaseUrl
     ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes)
     : createMemoryFileArtifactStore(fileBytes);
-  const defaultMemory: MemoryService = config.databaseUrl
-    ? createPostgresMemoryService(config.databaseUrl)
-    : createMemoryService(workspace);
+  const memoryTombstoneSecret = config.memoryTombstoneSecret;
+  if (config.databaseUrl && !memoryTombstoneSecret) {
+    throw new Error("MEMORY_TOMBSTONE_SECRET is required when Postgres-backed memory is enabled");
+  }
+  const defaultMemory: MemoryService =
+    config.databaseUrl && memoryTombstoneSecret
+      ? createPostgresMemoryService(config.databaseUrl, memoryTombstoneSecret)
+      : createMemoryService(workspace);
   // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = createConfiguredMemoryService({

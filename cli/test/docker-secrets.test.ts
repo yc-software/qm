@@ -11,6 +11,7 @@ const SECRETS = {
   CAPABILITY_SECRET: "capability-supersecret",
   CONNECTOR_SECRET_KEY: "connector-supersecret".repeat(2),
   CORE_SIGNING_SECRET: "core-signing-supersecret".repeat(2),
+  MEMORY_TOMBSTONE_SECRET: "memory-tombstone-supersecret".repeat(2),
   PORTAL_IDENTITY_SECRET: "portal-identity-supersecret",
   SKILL_SIGNING_SECRET: "skill-signing-supersecret".repeat(2),
   FLY_SANDBOX_API_TOKEN: "fly-api-supersecret",
@@ -259,7 +260,7 @@ test(
       );
       writeFileSync(
         join(dir, ".env"),
-        `CAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\n`,
+        `CAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nMEMORY_TOMBSTONE_SECRET=${"memory-tombstone".repeat(3)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\n`,
       );
       const fake = fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;
@@ -372,7 +373,7 @@ test(
       );
       writeFileSync(
         join(dir, ".env"),
-        `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n`,
+        `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nMEMORY_TOMBSTONE_SECRET=${"memory-tombstone".repeat(3)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n`,
       );
       fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;

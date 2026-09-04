@@ -161,6 +161,19 @@ test("read() returns the full uncapped notebook; replace() round-trips and clear
   assert.equal(await mem.recall(sid), "");
 });
 
+test("purge() removes the notebook instead of leaving a recoverable replacement", async () => {
+  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-purge-")));
+  const mem = createMemoryService(ws);
+  const sid = scopeId("personal", "U1");
+  await ws.ensureScope(sid);
+  await mem.capture(sid, ["Prefers terse replies"], Date.UTC(2026, 4, 31));
+
+  await mem.purge(sid);
+
+  assert.equal(await mem.read(sid), "");
+  assert.equal(await ws.read(sid, MEMORY_FILE), null);
+});
+
 test("capture() PRESERVES hand-written prose written via replace() (no silent data-loss)", async () => {
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-preserve-")));
   const mem = createMemoryService(ws);

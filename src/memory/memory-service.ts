@@ -20,7 +20,7 @@ export interface MemoryRevision {
   at: number;
 }
 
-interface MemoryHead {
+export interface MemoryHead {
   content: string;
   revision: string;
   updatedAt?: number;
@@ -46,6 +46,49 @@ export interface MemoryCaptureContext {
   idempotencyKey?: string;
 }
 
+export interface MemoryCaptureOnceInput {
+  integrationId: string;
+  operationId: string;
+  scopeId: ScopeId;
+  facts: string[];
+  at: number;
+  author?: string;
+}
+
+export interface MemoryCaptureReceipt {
+  added: number;
+  revision: string;
+  updatedAt?: number;
+}
+
+export interface MemoryPurgeOnceInput {
+  integrationId: string;
+  operationId: string;
+  scopeId: ScopeId;
+  at: number;
+}
+
+export interface MemoryPurgeReceipt {
+  erasedRevisions: number;
+  tombstonedOperations: number;
+  completedAt: number;
+  scopeHash: string;
+}
+
+export class MemoryOperationConflictError extends Error {
+  constructor() {
+    super("memory operation id was reused with a different request");
+    this.name = "MemoryOperationConflictError";
+  }
+}
+
+export class MemoryOperationErasedError extends Error {
+  constructor() {
+    super("memory operation belongs to an erased scope");
+    this.name = "MemoryOperationErasedError";
+  }
+}
+
 export interface MemoryService {
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<string>;
   capture(
@@ -58,12 +101,18 @@ export interface MemoryService {
   query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<string[]>;
   read(scopeId: ScopeId): Promise<string>;
   replace(scopeId: ScopeId, content: string, author?: string): Promise<void>;
+  purge(scopeId: ScopeId): Promise<void>;
   readHead?(scopeId: ScopeId): Promise<MemoryHead>;
   replaceIfRevision?(scopeId: ScopeId, content: string, revision: string, author?: string): Promise<boolean>;
   history?(scopeId: ScopeId, limit?: number): Promise<MemoryRevision[]>;
   restore?(scopeId: ScopeId, revision: string, expectedRevision: string, author?: string): Promise<boolean>;
   updatedAt?(scopeId: ScopeId): Promise<number | undefined>;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
+}
+
+export interface IdempotentMemoryService extends MemoryService {
+  captureOnce(input: MemoryCaptureOnceInput): Promise<MemoryCaptureReceipt>;
+  purgeOnce(input: MemoryPurgeOnceInput): Promise<MemoryPurgeReceipt>;
 }
 
 export function recallBody(body: string): string {
@@ -165,6 +214,10 @@ export function createMemoryService(workspace: WorkspaceStore): MemoryService {
         }
         await workspace.write(scopeId, MEMORY_FILE, next);
       });
+    },
+
+    async purge(scopeId) {
+      await workspace.remove(scopeId, MEMORY_FILE);
     },
 
     async readHead(scopeId) {

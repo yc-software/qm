@@ -1617,6 +1617,7 @@ test("AWS task definitions are digest-pinned and route only computed secrets", (
     "CORE_SIGNING_SECRET",
     "DATABASE_URL",
     "FLY_RESIDENT_ENV_ACME_API_KEY",
+    "MEMORY_TOMBSTONE_SECRET",
     "PORTAL_IDENTITY_SECRET",
     "PUBLIC_API_URL",
     "SKILL_SIGNING_SECRET",

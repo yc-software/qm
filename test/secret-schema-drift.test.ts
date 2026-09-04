@@ -72,6 +72,19 @@ test("an OpenAI base model on the Codex harness reports its one missing key once
   );
 });
 
+test("a configured Postgres database requires a stable memory tombstone secret", () => {
+  assert.deepEqual(validateCoreSecretEnv({ DATABASE_URL: "postgres://test" } as NodeJS.ProcessEnv), [
+    "MEMORY_TOMBSTONE_SECRET",
+  ]);
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      DATABASE_URL: "postgres://test",
+      MEMORY_TOMBSTONE_SECRET: "memory-tombstone-secret-0123456789abcdef",
+    } as NodeJS.ProcessEnv),
+    [],
+  );
+});
+
 test("each core secret is named by exactly one spec, so boot failures never repeat a name", () => {
   const names = CORE_SECRET_SPECS.map((spec) => spec.name);
   assert.deepEqual(
@@ -98,6 +111,7 @@ test("production rejects weak encryption key material for managed credentials", 
     CAPABILITY_SECRET: "capability",
     CONNECTOR_SECRET_KEY: strong,
     CORE_SIGNING_SECRET: strong,
+    MEMORY_TOMBSTONE_SECRET: strong,
     PORTAL_IDENTITY_SECRET: "identity",
     SKILL_SIGNING_SECRET: strong,
   } as NodeJS.ProcessEnv;

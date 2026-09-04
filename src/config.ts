@@ -24,6 +24,77 @@ import {
   type ModelProvider,
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
+import { parseScopeId, type ScopeKind } from "./types.ts";
+
+export interface MemoryServiceConfig {
+  databaseUrl: string;
+  signingSecret: string;
+  tombstoneSecret: string;
+  integrationId: string;
+  allowedScopeKinds: ReadonlySet<ScopeKind>;
+  allowedScopePrefixes: readonly string[];
+  port: number;
+}
+
+export function loadMemoryServiceConfig(env: NodeJS.ProcessEnv = process.env): MemoryServiceConfig {
+  const required = (name: string): string => {
+    const value = env[name]?.trim();
+    if (!value) throw new Error(`${name} is required`);
+    return value;
+  };
+  const list = (name: string): string[] =>
+    required(name)
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+  const databaseUrl = required("MEMORY_SERVICE_DATABASE_URL");
+  const signingSecret = required("MEMORY_SERVICE_SIGNING_SECRET");
+  if (signingSecret.length < 32) throw new Error("MEMORY_SERVICE_SIGNING_SECRET must be at least 32 characters");
+  if ([env.CORE_SIGNING_SECRET, env.CAPABILITY_SECRET, env.PORTAL_IDENTITY_SECRET].includes(signingSecret)) {
+    throw new Error("MEMORY_SERVICE_SIGNING_SECRET must be distinct from core, capability, and portal secrets");
+  }
+  const tombstoneSecret = required("MEMORY_SERVICE_TOMBSTONE_SECRET");
+  if (tombstoneSecret.length < 32) {
+    throw new Error("MEMORY_SERVICE_TOMBSTONE_SECRET must be at least 32 characters");
+  }
+  if (
+    [databaseUrl, signingSecret, env.CORE_SIGNING_SECRET, env.CAPABILITY_SECRET, env.PORTAL_IDENTITY_SECRET].includes(
+      tombstoneSecret,
+    )
+  ) {
+    throw new Error(
+      "MEMORY_SERVICE_TOMBSTONE_SECRET must be distinct from the database credential and request/core secrets",
+    );
+  }
+  const integrationId = required("MEMORY_SERVICE_INTEGRATION_ID");
+  const supportedKinds = new Set<ScopeKind>(["personal", "channel", "team", "org", "group"]);
+  const configuredKinds = list("MEMORY_SERVICE_ALLOWED_SCOPE_KINDS");
+  if (configuredKinds.some((kind) => !supportedKinds.has(kind as ScopeKind))) {
+    throw new Error("MEMORY_SERVICE_ALLOWED_SCOPE_KINDS contains an unsupported scope kind");
+  }
+  const allowedScopePrefixes = list("MEMORY_SERVICE_ALLOWED_SCOPE_PREFIXES");
+  if (
+    allowedScopePrefixes.some((prefix) => {
+      const parsed = parseScopeId(prefix);
+      return !prefix.endsWith(":") || !parsed.kind || !configuredKinds.includes(parsed.kind) || !parsed.ref;
+    })
+  ) {
+    throw new Error("MEMORY_SERVICE_ALLOWED_SCOPE_PREFIXES must match an allowed scope kind and non-empty prefix");
+  }
+  const port = numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port;
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("PORT must be an integer from 1 to 65535");
+  }
+  return {
+    databaseUrl,
+    signingSecret,
+    tombstoneSecret,
+    integrationId,
+    allowedScopeKinds: new Set(configuredKinds as ScopeKind[]),
+    allowedScopePrefixes,
+    port,
+  };
+}
 
 export interface Config {
   production: boolean;
@@ -93,6 +164,7 @@ export interface Config {
   skillSyncPollMs: number;
   monitorHeartbeatMs: number;
   signingSecret?: string;
+  memoryTombstoneSecret?: string;
   capabilitySecret?: string;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
@@ -841,6 +913,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "CODEX_AUTH_FILE is supported for local Codex harnesses only; production must use CODEX_AUTH_CREDENTIAL (keychain custody)",
     );
   }
+  const memoryTombstoneSecret = env.MEMORY_TOMBSTONE_SECRET?.trim();
+  if (
+    memoryTombstoneSecret &&
+    [
+      env.CORE_SIGNING_SECRET,
+      env.CAPABILITY_SECRET,
+      env.PORTAL_IDENTITY_SECRET,
+      env.CONNECTOR_SECRET_KEY,
+      env.SKILL_SIGNING_SECRET,
+      env.DATABASE_URL,
+    ].some((value) => value?.trim() === memoryTombstoneSecret)
+  ) {
+    throw new Error("MEMORY_TOMBSTONE_SECRET must differ from the database credential and every other core secret");
+  }
   const modelProvider = modelProviderEnvStrict(env);
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
     if (env[key] === "sqlite") {
@@ -1120,6 +1206,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     monitorHeartbeatMs:
       (numEnvStrict("MONITOR_HEARTBEAT_SEC", env.MONITOR_HEARTBEAT_SEC) ?? CONFIG_DEFAULTS.monitorHeartbeatSec) * 1000,
     ...(env.CORE_SIGNING_SECRET ? { signingSecret: env.CORE_SIGNING_SECRET } : {}),
+    ...(memoryTombstoneSecret ? { memoryTombstoneSecret } : {}),
     ...((env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET)
       ? { capabilitySecret: env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET }
       : {}),
