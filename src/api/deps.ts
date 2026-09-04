@@ -7,6 +7,7 @@ import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
 import type { ConsentLinkStore } from "../connectors/consent-link.ts";
+import type { OAuthFlowStore } from "../connectors/oauth-flow-store.ts";
 import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -76,6 +77,7 @@ export interface ServerDeps {
   oauthEnv?: NodeJS.ProcessEnv;
   resolveClient?: OAuthClientResolver;
   consentLinks?: ConsentLinkStore;
+  oauthFlows?: OAuthFlowStore;
   apiBaseUrl?: string;
   publicUrl?: string;
   portalUrl?: string;

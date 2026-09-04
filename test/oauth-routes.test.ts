@@ -27,7 +27,10 @@ function sign(method: string, pathWithQuery: string, body = ""): Record<string, 
   };
 }
 
-function start(fetchImpl: FetchLike): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(
+  fetchImpl: FetchLike,
+  opts: { oauthEnv?: NodeJS.ProcessEnv } = {},
+): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "oauth-routes-")),
@@ -37,8 +40,9 @@ function start(fetchImpl: FetchLike): { base: string; built: BuiltApp; close: ()
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
+    oauthFlows: built.oauthFlows,
     auditLog: built.auditLog,
-    oauthEnv,
+    oauthEnv: opts.oauthEnv ?? oauthEnv,
     oauthFetch: fetchImpl,
   });
   server.listen(0);
@@ -79,7 +83,7 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
     assert.equal(exchanged, true);
     const replay = await fetch(`${srv.base}${callbackPath}`);
     assert.equal(replay.status, 400);
-    assert.match(((await replay.json()) as { message: string }).message, /already used/);
+    assert.match(((await replay.json()) as { message: string }).message, /already used|invalid OAuth state/);
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), "at-google");
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U2"), null);
 
@@ -194,6 +198,45 @@ test("connector token route normalizes expiry seconds before storing", async () 
     const status = await srv.built.connectorTokens.connectorTokenStatus("api.example.test", "U1");
     assert.equal(status.connected, true);
     assert.equal(status.expiresAt, expiresAtMs);
+  } finally {
+    await srv.close();
+  }
+});
+
+const X_ENV = { X_OAUTH_CLIENT_ID: "xid", X_OAUTH_CLIENT_SECRET: "xsecret" } as NodeJS.ProcessEnv;
+const X_STATE_LIMIT = 500;
+
+test("authorize state stays inside the tightest provider limit and still carries the PKCE verifier", async () => {
+  let body = "";
+  const srv = start(
+    async (_url, init) => {
+      body = init.body;
+      return { ok: true, status: 200, json: async () => ({ access_token: "at-x", expires_in: 7200 }) };
+    },
+    { oauthEnv: X_ENV },
+  );
+  try {
+    const redirectUri = "https://acme-portal.fly.dev/v1/connectors/oauth/x/callback";
+    const query = `principalId=${encodeURIComponent("person@acme-corp.com")}&redirectUri=${encodeURIComponent(redirectUri)}&returnTo=${encodeURIComponent("/keychain")}`;
+    const startPath = `/v1/connectors/oauth/x/start?${query}`;
+    const startRes = await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) });
+    assert.equal(startRes.status, 200);
+    const consent = new URL(((await startRes.json()) as { authorizeUrl: string }).authorizeUrl);
+    const state = consent.searchParams.get("state") ?? "";
+    assert.ok(
+      state.length <= X_STATE_LIMIT,
+      `state is ${state.length} chars — X rejects authorize when state exceeds ${X_STATE_LIMIT}`,
+    );
+    assert.ok(consent.searchParams.get("code_challenge"));
+
+    const callbackPath = `/v1/connectors/oauth/x/callback?code=code-x&state=${encodeURIComponent(state)}`;
+    const cb = await fetch(`${srv.base}${callbackPath}`, { redirect: "manual" });
+    assert.equal(cb.status, 302, await cb.text());
+    assert.equal(cb.headers.get("location"), "/keychain?connector=x&status=connected");
+    assert.match(body, /code_verifier=/);
+    assert.equal(await srv.built.connectorTokens.connectorAccessToken("api.x.com", "person@acme-corp.com"), "at-x");
+    const replayed = await fetch(`${srv.base}${callbackPath}`, { redirect: "manual" });
+    assert.equal(replayed.status, 400, "the state is single-use");
   } finally {
     await srv.close();
   }
