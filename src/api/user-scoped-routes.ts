@@ -92,6 +92,7 @@ const SYSTEM: Rule[] = [
   pat("POST", "/v1/deliveries/:id/ack"),
   pat("POST", "/v1/deliveries/ack-by-key"),
   pat("POST", "/v1/directory"),
+  pat("GET", "/v1/principals/:id/status"),
   pat("POST", "/v1/principals/:id/deactivate"),
   pat("POST", "/v1/principals/:id/reactivate"),
   pat("POST", "/v1/surface-cache/ingest"),

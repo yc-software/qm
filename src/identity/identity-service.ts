@@ -33,11 +33,16 @@ export interface IdentityService extends IdentityProvider {
   removeExternalMember(principalId: string): Promise<void>;
   hydrate(): Promise<void>;
   refresh(force?: boolean): Promise<void>;
+  status(externalId: string): { active: boolean; source?: DeactivationSource };
 }
 
 export function createIdentityService(
   backing?: DurableMap<DeactivationRecord>,
-  opts: { directorySyncProtected?: readonly string[]; externalMembers?: DurableMap<ExternalMember> } = {},
+  opts: {
+    directorySyncProtected?: readonly string[];
+    directorySyncProtectedDomain?: string;
+    externalMembers?: DurableMap<ExternalMember>;
+  } = {},
 ): IdentityService {
   const store = backing ?? createMemoryMap<DeactivationRecord>();
   const externalStore = opts.externalMembers ?? createMemoryMap<ExternalMember>();
@@ -49,7 +54,12 @@ export function createIdentityService(
   let refreshP: Promise<void> | null = null;
   let hydrateP: Promise<void> | null = null;
 
-  const keptByDirectorySync = (key: string): boolean => directorySyncProtected.has(key) || externals.has(key);
+  const directorySyncProtectedDomain = opts.directorySyncProtectedDomain?.trim().toLowerCase();
+  const keptByDirectorySync = (key: string): boolean => {
+    if (directorySyncProtected.has(key) || externals.has(key)) return true;
+    const at = key.lastIndexOf("@");
+    return at > 0 && key.slice(at + 1) === directorySyncProtectedDomain;
+  };
 
   async function load(overwrite: boolean): Promise<void> {
     const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
@@ -110,6 +120,12 @@ export function createIdentityService(
 
   return {
     classify,
+    status(externalId) {
+      const key = personKey(externalId);
+      if (classify(externalId).type === "internal") return { active: true };
+      const source = deactivated.get(key)?.source;
+      return { active: false, ...(source ? { source } : {}) };
+    },
     deactivate,
     reactivate,
     async recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome> {

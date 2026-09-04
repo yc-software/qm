@@ -1060,6 +1060,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(modelProvider ? { modelProvider } : {}),
     providerBaseUrls,
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
+    ...(env.AUTH_ALLOWED_EMAIL_DOMAIN?.trim()
+      ? { emailAuthDomain: env.AUTH_ALLOWED_EMAIL_DOMAIN.trim().toLowerCase() }
+      : {}),
     ...(env.AUTH_ALLOWED_EMAILS
       ? {
           emailAuthPrincipals: [
@@ -1070,9 +1073,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
             ),
           ],
         }
-      : {}),
-    ...(env.AUTH_ALLOWED_EMAIL_DOMAIN?.trim()
-      ? { emailAuthDomain: env.AUTH_ALLOWED_EMAIL_DOMAIN.trim().toLowerCase() }
       : {}),
     ...(env.RESEND_API_KEY?.trim() ? { resendApiKey: env.RESEND_API_KEY.trim() } : {}),
     ...(env.AUTH_EMAIL_FROM?.trim() ? { emailFrom: env.AUTH_EMAIL_FROM.trim() } : {}),

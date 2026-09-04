@@ -73,6 +73,7 @@ test("fly derives the portal's whole OIDC block from the broker, over the privat
   const auth = derivedTomlFor(brokerConfig(), "auth", repoRoot);
   assert.equal(auth, readFileSync(join(repoRoot, "deploy", "auth", "fly.toml"), "utf8"));
   assert.match(auth, /AUTH_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
+  assert.match(derivedTomlFor(brokerConfig(), "core", repoRoot), /AUTH_ALLOWED_EMAIL_DOMAIN = "example.com"/);
   assert.match(auth, /AUTH_REDIRECT_URI = "https:\/\/agent\.example\.com\/auth\/callback"/);
 });
 
@@ -100,6 +101,7 @@ test("a configured botName brands the docker service env for core and auth", () 
 test("docker and AWS wire the broker with parity", () => {
   const docker = configWith(configText());
   const dockerPortal = dockerServiceEnv(docker, "portal");
+  assert.equal(dockerServiceEnv(docker, "core").AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
   assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://qm-acme-auth.internal:8080");
   assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://qm-acme-auth.internal:8080/token");
   assert.equal(dockerPortal.OIDC_ISSUER, "https://agent.example.com/idp");
@@ -125,6 +127,7 @@ test("docker and AWS wire the broker with parity", () => {
     }
   }`);
   const awsPortal = serviceEnvironment(aws, "portal");
+  assert.equal(serviceEnvironment(aws, "core").AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
   assert.equal(awsPortal.AUTH_BROKER_UPSTREAM, "http://auth.acme.internal:8080");
   assert.equal(awsPortal.OIDC_JWKS_URI, "http://auth.acme.internal:8080/.well-known/jwks.json");
   assert.equal(awsPortal.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");

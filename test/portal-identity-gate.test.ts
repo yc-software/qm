@@ -32,6 +32,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
       scheduler: built.scheduler,
+      identity: built.identity,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -53,6 +54,21 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   it("rejects (403) when the portal identity names a different user than the viewer", async () => {
     assert.equal((await get({ "x-portal-identity": await token("U2") })).status, 403);
+  });
+
+  it("distinguishes a verified inactive principal from a missing portal identity", async () => {
+    await built.identity.deactivate("U1");
+    try {
+      const r = await get({ "x-portal-identity": await token("U1") });
+      assert.equal(r.status, 401);
+      assert.deepEqual(await r.json(), {
+        error: "account_deactivated",
+        message: "account is deactivated",
+        reason: "deactivated",
+      });
+    } finally {
+      await built.identity.reactivate("U1");
+    }
   });
 
   it("rejects (401) a portal identity forged with the source-auth secret (what a surface holds)", async () => {

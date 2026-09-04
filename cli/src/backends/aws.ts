@@ -253,6 +253,8 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
   };
   if (service === "core") {
     const sandboxBackend = config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
+    if (config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN)
+      env.AUTH_ALLOWED_EMAIL_DOMAIN = config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN;
     const stores = {
       DEPLOY_PROVIDER: "aws",
       AWS_DEPLOY_REGION: aws.region,

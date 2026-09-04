@@ -353,6 +353,9 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
     CORE_API_URL: "http://core:8080",
     ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
   };
+  if (service === "core" && config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN) {
+    out.AUTH_ALLOWED_EMAIL_DOMAIN = config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN;
+  }
   if (service === "core" && localSandboxActive(config)) {
     out.DOCKER_HOST = "unix:///var/run/docker.sock";
     out.QM_CORE_CONTAINER = `${dockerPrefix(config)}-core`;

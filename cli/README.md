@@ -96,6 +96,8 @@ Auto uses its built-in model classifier unless `qm.config.jsonc` declares one
 init [dir] [--org id] [--target docker|fly|aws]
 check [--json] [--live]
 doctor
+principal status <id>
+principal reactivate <id> --yes
 infra render|build-image|delete-image|delete-task-definitions
 conformance [dir] [--static]
 plan

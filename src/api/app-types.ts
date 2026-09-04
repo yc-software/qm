@@ -549,6 +549,7 @@ export interface AppDeps {
   deliveries: DeliveryStore;
   directory: DirectoryStore;
   emailAuthMembers?: DirectoryMember[];
+  emailAuthDomain?: string;
   projects?: ProjectStore;
   deploy: DeployService;
   deploymentLayer?: DeploymentLayerRuntime;

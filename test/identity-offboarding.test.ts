@@ -39,6 +39,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
         dataDir: mkdtempSync(join(tmpdir(), "offboarding-")),
         signingSecret: SECRET,
         emailAuthPrincipals: ["allowed@example.com"],
+        emailAuthDomain: "example.com",
       }),
     );
     await built.identity.hydrate();
@@ -87,11 +88,28 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
   });
 
+  it("a domain-authorized email remains active and exactly resolvable after Slack omission", async () => {
+    await built.app.upsertDirectory([member("U-stay"), member("domain@example.com")]);
+    await built.app.upsertDirectory([member("U-stay")]);
+    assert.equal(built.identity.classify("domain@example.com").type, "internal");
+    const resolved = await built.app.resolveRecipient("domain@example.com");
+    assert.equal(resolved.kind, "one");
+    if (resolved.kind === "one") assert.equal(resolved.member.principalId, "domain@example.com");
+  });
+
   it("the deactivate/reactivate routes flip classification and are audited", async () => {
     const off = await signedPost("/v1/principals/U-manual/deactivate");
     assert.equal(off.status, 200);
     assert.deepEqual(await off.json(), { ok: true, principalId: "U-manual", active: false });
     assert.equal(built.identity.classify("U-manual").type, "guest");
+
+    const path = "/v1/principals/U-manual/status";
+    const ts = Math.floor(Date.now() / 1000);
+    const status = await fetch(`${base}${path}`, {
+      headers: { "x-timestamp": String(ts), "x-signature": signRequest(SECRET, ts, `GET\n${path}\n`) },
+    });
+    assert.equal(status.status, 200);
+    assert.deepEqual(await status.json(), { principalId: "U-manual", active: false, source: "manual" });
 
     await built.app.upsertDirectory([member("U-manual")]);
     assert.equal(built.identity.classify("U-manual").type, "guest");

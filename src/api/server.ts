@@ -269,9 +269,11 @@ async function gate(
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
+    let inactiveActor = false;
     if (actor && deps.identity) {
       await deps.identity.refresh();
-      if (deps.identity.classify(actor.p).type !== "internal") actor = null;
+      inactiveActor = deps.identity.classify(actor.p).type !== "internal";
+      if (inactiveActor) actor = null;
     }
     if (!isPublicRoute && requirePortalIdentity) {
       const webTurn =
@@ -287,6 +289,14 @@ async function gate(
         isUnclassifiedWrite(method, pathname);
       if (needsActor) {
         if (!psecret || !actor) {
+          if (inactiveActor) {
+            sendJson(res, 401, {
+              error: "account_deactivated",
+              message: "account is deactivated",
+              reason: "deactivated",
+            });
+            return null;
+          }
           sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
           return null;
         }

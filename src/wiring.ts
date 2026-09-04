@@ -457,6 +457,7 @@ export function buildApp(
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
     directorySyncProtected: config.emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
+    directorySyncProtectedDomain: config.emailAuthDomain,
   });
   void identity.hydrate();
   const leaderLease: LeaderLease = pgArtifactMap
@@ -1345,6 +1346,7 @@ export function buildApp(
     webhooks,
     deliveries,
     directory,
+    ...(config.emailAuthDomain ? { emailAuthDomain: config.emailAuthDomain } : {}),
     ...(config.emailAuthPrincipals?.length
       ? {
           emailAuthMembers: config.emailAuthPrincipals.map((principalId) => ({

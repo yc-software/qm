@@ -91,6 +91,14 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
+  const emailAuthDomain = deps.emailAuthDomain?.trim().toLowerCase();
+  const domainMember = (query: string) => {
+    const principalId = personKey(query);
+    const at = principalId.lastIndexOf("@");
+    return at > 0 && principalId.slice(at + 1) === emailAuthDomain
+      ? { principalId, displayName: principalId, type: "internal" as const }
+      : null;
+  };
   const emailMembers = async (): Promise<DirectoryMember[]> => {
     const externals = (await deps.identity.listExternalMembers()).filter((member) => externalMemberActive(member));
     return [
@@ -416,9 +424,10 @@ export function createMessagingMethods(
       const stored = await deps.directory.resolve(query);
       if (stored.kind !== "none") return stored;
       const key = personKey(query);
-      const member = (await emailMembers()).find(
-        (candidate) => personKey(candidate.principalId) === key || personKey(candidate.displayName) === key,
-      );
+      const member =
+        (await emailMembers()).find(
+          (candidate) => personKey(candidate.principalId) === key || personKey(candidate.displayName) === key,
+        ) ?? domainMember(query);
       return member ? { kind: "one", member } : { kind: "none" };
     },
     resolveChannel(query) {
@@ -434,7 +443,7 @@ export function createMessagingMethods(
       return (
         (await deps.directory.get(principalId)) ??
         (await emailMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ??
-        null
+        domainMember(principalId)
       );
     },
     samePerson(a, b) {

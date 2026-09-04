@@ -169,9 +169,10 @@ function isCoreUnreachable(error: unknown): boolean {
 interface DeploymentLayerTransportOpts {
   config: QmConfig;
   configDir: string;
-  method: "GET" | "PUT";
+  method: "GET" | "POST" | "PUT";
   body: string;
   envFile?: string;
+  path?: string;
 }
 
 /**
@@ -197,10 +198,14 @@ export function httpDeploymentLayerTransport(
     if (!secret && o.secretFallback) secret = o.secretFallback(opts.config);
     if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
     const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
+    if (opts.path) {
+      url.pathname = opts.path;
+      url.search = "";
+    }
     const response = await fetch(url, {
       method: opts.method,
       headers: signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
-      ...(opts.method === "PUT" ? { body: opts.body } : {}),
+      ...(opts.body ? { body: opts.body } : {}),
       ...(o.timeoutMs ? { signal: AbortSignal.timeout(o.timeoutMs) } : {}),
     });
     return { status: response.status, body: await response.text() };

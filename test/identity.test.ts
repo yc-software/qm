@@ -146,3 +146,12 @@ test("a manual deactivation survives roster churn — only reactivate() clears i
   await svc.reactivate("U-fired");
   assert.equal(svc.classify("U-fired").type, "internal");
 });
+
+test("directory sync cannot deactivate an email admitted by the configured domain", async () => {
+  const svc = createIdentityService(undefined, { directorySyncProtectedDomain: "Example.COM" });
+  await svc.recordDirectorySync(["Person@example.com", "outsider@other.com"], []);
+  assert.equal(svc.classify("person@example.com").type, "internal");
+  assert.equal(svc.classify("outsider@other.com").type, "guest");
+  await svc.deactivate("person@example.com");
+  assert.equal(svc.classify("person@example.com").type, "guest", "manual deactivation remains authoritative");
+});

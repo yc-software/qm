@@ -27,6 +27,10 @@ test("ORG_BRAND_* parses into a validated branding default", () => {
   assert.deepEqual(loadConfig({ ORG_BRAND_SELF_LABEL: "{{straylight}}" }).brandingDefault, { selfLabel: "straylight" });
 });
 
+test("AUTH_ALLOWED_EMAIL_DOMAIN becomes a normalized core identity boundary", () => {
+  assert.equal(loadConfig({ AUTH_ALLOWED_EMAIL_DOMAIN: " Example.COM " }).emailAuthDomain, "example.com");
+});
+
 test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => {
   assert.equal(loadConfig({}).emailAuthPrincipals, undefined);
   assert.deepEqual(

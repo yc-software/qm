@@ -28,6 +28,7 @@ import { renderSlackFiles, runOutputs } from "./commands/outputs.ts";
 import { cliVersion } from "./manifest.ts";
 import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
+import { principalStatus, reactivatePrincipal } from "./commands/principal.ts";
 
 interface Parsed {
   positionals: string[];
@@ -128,6 +129,8 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
     --json                                 machine-readable results keyed by contract clause
     --live                                 verify running identity, rendered config, and health
   doctor                                   verify deployment prerequisites read-only
+  principal status <id>                    report whether a principal is active
+  principal reactivate <id> --yes           restore a deactivated principal
   config get <dot.path>                    print one config value (raw scalar, JSON otherwise)
   slack render                             render the bot manifest (+ SSO manifest for Slack OIDC)
   outputs [--json]                         print the Web UI, health, and Slack app creation links
@@ -551,6 +554,24 @@ async function dispatch(argv: string[]): Promise<void> {
       runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
       await deploymentBackend(ctx).doctor();
       note(`doctor: ${ctx.target} prerequisites are ready`);
+      return;
+    }
+
+    case "principal": {
+      const action = positionals[0];
+      if (action !== "status" && action !== "reactivate")
+        throw new CliError(`usage: ${CLI_NAME} principal status <id> | principal reactivate <id> --yes`);
+      rejectExtraPositionals(positionals, 2);
+      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "yes"]);
+      const id = positionals[1]?.trim();
+      if (!id)
+        throw new CliError(`usage: ${CLI_NAME} principal ${action} <id>${action === "reactivate" ? " --yes" : ""}`);
+      if (action === "reactivate" && !boolFlag(flags, "yes"))
+        throw new CliError(`principal reactivate changes access; pass --yes to confirm`);
+      const ctx = deployContext(flags);
+      const transport = hostingProvider(ctx.target).deploymentLayerTransport;
+      if (action === "status") await principalStatus(ctx.config, ctx.configDir, transport, id, ctx.envFile);
+      else await reactivatePrincipal(ctx.config, ctx.configDir, transport, id, ctx.envFile);
       return;
     }
 

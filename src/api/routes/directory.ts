@@ -6,6 +6,15 @@ import { type ApiCtx, type Route } from "./route.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
+async function principalStatus(ctx: ApiCtx): Promise<void> {
+  const { res, deps } = ctx;
+  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+  const id = ctx.params.id!;
+  if (!id) return sendJson(res, 404, { error: "not_found" });
+  await deps.identity.refresh();
+  return sendJson(res, 200, { principalId: id, ...deps.identity.status(id) });
+}
+
 async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
@@ -145,6 +154,7 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
 }
 
 export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/principals/:id/status", auth: "source", handle: principalStatus },
   { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
   { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },
   { method: "POST", path: "/v1/directory", auth: "source", handle: pushDirectory },
