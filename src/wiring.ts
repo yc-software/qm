@@ -286,6 +286,7 @@ import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.
 import {
   emptyDeploymentLayer,
   loadDeploymentLayer,
+  loadMcpLayerAuthorizer,
   type BrokeredLayerTool,
   type DeploymentLayerRuntime,
 } from "./deployment/load-layer.ts";
@@ -515,6 +516,7 @@ export function buildApp(
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
+  const mcpAuthorizer = config.deploymentLayerDir ? loadMcpLayerAuthorizer(config.deploymentLayerDir) : undefined;
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
@@ -547,7 +549,7 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
+  const deploymentLayerReady = Promise.all([deploymentLayerStore.hydrate(), mcpAuthorizer]).then(() => undefined);
   const deploymentLayerRefresh = createSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
     label: "deployment layer refresh",
   });
@@ -624,8 +626,18 @@ export function buildApp(
     },
   });
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
-  const mcpToolService = createMcpToolService({ servers: mcpServers, audit: auditLog });
-  const mcpTools = () => mcpToolService.toolDefs();
+  const mcpToolService = createMcpToolService({
+    servers: mcpServers,
+    audit: auditLog,
+    ...(mcpAuthorizer
+      ? {
+          authorize: async (context, target) => {
+            const authorize = await mcpAuthorizer;
+            return authorize ? authorize(context, target) : { allowed: true };
+          },
+        }
+      : {}),
+  });
   const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
     errors.record({
@@ -877,7 +889,6 @@ export function buildApp(
         resolveBaseModelId: orgBaseModelId,
         resolveProviderKeys: resolveModelProviderKeys,
         signals: runSignals,
-        mcpTools,
       }),
     ],
     [
@@ -886,7 +897,6 @@ export function buildApp(
         ...openCodeHarnessConfigOptions(config),
         signals: runSignals,
         tasks,
-        mcpTools,
         resolveCustomProviders: async () => {
           const enabled = await customProviders.enabled();
           return Promise.all(
@@ -919,7 +929,6 @@ export function buildApp(
           : {}),
         signals: runSignals,
         tasks,
-        mcpTools,
       }),
     ],
     [
@@ -936,7 +945,6 @@ export function buildApp(
           : {}),
         signals: runSignals,
         tasks,
-        mcpTools,
       }),
     ],
     ["mock", createMockHarness()],

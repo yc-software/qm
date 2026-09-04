@@ -62,7 +62,7 @@ import {
   type GapWork,
 } from "./harness.ts";
 import { coreToolOptions, createPiTools, pauseStampAfterToolCall, type ToolContextRef } from "./pi-tools.ts";
-import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import { mcpToolsForTurn, type McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   planColdStartSeed,
@@ -1290,6 +1290,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     tapeFold?: unknown[],
     tape?: HarnessTurnInput["tape"],
     turnProviderKeys?: ProviderKeys,
+    turnMcpTools?: readonly McpToolDescriptor[],
   ): Promise<{ entry: TurnSession; compileMs: number; tapeWriteFailed: boolean }> {
     const compileStart = Date.now();
     const cacheBoundary =
@@ -1330,6 +1331,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
     const model = getRequiredModel(resolveModelId(turnScope));
     const modelRuntime = await buildModelRuntime(turnProviderKeys ?? (await resolveProviderKeys()));
+    const availableMcpTools = mcpToolsForTurn(turnMcpTools, mcpTools);
     const ref: ToolContextRef = { current: null };
     const { resourceLoader, cwd, agentDir } = await createIsolatedResources(tempDirPrefix, composedPrompt);
     const compileMs = Date.now() - compileStart;
@@ -1344,7 +1346,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           scratchExec,
           ownerAuthExec,
           reachExec,
-          ...(mcpTools ? { mcpTools } : {}),
+          ...(availableMcpTools ? { mcpTools: availableMcpTools } : {}),
           controlTools,
           ...(credentialExecServices?.length ? { credentialExecServices } : {}),
           ...(surfaceTools ? { surfaceTools: true } : {}),
@@ -1509,6 +1511,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.tapeFold,
           turn.tape,
           turn.providerKeys,
+          turn.mcpToolDefs,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;

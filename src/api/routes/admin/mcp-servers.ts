@@ -37,7 +37,7 @@ export async function getMcpServers(ctx: ApiCtx): Promise<void> {
   const servers = await ctx.deps.mcpServers.list();
   return sendJson(ctx.res, 200, {
     servers: servers.map(redact),
-    tools: ctx.deps.mcpToolService?.toolDefs().map(({ name, serverId, description, readOnly }) => ({
+    tools: ctx.deps.mcpToolService?.allToolDefs().map(({ name, serverId, description, readOnly }) => ({
       name,
       serverId,
       description,

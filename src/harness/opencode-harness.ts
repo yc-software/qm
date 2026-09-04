@@ -26,7 +26,7 @@ import {
   type HarnessTurnResult,
 } from "./harness.ts";
 import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
-import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import { mcpToolsForTurn, type McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { reconstructMessagesFromHistory } from "./replay.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -107,11 +107,12 @@ type Runtime = {
 };
 
 function toolOptions(opts: OpenCodeHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
+  const mcpTools = mcpToolsForTurn(turn?.mcpToolDefs, opts.mcpTools);
   return {
     scratchExec: opts.scratchExec,
     ownerAuthExec: opts.ownerAuthExec,
     reachExec: opts.reachExec,
-    ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
+    ...(mcpTools ? { mcpTools } : {}),
     controlTools: opts.controlTools,
     execTimeoutMs: opts.execTimeoutMs,
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
