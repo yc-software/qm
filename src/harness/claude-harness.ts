@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chownSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -181,11 +181,12 @@ class MessageQueue implements AsyncIterable<SDKUserMessage> {
   private readonly waiters: Array<(value: IteratorResult<SDKUserMessage>) => void> = [];
   private ended = false;
 
-  push(value: SDKUserMessage): void {
-    if (this.ended) return;
+  push(value: SDKUserMessage): boolean {
+    if (this.ended) return false;
     const waiter = this.waiters.shift();
     if (waiter) waiter({ value, done: false });
     else this.values.push(value);
+    return true;
   }
 
   close(): void {
@@ -277,9 +278,16 @@ function promptText(turn: HarnessTurnInput): string {
   return [replay, prior, turn.input, turn.environment].filter((value) => value?.trim()).join("\n\n");
 }
 
+function commandLifecycle(message: SDKMessage): { commandUuid: string; settled: boolean } | null {
+  const raw = message as { type?: string; command_uuid?: string; state?: string };
+  if (raw.type !== "command_lifecycle" || typeof raw.command_uuid !== "string") return null;
+  return { commandUuid: raw.command_uuid, settled: raw.state !== "queued" && raw.state !== "started" };
+}
+
 function userMessage(text: string, images: HarnessTurnInput["images"] = []): SDKUserMessage {
   return {
     type: "user",
+    uuid: randomUUID(),
     message: {
       role: "user",
       content: [
@@ -407,7 +415,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const model = modelSupportedByHarness(turn.model, "claude") ? turn.model! : resolveModelId(turn.scopeLabel);
     const text = promptText(turn);
     const initial = userMessage(text, turn.images);
-    let pendingPrompts = 1;
+    const openCommands = new Set<string>();
+    let commandLifecycleTracked = false;
     let stopped = false;
     let result: SDKResultMessage | null = null;
     const thinking: string[] = [];
@@ -537,8 +546,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                   scopeLabel: turn.scopeLabel,
                 });
                 steerPrompts.push(steer);
-                pendingPrompts++;
-                queue.push(userMessage(steer));
+                pushCommand(userMessage(steer));
               },
             },
             { onError: (error) => swallow("claude signal poll", error) },
@@ -547,6 +555,17 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
     let timer: NodeJS.Timeout | undefined;
     let signalsStopped = false;
+    const pushCommand = (message: SDKUserMessage) => {
+      if (queue.push(message)) openCommands.add(message.uuid!);
+    };
+    const settleCommand = async (commandUuid: string | undefined) => {
+      if (commandUuid === undefined || !openCommands.delete(commandUuid) || openCommands.size > 0) return;
+      if (!signalsStopped) {
+        await stopSignals?.();
+        signalsStopped = true;
+      }
+      queue.close();
+    };
     const recordedEnvelope = {
       system: turn.systemPrompt,
       tools: allowSubagents ? ["Agent"] : [],
@@ -601,10 +620,17 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     try {
       await sdkQuery.initializationResult();
       await appendTape(initial, true);
-      queue.push(initial);
+      pushCommand(initial);
       const consume = (async () => {
         for await (const message of sdkQuery) {
           if (settled) break;
+          if (message.type === "system" && message.subtype === "init")
+            commandLifecycleTracked = message.capabilities?.includes("msg_lifecycle_v1") ?? false;
+          const lifecycle = commandLifecycle(message);
+          if (lifecycle) {
+            if (lifecycle.settled) await settleCommand(lifecycle.commandUuid);
+            continue;
+          }
           if (message.type === "assistant") {
             const usage = message.message.usage;
             const seen = {
@@ -716,13 +742,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               scopeLabel: turn.scopeLabel,
             });
           streamedText = "";
-          pendingPrompts = Math.max(0, pendingPrompts - 1);
-          if (pendingPrompts > 0) continue;
-          if (!signalsStopped) {
-            await stopSignals?.();
-            signalsStopped = true;
-          }
-          if (pendingPrompts === 0) queue.close();
+          if (!commandLifecycleTracked) await settleCommand(openCommands.values().next().value);
         }
       })();
       try {
