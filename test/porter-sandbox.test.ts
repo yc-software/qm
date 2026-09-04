@@ -1,4 +1,5 @@
 import { test, after, beforeEach } from "node:test";
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +32,9 @@ beforeEach(() => {
   sandbox = make();
 });
 after(() => fake?.cleanup());
+
+const GROUP_LEADER_PROBE = 'exec setsid sh -c \'test "$$" = "$(ps -o pgid= -p $$ | tr -d " ")"\'';
+const groupKillWorks = spawnSync("sh", ["-c", GROUP_LEADER_PROBE], { stdio: "ignore" }).status === 0;
 
 test("provision runs commands with env and cwd", async () => {
   const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
@@ -139,16 +143,29 @@ test("scratch bodies are isolated, refcounted, and removed on release", async ()
   assert.equal(remaining.length, 0);
 });
 
-test("abort signal kills an in-flight exec", async () => {
-  const h = await sandbox.provision(layers);
-  const ac = new AbortController();
-  const started = Date.now();
-  const p = sandbox.run(h, "sleep 30; echo done", { timeoutMs: 60_000, signal: ac.signal });
-  setTimeout(() => ac.abort(), 300);
-  const r = await p;
-  assert.ok(Date.now() - started < 15_000);
-  assert.notEqual(r.code, 0);
-});
+test(
+  "abort signal kills an in-flight exec",
+  {
+    skip: groupKillWorks
+      ? false
+      : "setsid does not make a command its own process group leader here, so a group kill cannot work",
+  },
+  async () => {
+    const h = await sandbox.provision(layers);
+    const ac = new AbortController();
+    const started = Date.now();
+    const p = sandbox.run(h, "echo running > started.txt; sleep 30; echo done > finished.txt", {
+      timeoutMs: 60_000,
+      signal: ac.signal,
+    });
+    setTimeout(() => ac.abort(), 300);
+    const r = await p;
+    assert.ok(Date.now() - started < 15_000);
+    assert.notEqual(r.code, 0);
+    assert.equal(await sandbox.readFile(h, "started.txt"), "running\n");
+    assert.equal(await sandbox.readFile(h, "finished.txt"), null);
+  },
+);
 
 test("destroy terminates the body and deletes the volume", async () => {
   const h = await sandbox.provision(layers);
