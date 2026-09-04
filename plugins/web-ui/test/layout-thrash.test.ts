@@ -34,3 +34,16 @@ test("bottom-stickiness is tracked by the scroller's own scroll listener, and a 
   assert.match(chat, /stickToBottom = s\.scrollHeight - s\.scrollTop - s\.clientHeight <= 120;/);
   assert.match(chat, /let stickToBottom = true;/);
 });
+
+test("revealing a transcript re-arms auto-follow; read-only mounts start at the end except pagination", () => {
+  assert.match(chat, /function scrollToBottom\(\): void \{\s*stickToBottom = true;\s*scrollTranscript\(true\);/);
+  assert.match(chat, /if \(!sameSession\) scrollToBottom\(\);/);
+  assert.match(chat, /const scroller = ctx\.container\(\)\?\.querySelector/);
+});
+
+test("both pagination paths adjust their anchor without smooth scrolling", () => {
+  const anchors = chat.match(
+    /const prev = scrollerNow\.style\.scrollBehavior;\s*scrollerNow\.style\.scrollBehavior = "auto";\s*scrollerNow\.scrollTop = priorTop \+ \(scrollerNow\.scrollHeight - priorHeight\);\s*scrollerNow\.style\.scrollBehavior = prev;/g,
+  );
+  assert.equal(anchors?.length, 2);
+});

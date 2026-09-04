@@ -5,10 +5,24 @@ import test from "node:test";
 const split = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 
-test("pane visibility changes preserve the transcript viewport", () => {
+test("shown panes start at the end after refreshing their density", () => {
   const handler = split.match(/onDidVisibilityChange\(\(e\) => \{[\s\S]*?\}\);/)?.[0] ?? "";
-  assert.doesNotMatch(handler, /forceScroll/, "grid visibility is presentation state, not scroll intent");
+  assert.match(handler, /this\.conversation\.scrollToBottom\(\)/);
   assert.match(handler, /this\.syncDensity\(\)/, "shown panes still refresh their responsive presentation");
+});
+
+test("hidden tabs do not require attached transcript DOM", () => {
+  assert.doesNotMatch(split, /defaultRenderer: "always"/);
+  assert.doesNotMatch(split, /restoreTranscriptViewport/);
+  assert.doesNotMatch(chat, /transcriptTop/);
+});
+
+test("showing a pane that is already its tile's active tab does not re-open it", () => {
+  const fn = split.match(/function activatePanel\(panel: IDockviewPanel\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(fn, /panel\.group\.activePanel === panel\) panel\.group\.api\.setActive\(\)/);
+  const focus = split.match(/function focusPane\(paneId: string\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(focus, /activatePanel\(panel\)/);
+  assert.doesNotMatch(focus, /panel\.api\.setActive\(\)/);
 });
 
 test("responsive pane summaries do not replace the transcript scroller", () => {

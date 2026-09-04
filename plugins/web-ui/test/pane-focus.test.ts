@@ -45,5 +45,5 @@ test("a pane focusin never re-activates the pane it is already in", () => {
   const focusPane = split.match(/function focusPane\([\s\S]*?\n\}/)?.[0] ?? "";
   assert.ok(focusPane, "focusPane not found");
   assert.match(focusPane, /if \(!panel \|\| panel\.api\.isActive\) return;/, "re-activation remounts the pane");
-  assert.match(focusPane, /preservingFocus\(document, \(\) => panel\.api\.setActive\(\)\)/, "activation drops focus");
+  assert.match(focusPane, /preservingFocus\(document, \(\) => activatePanel\(panel\)\)/, "activation drops focus");
 });

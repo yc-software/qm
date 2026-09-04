@@ -453,7 +453,7 @@ export function openBackgroundInCanvas(s: CoreSession): boolean {
   if (!s.id || !mountRestoredCanvas() || !dockApi) return false;
   const showing = paneShowing(s.id);
   if (showing) {
-    showing.api.setActive();
+    activatePanel(showing);
     paneContents.get(showing.id)?.conversation.requestBackgroundPanel(s.id, s.threadRef);
     return true;
   }
@@ -467,7 +467,7 @@ function focusExistingPane(sessionId: string, exceptPaneId?: string): boolean {
   const dup = paneShowing(sessionId);
   if (!dup) return false;
   if (dup.id !== exceptPaneId) {
-    dup.api.setActive();
+    activatePanel(dup);
     canvasToast("Already open in a pane");
   }
   return true;
@@ -570,10 +570,15 @@ function maximizePane(params: PaneParams): void {
   else panel.api.maximize();
 }
 
+function activatePanel(panel: IDockviewPanel): void {
+  if (panel.group.activePanel === panel) panel.group.api.setActive();
+  else panel.api.setActive();
+}
+
 function focusPane(paneId: string): void {
   const panel = dockApi?.getPanel(paneId);
   if (!panel || panel.api.isActive) return;
-  preservingFocus(document, () => panel.api.setActive());
+  preservingFocus(document, () => activatePanel(panel));
 }
 
 export function canvasToast(msg: string): void {
@@ -852,6 +857,7 @@ class PaneContent implements IContentRenderer {
         return;
       }
       this.syncDensity();
+      this.conversation.scrollToBottom();
     });
     if (p.api.isVisible) void this.load();
   }

@@ -888,7 +888,10 @@ export function createChatSurface(
                               requestAnimationFrame(() => {
                                 const scrollerNow = container?.querySelector<HTMLElement>(".chat-scroll");
                                 if (!scrollerNow) return;
+                                const prev = scrollerNow.style.scrollBehavior;
+                                scrollerNow.style.scrollBehavior = "auto";
                                 scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
+                                scrollerNow.style.scrollBehavior = prev;
                               });
                             } catch {
                               btn.disabled = false;
@@ -918,6 +921,7 @@ export function createChatSurface(
     readonlyRedraw = draw;
     draw();
     container.replaceChildren(host);
+    if (!sameSession) scrollToBottom();
     readOnlyView = { id: s.id, threadRef: s.threadRef, session: s, anchorSeq };
     ctx.ensureDeliveryStream();
     consumeBackgroundPanelRequest();
@@ -2306,8 +2310,13 @@ export function createChatSurface(
     stickToBottom = s.scrollHeight - s.scrollTop - s.clientHeight <= 120;
   }
 
+  function scrollToBottom(): void {
+    stickToBottom = true;
+    scrollTranscript(true);
+  }
+
   function scrollTranscript(force = false): void {
-    const scroller = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
+    const scroller = ctx.container()?.querySelector<HTMLElement>(".chat-scroll");
     if (!scroller) return;
     if (!force && !stickToBottom) return;
     requestAnimationFrame(() => {
@@ -2337,6 +2346,7 @@ export function createChatSurface(
     mountContinuable,
     mountReadOnly,
     mountLoadingPane,
+    scrollToBottom,
     drawActiveChat,
     setTranscriptWindow,
     requestBackgroundPanel,

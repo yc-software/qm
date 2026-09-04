@@ -84,6 +84,7 @@ export interface ChatSurface {
     inheritedMessages?: ReturnType<typeof entriesToMessages>,
   ): void;
   mountLoadingPane(): void;
+  scrollToBottom(): void;
   drawActiveChat(agent?: Agent | null, opts?: { forceScroll?: boolean }): void;
   setTranscriptWindow(anchorSeq: number | null, earlierCount: number, hasEarlier?: boolean): void;
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
