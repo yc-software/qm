@@ -37,6 +37,7 @@ export interface TriggerDeps {
 }
 
 export interface TriggerSpec {
+  title?: string;
   owner: string;
   ownerScopeId: ScopeId;
   input: string;
@@ -94,6 +95,7 @@ function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResu
     fireKey: spec.fireKey,
     sourceScopeId: spec.ownerScopeId,
     sourceThreadRef: threadRef,
+    ...(spec.title ? { sourceTitle: spec.title } : {}),
     ...(res?.sessionId ? { sourceSessionId: res.sessionId } : {}),
     ...(res?.sourceUserSeq !== undefined ? { sourceUserSeq: res.sourceUserSeq } : {}),
     ...(res?.sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq: res.sourceAssistantEntrySeq } : {}),

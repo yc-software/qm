@@ -23,6 +23,7 @@ import type { Delivery } from "../types.ts";
 import type { CoreBridge } from "./core-bridge.ts";
 import type { Mirror } from "./mirror.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
+import { cronIdOf } from "../sessions/session-store.ts";
 
 const DELIVERY_CLAIM_MS = 15_000;
 
@@ -37,6 +38,7 @@ function mergeSlackApiMs(body: unknown, slackApiMs: number | undefined): unknown
 
 export function createDeliveryPoller(deps: {
   core: SlackCoreClient;
+  webUiPublicUrl?: string;
   bridge: CoreBridge;
   mirror: Mirror;
   threads: ReturnType<typeof createThreadTracker>;
@@ -56,6 +58,17 @@ export function createDeliveryPoller(deps: {
 
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number } | undefined);
+
+  function cronFooter(d: Delivery): Array<Record<string, unknown>> {
+    const base = deps.webUiPublicUrl?.trim().replace(/\/+$/, "");
+    const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
+    if (!base || !id) return [];
+    const title = (d.provenance?.sourceTitle?.trim() || "Cron")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
+    return [{ type: "mrkdwn", text: `${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`, verbatim: true }];
+  }
 
   const deliveryTracker = createDeliveryTracker();
 
@@ -121,17 +134,21 @@ export function createDeliveryPoller(deps: {
                   .catch(swallowAs("slack: post upload-failure note", undefined));
               }
             };
+            const settingsFooter = cronFooter(d);
+            const footer = [
+              ...settingsFooter,
+              ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
+            ];
             const taskList = d.destination.taskList?.length ? renderTaskList(d.destination.taskList) : undefined;
-            const taskListBlocks = taskList
-              ? [
-                  ...slackSectionBlocks(text),
-                  { type: "section", text: { type: "mrkdwn", text: taskList } },
-                  ...(d.destination.debugFooter
-                    ? [{ type: "context", elements: [{ type: "mrkdwn", text: d.destination.debugFooter }] }]
-                    : []),
-                ]
-              : undefined;
-            if (!text.trim()) {
+            const footerBlocks =
+              taskList || footer.length
+                ? [
+                    ...(text.trim() ? slackSectionBlocks(text) : []),
+                    ...(taskList ? [{ type: "section", text: { type: "mrkdwn", text: taskList } }] : []),
+                    ...(footer.length ? [{ type: "context", elements: footer }] : []),
+                  ]
+                : undefined;
+            if (!text.trim() && !(settingsFooter.length && d.attachments?.length)) {
               if (taskList) {
                 let preserved = false;
                 if (d.destination.editRef) {
@@ -172,7 +189,7 @@ export function createDeliveryPoller(deps: {
                   channel,
                   ts: d.destination.editRef,
                   text,
-                  ...(taskListBlocks ? { blocks: taskListBlocks } : {}),
+                  ...(footerBlocks ? { blocks: footerBlocks } : {}),
                   ...botIdentityArgs(),
                   ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                 });
@@ -184,14 +201,6 @@ export function createDeliveryPoller(deps: {
                 swallow("slack: finalize recovered reply in place", e);
               }
             }
-            const footerBlocks =
-              taskListBlocks ??
-              (d.destination.debugFooter && text.length <= 2900
-                ? [
-                    { type: "section", text: { type: "mrkdwn", text } },
-                    { type: "context", elements: [{ type: "mrkdwn", text: d.destination.debugFooter }] },
-                  ]
-                : undefined);
             let composedUploadError: unknown;
             const canComposeUpload =
               d.attachments?.length &&
@@ -269,9 +278,13 @@ export function createDeliveryPoller(deps: {
             if (!text.trim() && !d.attachments?.length) return undefined;
             const channel = await openConversationFor(client, [d.destination.target]);
             const threadTs = d.destination.threadTs;
+            const footer = cronFooter(d);
+            const blocks = footer.length
+              ? [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }]
+              : undefined;
             let composedUpload = false;
             let uploadError: unknown;
-            if (text.trim() && d.attachments?.length && d.destination.unfurlLinks === undefined) {
+            if (text.trim() && d.attachments?.length && !blocks && d.destination.unfurlLinks === undefined) {
               try {
                 const uploaded = await uploadAttachments(
                   client,
@@ -292,10 +305,11 @@ export function createDeliveryPoller(deps: {
               }
             }
             if (!composedUpload) {
-              if (text.trim()) {
-                const posted = await client.chat.postMessage(
-                  slackReplyArgs(channel, text, threadTs, { unfurlLinks: d.destination.unfurlLinks }),
-                );
+              if (text.trim() || blocks) {
+                const posted = await client.chat.postMessage({
+                  ...slackReplyArgs(channel, text, threadTs, { unfurlLinks: d.destination.unfurlLinks }),
+                  ...(blocks ? { blocks } : {}),
+                });
                 mirrorSelfPost(channel, posted?.ts, text, { kind: "dm", sub: threadTs });
               }
               if (d.attachments?.length && !uploadError) {

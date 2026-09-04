@@ -224,7 +224,14 @@ export async function startSlackPlugin(
     ...(cfg.userToken ? { userToken: cfg.userToken } : {}),
     clientOptions: CLIENT_OPTIONS,
   });
-  const deliveries = createDeliveryPoller({ core, bridge, mirror, threads, clientForIdentity });
+  const deliveries = createDeliveryPoller({
+    core,
+    bridge,
+    mirror,
+    threads,
+    clientForIdentity,
+    webUiPublicUrl: cfg.webUiPublicUrl,
+  });
 
   let auth: any;
   try {

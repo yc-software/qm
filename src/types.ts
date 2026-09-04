@@ -194,6 +194,7 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
+  sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
   fireKey: string;

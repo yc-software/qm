@@ -135,6 +135,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
+          ...(cron.title ? { title: cron.title } : {}),
           ...(cron.message !== undefined ? { message: cron.message } : {}),
           ...(cron.destination ? { destination: cron.destination } : {}),
           ...(cron.runAs ? { runAs: cron.runAs } : {}),
