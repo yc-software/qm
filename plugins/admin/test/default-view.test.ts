@@ -4,6 +4,31 @@ import test from "node:test";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
+function resolvedDisplay(classes: string[]) {
+  const styles = [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
+  const held = new Set(classes);
+  let display = "";
+  let important = false;
+  for (const [, selectors, body] of styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const matches = selectors.split(",").some(
+      (selector) =>
+        /^(\.[A-Za-z0-9_-]+)+$/.test(selector.trim()) &&
+        selector
+          .trim()
+          .split(".")
+          .filter(Boolean)
+          .every((name) => held.has(name)),
+    );
+    if (!matches) continue;
+    for (const [, value, bang] of body.matchAll(/display:\s*([a-z-]+)\s*(!important)?\s*;/g)) {
+      if (important && !bang) continue;
+      display = value;
+      important = !!bang;
+    }
+  }
+  return display;
+}
+
 test("admin shell uses the QM identity with org-injectable branding", () => {
   assert.match(html, /<title>QM Admin<\/title>/);
   assert.match(html, /<meta name="brand-self-label" content="Agent" \/>/);
@@ -186,7 +211,7 @@ test("compact governance rows preserve policy detail and collapse before they ov
   );
   assert.match(html, /#view-governance \.setting-row > \.foot \.status[^}]*overflow-wrap: anywhere/);
   assert.match(html, /#view-governance section\.card\.setting-row\s*\{\s*padding:\s*12px 14px;\s*\}/);
-  assert.match(html, /#view-governance \.setting-row\.hidden\s*\{\s*display:\s*none;\s*\}/);
+  assert.equal(resolvedDisplay(["setting-row", "hidden"]), "none");
 });
 
 test("governance reviews high-impact changes in product and preserves drafts", () => {
@@ -310,4 +335,14 @@ test("governance SOUL workbench shows draft diff, history, and conflict-safe res
   assert.match(html, /expectedVersion: soulVersion/);
   assert.match(html, /function refreshSoulConflict\(\)/);
   assert.match(html, /Restore SOUL version/);
+});
+
+test("the hidden utility hides an element whose component rule is declared later", () => {
+  assert.match(html, /<aside class="environment-notice hidden" id="environment-notice"/);
+  assert.match(html, /notice\.classList\.toggle\("hidden", !attachment\)/);
+  assert.equal(resolvedDisplay(["environment-notice"]), "flex");
+  assert.equal(resolvedDisplay(["environment-notice", "hidden"]), "none");
+  for (const component of ["admin-app", "scope-menu", "pack-adv", "ovmenu", "dense-row", "setting-row"]) {
+    assert.equal(resolvedDisplay([component, "hidden"]), "none");
+  }
 });

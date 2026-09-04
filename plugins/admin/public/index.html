@@ -209,9 +209,6 @@
         grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
         min-height: calc(100dvh - var(--header-total-h));
       }
-      .admin-app.hidden {
-        display: none;
-      }
       .admin-sidebar {
         position: sticky;
         top: var(--header-total-h);
@@ -692,9 +689,6 @@
         background: var(--surface);
         box-shadow: 0 12px 32px rgba(16, 24, 40, 0.12);
       }
-      .scope-menu.hidden {
-        display: none;
-      }
       .scope-menu .scope-filter {
         padding: 8px;
         border-bottom: 1px solid var(--border);
@@ -1075,9 +1069,6 @@
         flex-wrap: wrap;
         margin: 0 0 10px;
       }
-      .pack-adv.hidden {
-        display: none;
-      }
       .pack-adv input {
         flex: 1 1 150px;
         min-width: 0;
@@ -1128,9 +1119,6 @@
         border: 1px solid var(--border);
         border-radius: 8px;
         box-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
-      }
-      .ovmenu.hidden {
-        display: none;
       }
       .ovmenu button {
         text-align: left;
@@ -1189,9 +1177,6 @@
       .dense-row .file-thumb {
         width: 36px;
         height: 28px;
-      }
-      .dense-row.hidden {
-        display: none;
       }
       .scope-link {
         border: 0;
@@ -1366,7 +1351,7 @@
         font-variant-numeric: tabular-nums;
       }
       .hidden {
-        display: none;
+        display: none !important;
       }
 
       tr.openable {
@@ -3127,9 +3112,6 @@
       }
       #view-governance section.card.setting-row {
         padding: 12px 14px;
-      }
-      #view-governance .setting-row.hidden {
-        display: none;
       }
       #view-governance .setting-row > .head {
         display: block;
