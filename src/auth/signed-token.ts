@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { CompactSign, compactVerify, decodeProtectedHeader } from "jose";
 import { constantTimeEqual } from "../util/crypto.ts";
 
@@ -6,7 +6,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export function signingKeyId(secret: string): string {
-  return createHash("sha256").update(secret).digest("base64url").slice(0, 8);
+  return createHmac("sha256", secret).update("qm-signing-key-id").digest("base64url").slice(0, 8);
 }
 
 export function mintSignedPayload(value: unknown, secret: string): Promise<string> {
