@@ -525,15 +525,18 @@ export function createChatSurface(
       const threadRef = chatState.threadRef;
       const runId = await resolveApproval(decision);
       if (chatState.normalStreamFn && chatState.onWork)
-        await resumeRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork, runId);
+        await resumeRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork, runId, undefined, () => {
+          chatState.resolvingApprovals.delete(decision.requestId);
+          drawActiveChat(agent);
+        });
     } catch (err) {
       if (agent === chatState.agent) {
         ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
         drawActiveChat(agent);
       }
     } finally {
-      chatState.resolvingApprovals.delete(decision.requestId);
       if (agent === chatState.agent) {
+        chatState.resolvingApprovals.delete(decision.requestId);
         clearLiveWork();
         try {
           await refreshSessions({ silent: true });
@@ -676,6 +679,7 @@ export function createChatSurface(
     onWork: (work: WorkBlock) => void,
     runId: string,
     initialRun?: RunPoll,
+    onStarted?: () => void,
   ): Promise<boolean> {
     if (
       !agent.state.messages.length ||
@@ -703,7 +707,9 @@ export function createChatSurface(
       .join("\n\n");
     agent.streamFn = makeRunResumeStreamFn(runId, initialRun, onWork, runSlot, seedText);
     try {
-      await agent.continue();
+      const completion = agent.continue();
+      if (agent.state.isStreaming) onStarted?.();
+      await completion;
     } catch (err) {
       if (agent === chatState.agent)
         ctx.composer.state.error = err instanceof Error ? err.message : "Could not reconnect to the running task.";
