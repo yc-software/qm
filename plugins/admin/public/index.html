@@ -4984,6 +4984,91 @@
             </section>
             <section class="card">
               <div class="head">
+                <h2>Models on existing providers</h2>
+                <p>
+                  Add an API model using an existing provider and a compatible builtin template. Endpoint and
+                  credentials are inherited. Available through Pi; subscription support is not implied.
+                </p>
+              </div>
+              <div class="body">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Provider</th>
+                      <th>Template</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="model-registry-rows"></tbody>
+                </table>
+                <p class="muted" id="model-registry-empty">No additional models.</p>
+              </div>
+              <div class="body setup-form">
+                <label>Model id <input type="text" id="model-registry-id" autocomplete="off" required /></label>
+                <label>Display name <input type="text" id="model-registry-name" autocomplete="off" required /></label>
+                <label
+                  >Provider
+                  <select id="model-registry-provider">
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                  </select></label
+                >
+                <label
+                  >Compatible builtin template
+                  <select id="model-registry-template"></select
+                ></label>
+                <p class="muted" id="model-registry-capabilities"></p>
+                <label
+                  >Context window (tokens)
+                  <input id="model-registry-contextWindow" type="number" min="2" step="1" required
+                /></label>
+                <label
+                  >Maximum output (tokens) <input id="model-registry-maxTokens" type="number" min="1" step="1" required
+                /></label>
+                <label
+                  >Input ($ / million tokens)
+                  <input id="model-registry-input" type="number" min="0" step="any" required
+                /></label>
+                <label
+                  >Output ($ / million tokens)
+                  <input id="model-registry-output" type="number" min="0" step="any" required
+                /></label>
+                <label
+                  >Cache read ($ / million tokens)
+                  <input id="model-registry-cacheRead" type="number" min="0" step="any" required
+                /></label>
+                <label
+                  >Cache write ($ / million tokens)
+                  <input id="model-registry-cacheWrite" type="number" min="0" step="any" required
+                /></label>
+                <label class="check"
+                  ><input id="model-registry-base" type="checkbox" checked /> Offer in admin model choices</label
+                >
+                <label class="check"
+                  ><input id="model-registry-webui" type="checkbox" checked /> Offer in web picker by default</label
+                >
+                <label class="check"
+                  ><input id="model-registry-fastMode" type="checkbox" /> Model supports the Anthropic fast tier</label
+                >
+                <label class="check"
+                  ><input id="model-registry-auxiliary" type="checkbox" /> Eligible for auxiliary tasks</label
+                >
+                <details>
+                  <summary>Advanced pricing tiers</summary>
+                  <label
+                    >JSON array of inputTokensAbove, input, output, cacheRead and cacheWrite
+                    <textarea id="model-registry-tiers" rows="4" placeholder="[]"></textarea>
+                  </label>
+                </details>
+              </div>
+              <div class="foot">
+                <button class="primary" id="model-registry-save">Save model</button
+                ><button id="model-registry-new">New model</button><span class="status" id="st-model-registry"></span>
+              </div>
+            </section>
+            <section class="card">
+              <div class="head">
                 <h2>Custom providers</h2>
                 <p>
                   Point the deployment at any OpenAI- or Anthropic-compatible endpoint: a vendor like DeepSeek, or a
@@ -8764,6 +8849,7 @@
           : "Write-only API key";
       }
       async function loadOnboarding() {
+        await loadModelRegistry();
         const [models, slack, catalog, config] = await Promise.all([
           api("GET", "/api/model-providers"),
           api("GET", "/api/slack-installation"),
@@ -8869,6 +8955,127 @@
         await loadCustomProviders();
         setStatus("st-onboarding-model", "Provider disabled.", "ok");
       };
+      let modelRegistryTemplates = [];
+      function modelRegistryTemplateOptions() {
+        const select = $("model-registry-template");
+        const previous = select.value;
+        select.replaceChildren();
+        for (const template of modelRegistryTemplates.filter(
+          (m) => m.provider === $("model-registry-provider").value,
+        )) {
+          const option = document.createElement("option");
+          option.value = template.id;
+          option.textContent = template.name;
+          select.appendChild(option);
+        }
+        if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+        modelRegistryCapabilities();
+      }
+      function modelRegistryCapabilities() {
+        const template = modelRegistryTemplates.find((m) => m.id === $("model-registry-template").value);
+        $("model-registry-capabilities").textContent = template
+          ? `Inherited: ${template.input.join(", ")} input; reasoning ${template.reasoning ? "yes" : "no"}.`
+          : "";
+      }
+      function editRegistryModel(spec) {
+        $("model-registry-id").disabled = Boolean(spec);
+        $("model-registry-provider").disabled = Boolean(spec?.provider);
+        $("model-registry-provider").value = spec?.provider || "openai";
+        modelRegistryTemplateOptions();
+        for (const field of ["id", "name", "contextWindow", "maxTokens", "template"])
+          $("model-registry-" + field).value =
+            spec?.[field] ?? (field === "template" ? $("model-registry-template").value : "");
+        for (const field of ["input", "output", "cacheRead", "cacheWrite"])
+          $("model-registry-" + field).value = spec?.cost?.[field] ?? "";
+        for (const field of ["base", "webui", "auxiliary", "fastMode"])
+          $("model-registry-" + field).checked = spec?.[field] ?? (field === "base" || field === "webui");
+        $("model-registry-tiers").value = JSON.stringify(spec?.cost?.tiers || [], null, 2);
+        modelRegistryCapabilities();
+      }
+      async function loadModelRegistry() {
+        const response = await api("GET", "/api/model-registry");
+        if (!response.ok) {
+          setStatus("st-model-registry", "Could not load models.", "err");
+          return;
+        }
+        modelRegistryTemplates = response.data.templates;
+        modelRegistryTemplateOptions();
+        const rows = $("model-registry-rows");
+        rows.replaceChildren();
+        const enabled = response.data.models.filter((m) => !m.disabled);
+        $("model-registry-empty").hidden = enabled.length > 0;
+        for (const { spec, unavailableReason } of enabled) {
+          const row = document.createElement("tr");
+          for (const value of [
+            (spec.name || spec.id) + " (" + spec.id + ")" + (unavailableReason ? " — " + unavailableReason : ""),
+            spec.provider || "Unknown",
+            spec.template || "Missing",
+          ]) {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.appendChild(cell);
+          }
+          const actions = document.createElement("td");
+          const edit = document.createElement("button");
+          edit.textContent = "Edit";
+          edit.onclick = () => editRegistryModel(spec);
+          const remove = document.createElement("button");
+          remove.className = "danger";
+          remove.textContent = "Delete";
+          remove.onclick = async () => {
+            if (!confirm("Delete " + spec.name + "? New uses will be refused.")) return;
+            const result = await api("DELETE", "/api/model-registry/" + encodeURIComponent(spec.id));
+            if (!result.ok) {
+              setStatus("st-model-registry", result.data?.message || "Could not delete model.", "err");
+              return;
+            }
+            await loadOnboarding();
+            editRegistryModel(null);
+            setStatus("st-model-registry", "Model deleted.", "ok");
+          };
+          actions.append(edit, remove);
+          row.appendChild(actions);
+          rows.appendChild(row);
+        }
+      }
+      $("model-registry-provider").onchange = modelRegistryTemplateOptions;
+      $("model-registry-template").onchange = modelRegistryCapabilities;
+      $("model-registry-new").onclick = () => editRegistryModel(null);
+      $("model-registry-save").onclick = async () => {
+        const button = $("model-registry-save");
+        try {
+          const value = (field) => $("model-registry-" + field).value.trim();
+          const number = (field) => {
+            if (!value(field)) throw new Error(field + " is required");
+            return Number(value(field));
+          };
+          const spec = {
+            id: value("id"),
+            name: value("name"),
+            provider: value("provider"),
+            template: value("template"),
+            contextWindow: number("contextWindow"),
+            maxTokens: number("maxTokens"),
+            cost: Object.fromEntries(
+              ["input", "output", "cacheRead", "cacheWrite"].map((field) => [field, number(field)]),
+            ),
+          };
+          spec.cost.tiers = JSON.parse(value("tiers") || "[]");
+          for (const field of ["base", "webui", "auxiliary", "fastMode"])
+            spec[field] = $("model-registry-" + field).checked;
+          button.disabled = true;
+          const result = await api("PUT", "/api/model-registry/" + encodeURIComponent(spec.id), spec);
+          if (!result.ok) throw new Error(result.data?.message || "Could not save model.");
+          await loadOnboarding();
+          editRegistryModel(spec);
+          setStatus("st-model-registry", "Model saved. New turns use this definition.", "ok");
+        } catch (error) {
+          setStatus("st-model-registry", error.message, "err");
+        } finally {
+          button.disabled = false;
+        }
+      };
+
       let customProvidersLoaded = [];
       function parseCustomModels(text) {
         return text

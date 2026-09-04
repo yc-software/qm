@@ -91,6 +91,7 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
     sendJson(ctx.res, 400, { error: "bad_request", message: "the Auto flagger is org-wide; request an org scope" });
     return;
   }
+  await ctx.deps.refreshModels?.();
   const body = (ctx.body ?? {}) as {
     window?: unknown;
     harnessId?: unknown;

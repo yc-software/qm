@@ -1,54 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { getBaseModel, modelSupportsFastMode, setFastModeModelIds } from "../src/pi-models.ts";
+import { metadata } from "./model-metadata.ts";
 
-test("web UI resolves models from the shared catalog without privileging a provider", () => {
-  const anthropic = getBaseModel("claude-opus-4-8");
-  assert.equal(anthropic.id, "claude-opus-4-8");
-  assert.equal(anthropic.provider, "anthropic");
-  assert.equal(anthropic.api, "anthropic-messages");
-
-  const openai = getBaseModel("gpt-5.6-sol");
-  assert.equal(openai.id, "gpt-5.6-sol");
-  assert.equal(openai.provider, "openai");
-
-  const openrouter = getBaseModel("openrouter/auto");
-  assert.equal(openrouter.provider, "openrouter");
-
-  assert.throws(() => getBaseModel("claude-not-real"), /Unsupported/);
+test("models require server metadata even when the browser SDK knows their id", () => {
+  assert.throws(() => getBaseModel("gpt-5.5"), /metadata unavailable/);
+  assert.throws(() => getBaseModel("future", metadata("other")), /metadata unavailable/);
 });
 
-test("models this pi-ai build lacks are cloned from a template of their own provider", () => {
-  const fable51 = getBaseModel("claude-fable-5-1");
-  assert.equal(fable51.id, "claude-fable-5-1");
-  assert.equal(fable51.name, "Claude Fable 5.1");
-  assert.equal(fable51.provider, "anthropic");
-
-  const fable = getBaseModel("claude-fable-5");
-  assert.equal(fable.id, "claude-fable-5");
-  assert.equal(fable.name, "Claude Fable 5");
-  assert.equal(fable.provider, "anthropic");
-
-  const sol = getBaseModel("gpt-5.6-sol");
-  assert.equal(sol.id, "gpt-5.6-sol");
-  assert.equal(sol.name, "GPT-5.6 Sol");
-  assert.equal(sol.provider, "openai", "an OpenAI model never resolves through an Anthropic template");
+test("browser model preserves safe server geometry and does not share mutable metadata", () => {
+  const spec = metadata("future", "Future", "anthropic");
+  const model = getBaseModel("future", spec);
+  assert.equal(model.api, "anthropic-messages");
+  assert.equal(model.contextWindow, spec.contextWindow);
+  model.cost.input = 999;
+  assert.equal(spec.cost.input, 7);
+  assert.equal(model.baseUrl, "");
 });
 
-test("fast-mode support is fed from core's runtime config, not a hardcoded client copy", () => {
-  setFastModeModelIds(null, []);
-  assert.equal(modelSupportsFastMode(null, "claude-opus-4-8"), false);
-
-  setFastModeModelIds(null, ["claude-opus-4-8", "claude-opus-4-7"]);
-  assert.equal(modelSupportsFastMode(null, "claude-opus-4-8"), true);
-  assert.equal(modelSupportsFastMode(null, "claude-sonnet-4-6"), false);
-  assert.equal(modelSupportsFastMode(null, "claude-haiku-4-5"), false);
-  assert.equal(modelSupportsFastMode(null, undefined), false);
-});
-
-test("a custom-provider model builds from its dynamic catalog entry", () => {
-  const custom = getBaseModel("acme-large", { name: "Acme Large", provider: "acme-gateway" });
-  assert.equal(custom.id, "acme-large");
-  assert.equal(custom.name, "Acme Large");
-  assert.equal(custom.provider, "acme-gateway");
+test("fast mode support follows server updates", () => {
+  setFastModeModelIds("scope", ["future"]);
+  assert.equal(modelSupportsFastMode("scope", "future"), true);
+  setFastModeModelIds("scope", []);
+  assert.equal(modelSupportsFastMode("scope", "future"), false);
 });

@@ -397,12 +397,12 @@ export function createChatSurface(
     chatState.host = document.createElement("div");
     chatState.host.className = "custom-chat";
 
-    const model = ctx.composer.currentModelOption().model;
+    const model = ctx.composer.currentModelOption()?.model;
     const defaultThinkingLevel = defaultEffortForModel(model);
     const agent = new Agent({
       initialState: {
         systemPrompt: "",
-        model,
+        ...(model ? { model } : {}),
         ...(defaultThinkingLevel === "low" ? { thinkingLevel: "low" as const } : {}),
         messages,
         tools: [],
@@ -517,7 +517,9 @@ export function createChatSurface(
   }
 
   function currentTurnOptions(): TurnOptions {
-    const { harnessId: harness } = ctx.composer.currentModelOption();
+    const selected = ctx.composer.currentModelOption();
+    if (!selected) throw new Error("No model is available");
+    const harness = selected.harnessId;
     return {
       ...(harnessSupportsEffort(harness) ? { effortLevel: ctx.composer.state.effortLevel } : {}),
       ...(harnessSupportsFastMode(harness) ? { fastMode: ctx.composer.state.fastMode } : {}),

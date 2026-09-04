@@ -91,7 +91,7 @@ test("steering is reachable only as an explicit act on a queued row", () => {
   assert.match(strip, /class="chip-x"[\s\S]{0,240}removeQueued\(agent, q\)/);
   assert.match(
     composer,
-    /const steerable =\s*agent\.state\.isStreaming && ctx\.chat\.hasLiveRun\(\) && harnessSupportsSteer\(currentModelOption\(\)\.harnessId\);/,
+    /const steerable =\s*agent\.state\.isStreaming && ctx\.chat\.hasLiveRun\(\) &&\s*harnessSupportsSteer\(currentModelOption\(\)\?\.harnessId \?\? ""\);/,
     "Steer acts only against a live run on a harness that can fold one in",
   );
 });

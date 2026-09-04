@@ -98,6 +98,7 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
+  refreshModels?: () => Promise<void>;
   identity: IdentityService;
   resolution: ResolutionService;
   config?: ScopedConfigStore;

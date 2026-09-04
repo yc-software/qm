@@ -15,6 +15,8 @@ import {
   isHarnessId,
   modelProviderAvailabilityFor,
   modelServiceable,
+  modelOfferedInWebui,
+  modelUnavailableReason,
   resolveModel,
 } from "../model/pi-models.ts";
 import { selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
@@ -74,6 +76,7 @@ export function createTurnMethods(
   const { shouldRouteToSpine, markTriggerHandled, addressedWakeText } = ambient;
   return {
     async turn(req: TurnRequest): Promise<TurnResult> {
+      await deps.refreshModels?.();
       await deps.identity.refresh();
       const actor: Principal = deps.identity.resolve(req.actor);
       if (!deps.identity.isInternal(actor)) {
@@ -165,21 +168,17 @@ export function createTurnMethods(
             deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
           const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
           let orgRuntime;
-          let configuredRuntime;
           let runtime;
           try {
-            orgRuntime = await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
-            configuredRuntime =
-              targetScope === org
-                ? orgRuntime
-                : await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback);
-            runtime =
-              req.harness || req.model
-                ? await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback, {
-                    ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
-                    ...(req.model ? { modelId: req.model } : {}),
-                  })
-                : configuredRuntime;
+            const orgModel =
+              storedOrgRuntime?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? runtimeFallback.modelId;
+            orgRuntime = modelUnavailableReason(orgModel)
+              ? { harnessId: storedOrgRuntime?.harnessId ?? runtimeFallback.harnessId, modelId: orgModel }
+              : await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
+            runtime = await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback, {
+              ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
+              ...(req.model ? { modelId: req.model } : {}),
+            });
           } catch (error) {
             swallow("turn: runtime resolution", error);
             return { status: "refused", reason: `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}` };
@@ -201,15 +200,19 @@ export function createTurnMethods(
           }
           const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
           let enabledWebuiModels: string[] | null = null;
-          if (configuredWebuiModels?.length) {
-            enabledWebuiModels = [...new Set([...configuredWebuiModels, orgRuntime.modelId])];
+          if (configuredWebuiModels != null) {
+            enabledWebuiModels = configuredWebuiModels.length
+              ? [...new Set([...configuredWebuiModels, orgRuntime.modelId])]
+              : [];
           } else if (providers?.openrouter) {
             enabledWebuiModels = [
               ...new Set([
                 ...selectableCatalogForHarness(
                   await selectableModelCatalog(deps.modelCredentialFetch),
                   runtime.harnessId,
-                ).map((model) => model.id),
+                )
+                  .filter((model) => modelOfferedInWebui(model.id))
+                  .map((model) => model.id),
                 ...(orgRuntime.harnessId === runtime.harnessId ? [orgRuntime.modelId] : []),
               ]),
             ];

@@ -1,5 +1,5 @@
 import {
-  DEFAULT_WEBUI_MODEL_IDS,
+  defaultWebuiModelIds,
   THINKING_LEVELS,
   serviceableModelIds,
   modelServiceable,
@@ -39,7 +39,7 @@ export function validateWebTurnModelOptions(
   enabledModels: readonly string[] | null,
   providers: ModelProviderAvailability = ALL_PROVIDERS_AVAILABLE,
 ): string | null {
-  const enabled = enabledModels?.length ? enabledModels : DEFAULT_WEBUI_MODEL_IDS;
+  const enabled = enabledModels ?? defaultWebuiModelIds();
   const allowedModels = serviceableModelIds(enabled, providers);
   if (input.model && !allowedModels.includes(input.model)) {
     return resolveModel(input.model) && !modelServiceable(input.model, providers)

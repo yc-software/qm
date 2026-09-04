@@ -13,6 +13,7 @@
  * resolved per-call by wiring alongside the built-in provider keys.
  */
 
+import { modelIdReserved } from "./pi-models.ts";
 import { parseProviderBaseUrl, PROVIDER_IDS } from "./provider-endpoints.ts";
 
 export const CUSTOM_PROVIDER_PROTOCOLS = ["openai", "anthropic"] as const;
@@ -61,6 +62,8 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
     if (!m.id?.trim() || m.id.length > 200) throw new Error("every model needs an id (<=200 chars)");
     if (m.name !== undefined && (typeof m.name !== "string" || m.name.length > 200))
       throw new Error(`model "${m.id}": name must be a string of 200 chars or fewer`);
+    if (modelIdReserved(m.id) || (registry.has(m.id) && registry.get(m.id)?.provider !== spec.id))
+      throw new Error(`model id "${m.id}" is already registered`);
     if (seen.has(m.id)) throw new Error(`duplicate model id "${m.id}"`);
     seen.add(m.id);
     for (const [field, v] of [
@@ -123,6 +126,8 @@ let version = 0;
  * built-in.
  */
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
+  const snapshot = JSON.stringify(specs);
+  if (snapshot === JSON.stringify(providers)) return;
   const next = new Map<string, CustomRuntimeModel>();
   for (const spec of specs) {
     for (const m of spec.models) {

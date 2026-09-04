@@ -1430,6 +1430,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
   async function createTurnSession(
+    model: Model<Api>,
     sessionId: string,
     systemPrompt: string,
     history: SessionEntry[],
@@ -1484,7 +1485,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     const seedPlan = planColdStartSeed(seedSource, !!priorTurns?.length);
     const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
-    const model = getRequiredModel(resolveModelId(turnScope), !turnProviderKeys);
     const modelRuntime = await buildModelRuntime(
       turnProviderKeys ?? (await resolveProviderKeys()),
       turnProviderKeys ? undefined : modelGateway,
@@ -1659,7 +1659,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     },
     {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
+        const desiredModelId = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
+        const baseModel = getRequiredModel(desiredModelId, !turn.providerKeys);
+        const turnModelGateway = turn.providerKeys ? undefined : modelGateway;
+        const wantFast = wantsFastMode(turn.runtime?.fastMode, desiredModelId);
+        const wantFastHeader = wantFast && !turnModelGateway?.models[desiredModelId];
         const { entry, compileMs } = await createTurnSession(
+          wantFastHeader ? withFastModeHeaders(baseModel) : baseModel,
           turn.session.id,
           turn.systemPrompt,
           turn.history,
@@ -1678,7 +1684,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.providerKeys,
         );
         try {
-          const turnModelGateway = turn.providerKeys ? undefined : modelGateway;
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
           entry.ref.current = turn.tools;
           entry.ref.pendingApprovals = [];
@@ -1692,19 +1697,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.screenExternalContent = turn.screenExternalContent;
           entry.ref.toolApprovalGate = turn.toolApprovalGate;
 
-          const desiredModelId = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
-          const wantFast = wantsFastMode(turn.runtime?.fastMode, desiredModelId);
-          const wantFastHeader = wantFast && !turnModelGateway?.models[desiredModelId];
-          const current = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
-          const currentFast = modelHasFastMode(current);
-          if (current?.id !== desiredModelId || currentFast !== wantFastHeader) {
-            try {
-              const base = resolveModel(desiredModelId, !turn.providerKeys);
-              if (base) await entry.agentSession.setModel(wantFastHeader ? withFastModeHeaders(base) : base);
-            } catch (e) {
-              swallow("pi: model switch", e);
-            }
-          }
           const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
           entry.ref.fast = wantFast;
           const effectiveModel = activeModel?.id ?? desiredModelId;

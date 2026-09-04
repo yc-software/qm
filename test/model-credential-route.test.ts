@@ -305,10 +305,8 @@ test("OpenRouter catalog exposes runtime-supported tool models as selectable bas
       effective: { harnessId: string; modelId: string };
     };
     assert.ok(runtimeBody.modelsByHarness.pi!.includes("stealth/ox-alpha"));
-    assert.deepEqual(runtimeBody.modelCatalog["stealth/ox-alpha"], {
-      name: "Ox Alpha",
-      provider: "openrouter",
-    });
+    assert.equal(runtimeBody.modelCatalog["stealth/ox-alpha"]?.name, "Ox Alpha");
+    assert.equal(runtimeBody.modelCatalog["stealth/ox-alpha"]?.provider, "openrouter");
     assert.deepEqual(runtimeBody.effective, { harnessId: "pi", modelId: "stealth/ox-alpha" });
 
     const surface = await fetch(`${srv.base}/v1/surface-config`);

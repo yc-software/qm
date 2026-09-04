@@ -6,7 +6,7 @@ import { parseCommandPolicy } from "../../policy/command-policy.ts";
 import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
   defaultModelForHarness,
-  FAST_MODE_MODEL_IDS,
+  fastModeModelIds,
   harnessSupportsFastMode,
   HARNESS_IDS,
   isHarnessId,
@@ -14,8 +14,8 @@ import {
   modelServiceable,
   modelProviderAvailabilityFor,
   resolveModel,
-  SELECTABLE_BASE_MODELS,
   thinkingLevelsForHarness,
+  selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
   type HarnessId,
 } from "../../model/pi-models.ts";
@@ -535,7 +535,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     target: "any",
     clearable: true,
     readKey: "baseModel",
-    enumValues: SELECTABLE_BASE_MODELS,
+    get enumValues() {
+      return selectableBaseModels();
+    },
     get: (deps, scope) => deps.config!.getBaseModel(scope),
     apply: async (ctx, _actor, scope) => {
       const raw = (ctx.body as { modelId?: unknown }).modelId;
@@ -567,7 +569,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
                 fastMode:
                   runtime.fastMode &&
                   harnessSupportsFastMode(runtime.harnessId) &&
-                  FAST_MODE_MODEL_IDS.includes(modelId),
+                  fastModeModelIds().includes(modelId),
               }
             : {}),
         });
@@ -590,7 +592,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
                 fastMode:
                   effective.fastMode &&
                   harnessSupportsFastMode(effective.harnessId) &&
-                  FAST_MODE_MODEL_IDS.includes(modelId),
+                  fastModeModelIds().includes(modelId),
               }
             : {}),
         });
@@ -633,7 +635,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         harnessId,
         modelId,
         effortLevel,
-        fastMode: fastMode && harnessSupportsFastMode(harnessId) && FAST_MODE_MODEL_IDS.includes(modelId),
+        fastMode: fastMode && harnessSupportsFastMode(harnessId) && fastModeModelIds().includes(modelId),
       });
       return { ok: true };
     },
@@ -668,7 +670,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "Web UI model picker (ordered list of model ids; the org base model is the default selection, else the first). Empty restores the built-in set.",
     readKey: "webuiModels",
-    enumValues: SELECTABLE_BASE_MODELS,
+    get enumValues() {
+      return selectableBaseModels();
+    },
     get: (deps, scope) => deps.config!.getWebuiModels(scope),
     apply: generic<string[] | null>(
       (body, { scope }) => {
@@ -801,7 +805,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "The model driving the browser agent in the browse skill, org-wide (empty follows the deployment's base model; fast mode applies only on Opus models).",
     readKey: "browseModel",
-    enumValues: SELECTABLE_BASE_MODELS,
+    get enumValues() {
+      return selectableBaseModels();
+    },
     get: (deps, scope) => deps.config!.getBrowseModel(scope),
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "the browse model is org-wide");

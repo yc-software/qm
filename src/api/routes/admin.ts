@@ -1,3 +1,4 @@
+import { modelRegistry } from "./admin/model-registry.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import {
   getAdminResources,
@@ -73,6 +74,9 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "PUT", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: putMcpServer },
   { method: "DELETE", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: deleteMcpServer },
   { method: "DELETE", path: "/v1/admin/model-providers/:provider", auth: "either", handle: deleteModelProvider },
+  { method: "GET", path: "/v1/admin/model-registry", auth: "either", handle: modelRegistry },
+  { method: "PUT", path: "/v1/admin/model-registry/:model", auth: "either", handle: modelRegistry },
+  { method: "DELETE", path: "/v1/admin/model-registry/:model", auth: "either", handle: modelRegistry },
   { method: "GET", path: "/v1/admin/custom-providers", auth: "either", handle: getCustomProviders },
   { method: "PUT", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: putCustomProvider },
   { method: "DELETE", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: deleteCustomProvider },

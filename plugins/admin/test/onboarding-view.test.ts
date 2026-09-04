@@ -64,6 +64,7 @@ async function runLoadOnboarding(modelProviders: unknown): Promise<Record<string
         },
       }),
     api: async (_method: string, path: string) => ({ ok: true, data: fixtures[path] ?? {} }),
+    loadModelRegistry: async () => {},
     orgScope: () => "org:default-org",
     encodeURIComponent,
     setStatus: () => {},

@@ -1,3 +1,4 @@
+import { metadata } from "./model-metadata.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
@@ -50,6 +51,8 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
   const approval: PendingApproval = { requestId: "a1", command: "echo test", reason: "requires approval" };
   const row = { id: "s1", threadRef: "web:owner:test", scopeId: "personal:owner", title: "Test" };
   const entries = [{ seq: 1, type: "user", createdAt: Date.now(), payload: { text: "run the command" } }];
+  let selectedModelId = "gpt-5.6-sol";
+  let modelDeleted = false;
   let pending = [approval];
   let decision = deferred<Response>();
   let continuation = deferred<Response>();
@@ -61,21 +64,30 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     requests.push({ path, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
-    if (path.includes("runtime-config"))
+    if (path.includes("runtime-config")) {
+      if (init?.method === "PUT") selectedModelId = JSON.parse(String(init.body)).modelId;
       return Response.json({
         scopeId: row.scopeId,
         approvedHarnesses: ["pi"],
-        modelsByHarness: { pi: ["gpt-5.6-sol"] },
+        modelsByHarness: { pi: modelDeleted ? ["replacement-api"] : ["gpt-5.6-sol"] },
+        modelCatalog: modelDeleted
+          ? { "replacement-api": metadata("replacement-api", "Replacement API") }
+          : { "gpt-5.6-sol": metadata("gpt-5.6-sol", "GPT-5.6 Sol") },
         orgDefault: { harnessId: "pi", modelId: "gpt-5.6-sol", revision: 0 },
-        effective: { harnessId: "pi", modelId: "gpt-5.6-sol" },
-        scopeOverride: null,
+        effective: { harnessId: "pi", modelId: selectedModelId },
+        scopeOverride: modelDeleted ? { harnessId: "pi", modelId: selectedModelId } : null,
+        ...(modelDeleted && selectedModelId === "deleted-overlay"
+          ? { unavailableReason: "Model has been deleted; select another model" }
+          : {}),
       });
+    }
     if (path.startsWith("/api/approvals/")) {
       submitted = true;
       return decision.promise;
     }
     if (path.includes("/api/runs/active")) return Response.json({ runId: null, queued: [] });
     if (path === "/api/runs/r1") return continuation.promise;
+    if (path === "/api/runs/q1") return Response.json({ status: "done", result: { status: "ok", reply: "done" } });
     if (path === "/api/turn") return Response.json({ runId: "q1" });
     if (path === "/api/runs/q1/withdraw") return Response.json({ withdrawn: true });
     if (path === "/api/runs/r1/signal") return Response.json({ accepted: true });
@@ -98,6 +110,8 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     const { createConversation } = await vite.ssrLoadModule("/src/conversations.ts");
     const { entriesToMessages, attachPendingApprovals } = await vite.ssrLoadModule("/src/core-bridge.ts");
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
+    const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/composer.ts");
+    seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
     appState.me = { user: "owner", org: "test" };
     appState.currentView = "chats";
     sessionsState.list = [row];
@@ -128,7 +142,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       button.click();
     }
     mount();
-    await until(() => !!host.querySelector(".approval-btn"));
+    await until(() => !!chat.composer.currentModelOption() && !!host.querySelector(".approval-btn"));
 
     await t.test("submission and handoff suppress duplicate clicks and stale cards", async () => {
       click("Allow once");
@@ -252,6 +266,36 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       assert.equal(host.querySelector<HTMLTextAreaElement>("textarea")?.disabled, true);
       decision.resolve(Response.json({ error: "new request failed" }, { status: 503 }));
       await until(() => chat.state.resolvingApprovals.size === 0);
+    });
+    await t.test("deleted selection blocks sends, renders transcript and offers explicit replacement", async () => {
+      submitted = false;
+      pending = [];
+      selectedModelId = "deleted-overlay";
+      modelDeleted = true;
+      mount();
+      await chat.composer.refreshRuntimeSelection(row.scopeId, chat.state.agent!);
+      await until(() => !!host.querySelector('select[aria-label="Replacement model"]'));
+      assert.equal(chat.composer.currentModelOption(), undefined);
+      assert.match(host.textContent ?? "", /deleted-overlay/);
+      assert.match(host.textContent ?? "", /run the command/);
+      assert.equal(host.querySelector("textarea"), null);
+      assert.equal(host.querySelector("button.send-btn"), null);
+      const replacement = host.querySelector<HTMLSelectElement>('select[aria-label="Replacement model"]')!;
+      assert.ok([...replacement.options].some((option) => option.value === "pi:replacement-api"));
+      const writes = requests.filter((request) => request.path === "/api/turn").length;
+      replacement.value = "pi:replacement-api";
+      replacement.dispatchEvent(new Event("change", { bubbles: true }));
+      await until(() => chat.composer.currentModelOption()?.model.id === "replacement-api");
+      assert.equal(selectedModelId, "replacement-api");
+      await until(() => !!host.querySelector("textarea"));
+      assert.equal(requests.filter((request) => request.path === "/api/turn").length, writes);
+      const input = host.querySelector<HTMLTextAreaElement>("textarea")!;
+      input.value = "Continue with my chosen replacement";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await until(() => host.querySelector<HTMLButtonElement>("button.send-btn")?.disabled === false);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await until(() => requests.filter((request) => request.path === "/api/turn").length === writes + 1);
+      assert.equal(requests.filter((request) => request.path === "/api/turn").at(-1)?.body?.model, "replacement-api");
     });
   } finally {
     handoff.resolve();
