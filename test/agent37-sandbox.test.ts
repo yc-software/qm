@@ -134,7 +134,7 @@ test("a shared advisory lock prevents duplicate instances across core replicas",
   assert.equal(fake.names().filter((name) => name === a.id).length, 1);
 });
 
-test("exec on a sleeping instance wakes it and retries", async () => {
+test("exec on a sleeping instance wakes it without a separate start", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "keep.txt", "still here\n");
   fake.sleep(h.id);
@@ -142,15 +142,15 @@ test("exec on a sleeping instance wakes it and retries", async () => {
   assert.equal(r.code, 0);
   assert.equal(r.stdout, "still here\n");
   assert.equal(fake.instance(h.id)?.status, "running");
-  assert.ok(fake.calls.some((c) => c.method === "POST" && c.path.endsWith("/start")));
+  assert.ok(!fake.calls.some((c) => c.method === "POST" && c.path.endsWith("/start")));
 });
 
-test("exec during the sleep checkpoint retries start until the freeze clears", async () => {
+test("exec during the sleep checkpoint retries until the freeze clears", async () => {
   const h = await sandbox.provision(layers);
   fake.sleep(h.id, { freezing: 2 });
   const r = await sandbox.run(h, "echo woke");
   assert.equal(r.stdout.trim(), "woke");
-  assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path.endsWith("/start")).length, 3);
+  assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path.endsWith("/start")).length, 2);
 });
 
 test("exec on a stopping instance waits for it to stop, then starts it", async () => {
@@ -247,11 +247,11 @@ test("timeouts beyond the API's sync exec ceiling run detached and poll to compl
   assert.equal(leftovers.stdout.trim(), "0");
 });
 
-test("create requests the template, the default shape and no auto sleep", async () => {
+test("create requests the template, the default shape and auto sleep", async () => {
   const h = await sandbox.provision(layers);
   const created = fake.instance(h.id);
   assert.equal(created?.template, "agent37-codex");
-  assert.equal(created?.autoSleep, false);
+  assert.equal(created?.autoSleep, true);
   assert.deepEqual(created?.resources, { cpu: 2, memory: 4, disk: 8 });
 });
 

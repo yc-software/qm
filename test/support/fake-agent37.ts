@@ -143,8 +143,19 @@ export function installFakeAgent37(): FakeAgent37 {
       const m = instances.get(decodeURIComponent(sub[1]!));
       if (!m || m.status === "deleted") return error(404, "not_found", "Instance not found.");
       if (sub[2] === "exec") {
+        if (m.status === "sleeping") {
+          if (m.freezing) {
+            m.freezing--;
+            return error(409, "try_again", "A sleep checkpoint is in flight. Retry in a few seconds.");
+          }
+          m.status = "running";
+        }
         if (m.status !== "running") {
-          return error(400, "invalid_request", "Only running instances can execute commands.");
+          return error(
+            400,
+            "invalid_request",
+            "Only running instances can execute commands (a sleeping instance is woken first).",
+          );
         }
         const body = JSON.parse(toBuf(init?.body).toString() || "{}") as { command?: string };
         const script = body.command ?? "";

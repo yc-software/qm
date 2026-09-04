@@ -165,7 +165,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     const info = await apiJson<InstanceInfo>(
       "POST",
       "/v1/instances",
-      { template, name, resources, auto_sleep: false },
+      { template, name, resources, auto_sleep: true },
       CREATE_TIMEOUT_MS,
     );
     await ensureRunning(info.id);
@@ -201,7 +201,8 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       const detail = (await first.text()).slice(0, 200);
       if (first.status === 404) idByName.delete(name);
       const notRunning = first.status === 400 && /running instances/i.test(detail);
-      if (first.status !== 404 && !notRunning) {
+      const freezing = first.status === 409;
+      if (first.status !== 404 && !notRunning && !freezing) {
         throw new Error(`agent37 exec ${name}: http ${first.status} ${detail}`);
       }
       const retryId = await instanceIdFor(name);
