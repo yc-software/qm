@@ -87,7 +87,7 @@ import {
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
-  addBlankPane,
+  startNewChatInCanvas,
   beginSessionDrag,
   endPaneDrag,
   notifyPanesChanged,
@@ -453,11 +453,18 @@ function toggleRecentProject(scopeId: string): void {
   renderList();
 }
 
-export function startNewChat(scopeId: string | null, name: string | null): void {
+export function startNewChat(
+  scopeId: string | null = null,
+  name: string | null = null,
+  threadRef?: string,
+): Conversation | null {
   closeSidebarOnNarrowView();
   if (scopeId) sessionsState.collapsedProjectScopes.delete(scopeId);
-  if (addBlankPane(scopeId ?? undefined)) return;
-  addPendingSession(mainConversation().newChat(scopeId ? { scopeId, name } : undefined), scopeId, name);
+  if (splitState.active) return startNewChatInCanvas(scopeId ?? undefined, threadRef);
+  const conv = mainConversation();
+  if (threadRef) conv.mountContinuable(threadRef, null, scopeId, [], name);
+  else addPendingSession(conv.newChat(scopeId ? { scopeId, name } : undefined), scopeId, name);
+  return conv;
 }
 
 export function startNewChatInLastScope(): void {
@@ -564,7 +571,7 @@ export function drawChatsPage(): void {
         chatsPageScope = s;
         drawChatsPage();
       },
-      action: { label: "New chat", onClick: () => mainConversation().newChat() },
+      action: { label: "New chat", onClick: () => startNewChat() },
       search: {
         value: chatsPageQuery,
         placeholder: "Search chats…",

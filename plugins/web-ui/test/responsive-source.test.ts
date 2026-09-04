@@ -19,7 +19,7 @@ test("mobile shell follows the visual viewport and device safe areas", () => {
 
 test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(shell, /actionRow\(ICON\.newChat[\s\S]{0,200}startNewChatInLastScope\(\);/);
-  assert.match(sessions, /export function startNewChat\([\s\S]{0,120}closeSidebarOnNarrowView\(\);/);
+  assert.match(sessions, /export function startNewChat\([^)]*\)[^{]*\{\s*closeSidebarOnNarrowView\(\);/);
   assert.match(shell, /class="sidebar-scrim"[^>]+aria-label="Close sidebar"[^>]+@click=\$\{toggleSidebar\}/);
   assert.match(shell, /main\.inert = modal/);
   assert.match(

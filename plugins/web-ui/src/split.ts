@@ -344,17 +344,6 @@ function seedFromV1(api: DockviewApi, seeds: PaneSeed[]): void {
   persist();
 }
 
-function largestGroupPanel(api: DockviewApi): { panel: IDockviewPanel; wide: boolean } | null {
-  let best: { panel: IDockviewPanel; area: number; wide: boolean } | null = null;
-  for (const group of api.groups) {
-    const r = group.element.getBoundingClientRect();
-    const panel = group.activePanel ?? group.panels[0];
-    if (!panel) continue;
-    if (!best || r.width * r.height > best.area) best = { panel, area: r.width * r.height, wide: r.width >= r.height };
-  }
-  return best && { panel: best.panel, wide: best.wide };
-}
-
 export function activateCanvas(first: PaneParams, second: PaneParams, edge: SplitEdge): void {
   if (isPhone()) return;
   mainConversation().teardown();
@@ -623,16 +612,24 @@ function tabIntoPane(paneId: string, params: PaneParams, index?: number): boolea
   return true;
 }
 
-export function addBlankPane(scopeId?: string): boolean {
-  if (!splitState.active || !dockApi) return false;
+export function startNewChatInCanvas(scopeId?: string, threadRef?: string): Conversation | null {
+  if (!splitState.active || !dockApi) return null;
   if (appState.currentView !== "chats") switchView("chats");
-  if (!ensureCanvas() || !dockApi) return false;
-  const at = largestGroupPanel(dockApi);
-  if (!at) return false;
-  const capped = dockApi.groups.length >= MAX_TILES;
-  const target = (capped ? dockApi.activePanel : null) ?? at.panel;
-  splitPane(target.id, at.wide ? "right" : "bottom", scopeId ? { scopeId } : {});
-  return true;
+  if (!ensureCanvas() || !dockApi) return null;
+  const target = dockApi.activePanel ?? dockApi.panels[0];
+  if (!target) return null;
+  const replace = dockApi.panels.length === 1 || dockApi.panels.length >= MAX_PANES;
+  const tile = !replace && dockApi.groups.length > 1 && dockApi.groups.length < MAX_TILES;
+  const { width, height } = target.group.element.getBoundingClientRect();
+  const direction = width >= height ? "right" : "below";
+  const fresh = addPane(
+    { ...(scopeId ? { scopeId } : {}), ...(threadRef ? { threadRef } : {}) },
+    { referencePanel: target.id, direction: tile ? direction : "within" },
+  );
+  if (replace) dockApi.removePanel(target);
+  fresh.api.setActive();
+  persist();
+  return paneContents.get(fresh.id)?.conversation ?? null;
 }
 
 function paneSplitWithBlank(panel: IDockviewPanel): void {
@@ -1084,6 +1081,10 @@ class PaneContent implements IContentRenderer {
     const wanted =
       sessionId ?? (threadRef ? (sessionsState.list.find((s) => s.threadRef === threadRef)?.id ?? null) : null);
     if (!wanted) {
+      if (threadRef) {
+        conversation.mountContinuable(threadRef, null, scopeId ?? null, []);
+        return;
+      }
       const context = scopeId ? contextsState.list.find((c) => c.scopeId === scopeId) : undefined;
       conversation.newChat(context ? { scopeId: context.scopeId, name: context.name ?? null } : undefined);
       return;

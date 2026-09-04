@@ -71,6 +71,7 @@ import {
   sessionSelectionBar,
   revealSessionSurface,
   startNewChatInLastScope,
+  startNewChat,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
@@ -919,7 +920,7 @@ function openAppEditChat(slug: string): void {
     return;
   }
   if (!storedDraft(threadRef)) saveDraft(threadRef, `Update my deployed app "${slug}": `);
-  mainConversation().mountContinuable(threadRef, null, null, []);
+  startNewChat(null, null, threadRef);
   renderList();
 }
 
