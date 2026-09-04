@@ -368,11 +368,21 @@ const readline = require("node:readline");
 const authPath = path.join(process.env.CODEX_HOME, "auth.json");
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const rl = readline.createInterface({ input: process.stdin });
+let loggedIn = false;
 rl.on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.method === "initialize") return send({ id: msg.id, result: {} });
   if (msg.method === "initialized") return;
-  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "thread-${token}" } } });
+  if (msg.method === "account/login/start") {
+    if (msg.params.type !== "chatgptAuthTokens" || !msg.params.accessToken || !msg.params.chatgptAccountId)
+      return send({ id: msg.id, error: { code: -1, message: "invalid external subscription auth" } });
+    loggedIn = true;
+    return send({ id: msg.id, result: { type: "chatgptAuthTokens" } });
+  }
+  if (msg.method === "thread/start") {
+    if (!loggedIn) return send({ id: msg.id, error: { code: 401, message: "401 Unauthorized: Missing Bearer" } });
+    return send({ id: msg.id, result: { thread: { id: "thread-${token}" } } });
+  }
   if (msg.method === "turn/start") {
     const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
     auth.tokens.access_token = ${JSON.stringify(accessToken)};
@@ -400,16 +410,74 @@ const readline = require("node:readline");
 const authPath = path.join(process.env.CODEX_HOME, "auth.json");
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const rl = readline.createInterface({ input: process.stdin });
+let loggedIn = false;
 rl.on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.method === "initialize") return send({ id: msg.id, result: {} });
   if (msg.method === "initialized") return;
-  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "thread-" + process.pid } } });
+  if (msg.method === "account/login/start") {
+    if (msg.params.type !== "chatgptAuthTokens" || !msg.params.accessToken || !msg.params.chatgptAccountId)
+      return send({ id: msg.id, error: { code: -1, message: "invalid external subscription auth" } });
+    loggedIn = true;
+    return send({ id: msg.id, result: { type: "chatgptAuthTokens" } });
+  }
+  if (msg.method === "thread/start") {
+    if (!loggedIn) return send({ id: msg.id, error: { code: 401, message: "401 Unauthorized: Missing Bearer" } });
+    return send({ id: msg.id, result: { thread: { id: "thread-" + process.pid } } });
+  }
   if (msg.method === "turn/start") {
     const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
     const reply = String(auth.tokens.account_id ?? "none") + ":" + String("refresh_token" in auth.tokens);
     send({ id: msg.id, result: { turn: { id: "turn-" + process.pid, status: "inProgress", items: [] } } });
     return setTimeout(() => send({ method: "turn/completed", params: { threadId: "thread-" + process.pid, turn: { id: "turn-" + process.pid, status: "completed", items: [{ type: "agentMessage", text: reply, phase: "final_answer" }] } } }), ${delayMs});
+  }
+  if (msg.method === "turn/interrupt") return send({ id: msg.id, result: {} });
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function subscriptionAuthCodexBinary(dir: string): string {
+  const path = join(dir, "subscription-auth-codex");
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const readline = require("node:readline");
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+const rl = readline.createInterface({ input: process.stdin });
+let loggedIn = false;
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "initialized") return;
+  if (msg.method === "account/login/start") {
+    const auth = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, "auth.json"), "utf8"));
+    if ("refresh_token" in auth.tokens || msg.params.type !== "chatgptAuthTokens" ||
+        msg.params.accessToken !== ${JSON.stringify(oauthAccessToken("subscription-account", "initial"))} ||
+        msg.params.chatgptAccountId !== "subscription-account") {
+      return send({ id: msg.id, error: { code: -1, message: "invalid external subscription auth" } });
+    }
+    loggedIn = true;
+    return send({ id: msg.id, result: { type: "chatgptAuthTokens" } });
+  }
+  if (msg.method === "thread/start") {
+    if (!loggedIn) return send({ id: msg.id, error: { code: 401, message: "401 Unauthorized: Missing Bearer" } });
+    return send({ id: msg.id, result: { thread: { id: "subscription-thread" } } });
+  }
+  if (msg.method === "turn/start") {
+    send({ id: msg.id, result: { turn: { id: "subscription-turn", status: "inProgress", items: [] } } });
+    return send({ id: "refresh-auth", method: "account/chatgptAuthTokens/refresh", params: {} });
+  }
+  if (msg.id === "refresh-auth") {
+    if (msg.result?.accessToken !== ${JSON.stringify(oauthAccessToken("subscription-account", "refreshed"))} ||
+        msg.result?.chatgptAccountId !== "subscription-account") {
+      return send({ method: "turn/completed", params: { threadId: "subscription-thread", turn: { id: "subscription-turn", status: "failed", error: { message: "refresh failed" }, items: [] } } });
+    }
+    return send({ method: "turn/completed", params: { threadId: "subscription-thread", turn: { id: "subscription-turn", status: "completed", items: [{ type: "agentMessage", text: "authenticated", phase: "final_answer" }] } } });
   }
   if (msg.method === "turn/interrupt") return send({ id: msg.id, result: {} });
 });
@@ -679,6 +747,51 @@ test("Codex materializes ChatGPT OAuth auth as ephemeral child material without 
   const defaultEnv = { HOME: defaultSource, OPENAI_API_KEY: "ambient-default-api-key" };
   assert.equal(codexChildEnv(defaultEnv, defaultJail).OPENAI_API_KEY, undefined);
   assert.equal(existsSync(join(prepareCodexHome(defaultEnv, defaultJail), "auth.json")), true);
+});
+
+test("Codex logs the app-server into ChatGPT subscription auth and services token refresh", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-subscription-test-"));
+  const loads: boolean[] = [];
+  const auth = (marker: string) => ({
+    auth_mode: "chatgpt",
+    tokens: {
+      access_token: oauthAccessToken("subscription-account", marker),
+      refresh_token: `refresh-${marker}`,
+      account_id: "subscription-account",
+      id_token: oauthIdToken("subscription-account", marker),
+    },
+  });
+  const harness = createCodexHarness({
+    binaryPath: subscriptionAuthCodexBinary(dir),
+    env: testHarnessEnv(dir),
+    authStore: {
+      description: "test subscription",
+      async load(options?: { forceRefresh?: boolean }) {
+        loads.push(Boolean(options?.forceRefresh));
+        return auth(options?.forceRefresh ? "refreshed" : "initial");
+      },
+    },
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const result = await harness.turns.runTurn({
+    session: { id: "subscription-auth" } as Session,
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) =>
+      ({ ...entry, sessionId: "subscription-auth", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  });
+
+  assert.equal(result.reply, "authenticated");
+  assert.equal(loads.at(-1), true);
 });
 
 test("Codex diagnostics redact credential-shaped stderr", () => {

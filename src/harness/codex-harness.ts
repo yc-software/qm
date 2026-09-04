@@ -15,6 +15,7 @@ import { countTokens } from "../util/tokens.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { CodexAppServer, CodexRpcError, redactCodexDiagnostics } from "./codex-app-server.ts";
 import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "./codex-auth.ts";
+import { asObject, codexOAuthJwtAccountId } from "./codex-auth-file.ts";
 import {
   childCodexAuthFromDerived,
   childCodexOAuthAuth,
@@ -168,6 +169,7 @@ type ActiveTurn = {
 type Runtime = {
   server: CodexAppServer;
   jail: string;
+  authTokenFingerprint?: string;
 };
 type StartingRuntime = {
   promise: Promise<Runtime>;
@@ -258,6 +260,26 @@ const CODEX_ENV_PASSTHROUGH = [
   "OPENAI_BASE_URL",
   "CODEX_ACCESS_TOKEN",
 ] as const;
+
+function codexSubscriptionAuth(auth: Record<string, unknown>): { accessToken: string; accountId: string } {
+  const accessToken = asObject(auth.tokens)?.access_token;
+  if (typeof accessToken !== "string" || !accessToken)
+    throw new Error("Codex OAuth auth does not contain an access token");
+  const accountId = codexOAuthJwtAccountId(auth);
+  if (!accountId) throw new Error("Codex OAuth auth does not contain a ChatGPT account id");
+  return { accessToken, accountId };
+}
+
+async function loginCodexSubscription(server: CodexAppServer, auth: Record<string, unknown>): Promise<string> {
+  const subscription = codexSubscriptionAuth(auth);
+  await server.request("account/login/start", {
+    type: "chatgptAuthTokens",
+    accessToken: subscription.accessToken,
+    chatgptAccountId: subscription.accountId,
+    chatgptPlanType: null,
+  });
+  return createHash("sha256").update(subscription.accessToken).digest("hex");
+}
 
 export function codexChildEnv(
   source: NodeJS.ProcessEnv,
@@ -542,7 +564,11 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     }
   };
 
-  const buildServer = (jail: string, childEnv: NodeJS.ProcessEnv): CodexAppServer => {
+  const buildServer = (
+    jail: string,
+    childEnv: NodeJS.ProcessEnv,
+    loadSubscriptionAuth?: (forceRefresh: boolean) => Promise<Record<string, unknown> | null>,
+  ): CodexAppServer => {
     const binaryPath = opts.binaryPath ?? resolve("node_modules/.bin/codex");
     const server: CodexAppServer = new CodexAppServer({
       binaryPath,
@@ -600,6 +626,19 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         }
       },
       onRequest: async (method, params) => {
+        if (method === "account/chatgptAuthTokens/refresh") {
+          if (!loadSubscriptionAuth) throw new Error("Codex subscription auth store is unavailable");
+          const freshAuth = await loadSubscriptionAuth(true);
+          if (!freshAuth) throw new Error("Codex OAuth auth is unavailable");
+          const fresh = codexSubscriptionAuth(freshAuth);
+          if (runtime?.server === server)
+            runtime.authTokenFingerprint = createHash("sha256").update(fresh.accessToken).digest("hex");
+          return {
+            accessToken: fresh.accessToken,
+            chatgptAccountId: fresh.accountId,
+            chatgptPlanType: null,
+          };
+        }
         if (method !== "item/tool/call") throw new Error(`unsupported Codex request ${method}`);
         const p = (params ?? {}) as Record<string, unknown>;
         const threadId = String(p.threadId ?? "");
@@ -674,7 +713,11 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             throw new Error(`Codex OAuth auth is unavailable (${authStore!.description})`);
           prepareCodexHome(sourceEnv, jail, oauthConfigured ? sourceAuth : undefined);
           if (startupAbort.signal.aborted) throw new Error("Codex app-server startup cancelled");
-          server = buildServer(jail, codexChildEnv(sourceEnv, jail, oauthConfigured ? sourceAuth : undefined));
+          server = buildServer(
+            jail,
+            codexChildEnv(sourceEnv, jail, oauthConfigured ? sourceAuth : undefined),
+            authStore ? (forceRefresh) => authStore.load({ forceRefresh }) : undefined,
+          );
           startingServer = server;
           if (startupAbort.signal.aborted) throw new Error("Codex app-server startup cancelled");
         } catch (error) {
@@ -691,7 +734,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               )
             : (opts.appServerStartTimeoutMs ?? CODEX_START_TIMEOUT_MS);
           await Promise.race([
-            server.initialize(),
+            (async () => {
+              await server.initialize();
+              if (sourceAuth) await loginCodexSubscription(server, sourceAuth);
+            })(),
             new Promise<never>((_, reject) => {
               startTimer = setTimeout(
                 () => reject(new Error("Codex app-server initialization timed out")),
@@ -707,7 +753,17 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           if (startTimer) clearTimeout(startTimer);
           if (startingServer === server) startingServer = null;
         }
-        runtime = { server, jail };
+        runtime = {
+          server,
+          jail,
+          ...(sourceAuth
+            ? {
+                authTokenFingerprint: createHash("sha256")
+                  .update(codexSubscriptionAuth(sourceAuth).accessToken)
+                  .digest("hex"),
+              }
+            : {}),
+        };
         runtimeCleanupRequested = false;
         server.process.once("close", () => {
           void (async () => {
@@ -866,7 +922,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         try {
           await awaitSetup(
             Promise.race([
-              server.initialize(),
+              (async () => {
+                await server.initialize();
+                await loginCodexSubscription(server, userAuth);
+              })(),
               new Promise<never>((_, reject) => {
                 startTimer = setTimeout(
                   () => reject(new Error("Codex app-server initialization timed out")),
@@ -927,6 +986,12 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           );
         } else {
           prepareCodexHome(sourceEnv, rt.jail, sourceAuth);
+          const freshFingerprint = createHash("sha256")
+            .update(codexSubscriptionAuth(sourceAuth).accessToken)
+            .digest("hex");
+          if (rt.authTokenFingerprint !== freshFingerprint) {
+            rt.authTokenFingerprint = await awaitSetup(loginCodexSubscription(rt.server, sourceAuth));
+          }
         }
       }
     } catch (error) {

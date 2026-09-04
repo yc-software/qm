@@ -19,7 +19,7 @@ export interface CodexAuthStore {
   /** Where the credential lives, for logs and errors. Never includes secrets. */
   readonly description: string;
   /** Current auth, centrally refreshed when the access token is stale. Null when unavailable. */
-  load(): Promise<JsonObject | null>;
+  load(options?: { forceRefresh?: boolean }): Promise<JsonObject | null>;
 }
 
 /** The Codex CLI's public OAuth client id (auth.openai.com device/PKCE client). */
@@ -209,10 +209,10 @@ export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexA
 
   return {
     description: `keychain credential ${deps.credentialId}`,
-    async load(): Promise<JsonObject | null> {
+    async load(options): Promise<JsonObject | null> {
       const current = await readCurrent();
       if (!current) return null;
-      if (!authNeedsRefresh(current.auth, now())) return current.auth;
+      if (!options?.forceRefresh && !authNeedsRefresh(current.auth, now())) return current.auth;
       // Single refresh in flight per store; concurrent loads share it.
       refreshing ??= (async () => {
         try {
@@ -250,10 +250,10 @@ export function fileCodexAuthStore(
   let refreshing: Promise<JsonObject | null> | null = null;
   return {
     description: `auth file ${path}`,
-    async load(): Promise<JsonObject | null> {
+    async load(options): Promise<JsonObject | null> {
       const current = readCodexOAuthAuthFile(path);
       if (!current) return null;
-      if (!authNeedsRefresh(current, now())) return current;
+      if (!options?.forceRefresh && !authNeedsRefresh(current, now())) return current;
       refreshing ??= (async () => {
         try {
           const next = await refreshCodexOAuth(current, fetchImpl);

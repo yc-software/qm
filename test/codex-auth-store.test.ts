@@ -124,6 +124,37 @@ test("keychain store returns fresh auth without refreshing", async () => {
   assert.equal(state.saves.length, 0);
 });
 
+test("keychain store force-refreshes a token requested by the app-server", async () => {
+  const state: FakeKeychainState = {
+    meta: META,
+    files: credFiles(authJson("acct", FRESH_EXP, "refresh-1")),
+    saves: [],
+  };
+  let calls = 0;
+  const store = keychainCodexAuthStore({
+    keychain: fakeKeychain(state),
+    credentialId: "cred-1",
+    now: () => NOW,
+    fetchImpl: (async () => {
+      calls += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          access_token: accessToken("acct", FRESH_EXP, "forced"),
+          id_token: idToken("acct"),
+          refresh_token: "refresh-2",
+        }),
+      };
+    }) as unknown as typeof fetch,
+  });
+
+  const auth = await store.load({ forceRefresh: true });
+
+  assert.equal(calls, 1);
+  assert.equal((auth!.tokens as Record<string, unknown>).refresh_token, "refresh-2");
+  assert.equal(state.saves.length, 1);
+});
+
 test("keychain store refreshes a stale access token centrally and persists rotation", async () => {
   const state: FakeKeychainState = {
     meta: META,
