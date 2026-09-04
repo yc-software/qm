@@ -1,0 +1,30 @@
+{
+  "display_information": {
+    "name": "Agent QA Driver",
+    "description": "Live-e2e driver — posts to Slack as the signed-in member (QA human + actors).",
+    "background_color": "#1f2937"
+  },
+  "oauth_config": {
+    "redirect_urls": ["http://localhost:3000/slack/callback"],
+    "scopes": {
+      "user": [
+        "chat:write",
+        "channels:read",
+        "channels:write",
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "im:write",
+        "reactions:write",
+        "files:read",
+        "files:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "noise-heavy-debugging",
+  "description": "A debugging session full of one-off ephemera (error strings, temp ports, a flaky test) with only two genuinely durable facts buried in it.",
+  "turns": [
+    {
+      "input": "getting `ECONNREFUSED 127.0.0.1:5433` from the integration tests, any idea?",
+      "reply": "That port suggests the test Postgres isn't up. Try `docker compose up -d pg-test` first."
+    },
+    {
+      "input": "ok that fixed it. now `relation \"webhook_events\" does not exist`...",
+      "reply": "Run the migrations against the test database: `npm run migrate:test`."
+    },
+    {
+      "input": "works. unrelated: we deploy with `make ship` in this repo, never raw kubectl — house rule worth remembering.",
+      "reply": "Noted: deploys go through `make ship`, never raw kubectl."
+    },
+    {
+      "input": "the flaky one today was retry-backoff.test.ts, failed twice then passed. ignoring it for now.",
+      "reply": "Reasonable — it's a known-flaky pattern; rerun before concluding anything."
+    },
+    {
+      "input": "also for context I'm the on-call owner for the webhooks service long-term, so route webhook questions to me.",
+      "reply": "Got it — you're the long-term owner/on-call for the webhooks service."
+    },
+    {
+      "input": "ok all green now, thanks",
+      "reply": "Nice. All tests passing."
+    }
+  ]
+}

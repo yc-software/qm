@@ -1,0 +1,26 @@
+{
+  "id": "long-project-arc",
+  "description": "A multi-turn project arc; good notebooks track the ongoing project and its decisions without logging every step.",
+  "turns": [
+    {
+      "input": "starting a new project: migrating our notification system off SQS to a Postgres-backed queue. Codename 'quiethours'. This will run for about a month.",
+      "reply": "Exciting — project 'quiethours': SQS → Postgres-backed queue, ~1 month horizon. Where do you want to start?"
+    },
+    {
+      "input": "first decision made: we're using SKIP LOCKED polling, not LISTEN/NOTIFY. Write that down.",
+      "reply": "Recorded: quiethours uses SKIP LOCKED polling rather than LISTEN/NOTIFY."
+    },
+    {
+      "input": "can you sketch the worker loop?",
+      "reply": "Sure: BEGIN; SELECT ... FOR UPDATE SKIP LOCKED LIMIT n; process; DELETE/mark done; COMMIT — with a visibility-timeout column for crash recovery."
+    },
+    {
+      "input": "good. second decision: dual-write during migration, cut reads over per-tenant behind a flag.",
+      "reply": "Recorded: dual-write during migration; per-tenant read cutover behind a feature flag."
+    },
+    {
+      "input": "I'll pick this up next week, same project.",
+      "reply": "I'll keep the quiethours context ready for next week."
+    }
+  ]
+}

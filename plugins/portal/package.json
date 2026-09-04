@@ -1,0 +1,23 @@
+{
+  "name": "qm-portal-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Public SSO front door and path-prefix reverse proxy to private web and admin surfaces.",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "jose": "^6.2.3",
+    "lru-cache": "^11.5.2"
+  }
+}

@@ -1,0 +1,110 @@
+name: Publish the QM CLI
+
+on:
+  workflow_call:
+    inputs:
+      images_ref:
+        description: Commit SHA whose published images the package should pin
+        required: false
+        type: string
+      version:
+        description: Version to publish, overriding cli/package.json
+        required: false
+        type: string
+    outputs:
+      manifest:
+        description: The image manifest the published package pins
+        value: ${{ jobs.package.outputs.manifest }}
+  workflow_dispatch:
+    inputs:
+      images_ref:
+        description: Commit SHA whose published images the package should pin
+        required: false
+      version:
+        description: Version to publish, overriding cli/package.json
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  package:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      manifest: ${{ steps.pin.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install, typecheck, packed-artifact test
+        working-directory: cli
+        run: |
+          npm ci
+          npm run typecheck
+          npm run test:pack
+      - name: Pin published image digests
+        id: pin
+        env:
+          IMAGES_REF: ${{ inputs.images_ref || github.sha }}
+        run: |
+          set -euo pipefail
+          out=$(jq -n '{sandboxBase: "", services: {}}')
+          for service in core web-ui admin portal auth sandbox-base; do
+            repo="yc-software/qm/$service"
+            token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull&service=ghcr.io" | jq -r .token)
+            digest=$(curl -fsS -o /dev/null -D - -H "Authorization: Bearer $token" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/$repo/manifests/$IMAGES_REF" \
+              | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2 }')
+            if [ -z "$digest" ]; then
+              echo "no published image for $repo at $IMAGES_REF" >&2
+              exit 1
+            fi
+            ref="ghcr.io/$repo@$digest"
+            if [ "$service" = sandbox-base ]; then
+              out=$(printf '%s' "$out" | jq --arg r "$ref" '.sandboxBase = $r')
+            else
+              out=$(printf '%s' "$out" | jq --arg k "$service" --arg r "$ref" '.services[$k] = $r')
+            fi
+          done
+          printf '%s\n' "$out" > cli/manifest.json
+          cat cli/manifest.json
+          jq -e '[.sandboxBase] + [.services[]]
+                 | length == 6
+                 and all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$"))
+                 and all(test("@sha256:(.)\\1{63}$") | not)' cli/manifest.json > /dev/null
+          printf 'manifest=%s\n' "$(jq -c . cli/manifest.json)" >> "$GITHUB_OUTPUT"
+      - name: Publish
+        working-directory: cli
+        env:
+          VERSION: ${{ inputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version > /dev/null
+          fi
+          version=$(jq -r .version package.json)
+          if npm view "@yc-software/qm@$version" version > /dev/null 2>&1; then
+            published=$(mktemp -d)
+            tarball=$(npm pack "@yc-software/qm@$version" --pack-destination "$published" --silent | tail -1)
+            tar -xzf "$published/$tarball" -C "$published" package/manifest.json
+            if [ "$(jq -Sc . "$published/package/manifest.json")" != "$(jq -Sc . manifest.json)" ]; then
+              echo "@yc-software/qm@$version is on npm pinning different image digests; bump the version" >&2
+              exit 1
+            fi
+            echo "@yc-software/qm@$version is already on npm pinning these digests; keeping it"
+          else
+            npm publish --provenance --access public
+          fi
+          if [ "$version" = 0.1.5 ]; then
+            npm deprecate @yc-software/qm@1.0.5 "Published with an incorrect version number; use 0.1.5."
+          fi

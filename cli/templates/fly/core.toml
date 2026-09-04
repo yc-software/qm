@@ -1,0 +1,43 @@
+app = "qm-core"
+primary_region = "sjc"
+
+[env]
+  QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
+  PORT = "8080"
+  ORG_ID = "acme"
+  HARNESS = "pi"
+  PI_SYSTEM_CACHE_SPLIT = "1"
+  SESSION_STORE = "postgres"
+  RUN_STORE = "postgres"
+  SNAPSHOT_STORE = "s3"
+  TRANSFER_STORE = "s3"
+  S3_BUCKET = "acme-data"
+  S3_REGION = "auto"
+  DATA_DIR = "/data"
+  PUBLIC_WEB_URL = "https://agent.example.com"
+  FLY_SANDBOX_APP_NAME = "acme-sandboxes"
+  FLY_BASE_IMAGE = "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+  WEB_UI_PUBLIC_URL = "https://agent.example.com"
+  REQUIRE_SIGNED_PORTAL_IDENTITY = "1"
+  FLY_ORG = "personal"
+  FLY_DEPLOY_BASE_IMAGE = "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+  FLY_DEPLOY_APP_PREFIX = "qm-d"
+[deploy]
+  strategy = "bluegreen"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "2gb"
+
+kill_signal = "SIGTERM"
+kill_timeout = "300s"
+
+[checks]
+  [checks.health]
+    type = "http"
+    port = 8080
+    method = "get"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "20s"

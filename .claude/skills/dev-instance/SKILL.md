@@ -1,0 +1,1 @@
+../../../.codex/skills/dev-instance/SKILL.md

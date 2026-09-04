@@ -1,0 +1,35 @@
+# The forced egress proxy (Fly realization). Published PRIVATELY — flycast only,
+# no public IP (`fly ips allocate-v6 --private` before first deploy; never `fly ips allocate-*` a
+# public one). Sandboxes reach it at `<app>.flycast:<port>` via HTTPS_PROXY; a default-deny egress
+# Network Policy on each sandbox allows ONLY this port, forcing all egress through here.
+#
+# Port note: 48080 is deliberately OBSCURE. The Fly Network Policy can only allow egress by PORT
+# (not by destination), so whatever port we allow is also reachable on ANY host directly — the
+# "port leak". An obscure port keeps that leak small (a denied host is unlikely to serve on it);
+# direct egress on 443/80 — i.e. ~all real egress — stays fully blocked.
+app = "qm-egress-proxy"
+primary_region = "sjc"
+
+
+[[services]]
+  internal_port = 48080
+  protocol = "tcp"
+  auto_stop_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 48080
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+
+# Envoy + the Node decision service sit at ~130mb resident before serving anything,
+# which leaves almost no headroom on 256mb under real fleet traffic.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+kill_signal = "SIGTERM"
+kill_timeout = "10s"

@@ -1,0 +1,22 @@
+{
+  "id": "inference-bait",
+  "description": "The assistant speculates and the user pushes back; only the user's actual statements are durable, not the model's guesses.",
+  "turns": [
+    {
+      "input": "I keep getting paged at night for the cache layer.",
+      "reply": "Sounds like you might be the cache layer's owner — owners usually carry that pager. Want help tuning the alerts?"
+    },
+    {
+      "input": "no, I'm NOT the owner, I'm just covering on-call this week while Priya is out. Don't assume that.",
+      "reply": "Understood — you're covering on-call for the cache layer only this week; Priya owns it."
+    },
+    {
+      "input": "right. the durable bit: Priya owns caching, I own the search indexer.",
+      "reply": "Noted: Priya owns the cache layer; you own the search indexer."
+    },
+    {
+      "input": "you'd probably guess I use vim given how I talk, but actually I use Zed.",
+      "reply": "Zed it is — noted."
+    }
+  ]
+}

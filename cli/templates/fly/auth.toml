@@ -1,0 +1,43 @@
+app = "qm-auth"
+primary_region = "sjc"
+
+[env]
+  QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
+  PORT = "8080"
+  CORE_API_URL = "http://qm-core.internal:8080"
+  CORE_ORG_ID = "acme"
+  AUTH_ISSUER = "https://agent.example.com/idp"
+  AUTH_CLIENT_ID = "qm-portal"
+  AUTH_REDIRECT_URI = "https://agent.example.com/auth/callback"
+  AUTH_EMAIL_TRANSPORT = "resend"
+  AUTH_ALLOWED_EMAIL_DOMAIN = "example.com"
+  AUTH_BRAND_NAME = "Acme"
+
+[http_service]
+  internal_port = 8080
+  force_https = false
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 150
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+kill_signal = "SIGTERM"
+kill_timeout = "10s"
+
+[checks]
+  [checks.health]
+    type = "http"
+    port = 8080
+    method = "get"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"

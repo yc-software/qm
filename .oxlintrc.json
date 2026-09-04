@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["**/node_modules", "**/dist", "**/dist-web", "plugins/web-ui/public"],
+  "categories": {
+    "correctness": "warn"
+  },
+  "rules": {
+    "no-control-regex": "off",
+    "unicorn/no-useless-fallback-in-spread": "warn",
+    "unicorn/no-useless-spread": "warn",
+    "unicorn/no-new-array": "warn",
+    "unicorn/prefer-string-starts-ends-with": "warn",
+    "unicorn/no-invalid-fetch-options": "warn"
+  }
+}

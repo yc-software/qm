@@ -1,0 +1,40 @@
+{
+  "contract": 1,
+  "orgId": "beta",
+  "publicUrl": "https://beta.example.com",
+  "target": "fly",
+  "appPrefix": "beta",
+  "region": "sjc",
+  "flyOrg": "personal",
+  "imageFrom": "qm",
+  "sandbox": {
+    "app": "beta-sandboxes",
+    "image": "registry.fly.io/beta-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+  },
+  "services": ["core", "slack", "admin", "web-ui", "portal"],
+  "vms": {
+    "core": { "size": "shared-cpu-2x", "memory": "4gb" }
+  },
+  "env": {
+    "core": {
+      "PUBLIC_WEB_URL": "https://beta-portal.fly.dev",
+      "FLY_SANDBOX_APP_NAME": "beta-sandboxes",
+      "SNAPSHOT_STORE": "s3",
+      "TRANSFER_STORE": "s3",
+      "S3_BUCKET": "beta-data",
+      "S3_REGION": "auto"
+    },
+    "admin": { "ADMIN_BASE_PATH": "/admin" },
+    "slack": {
+      "WEB_UI_PUBLIC_URL": "https://beta-portal.fly.dev"
+    },
+    "web-ui": {
+      "WEB_UI_PUBLIC_URL": "https://beta-portal.fly.dev"
+    },
+    "portal": {
+      "PORTAL_PUBLIC_URL": "https://beta-portal.fly.dev",
+      "OIDC_CLIENT_ID": "1111111111.2222222222",
+      "PORTAL_EXPECTED_TEAM_ID": "T00000000"
+    }
+  }
+}

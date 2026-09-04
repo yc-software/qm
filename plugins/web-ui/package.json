@@ -1,0 +1,49 @@
+{
+  "name": "qm-web-ui-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Web UI surface plugin for qm. Custom chat shell over a thin node:http transport that talks only to the core HTTP API.",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "node --env-file-if-exists=.env server/index.ts",
+    "start": "npm run build && npm run serve",
+    "test": "NODE_ENV=test ALLOW_UNSIGNED_TEST_IDENTITY=1 node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "@date-fns/tz": "^1.5.0",
+    "@earendil-works/pi-agent-core": "0.77.0",
+    "@earendil-works/pi-ai": "0.77.0",
+    "@earendil-works/pi-web-ui": "0.75.3",
+    "@mariozechner/mini-lit": "^0.2.0",
+    "date-fns": "^4.4.0",
+    "dockview-core": "^7.0.4",
+    "dompurify": "^3.4.13",
+    "jszip": "^3.10.1",
+    "lit": "^3.3.1",
+    "lru-cache": "^11.5.2",
+    "lucide": "^0.544.0",
+    "marked": "^18.0.5"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^24.0.0",
+    "jsdom": "^29.1.1",
+    "katex": "^0.16.47",
+    "typescript": "^5.8.2",
+    "vite": "^7.1.6"
+  },
+  "overrides": {
+    "@earendil-works/pi-web-ui": {
+      "@earendil-works/pi-ai": "$@earendil-works/pi-ai"
+    },
+    "@mariozechner/mini-lit": {
+      "marked": "^18.0.5"
+    }
+  }
+}

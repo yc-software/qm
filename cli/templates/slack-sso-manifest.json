@@ -1,0 +1,18 @@
+{
+  "display_information": {
+    "name": "qm SSO",
+    "description": "Sign in to your qm deployment with Slack",
+    "background_color": "#1f2937"
+  },
+  "oauth_config": {
+    "redirect_urls": ["https://example.com/auth/callback"],
+    "scopes": {
+      "user": ["openid", "profile", "email"]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

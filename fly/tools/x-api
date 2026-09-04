@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+as="org"
+case "${1:-}" in
+  --as) as="${2:-}"; shift 2 ;;
+  --as=*) as="${1#--as=}"; shift ;;
+esac
+
+org_token="${X_BEARER_TOKEN:-${X_ACCESS_TOKEN:-}}"
+user_token="${VAULT_TOKEN_API_X_COM:-}"
+
+case "$as" in
+  org) token="$org_token" ;;
+  me|user) token="$user_token" ;;
+  *) echo "x-api: --as must be 'org' or 'me'" >&2; exit 2 ;;
+esac
+
+if [ -z "$token" ]; then
+  {
+    echo "x-api: no X auth available for --as=$as. Auth methods present:"
+    [ -n "$org_token" ] && echo "  --as=org  org-level app token — broad reads, higher rate limits"
+    [ -n "$user_token" ] && echo "  --as=me   your connected X account — acts as you (needed to post as yourself)"
+    [ -z "${org_token}${user_token}" ] && echo "  (none) — connect your X account in the web UI, or set resident X auth (X_BEARER_TOKEN / X_ACCESS_TOKEN)"
+  } >&2
+  exit 2
+fi
+
+if [ "$#" -lt 1 ]; then
+  echo "usage: x-api [--as=org|me] <v2-path> [curl args...]" >&2
+  exit 2
+fi
+
+path="${1#/}"
+shift
+
+exec curl -sS -H "authorization: Bearer ${token}" "https://api.x.com/2/${path}" "$@"

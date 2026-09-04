@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - id: version
+        name: Resolve the release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "releases are cut from main; this run is on $GITHUB_REF" >&2
+            exit 1
+          fi
+          pkg=$(jq -r .version cli/package.json)
+          case "$pkg" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "cli/package.json version must be semver, got $pkg" >&2; exit 1 ;;
+          esac
+          tagged=$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" -q '.[].ref' \
+            | sed 's|^refs/tags/||' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1 || true)
+          published=$(npm view @yc-software/qm version 2>/dev/null || true)
+          base=$(printf '%s\n%s\n' "${tagged:-0.0.0}" "${published:-0.0.0}" | sort -V | tail -1)
+          if [ "$(printf '%s\n%s\n' "$base" "$pkg" | sort -V | tail -1)" = "$pkg" ] && [ "$pkg" != "$base" ]; then
+            version=$pkg
+          else
+            IFS=. read -r major minor patch <<< "$base"
+            version="$major.$minor.$((patch + 1))"
+          fi
+          tag="v$version"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > /dev/null 2>&1; then
+            echo "$tag already exists; refusing to move it" >&2
+            exit 1
+          fi
+          printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: Images
+    needs: preflight
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/release-package.yml
+
+  cli:
+    name: CLI
+    needs:
+      - preflight
+      - images
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/publish-cli.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+
+  release:
+    name: Tag and publish the release
+    needs:
+      - preflight
+      - cli
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          MANIFEST: ${{ needs.cli.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MANIFEST" | jq . > images.json
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" > /dev/null
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes \
+            "images.json#Pinned image digests"

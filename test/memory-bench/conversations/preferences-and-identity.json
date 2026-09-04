@@ -1,0 +1,22 @@
+{
+  "id": "preferences-and-identity",
+  "description": "Durable preferences and identifiers stated plainly; the notebook should capture them and skip pleasantries.",
+  "turns": [
+    {
+      "input": "hey! quick note before we start: I prefer extremely terse replies, no preamble. My GitHub handle is rdelacroix and my work email is rdelacroix@acme.com.",
+      "reply": "Got it — terse replies from here on."
+    },
+    {
+      "input": "thanks. what's 18% of 240?",
+      "reply": "43.2"
+    },
+    {
+      "input": "perfect. also FYI I'm on the platform team, reporting to Maya. We own the deploy pipeline.",
+      "reply": "Noted: platform team, reporting to Maya, owns the deploy pipeline."
+    },
+    {
+      "input": "great, that's all for now, have a good one!",
+      "reply": "You too."
+    }
+  ]
+}

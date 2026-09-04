@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dev Instance"
+  short_description: "Run the prod-shaped local QM stack"
+  default_prompt: "Use $dev-instance to start or inspect the local QM dev stack."

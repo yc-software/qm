@@ -1,0 +1,30 @@
+app = "qm-egress-proxy-pub"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "../egress-proxy/Dockerfile"
+
+[env]
+  EGRESS_TOKENLESS = "deny"
+
+[[services]]
+  internal_port = 48080
+  protocol = "tcp"
+  auto_stop_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls"]
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+kill_signal = "SIGTERM"
+kill_timeout = "10s"

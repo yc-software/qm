@@ -1,0 +1,40 @@
+// The reference Fly deployment that signs people in with qm's own broker: the
+// portal still speaks plain OIDC, but the identity provider is the "auth" service
+// qm deploys, and the CLI generates its keys and the portal's client credentials.
+// deploy/stacks/acme is the same stack wired to an external identity provider.
+{
+  "contract": 1,
+  "orgId": "acme",
+  "publicUrl": "https://agent.example.com",
+  "target": "fly",
+  "appPrefix": "qm",
+  "region": "sjc",
+  "flyOrg": "personal",
+  "deployAppPrefix": "qm-d",
+  "sandbox": {
+    "app": "acme-sandboxes",
+    "image": "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+  },
+  "services": ["core", "slack", "admin", "web-ui", "portal", "auth"],
+  "env": {
+    "admin": {
+      "ADMIN_BASE_PATH": "/admin",
+    },
+    "core": {
+      "HARNESS": "pi",
+      "PI_DETECT_MODEL": "claude-opus-4-8",
+      "SNAPSHOT_STORE": "s3",
+      "TRANSFER_STORE": "s3",
+      "S3_BUCKET": "acme-data",
+      "S3_REGION": "auto",
+    },
+    "slack": {
+      "SLACK_IDENTITY_EMAIL": "1",
+    },
+    "auth": {
+      "AUTH_EMAIL_TRANSPORT": "resend",
+      "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com",
+      "AUTH_BRAND_NAME": "Acme",
+    },
+  },
+}

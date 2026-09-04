@@ -1,0 +1,185 @@
+import type { ScenarioResult, TimelineSnapshot } from "./harness.ts";
+import { isLiveStatusText, slug } from "./harness.ts";
+
+export interface ShotIndex {
+  [threadKey: string]: string;
+}
+
+function esc(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+}
+
+function renderMrkdwn(raw: string): string {
+  const codes: string[] = [];
+  const S = "\u0000";
+  const stash = (html: string): string => S + (codes.push(html) - 1) + S;
+  let s = esc(raw);
+  s = s.replace(/```\n?([\s\S]*?)```/g, (_m, c: string) => stash(`<pre class="code">${c.replace(/\n$/, "")}</pre>`));
+  s = s.replace(/`([^`\n]+)`/g, (_m, c: string) => stash(`<code>${c}</code>`));
+  s = s.replace(/&lt;(https?:\/\/[^|&>]+)\|([^&>]+)&gt;/g, '<a href="$1" target="_blank" rel="noopener">$2</a>');
+  s = s.replace(/&lt;(https?:\/\/[^|&>]+)&gt;/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  s = s.replace(/&lt;@([A-Z0-9]+)&gt;/g, '<span class="mention">@$1</span>');
+  s = s.replace(/&lt;#[A-Z0-9]+\|([^&>]+)&gt;/g, '<span class="mention">#$1</span>');
+  s = s.replace(/(^|[\s(>\0])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, "$1<b>$2</b>");
+  s = s.replace(/(^|[\s(>\0])_([^_\n]+)_(?=[\s).,!?:;]|$)/g, "$1<i>$2</i>");
+  s = s.replace(/(^|[\s(>\0])~([^~\n]+)~(?=[\s).,!?:;]|$)/g, "$1<s>$2</s>");
+  s = s.replace(/^&gt; ?(.*)$/gm, "<blockquote>$1</blockquote>");
+  return s.replace(new RegExp(S + "(\\d+)" + S, "g"), (_m, i: string) => codes[Number(i)]!);
+}
+
+function fmtSecs(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+const STATUS_META: Record<ScenarioResult["status"], { label: string; cls: string }> = {
+  pass: { label: "pass", cls: "ok" },
+  flaky: { label: "flaky", cls: "warn" },
+  fail: { label: "fail", cls: "bad" },
+  skip: { label: "skip", cls: "muted" },
+};
+
+function renderTimeline(t: TimelineSnapshot): string {
+  type Row = { atMs: number; html: string };
+  const rows: Row[] = [];
+
+  for (const p of t.posts) {
+    rows.push({
+      atMs: p.atMs,
+      html:
+        `<div class="msg user"><div class="who">${esc(shortId(p.author))} <span class="t">+${fmtSecs(p.atMs)}</span></div>` +
+        `<div class="body">${renderMrkdwn(p.text)}</div></div>`,
+    });
+  }
+
+  for (const b of t.botMessages) {
+    const finalV =
+      [...b.versions].reverse().find((v) => !isLiveStatusText(v.text)) ?? b.versions[b.versions.length - 1];
+    const frames = b.versions.filter((v) => v !== finalV);
+    const framesHtml = frames.length
+      ? `<details class="frames"><summary>${frames.length} streaming ${frames.length === 1 ? "edit" : "edits"}</summary>` +
+        frames
+          .map((v) => `<div class="frame"><span class="t">+${fmtSecs(v.atMs)}</span> ${renderMrkdwn(v.text)}</div>`)
+          .join("") +
+        `</details>`
+      : "";
+    const link = b.permalink
+      ? ` <a class="pl" href="${esc(b.permalink)}" target="_blank" rel="noopener">↗ slack</a>`
+      : "";
+    rows.push({
+      atMs: b.firstMs,
+      html:
+        `<div class="msg bot"><div class="who">agent <span class="t">+${fmtSecs(b.firstMs)}</span>${link}</div>` +
+        `<div class="body">${renderMrkdwn(finalV?.text ?? "")}</div>${framesHtml}</div>`,
+    });
+  }
+
+  rows.sort((a, b) => a.atMs - b.atMs);
+  return rows.map((r) => r.html).join("") || `<div class="empty">no Slack activity recorded</div>`;
+}
+
+function shortId(author: string): string {
+  return /^U[A-Z0-9]{6,}$/.test(author) ? "user" : author;
+}
+
+function renderCard(r: ScenarioResult, shots: ShotIndex): string {
+  const meta = STATUS_META[r.status];
+  const t = r.timeline;
+  const shotImgs = t
+    ? t.threads
+        .map((th) => shots[`${th.channelId}:${th.rootTs}`])
+        .filter((p, i, a) => p && a.indexOf(p) === i)
+        .map(
+          (p) =>
+            `<a href="${esc(p!)}" target="_blank" rel="noopener"><img class="shot" src="${esc(p!)}" loading="lazy" alt="rendered Slack thread"></a>`,
+        )
+        .join("")
+    : "";
+  const errorHtml = r.error
+    ? `<div class="error"><b>error</b><pre>${esc(r.error.slice(0, 1500))}</pre>${
+        r.coreErrors?.length
+          ? `<b>core turn errors</b><pre>${esc(r.coreErrors.map((e) => e.slice(0, 500)).join("\n"))}</pre>`
+          : ""
+      }</div>`
+    : "";
+  return (
+    `<section class="card ${meta.cls}" id="${esc(slug(r.name))}">` +
+    `<header><span class="badge ${meta.cls}">${meta.label}</span>` +
+    (r.quarantined ? `<span class="badge muted" title="excluded from the pass/fail signal">quarantined</span>` : "") +
+    `<h2>${esc(r.name)}</h2>` +
+    `<span class="dur">${r.attempts > 1 ? `${r.attempts} attempts · ` : ""}${Math.round(r.durationMs / 1000)}s</span></header>` +
+    (r.skipReason ? `<div class="skipreason">${esc(r.skipReason)}</div>` : "") +
+    errorHtml +
+    (shotImgs ? `<div class="shots">${shotImgs}</div>` : "") +
+    (t ? `<div class="timeline">${renderTimeline(t)}</div>` : "") +
+    `</section>`
+  );
+}
+
+export function renderGallery(runId: string, results: ScenarioResult[], shots: ShotIndex = {}): string {
+  const ordered = [...results].sort((a, b) => {
+    const rank = { fail: 0, flaky: 1, pass: 2, skip: 3 } as const;
+    return rank[a.status] - rank[b.status] || a.name.localeCompare(b.name);
+  });
+  const counts = results.reduce<Record<string, number>>(
+    (acc, r) => ((acc[r.status] = (acc[r.status] ?? 0) + 1), acc),
+    {},
+  );
+  const summary = (["fail", "flaky", "pass", "skip"] as const)
+    .filter((s) => counts[s])
+    .map((s) => `<span class="badge ${STATUS_META[s].cls}">${counts[s]} ${s}</span>`)
+    .join(" ");
+  const nav = ordered
+    .map((r) => `<a class="navitem ${STATUS_META[r.status].cls}" href="#${esc(slug(r.name))}">${esc(r.name)}</a>`)
+    .join("");
+  const cards = ordered.map((r) => renderCard(r, shots)).join("\n");
+
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Slack E2E — run ${esc(runId)}</title>
+<style>
+:root{--ink:#1c2128;--muted:#6b7280;--rule:#e5e7eb;--bg:#f6f7f9;--card:#fff;--ok:#0f7b3f;--warn:#a86400;--bad:#b42318;--accent:#2f66b0;--user:#eef2f7;--bot:#f4f9f4}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+header.top{position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--rule);padding:14px 24px;z-index:5}
+header.top h1{margin:0 0 6px;font-size:18px}
+.badge{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:20px;border:1px solid currentColor}
+.badge.ok{color:var(--ok)}.badge.warn{color:var(--warn)}.badge.bad{color:var(--bad)}.badge.muted{color:var(--muted)}
+main{max-width:860px;margin:0 auto;padding:20px 24px 80px;display:grid;grid-template-columns:1fr;gap:18px}
+.nav{max-width:860px;margin:0 auto;padding:10px 24px 0;display:flex;flex-wrap:wrap;gap:6px}
+.navitem{font-size:12px;text-decoration:none;padding:2px 8px;border-radius:6px;border:1px solid var(--rule);color:var(--muted)}
+.navitem.bad{color:var(--bad);border-color:var(--bad)}.navitem.warn{color:var(--warn);border-color:var(--warn)}.navitem.ok{color:var(--ok)}
+.card{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:16px 18px;scroll-margin-top:70px}
+.card.bad{border-left:4px solid var(--bad)}.card.warn{border-left:4px solid var(--warn)}.card.ok{border-left:4px solid var(--ok)}
+.card header{display:flex;align-items:center;gap:10px;margin:0 0 10px}
+.card header h2{font-size:16px;margin:0;flex:0 1 auto}
+.card .dur{margin-left:auto;color:var(--muted);font-size:12px}
+.skipreason{color:var(--muted);font-size:13px}
+.shots{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 12px}
+.shot{max-width:100%;border:1px solid var(--rule);border-radius:8px;display:block}
+.timeline{display:flex;flex-direction:column;gap:8px}
+.msg{border-radius:8px;padding:8px 10px}
+.msg.user{background:var(--user)}
+.msg.bot{background:var(--bot)}
+.msg .who{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:3px}
+.msg .who .t{font-weight:400}
+.msg .body{white-space:pre-wrap;word-break:break-word;font-size:14px}
+.msg .body a{color:var(--accent)}
+.msg .body code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;background:#eceef1;padding:1px 4px;border-radius:4px}
+.msg .body pre.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f0f2f4;border:1px solid var(--rule);border-radius:6px;padding:8px 10px;white-space:pre-wrap;word-break:break-word;margin:4px 0}
+.msg .body blockquote{border-left:3px solid var(--rule);margin:2px 0;padding:0 0 0 10px;color:#444}
+.mention{color:var(--accent);background:#eaf1fb;border-radius:3px;padding:0 2px}
+.pl{font-weight:400;text-decoration:none;color:var(--accent);font-size:12px}
+.frames{margin-top:6px;font-size:12px}
+.frames summary{cursor:pointer;color:var(--muted)}
+.frame{white-space:pre-wrap;word-break:break-word;color:#555;border-left:2px solid var(--rule);padding:2px 0 2px 8px;margin:4px 0}
+.frame .t{color:var(--muted)}
+.error{background:#fff5f4;border:1px solid #f3c9c4;border-radius:8px;padding:8px 10px;margin:0 0 12px}
+.error pre{white-space:pre-wrap;word-break:break-word;font-size:12px;margin:4px 0 8px}
+.empty{color:var(--muted);font-style:italic}
+</style></head>
+<body>
+<header class="top"><h1>Live Slack E2E — run ${esc(runId)}</h1><div>${summary}</div></header>
+<nav class="nav">${nav}</nav>
+<main>${cards}</main>
+</body></html>`;
+}

@@ -1,0 +1,37 @@
+{
+  "contract": 1,
+  "orgId": "acme",
+  "publicUrl": "https://agent.example.com",
+  "target": "fly",
+  "appPrefix": "qm",
+  "region": "sjc",
+  "flyOrg": "personal",
+  "deployAppPrefix": "qm-d",
+  "sandbox": {
+    "app": "acme-sandboxes",
+    "image": "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+  },
+  "services": ["core", "slack", "admin", "web-ui", "portal"],
+  "env": {
+    "admin": {
+      "ADMIN_BASE_PATH": "/admin",
+    },
+    "core": {
+      "HARNESS": "pi",
+      "SNAPSHOT_STORE": "s3",
+      "TRANSFER_STORE": "s3",
+      "S3_BUCKET": "acme-data",
+      "S3_REGION": "auto",
+    },
+    "portal": {
+      "OIDC_ALLOWED_EMAIL_DOMAIN": "example.com",
+      "OIDC_AUTH_ENDPOINT": "https://accounts.google.com/o/oauth2/v2/auth",
+      "OIDC_TOKEN_ENDPOINT": "https://oauth2.googleapis.com/token",
+      "OIDC_USERINFO_ENDPOINT": "https://openidconnect.googleapis.com/v1/userinfo",
+      "OIDC_ISSUER": "https://accounts.google.com",
+      "OIDC_JWKS_URI": "https://www.googleapis.com/oauth2/v3/certs",
+      "OIDC_SCOPES": "openid email profile",
+      "OIDC_PRINCIPAL_CLAIM": "email",
+    },
+  },
+}

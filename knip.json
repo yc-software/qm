@@ -1,0 +1,48 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "treatConfigHintsAsErrors": true,
+  "ignoreBinaries": ["flyctl", "tail", "cloudflared"],
+  "ignoreDependencies": ["@openai/codex", "opencode-ai"],
+  "ignoreIssues": {
+    "scripts/migrate-principals-to-email.d.mts": ["files"],
+    "plugins/chassis/src/source-auth-sign.ts": ["exports"],
+    "src/slack/lib.ts": ["exports", "types"]
+  },
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/sandbox/local-sandbox.ts",
+        "scripts/aws-deploy-smoke.ts",
+        "scripts/aws-litestream-smoke.ts",
+        "scripts/backfill-session-tape.ts",
+        "scripts/dev/cli.ts",
+        "scripts/dev/supervisor/main.ts",
+        "scripts/dev/test-helpers/fake-child.mjs",
+        "scripts/dev/twin-instance.ts",
+        "scripts/dev/twin-pump.ts",
+        "scripts/migrate-principals-to-email.mjs",
+        "scripts/mine-slack-scenarios.ts",
+        "scripts/skills-materialize-smoke.ts",
+        "scripts/slack-user-token.ts"
+      ]
+    },
+    "cli": { "entry": ["bin/qm.ts"] },
+    "plugins/*": {},
+    "plugins/web-ui": {
+      "entry": ["src/lazy-katex.ts", "src/lazy-hljs.ts", "src/hljs-lang-stub.ts", "test/**/*.test.ts"],
+      "ignoreDependencies": [
+        "katex-real",
+        "hljs-real",
+        "hljs-real-javascript",
+        "hljs-real-typescript",
+        "hljs-real-python",
+        "hljs-real-xml",
+        "hljs-real-css",
+        "hljs-real-json",
+        "hljs-real-bash",
+        "hljs-real-sql",
+        "hljs-real-markdown"
+      ]
+    }
+  }
+}

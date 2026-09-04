@@ -1,0 +1,26 @@
+{
+  "id": "stale-fact-supersession",
+  "description": "Facts change mid-conversation (timezone, project name, meeting day); the notebook should reflect only the latest state.",
+  "turns": [
+    {
+      "input": "for scheduling: I'm in US Eastern time, and our team sync is Mondays at 10am.",
+      "reply": "Noted — US Eastern, team sync Mondays 10am."
+    },
+    {
+      "input": "we're calling the new billing service 'ledgerd' internally, use that name.",
+      "reply": "Will do — 'ledgerd' it is."
+    },
+    {
+      "input": "update: I just moved, so I'm in US Pacific time now. Same sync though.",
+      "reply": "Updated — you're in US Pacific now."
+    },
+    {
+      "input": "one more change: naming review renamed ledgerd to 'tabkeeper'. And the sync moved to Wednesdays at 9am.",
+      "reply": "Got it: the billing service is 'tabkeeper' and the team sync is now Wednesdays at 9am."
+    },
+    {
+      "input": "can you remind me what we settled on?",
+      "reply": "You're in US Pacific time, the billing service is named 'tabkeeper', and your team sync is Wednesdays at 9am."
+    }
+  ]
+}

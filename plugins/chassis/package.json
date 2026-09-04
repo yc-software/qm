@@ -1,0 +1,10 @@
+{
+  "name": "qm-plugin-chassis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared chassis for the HTTP surface plugins: source-auth signing, the signed core-client helpers, small node:http request/response helpers, error helpers, and the common CORE_* env block. Imported by relative path (like the plugins' type-only imports of core) and typechecked/tested through each consuming plugin; Docker images copy plugins/chassis alongside each plugin. Source-only, no dependencies, never published, never imports core.",
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

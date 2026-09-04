@@ -1,0 +1,4 @@
+interface:
+  display_name: "Upstream PR"
+  short_description: "Send a change to qm without leaking org context"
+  default_prompt: "Use $upstream-pr to contribute this change back to upstream qm."

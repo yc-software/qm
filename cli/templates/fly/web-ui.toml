@@ -1,0 +1,39 @@
+app = "qm-web-ui"
+primary_region = "sjc"
+
+[env]
+  QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
+  PORT = "8080"
+  CORE_API_URL = "http://qm-core.internal:8080"
+  CORE_ORG_ID = "acme"
+  WEB_UI_PUBLIC_URL = "https://agent.example.com"
+  WEB_UI_PRINCIPALS = ""
+
+[http_service]
+  internal_port = 8080
+  force_https = false
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "2gb"
+
+kill_signal = "SIGTERM"
+kill_timeout = "10s"
+
+[checks]
+  [checks.health]
+    type = "http"
+    port = 8080
+    method = "get"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"

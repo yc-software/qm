@@ -1,0 +1,134 @@
+# The forced egress proxy's data plane. Envoy terminates HTTP CONNECT and
+# forwards plain absolute-form HTTP, per-connection gated by a Lua check against the local
+# decision service (src/egress-authz-main.ts), which verifies the sandbox's per-turn capability
+# token and applies the embedded EgressPolicy + the unconditional metadata/link-local deny.
+# The check fails CLOSED: if the decision service is down, nothing egresses.
+#
+# Cloud metadata authorities (IMDS 169.254.169.254, GCP metadata, AWS IPv6 IMDS) are ALSO denied
+# statically here at the Envoy layer — belt and braces.
+
+# A UNIX SOCKET, never a TCP port — not even loopback. This process is a forward proxy: a
+# sandbox that asks it to `CONNECT 127.0.0.1:<port>` makes it dial its own namespace, so a
+# loopback admin listener is reachable by every sandbox and /quitquitquit would drop fleet
+# egress on demand. The decision service denies loopback destinations too; this is the other half.
+# Read it with `curl --unix-socket /tmp/envoy-admin.sock http://localhost/stats`. mode 384 = 0600.
+admin:
+  address:
+    pipe: { path: /tmp/envoy-admin.sock, mode: 384 }
+
+static_resources:
+  listeners:
+    - name: egress_proxy
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 48080 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: egress_proxy
+                # One line per connection, on stdout (`fly logs`). %RESPONSE_FLAGS% and
+                # %RESPONSE_CODE_DETAILS% are the point: they name WHY a request failed
+                # (lua_response, upstream_reset_before_response_started{…}), which the
+                # 503's body carries but a failed CONNECT throws away.
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        text_format_source:
+                          inline_string: "[envoy] %REQ(:METHOD)% %REQ(:AUTHORITY):256% %RESPONSE_CODE% flags=%RESPONSE_FLAGS% detail=%RESPONSE_CODE_DETAILS% upstream=%UPSTREAM_HOST% dur=%DURATION%\n"
+                http_protocol_options:
+                  allow_absolute_url: true
+                upgrade_configs:
+                  - upgrade_type: CONNECT
+                route_config:
+                  name: egress
+                  virtual_hosts:
+                    - name: blocked_metadata
+                      domains:
+                        - "169.254.169.254"
+                        - "169.254.169.254:*"
+                        - "[fd00:ec2::254]"
+                        - "[fd00:ec2::254]:*"
+                        - "metadata.google.internal"
+                        - "metadata.google.internal:*"
+                        - "*.metadata.google.internal"
+                        - "metadata.goog"
+                        - "metadata.goog:*"
+                        - "*.metadata.goog"
+                      routes:
+                        - match: { connect_matcher: {} }
+                          direct_response:
+                            status: 403
+                            body: { inline_string: "egress denied by policy\n" }
+                        - match: { prefix: "/" }
+                          direct_response:
+                            status: 403
+                            body: { inline_string: "egress denied by policy\n" }
+                    - name: forward
+                      domains: ["*"]
+                      request_headers_to_remove: ["proxy-authorization"]
+                      routes:
+                        - match: { connect_matcher: {} }
+                          route:
+                            cluster: original_dst
+                            upgrade_configs:
+                              - upgrade_type: CONNECT
+                                connect_config: {}
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: original_dst
+                http_filters:
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        inline_string: |
+                          function envoy_on_request(handle)
+                            local headers = handle:headers()
+                            headers:remove("x-egress-upstream-address")
+                            local check = {
+                              [":method"] = "GET",
+                              [":path"] = "/check",
+                              [":authority"] = "egress-authz",
+                              ["x-egress-authority"] = headers:get(":authority") or "",
+                              ["x-egress-scheme"] = headers:get(":scheme") or "https",
+                            }
+                            local auth = headers:get("proxy-authorization")
+                            if auth then check["proxy-authorization"] = auth end
+                            local ok, status, upstream = pcall(function()
+                              local h, _ = handle:httpCall("egress_authz", check, nil, 10000)
+                              return h[":status"], h["x-egress-upstream-address"]
+                            end)
+                            if not ok or status ~= "200" then
+                              handle:respond({ [":status"] = "403" }, "egress denied by policy\n")
+                              return
+                            end
+                            if upstream == nil then
+                              handle:respond({ [":status"] = "403" }, "egress denied by policy\n")
+                              return
+                            end
+                            handle:headers():replace("x-egress-upstream-address", upstream)
+                          end
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: egress_authz
+      connect_timeout: 2s
+      type: STATIC
+      load_assignment:
+        cluster_name: egress_authz
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: 127.0.0.1, port_value: 48081 }
+    - name: original_dst
+      connect_timeout: 15s
+      type: ORIGINAL_DST
+      lb_policy: CLUSTER_PROVIDED
+      original_dst_lb_config:
+        use_http_header: true
+        http_header_name: x-egress-upstream-address

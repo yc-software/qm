@@ -1,0 +1,8 @@
+package-lock.json
+src/resolution/protocols/
+**/dist/
+**/dist-web/
+data/
+.ci-instance/
+test/live-slack/out/
+deploy/stacks/.generated/
