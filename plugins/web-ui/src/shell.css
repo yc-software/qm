@@ -1505,6 +1505,37 @@ a.chat-row-open {
   background: color-mix(in srgb, var(--secondary) 76%, var(--background));
   color: var(--foreground);
 }
+.mention-chip {
+  display: inline;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--brand-accent) 12%, transparent);
+  color: var(--brand-accent);
+  font-weight: 600;
+}
+.mention-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 24px;
+  z-index: 60;
+  max-width: 320px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.25);
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+.mention-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
 .message-files,
 .attachment-strip {
   display: flex;

@@ -328,8 +328,95 @@ interface PendingWebDelivery {
   id: string;
   idempotencyKey: string;
   createdAt: number;
-  destination?: { target?: string };
+  destination?: { target?: string; audienceScopeId?: string };
 }
+
+const MENTION_TOKEN_BODY = /^[\p{L}\p{N}_.·-]+/u;
+
+function mentionTokensOf(text: string): string[] {
+  const tokens = new Set<string>();
+  let i = text.indexOf("@");
+  while (i !== -1) {
+    const prev = i > 0 ? text[i - 1]! : "";
+    const m = text.slice(i + 1).match(MENTION_TOKEN_BODY);
+    if (m && m[0] && !/[A-Za-z0-9]/.test(prev)) tokens.add(m[0]);
+    i = text.indexOf("@", i + 1);
+  }
+  return [...tokens].slice(0, 5);
+}
+
+function pushThreadEvent(user: string, threadRef: string): void {
+  const conns = deliveryClients.get(user);
+  if (!conns || !conns.size) return;
+  for (const res of conns) sseEvent(res, "delivery", { threadRef });
+}
+
+async function projectMembers(
+  projectId: string,
+  owner: string,
+): Promise<Array<{ principalId: string; displayName?: string }>> {
+  try {
+    const r = await coreFetch(
+      "GET",
+      `/v1/projects?principalId=${encodeURIComponent(owner)}`,
+    );
+    if (r.status !== 200) return [];
+    const parsed = JSON.parse(r.text) as {
+      projects?: Array<{
+        id?: string;
+        memberIds?: string[];
+        members?: Array<{ principalId: string; displayName?: string }>;
+      }>;
+    };
+    const project = (parsed.projects ?? []).find((p) => p.id === projectId);
+    if (project?.members?.length) return project.members;
+    return (project?.memberIds ?? []).map((principalId) => ({ principalId }));
+  } catch {
+    return [];
+  }
+}
+
+async function broadcastProjectThread(projectId: string, owner: string, threadRef: string): Promise<void> {
+  for (const member of await projectMembers(projectId, owner)) {
+    if (member.principalId !== owner) pushThreadEvent(member.principalId, threadRef);
+  }
+}
+
+export function matchMentionMembers(
+  tokens: readonly string[],
+  members: ReadonlyArray<{ principalId: string; displayName?: string }>,
+  senderId: string,
+): string[] {
+  const named = members
+    .filter((m) => m.principalId !== senderId && m.displayName?.trim())
+    .map((m) => ({ principalId: m.principalId, name: m.displayName!.trim().toLowerCase() }));
+  const hits: string[] = [];
+  for (const raw of tokens) {
+    const token = raw.replace(/[._·-]+$/, "").toLowerCase();
+    if (!token) continue;
+    const hit =
+      named.find((n) => n.name === token) ??
+      named.find(
+        (n) =>
+          token.length >= 2 &&
+          token.startsWith(n.name) &&
+          /[^\x00-\x7F]/.test(token.slice(n.name.length)),
+      );
+    if (hit && !hits.includes(hit.principalId)) hits.push(hit.principalId);
+  }
+  return hits;
+}
+
+async function notifyMentions(text: string, threadRef: string, senderId: string, scope: string): Promise<void> {
+  if (!scope.startsWith("group:web-project-")) return;
+  const owner = ownerOfWebThread(threadRef) ?? "";
+  const members = await projectMembers(scope.slice("group:web-project-".length), owner);
+  for (const principalId of matchMentionMembers(mentionTokensOf(text), members, senderId)) {
+    pushThreadEvent(principalId, threadRef);
+  }
+}
+
+const broadcastDeliveries = new Map<string, number>();
 
 async function drainWebDeliveries(): Promise<void> {
   if (deliveriesPollInFlight) return;
@@ -347,6 +434,18 @@ async function drainWebDeliveries(): Promise<void> {
     for (const d of pending) {
       const target = d.destination?.target ?? "";
       const isRecovery = d.idempotencyKey.startsWith("run:");
+      const audienceScopeId = !isRecovery ? (d.destination?.audienceScopeId ?? "") : "";
+      if (audienceScopeId.startsWith("group:web-project-")) {
+        for (const [id, at] of broadcastDeliveries) {
+          if (now - at > WEB_DELIVERY_GIVEUP_MS) broadcastDeliveries.delete(id);
+        }
+        if (!broadcastDeliveries.has(d.id)) {
+          broadcastDeliveries.set(d.id, now);
+          const owner = ownerOfWebThread(target) ?? "";
+          const projectId = audienceScopeId.slice("group:web-project-".length);
+          void broadcastProjectThread(projectId, owner, target);
+        }
+      }
       const conns = !isRecovery ? deliveryClients.get(ownerOfWebThread(target) ?? "") : undefined;
       if (conns && conns.size) {
         for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
@@ -519,7 +618,7 @@ async function readJson<T extends object>(
   }
 }
 
-async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string, threadRef: string): Promise<void> {
+async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string, threadRef: string): Promise<boolean> {
   const r = await coreFetch("POST", `/v1/turns?async=1`, JSON.stringify(turn));
   if (r.status >= 200 && r.status < 300) {
     try {
@@ -527,13 +626,15 @@ async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string,
       const runId = parsed.runId;
       if (runId) {
         rememberRun(runId, user, threadRef);
-        return json(res, r.status, parsed);
+        json(res, r.status, parsed);
+        return true;
       }
     } catch {
       void 0;
     }
   }
   relay(res, r);
+  return false;
 }
 
 async function userPermissions(): Promise<string[]> {
@@ -1899,7 +2000,18 @@ const apiRoutes: readonly WebRoute[] = [
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
         ...(clientTurnId ? { idempotencyKey: `web:${user}:${clientTurnId}` } : {}),
       };
-      return postTurnAndMint(res, turn, user, threadRef);
+      const sent = await postTurnAndMint(res, turn, user, threadRef);
+      if (
+        sent &&
+        typeof scope === "string" &&
+        scope &&
+        !scope.startsWith("personal:") &&
+        typeof text === "string" &&
+        text.includes("@")
+      ) {
+        void notifyMentions(text, threadRef, user, scope);
+      }
+      return;
     },
   },
   {
