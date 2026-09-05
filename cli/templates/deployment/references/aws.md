@@ -50,7 +50,9 @@ Existing deployments created before private session canaries must rerun
 `npm exec qm -- infra render`, review the Terraform plan, and apply it with
 infrastructure-administrator credentials before enabling `check --live`. This
 adds the deploy role's stack-scoped permission to run and inspect the one-off
-core canary task.
+core canary task. When that task fails, the check includes a bounded, redacted
+tail from that task's exact core log stream; it does not search other service
+or task logs.
 
 The package image manifest supplies first-party control-plane images. The AWS
 backend transfers them into deployment-owned ECR and records immutable digests.

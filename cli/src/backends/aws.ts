@@ -785,6 +785,77 @@ interface EcsServiceState {
   tags?: Array<{ key?: string; value?: string }>;
 }
 
+const CANARY_FAILURE_LOG_LINES = 40;
+const CANARY_FAILURE_LOG_BYTES = 8 * 1024;
+
+function redactCanaryFailureLog(value: string): string {
+  return value
+    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----/g, "[REDACTED]")
+    .replace(
+      /\b(?:https?|postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?):\/\/[^\s/@:]+:[^\s/@]+@[^\s]+/gi,
+      "[REDACTED_URL]",
+    )
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[REDACTED_EMAIL]")
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
+    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[REDACTED]")
+    .replace(/\b(?:xox[baprs]-[A-Za-z0-9-]{10,}|gh[pousr]_[A-Za-z0-9]{10,})\b/g, "[REDACTED]")
+    .replace(/\b(?:sk-(?:ant-|proj-|or-v1-)?|sk_live_|rk_live_|AIza)[A-Za-z0-9_-]{16,}\b/g, "[REDACTED]")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
+    .replace(
+      /(\b[A-Za-z0-9_-]*(?:authorization|cookie|secret|token|password|passwd|api[_-]?key|access[_-]?key)[A-Za-z0-9_-]*\b["']?\s*(?:=|:)\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]]+)/gi,
+      "$1[REDACTED]",
+    );
+}
+
+function utf8Tail(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (Buffer.byteLength(value.slice(middle)) <= maxBytes) high = middle;
+    else low = middle + 1;
+  }
+  return value.slice(low);
+}
+
+function canaryFailureLogs(config: QmConfig, taskArn: string): { stream: string; body: string } | null {
+  const aws = requireAws(config);
+  const taskId = taskArn.split("/").at(-1);
+  if (!taskId || !/^[A-Za-z0-9_-]+$/.test(taskId)) return null;
+  const spec = aws.services.core;
+  if (!spec) return null;
+  const stream = `core/core/${taskId}`;
+  try {
+    const response = awsJson<{ events?: Array<{ message?: string }> }>(aws, [
+      "logs",
+      "get-log-events",
+      "--log-group-name",
+      spec.logGroup ?? `/ecs/${spec.ecsService}`,
+      "--log-stream-name",
+      stream,
+      "--limit",
+      String(CANARY_FAILURE_LOG_LINES),
+      "--no-start-from-head",
+    ]);
+    const lines = [...(response.events ?? [])]
+      .reverse()
+      .flatMap((event) => (typeof event.message === "string" ? event.message.split(/\r?\n/) : []))
+      .filter((line) => line.length > 0)
+      .slice(-CANARY_FAILURE_LOG_LINES);
+    if (!lines.length) return null;
+    const joined = redactCanaryFailureLog(lines.join("\n"));
+    if (Buffer.byteLength(joined) <= CANARY_FAILURE_LOG_BYTES) return { stream, body: joined };
+    const marker = "…";
+    return {
+      stream,
+      body: `${marker}${utf8Tail(joined, CANARY_FAILURE_LOG_BYTES - Buffer.byteLength(marker))}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
   const aws = requireAws(config);
   if (!core.taskDefinition) throw new Error("core service has no live task definition");
@@ -837,8 +908,10 @@ function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
   const task = stopped.tasks?.[0];
   const coreContainer = task?.containers?.find((container) => container.name === "core");
   if (coreContainer?.exitCode !== 0) {
+    const logs = canaryFailureLogs(config, taskArn);
+    const diagnostics = logs ? `\ncanary task logs (${logs.stream}):\n${logs.body}` : "";
     throw new Error(
-      `canary task exited ${coreContainer?.exitCode ?? "without a code"}: ${coreContainer?.reason ?? task?.stoppedReason ?? "unknown reason"}`,
+      `canary task exited ${coreContainer?.exitCode ?? "without a code"}: ${coreContainer?.reason ?? task?.stoppedReason ?? "unknown reason"}${diagnostics}`,
     );
   }
 }
