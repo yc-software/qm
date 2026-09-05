@@ -78,6 +78,7 @@
     "porter-sandbox": "^0.1.41",
     "tar-stream": "^3.2.0",
     "typebox": "^1.1.38",
+    "yauzl": "^3.2.0",
     "zod": "4.4.3"
   },
   "overrides": {
@@ -101,6 +102,7 @@
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
     "@types/tar-stream": "^3.1.4",
+    "@types/yauzl": "^2.10.3",
     "@yc-software/qm": "file:./cli",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",

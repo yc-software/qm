@@ -37,7 +37,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { SkillStore, Skill, SkillResolution } from "../skills/skill-store.ts";
 import type { SkillPack, NewSkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
-import { type IngestPlan, type ImportResult } from "../skills/ingest.ts";
+import { type IngestPlan, type ImportResult, type FetchedRepo } from "../skills/ingest.ts";
 import { type SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -460,10 +460,16 @@ export interface App {
   restoreOwnedSkill(id: string, principalId: string): Promise<Skill | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
-  registerSkillPack(input: NewSkillPack): Promise<SkillPack>;
+  registerSkillPack(input: NewSkillPack, archive?: FetchedRepo): Promise<SkillPack>;
+  updateSkillPackArchive(id: string, name: string, archive: FetchedRepo): Promise<SkillPack>;
   updateSkillPack(id: string, patch: Partial<Omit<SkillPack, "id" | "createdAt">>): Promise<SkillPack>;
-  skillPackCatalog(id: string): Promise<IngestPlan & { bundlePaths: string[] }>;
-  importSkillPack(id: string, selected: "all" | string[], scopeIds?: ScopeId[]): Promise<ImportResult>;
+  skillPackCatalog(id: string): Promise<IngestPlan & { bundlePaths: string[]; commit: string }>;
+  importSkillPack(
+    id: string,
+    selected: "all" | string[],
+    scopeIds?: ScopeId[],
+    expectedCommit?: string,
+  ): Promise<ImportResult>;
   syncSkillPack(id: string): Promise<ImportResult>;
   removeSkillPack(id: string): Promise<{ removed: number }>;
   createOwnedSkill(input: {

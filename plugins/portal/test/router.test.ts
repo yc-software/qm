@@ -600,3 +600,24 @@ test("impersonate: an admin starts it; the web-ui hop carries target + impersona
   assert.equal(stop.status, 200);
   assert.match(stop.headers.get("set-cookie") ?? "", /portal_impersonate=;[^,]*Max-Age=0/);
 });
+
+test("surface proxy preserves upload metadata while retaining the portal identity", async () => {
+  const r = await fetch(`${base}/admin/api/skill-packs/upload`, {
+    method: "POST",
+    headers: {
+      cookie: sessionCookie("U-admin"),
+      origin: PUBLIC,
+      "content-type": "application/zip",
+      "x-file-name": "skills.zip",
+      "x-content-sha256": "a".repeat(64),
+      "x-admin-actor": "forged",
+    },
+    body: "zip bytes",
+  });
+  assert.equal(r.status, 200);
+  const result = (await r.json()) as { headers: Record<string, string> };
+  assert.equal(result.headers["x-file-name"], "skills.zip");
+  assert.equal(result.headers["x-content-sha256"], "a".repeat(64));
+  assert.equal(result.headers["x-admin-actor"], undefined);
+  assert.ok(result.headers["x-portal-identity"]);
+});

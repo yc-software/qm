@@ -101,12 +101,13 @@ async function reconcilePack(
   fetcher: SkillPackFetcher,
   id: string,
   targets: ReconcileTarget[],
+  fetchOptions?: { refresh?: boolean; expectedCommit?: string },
 ): Promise<ImportResult> {
   const pack = await packs.get(id);
   if (!pack) throw new Error(`unknown skill pack: ${id}`);
   let repo: Awaited<ReturnType<SkillPackFetcher["fetch"]>>;
   try {
-    repo = await fetcher.fetch(pack);
+    repo = await fetcher.fetch(pack, fetchOptions);
   } catch (e) {
     await packs.recordImport(id, {
       at: Date.now(),
@@ -201,6 +202,7 @@ export function createSkillMethods(
   | "listSkillPacks"
   | "getSkillPack"
   | "registerSkillPack"
+  | "updateSkillPackArchive"
   | "updateSkillPack"
   | "skillPackCatalog"
   | "importSkillPack"
@@ -296,9 +298,20 @@ export function createSkillMethods(
     getSkillPack(id) {
       return deps.skillPacks ? deps.skillPacks.get(id) : Promise.resolve(null);
     },
-    async registerSkillPack(input) {
+    async registerSkillPack(input, archive) {
       const { packs, fetcher } = requireRegistry(deps);
+      if (input.kind === "archive" && (!archive || !fetcher.storeArchive)) {
+        throw new Error("offline skill pack source is required");
+      }
       const pack = await packs.create(input);
+      if (archive) {
+        try {
+          await fetcher.storeArchive!(pack, archive);
+        } catch (error) {
+          await packs.remove(pack.id);
+          throw error;
+        }
+      }
       try {
         const repo = await fetcher.fetch(pack);
         const nativeNames = await nativeNamesFor(deps, pack.id, pack.targetScopeId);
@@ -315,8 +328,43 @@ export function createSkillMethods(
       }
     },
     async updateSkillPack(id, patch) {
-      const { packs } = requireRegistry(deps);
-      return withSkillMutationLock(deps, () => packs.update(id, patch));
+      const { packs, fetcher } = requireRegistry(deps);
+      return withSkillMutationLock(deps, async () => {
+        const pack = await packs.get(id);
+        if (!pack) throw new Error(`unknown skill pack: ${id}`);
+        if (pack.kind === "archive") {
+          if (patch.syncMode === "tracked" || (patch.url !== undefined && patch.url !== pack.url)) {
+            throw new Error("offline packs use uploaded ZIP versions; Git URL and auto-sync are unavailable");
+          }
+          if (patch.ref && patch.ref !== pack.ref) {
+            await fetcher.fetch({ ...pack, ref: patch.ref });
+            patch.previousRef = pack.ref;
+            patch.updateAvailable = true;
+          }
+        }
+        return packs.update(id, patch);
+      });
+    },
+    async updateSkillPackArchive(id, name, archive) {
+      const { packs, fetcher } = requireRegistry(deps);
+      return withSkillMutationLock(deps, async () => {
+        const pack = await packs.get(id);
+        if (!pack || pack.kind !== "archive" || !fetcher.storeArchive) throw new Error("offline skill pack not found");
+        const previousRef = archive.commit === pack.ref ? pack.previousRef : pack.ref;
+        const next = { ...pack, url: name, ref: archive.commit, previousRef };
+        await fetcher.storeArchive(next, archive);
+        const plan = planIngest(archive, {
+          config: pack.config,
+          nativeNames: await nativeNamesFor(deps, id, pack.targetScopeId),
+        });
+        return packs.update(id, {
+          url: name,
+          ref: archive.commit,
+          previousRef,
+          available: plan.counts.eligible,
+          updateAvailable: archive.commit !== pack.lastImport?.commit,
+        });
+      });
     },
     async skillPackCatalog(id) {
       const { packs, fetcher } = requireRegistry(deps);
@@ -334,6 +382,7 @@ export function createSkillMethods(
       }
       return {
         ...plan,
+        commit: repo.commit,
         bundlePaths,
         candidates: plan.candidates.map((c) => ({
           ...c,
@@ -341,7 +390,7 @@ export function createSkillMethods(
         })),
       };
     },
-    async importSkillPack(id, selected, scopeIds) {
+    async importSkillPack(id, selected, scopeIds, expectedCommit) {
       const { packs, fetcher } = requireRegistry(deps);
       const pack = await packs.get(id);
       if (!pack) throw new Error(`unknown skill pack: ${id}`);
@@ -352,6 +401,7 @@ export function createSkillMethods(
         fetcher,
         id,
         scopes.map((scopeId) => ({ scopeId, selected })),
+        expectedCommit ? { expectedCommit } : { refresh: true },
       );
     },
     async syncSkillPack(id) {
@@ -366,15 +416,17 @@ export function createSkillMethods(
       }
       const targets = [...importedByScope].map(([scopeId, selected]) => ({ scopeId, selected }));
       if (!targets.length) targets.push({ scopeId: pack.targetScopeId, selected: [] });
-      return reconcilePack(deps, packs, fetcher, id, targets);
+      return reconcilePack(deps, packs, fetcher, id, targets, { refresh: true });
     },
     async removeSkillPack(id) {
-      const { packs } = requireRegistry(deps);
+      const { packs, fetcher } = requireRegistry(deps);
       return withSkillMutationLock(deps, async () => {
+        const pack = await packs.get(id);
         const mine = (await deps.skills.list()).filter((s) => s.createdBy === `pack:${id}`);
         for (const s of mine) await deps.skills.delete(s.id);
         await deps.skillBundles?.delete(id);
         await packs.remove(id);
+        if (pack) await fetcher.remove?.(pack);
         return { removed: mine.length };
       });
     },

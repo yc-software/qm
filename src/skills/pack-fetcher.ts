@@ -12,8 +12,10 @@ import type { FetchedRepo, RepoFile } from "./ingest.ts";
 import type { SkillPack } from "./skill-pack-store.ts";
 
 export interface SkillPackFetcher {
-  fetch(pack: SkillPack): Promise<FetchedRepo>;
+  fetch(pack: SkillPack, options?: { refresh?: boolean; expectedCommit?: string }): Promise<FetchedRepo>;
   resolveRef(pack: SkillPack): Promise<string>;
+  storeArchive?(pack: SkillPack, repo: FetchedRepo): Promise<void>;
+  remove?(pack: SkillPack): Promise<void>;
 }
 
 export interface GitFetcherOptions {

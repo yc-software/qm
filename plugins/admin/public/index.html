@@ -10013,7 +10013,12 @@
           dataCache.clear();
           renderData();
         };
-        row.append(url, advToggle, btn, status);
+        const upload = document.createElement("button");
+        upload.type = "button";
+        upload.textContent = "Upload ZIP";
+        upload.title = "Upload a text-only skill pack, up to 16 MiB. No repository connection is needed.";
+        upload.onclick = () => chooseSkillPackArchive(null, status);
+        row.append(url, advToggle, btn, upload, status);
         box.append(row, adv);
 
         const rows = packs.map((s) => {
@@ -10062,12 +10067,13 @@
               "Upstream advanced past the imported commit — Sync now (or turn on Auto-sync) to apply.",
             );
           else setStatusText(li ? "up to date" : "not imported", "muted", delta);
-          const isTracked = s.syncMode === "tracked";
+          const isArchive = s.kind === "archive";
+          const isTracked = !isArchive && s.syncMode === "tracked";
           let busy = false;
           const menu = overflowMenu([
             { label: "Browse skills…", onClick: () => browsePack(s, detail) },
             {
-              label: "Sync now",
+              label: isArchive ? "Apply uploaded version" : "Sync now",
               title:
                 "Pull the pack's latest commit and refresh already-imported skills (update changed, archive removed). Does NOT add new skills — use Browse for that.",
               onClick: async () => {
@@ -10096,26 +10102,51 @@
                 }, 1200);
               },
             },
-            {
-              label: isTracked ? "Turn off auto-sync" : "Turn on auto-sync",
-              title: isTracked
-                ? "Auto-sync is ON — re-imports when the upstream advances."
-                : "Auto-sync is OFF — manual Sync only.",
-              onClick: async () => {
-                if (busy) return;
-                busy = true;
-                const r = await api("PATCH", "/api/skill-packs/" + encodeURIComponent(s.id), {
-                  syncMode: isTracked ? "pinned" : "tracked",
-                });
-                busy = false;
-                if (!r.ok) {
-                  alert(r.data?.message || "Failed (" + r.status + ").");
-                  return;
-                }
-                dataCache.clear();
-                renderData();
-              },
-            },
+            ...(isArchive
+              ? [
+                  {
+                    label: "Upload new ZIP…",
+                    onClick: () => chooseSkillPackArchive(s, st),
+                  },
+                  ...(s.previousRef
+                    ? [
+                        {
+                          label: "Select previous version",
+                          onClick: async () => {
+                            const r = await api("PATCH", "/api/skill-packs/" + encodeURIComponent(s.id), {
+                              ref: s.previousRef,
+                            });
+                            if (!r.ok)
+                              return setStatusText(r.data?.message || "Could not select the previous version.", "err");
+                            dataCache.clear();
+                            renderData();
+                          },
+                        },
+                      ]
+                    : []),
+                ]
+              : [
+                  {
+                    label: isTracked ? "Turn off auto-sync" : "Turn on auto-sync",
+                    title: isTracked
+                      ? "Auto-sync is ON — re-imports when the upstream advances."
+                      : "Auto-sync is OFF — manual Sync only.",
+                    onClick: async () => {
+                      if (busy) return;
+                      busy = true;
+                      const r = await api("PATCH", "/api/skill-packs/" + encodeURIComponent(s.id), {
+                        syncMode: isTracked ? "pinned" : "tracked",
+                      });
+                      busy = false;
+                      if (!r.ok) {
+                        alert(r.data?.message || "Failed (" + r.status + ").");
+                        return;
+                      }
+                      dataCache.clear();
+                      renderData();
+                    },
+                  },
+                ]),
             {
               label: "Remove pack",
               danger: true,
@@ -10135,7 +10166,7 @@
           return [
             { node: packNode },
             { node: skillsNode, cls: "num" },
-            { text: s.trustTier + (isTracked ? " · auto-sync" : ""), cls: "subline" },
+            { text: s.trustTier + (isArchive ? " · offline" : isTracked ? " · auto-sync" : ""), cls: "subline" },
             { node: st },
             { node: menu, cls: "num" },
           ];
@@ -10317,6 +10348,56 @@
         renderChips();
         return pick;
       }
+      let skillPackUploadBusy = false;
+      function chooseSkillPackArchive(pack, status) {
+        if (skillPackUploadBusy) return;
+        const picker = document.createElement("input");
+        picker.type = "file";
+        picker.accept = ".zip,application/zip";
+        picker.hidden = true;
+        picker.oncancel = () => picker.remove();
+        picker.onchange = async () => {
+          const file = picker.files?.[0];
+          picker.remove();
+          if (!file) return;
+          if (!/\.zip$/i.test(file.name) || file.size > 16 * 1024 * 1024) {
+            status.className = "status err";
+            status.textContent = "Choose a ZIP file up to 16 MiB.";
+            return;
+          }
+          skillPackUploadBusy = true;
+          status.className = "status";
+          status.textContent = "Uploading and validating ZIP…";
+          try {
+            const path = "/api/skill-packs/" + (pack ? encodeURIComponent(pack.id) + "/" : "") + "upload";
+            const response = await fetch(API_BASE + path, {
+              method: "POST",
+              credentials: "same-origin",
+              headers: {
+                "content-type": "application/zip",
+                "x-file-name": encodeURIComponent(file.name),
+                "x-content-sha256": await fileSha256(file),
+              },
+              body: file,
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || "ZIP upload failed (" + response.status + ").");
+            if (data.pack?.lastImport?.status === "error" && !pack)
+              throw new Error(data.pack.lastImport.error || "ZIP validation failed.");
+            status.className = "status ok";
+            status.textContent = "ZIP ready. Browse skills to choose where to import them.";
+            dataCache.clear();
+            renderData();
+          } catch (error) {
+            status.className = "status err";
+            status.textContent = error.message || "ZIP upload failed.";
+          } finally {
+            skillPackUploadBusy = false;
+          }
+        };
+        document.body.appendChild(picker);
+        picker.click();
+      }
       async function browsePack(s, holder) {
         holder.textContent = "";
         const loading = document.createElement("div");
@@ -10461,6 +10542,7 @@
           const r2 = await api("POST", "/api/skill-packs/" + encodeURIComponent(s.id) + "/import", {
             selected: allEligible ? "all" : names,
             scopeIds: scopes,
+            expectedCommit: plan.commit,
           });
           importButtons.forEach((b) => {
             b.disabled = false;

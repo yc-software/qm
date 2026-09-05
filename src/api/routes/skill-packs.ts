@@ -4,6 +4,8 @@ import { audit, authorizeAdmin, orgScope } from "./shared.ts";
 import type { NewSkillPack, SkillPack } from "../../skills/skill-pack-store.ts";
 import type { PackConfig } from "../../skills/normalize.ts";
 import { parseScopeId, type ScopeId } from "../../types.ts";
+import { MAX_SKILL_ARCHIVE_BYTES, readSkillPackArchive, SkillPackArchiveError } from "../../skills/pack-archive.ts";
+import { SkillPackSourceError } from "../../skills/pack-source-cache.ts";
 
 function asSubset(v: unknown): "all" | string[] | undefined {
   if (v === "all" || v === undefined) return "all";
@@ -119,7 +121,20 @@ async function importPack(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: "scopeIds must be an array of 'kind:ref' scope ids",
     });
-  const result = await ctx.app.importSkillPack(ctx.params.id!, subset, scopeIds);
+  if (
+    body.expectedCommit !== undefined &&
+    (typeof body.expectedCommit !== "string" || !/^[a-f0-9]{40,64}$/.test(body.expectedCommit))
+  ) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "expectedCommit must be a commit hash" });
+  }
+  let result;
+  try {
+    result = await ctx.app.importSkillPack(ctx.params.id!, subset, scopeIds, body.expectedCommit as string | undefined);
+  } catch (error) {
+    if (error instanceof SkillPackSourceError)
+      return sendJson(ctx.res, 409, { error: "source_changed", message: error.message });
+    throw error;
+  }
   audit(ctx.deps, {
     principalId: actor.id,
     action: "skill_pack.import",
@@ -127,6 +142,58 @@ async function importPack(ctx: ApiCtx): Promise<void> {
     scopeLabel: scopeIds.length ? scopeIds.join(",") : orgScope(ctx.deps),
   });
   sendJson(ctx.res, 200, result);
+}
+
+async function uploadArchive(ctx: ApiCtx): Promise<void> {
+  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  if (!actor) return;
+  const body = (ctx.body ?? {}) as Record<string, unknown>;
+  if (
+    typeof body.blobId !== "string" ||
+    typeof body.name !== "string" ||
+    !/^[^/\\\x00-\x1f]{1,160}\.zip$/i.test(body.name)
+  ) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "a blobId and a ZIP filename are required" });
+  }
+  const blob = await ctx.deps.blobTransfer?.open(body.blobId);
+  if (!blob) return sendJson(ctx.res, 404, { error: "not_found", message: "uploaded ZIP is unavailable" });
+  let response: { status: number; body: Record<string, unknown> };
+  try {
+    if (blob.sizeBytes > MAX_SKILL_ARCHIVE_BYTES) {
+      response = { status: 413, body: { error: "payload_too_large", message: "skill pack ZIP exceeds 16 MiB" } };
+    } else {
+      const repo = await readSkillPackArchive(blob.stream);
+      const pack = ctx.params.id
+        ? await ctx.app.updateSkillPackArchive(ctx.params.id, body.name, repo)
+        : await ctx.app.registerSkillPack(
+            {
+              kind: "archive",
+              url: body.name,
+              ref: repo.commit,
+              syncMode: "pinned",
+              trustTier: "third-party",
+              targetScopeId: orgScope(ctx.deps),
+              subset: "all",
+              createdBy: actor.id,
+            },
+            repo,
+          );
+      audit(ctx.deps, {
+        principalId: actor.id,
+        action: "skill_pack.upload",
+        resource: pack.id,
+        scopeLabel: pack.targetScopeId,
+      });
+      response = { status: 200, body: { pack } };
+    }
+  } catch (error) {
+    if (!(error instanceof SkillPackArchiveError)) throw error;
+    response = { status: 400, body: { error: "invalid_archive", message: error.message } };
+  } finally {
+    blob.stream.destroy();
+    await ctx.deps.blobTransfer!.delete(body.blobId);
+  }
+  sendJson(ctx.res, response.status, response.body);
 }
 
 async function syncPack(ctx: ApiCtx): Promise<void> {
@@ -182,6 +249,8 @@ async function removePack(ctx: ApiCtx): Promise<void> {
 }
 
 export const skillPackRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "POST", path: "/v1/admin/skill-packs/upload", auth: "either", handle: uploadArchive },
+  { method: "POST", path: "/v1/admin/skill-packs/:id/upload", auth: "either", handle: uploadArchive },
   { method: "POST", path: "/v1/admin/skill-packs", auth: "either", handle: registerPack },
   { method: "GET", path: "/v1/admin/skill-packs", auth: "either", handle: listPacks },
   { method: "GET", path: "/v1/admin/skill-packs/:id/catalog", auth: "either", handle: packCatalog },

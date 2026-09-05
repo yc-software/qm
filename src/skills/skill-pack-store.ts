@@ -3,7 +3,7 @@ import type { ScopeId } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import type { PackConfig } from "./normalize.ts";
 
-type PackKind = "git";
+type PackKind = "git" | "archive";
 type SyncMode = "pinned" | "tracked";
 type TrustTier = "internal" | "third-party";
 
@@ -31,6 +31,7 @@ export interface SkillPack {
   lastImport?: ImportRecord;
   updateAvailable?: boolean;
   available?: number;
+  previousRef?: string;
 }
 
 export type NewSkillPack = Omit<SkillPack, "id" | "createdAt" | "lastImport">;

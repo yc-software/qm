@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { createGzip, gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { json, readBody, cookie } from "../../chassis/src/http.ts";
+import { json, readBody, readBytes, PayloadTooLargeError, cookie } from "../../chassis/src/http.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
@@ -194,7 +194,7 @@ function uploadFileName(req: IncomingMessage): string {
   }
 }
 
-async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<Response> {
+async function stageUploadStream(req: IncomingMessage | Buffer, sha256: string): Promise<Response> {
   const corePath = withSourceAuthNonce("/v1/blobs", CORE_SIGNING_SECRET);
   const headers = signedRequestHeaders(CORE_SIGNING_SECRET, "POST", corePath, sha256, {
     "content-type": "application/octet-stream",
@@ -206,6 +206,45 @@ async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<
     body: req as unknown as RequestInit["body"],
     duplex: "half",
   } as RequestInit & { duplex: "half" });
+}
+
+async function uploadSkillPackFromRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  principal: string,
+  corePath: string,
+): Promise<void> {
+  const who = await coreWhoami(principal);
+  if (!who?.isAdmin) {
+    req.resume();
+    return json(res, who ? 403 : 502, {
+      error: who ? "forbidden" : "core_unreachable",
+      message: "admin status could not be verified",
+    });
+  }
+  const sha256 = typeof req.headers["x-content-sha256"] === "string" ? req.headers["x-content-sha256"] : "";
+  const name = uploadFileName(req);
+  if (!/^[0-9a-f]{64}$/.test(sha256) || !/^[^/\\\x00-\x1f]{1,160}\.zip$/i.test(name)) {
+    req.resume();
+    return json(res, 400, { error: "bad_request", message: "a ZIP filename and x-content-sha256 are required" });
+  }
+  try {
+    const bytes = await readBytes(req, 16 * 1024 * 1024);
+    const staged = await stageUploadStream(bytes, sha256);
+    const body = await staged.text();
+    if (!staged.ok) {
+      res.writeHead(staged.status, { "content-type": "application/json" });
+      return void res.end(body);
+    }
+    const { blobId } = JSON.parse(body) as { blobId: string };
+    return forward(req, res, principal, "POST", corePath, JSON.stringify({ name, blobId }));
+  } catch (error) {
+    req.resume();
+    if (error instanceof PayloadTooLargeError)
+      return json(res, 413, { error: "payload_too_large", message: "skill pack ZIP exceeds 16 MiB" });
+    console.error("[admin] skill pack upload failed:", errMessage(error));
+    return json(res, 502, { error: "upload_failed", message: "skill pack upload failed" });
+  }
 }
 
 async function uploadFileFromRequest(
@@ -458,6 +497,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!principal) return json(res, 401, { error: "signed_out" });
     const m = method as "POST" | "PUT" | "PATCH" | "DELETE";
     const corePath = `/v1/admin/${rest}${url.search}`;
+    if (method === "POST" && /^skill-packs\/(?:[^/]+\/)?upload$/.test(rest)) {
+      return uploadSkillPackFromRequest(req, res, principal, corePath);
+    }
     return m === "DELETE"
       ? forward(req, res, principal, m, corePath)
       : forward(req, res, principal, m, corePath, await readBody(req));
