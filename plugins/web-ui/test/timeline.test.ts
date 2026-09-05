@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolActivity, WorkBlock } from "../src/core-bridge.ts";
-import { buildTimeline, toolRowKind, type ToolRowModel } from "../src/timeline.ts";
+import { buildTimeline, postSpeechText, toolRowKind, type ToolRowModel } from "../src/timeline.ts";
 
 function act(seq: number, type: ToolActivity["type"], payload: unknown): ToolActivity {
   return { seq, parentSeq: null, type, payload, createdAt: seq };
@@ -258,6 +258,40 @@ test("toolRowKind: no result yet — `running` mid-turn, `attempted`/`failed` on
     "failed",
     "turn itself failed, so the in-flight call counts as failed",
   );
+});
+
+test("postSpeechText: a delivered surface post is speech; failed or unconfirmed posts are not", () => {
+  const okRow: ToolRowModel = {
+    call: act(1, "tool_call", { tool: "web", action: "post", text: "Which plan should I use?", callId: "a" }),
+    result: act(2, "tool_result", { tool: "web", callId: "a", ok: true, deliveryId: "d" }),
+  };
+  assert.equal(postSpeechText(okRow), "Which plan should I use?");
+
+  const inFlight: ToolRowModel = {
+    call: act(1, "tool_call", { tool: "web", action: "post", text: "Still composing", callId: "b" }),
+    result: null,
+  };
+  assert.equal(postSpeechText(inFlight), null, "a post without a result never claims delivered speech");
+  assert.equal(postSpeechText(inFlight, true), "Still composing", "live contexts may preview the in-flight text");
+
+  const failed: ToolRowModel = {
+    call: act(1, "tool_call", { tool: "web", action: "post", text: "Never delivered", callId: "c" }),
+    result: act(2, "tool_result", { tool: "web", callId: "c", error: "channel unavailable" }),
+  };
+  assert.equal(postSpeechText(failed), null);
+  assert.equal(postSpeechText(failed, true), null);
+
+  const failedFlag: ToolRowModel = {
+    call: act(1, "tool_call", { tool: "web", action: "post", text: "Also never delivered", callId: "e" }),
+    result: act(2, "tool_result", { tool: "web", callId: "e", ok: false }),
+  };
+  assert.equal(postSpeechText(failedFlag), null);
+
+  const nonPost: ToolRowModel = {
+    call: act(1, "tool_call", { tool: "read", path: "/x", callId: "d" }),
+    result: act(2, "tool_result", { tool: "read", callId: "d" }),
+  };
+  assert.equal(postSpeechText(nonPost), null);
 });
 
 function workWith(activity: ToolActivity[], status: WorkBlock["status"] = "working"): WorkBlock {

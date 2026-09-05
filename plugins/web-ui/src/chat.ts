@@ -19,6 +19,7 @@ import {
   Files,
   GitFork,
   Maximize2,
+  MessageSquare,
   Paperclip,
   Pencil,
   Plug,
@@ -67,7 +68,7 @@ import {
   type WorkBlock,
   withBase,
 } from "./core-bridge";
-import { buildTimeline, toolRowKind, type TimelineItem, type ToolPayload, type ToolRowModel } from "./timeline";
+import { buildTimeline, postSpeechText, toolRowKind, type TimelineItem, type ToolPayload, type ToolRowModel } from "./timeline";
 import { CONNECTOR_NAMES, connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
@@ -1940,8 +1941,16 @@ export function createChatSurface(
     const call = (row.call?.payload ?? {}) as ToolPayload;
     const result = (row.result?.payload ?? {}) as ToolPayload;
     const tool = call.tool ?? result.tool ?? "unknown";
-    const meta = TOOL_META[tool] ?? UNKNOWN_TOOL;
     const secs = elapsedSeconds(row.call?.createdAt) || workSeconds(work);
+    const posting = postSpeechText(row, true);
+    if (posting) {
+      return {
+        icon: MessageSquare,
+        label: secs > 0 ? `Posting message for ${secs}s` : "Posting message",
+        detail: firstLine(posting, 60),
+      };
+    }
+    const meta = TOOL_META[tool] ?? UNKNOWN_TOOL;
     return {
       icon: meta.icon,
       label: secs > 0 ? `${meta.active} for ${secs}s` : meta.active,
@@ -2026,6 +2035,14 @@ export function createChatSurface(
         flushSeg();
         const text = ((it.activity.payload as { text?: string } | null)?.text ?? "").trim();
         if (text) parts.push(html`<div class="work-said">${markdown(text)}</div>`);
+      } else if (it.kind === "tool") {
+        const speech = postSpeechText(it.row);
+        if (speech) {
+          flushSeg();
+          parts.push(html`<div class="work-said">${markdown(speech)}</div>`);
+        } else {
+          seg.push(it);
+        }
       } else {
         seg.push(it);
       }
@@ -2105,6 +2122,8 @@ export function createChatSurface(
     if (item.kind === "thinking") return thinkingRow(item.activity);
     if (item.kind === "text") return messageRow(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
+    const speech = postSpeechText(item.row, work.status === "working" || work.status === "thinking");
+    if (speech) return messageRow({ ...item.row.call!, payload: { text: speech } });
     return toolRow(item.row, work, status, stale);
   }
 
