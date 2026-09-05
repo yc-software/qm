@@ -16,7 +16,11 @@ const core = createServer((req: IncomingMessage, res) => {
       body,
     });
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true }));
+    const path = new URL(req.url ?? "/", "http://core.test").pathname;
+    let result: Record<string, unknown> = { ok: true };
+    if (path === "/v1/admin/whoami") result = { isAdmin: req.headers["x-admin-actor"] === "U-admin@acme" };
+    if (path === "/v1/blobs") result = { blobId: "uploaded-zip" };
+    res.end(JSON.stringify(result));
   });
 });
 await new Promise<void>((r) => core.listen(0, r));
@@ -121,4 +125,42 @@ test("skill-pack writes require a signed-in cookie", async () => {
   });
   assert.equal(r.status, 401);
   assert.equal(calls.length, before, "a signed-out request is rejected at the surface, never forwarded");
+});
+
+test("ZIP uploads authorize first, stage signed bytes and forward only the blob reference", async () => {
+  const r = await fetch(`${base}/api/skill-packs/upload`, {
+    method: "POST",
+    headers: {
+      cookie: ADMIN,
+      "content-type": "application/zip",
+      "x-file-name": "skills.zip",
+      "x-content-sha256": "a".repeat(64),
+    },
+    body: "zip bytes",
+  });
+  assert.equal(r.status, 200);
+  const staged = calls.at(-2)!;
+  assert.equal(new URL(staged.url, "http://core.test").pathname, "/v1/blobs");
+  assert.equal(staged.body, "zip bytes");
+  assert.equal(staged.signed, true);
+  assert.equal(calls.at(-1)!.url, "/v1/admin/skill-packs/upload");
+  assert.deepEqual(JSON.parse(calls.at(-1)!.body), { name: "skills.zip", blobId: "uploaded-zip" });
+});
+
+test("ZIP uploads reject non-admins, invalid hashes and oversized bodies before staging", async () => {
+  for (const [cookie, hash, body, status] of [
+    ["admin=U-user", "a".repeat(64), "zip", 403],
+    [ADMIN, "invalid", "zip", 400],
+    [ADMIN, "a".repeat(64), "a".repeat(16 * 1024 * 1024 + 1), 413],
+  ] as const) {
+    const before = calls.length;
+    const r = await fetch(`${base}/api/skill-packs/upload`, {
+      method: "POST",
+      headers: { cookie, "x-file-name": "skills.zip", "x-content-sha256": hash },
+      body,
+    });
+    assert.equal(r.status, status);
+    assert.ok(calls.slice(before).every((c) => !c.url.startsWith("/v1/blobs")));
+    await r.text();
+  }
 });

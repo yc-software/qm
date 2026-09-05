@@ -41,6 +41,7 @@ import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-st
 import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
+import { createCachedSkillPackFetcher, type SkillPackSourceSnapshot } from "./skills/pack-source-cache.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
@@ -1224,7 +1225,7 @@ export function buildApp(
 
   wireRunResultDeliveries(runs, deliveries, tasks);
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
-  const skillFetcher = createGitFetcher(
+  const gitSkillFetcher = createGitFetcher(
     keychain
       ? {
           allowLocalRepos: !config.production,
@@ -1243,6 +1244,10 @@ export function buildApp(
         }
       : { allowLocalRepos: !config.production },
   );
+  const skillFetcher = createCachedSkillPackFetcher({
+    git: gitSkillFetcher,
+    snapshots: artifactMap<SkillPackSourceSnapshot>("skill_pack_sources"),
+  });
   const reaper: Reaper = createReaper(runs, sessions, {
     intervalMs: config.reaperIntervalMs,
     leaderLease,

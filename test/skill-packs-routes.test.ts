@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { skillZip } from "./support/skill-zip.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
 const json = async (r: Response): Promise<any> => r.json();
@@ -106,6 +107,7 @@ function start() {
     auditLog: built.auditLog,
     sessions: built.sessions,
     errors: built.errors,
+    blobTransfer: built.blobTransfer,
   });
   server.listen(0);
   return {
@@ -114,6 +116,151 @@ function start() {
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }
+
+test("offline upload previews, imports, updates and selects the previous version through the same pack", async () => {
+  const s = start();
+  const upload = async (description: string, id?: string) => {
+    const bytes = skillZip([
+      { path: "bundle/SKILL.md", text: md(`name: offline-basic\ndescription: ${description}`) },
+      { path: "bundle/config.json", text: '{"ready":true}' },
+    ]);
+    const { blobId } = await s.built.blobTransfer.put(bytes);
+    const response = await fetch(`${s.base}/v1/admin/skill-packs/${id ? id + "/" : ""}upload`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ blobId, name: "offline.zip" }),
+    });
+    await response.clone().text();
+    assert.equal(await s.built.blobTransfer.open(blobId), null);
+    return response;
+  };
+  const importVersion = (id: string, commit: string) =>
+    fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ selected: "all", expectedCommit: commit }),
+    });
+  try {
+    const firstResponse = await upload("first");
+    assert.equal(firstResponse.status, 200);
+    const first = (await json(firstResponse)).pack;
+    assert.equal(first.kind, "archive");
+    assert.equal(first.trustTier, "third-party");
+    assert.equal(first.available, 1);
+    assert.equal((await s.built.skills.list()).filter((skill) => skill.pack?.packId === first.id).length, 0);
+    const preview = await json(await fetch(`${s.base}/v1/admin/skill-packs/${first.id}/catalog`, { headers: ADMIN }));
+    assert.equal(preview.commit, first.ref);
+    assert.equal((await importVersion(first.id, preview.commit)).status, 200);
+    let installed = (await s.built.skills.list()).find((skill) => skill.pack?.packId === first.id)!;
+    assert.equal(installed.manifest.description, "first");
+    assert.equal(installed.manifest.files?.[0]?.path, "config.json");
+
+    const nextResponse = await upload("second", first.id);
+    assert.equal(nextResponse.status, 200);
+    const next = (await json(nextResponse)).pack;
+    assert.equal(next.previousRef, first.ref);
+    assert.notEqual(next.ref, first.ref);
+    const stale = await importVersion(first.id, first.ref);
+    assert.equal(stale.status, 409);
+    installed = (await s.built.skills.list()).find((skill) => skill.pack?.packId === first.id)!;
+    assert.equal(installed.manifest.description, "first");
+    assert.equal((await importVersion(first.id, next.ref)).status, 200);
+    installed = (await s.built.skills.list()).find((skill) => skill.pack?.packId === first.id)!;
+    assert.equal(installed.manifest.description, "second");
+    const rollback = await fetch(`${s.base}/v1/admin/skill-packs/${first.id}`, {
+      method: "PATCH",
+      headers: ADMIN,
+      body: JSON.stringify({ ref: first.ref }),
+    });
+    assert.equal(rollback.status, 200);
+    assert.equal((await importVersion(first.id, first.ref)).status, 200);
+    installed = (await s.built.skills.list()).find((skill) => skill.pack?.packId === first.id)!;
+    assert.equal(installed.manifest.description, "first");
+    const thirdResponse = await upload("third", first.id);
+    assert.equal(thirdResponse.status, 200);
+    const third = (await json(thirdResponse)).pack;
+    assert.equal(third.previousRef, first.ref);
+    assert.equal((await importVersion(first.id, third.ref)).status, 200);
+    const rollbackAgain = await fetch(`${s.base}/v1/admin/skill-packs/${first.id}`, {
+      method: "PATCH",
+      headers: ADMIN,
+      body: JSON.stringify({ ref: first.ref }),
+    });
+    assert.equal(rollbackAgain.status, 200);
+    assert.equal((await importVersion(first.id, first.ref)).status, 200);
+    installed = (await s.built.skills.list()).find((skill) => skill.pack?.packId === first.id)!;
+    assert.equal(installed.manifest.description, "first");
+    const list = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
+    assert.equal(list.packs.length, 1);
+    assert.equal(list.packs[0].importedCount, 1);
+  } finally {
+    await s.close();
+  }
+});
+
+test("offline upload rejects non-admin callers and malformed archives without creating packs", async () => {
+  const s = start();
+  try {
+    const { blobId } = await s.built.blobTransfer.put(Buffer.from("not a ZIP"));
+    const request = { method: "POST", body: JSON.stringify({ blobId, name: "bad.zip" }) };
+    const denied = await fetch(`${s.base}/v1/admin/skill-packs/upload`, {
+      ...request,
+      headers: { "content-type": "application/json" },
+    });
+    assert.equal(denied.status, 403);
+    const invalid = await fetch(`${s.base}/v1/admin/skill-packs/upload`, { ...request, headers: ADMIN });
+    assert.equal(invalid.status, 400);
+    assert.equal((await json(invalid)).error, "invalid_archive");
+    assert.equal(await s.built.blobTransfer.open(blobId), null);
+    const oversized = await s.built.blobTransfer.put(Buffer.alloc(16 * 1024 * 1024 + 1));
+    const tooLarge = await fetch(`${s.base}/v1/admin/skill-packs/upload`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ blobId: oversized.blobId, name: "large.zip" }),
+    });
+    assert.equal(tooLarge.status, 413);
+    await tooLarge.text();
+    assert.equal(await s.built.blobTransfer.open(oversized.blobId), null);
+    assert.equal((await s.built.app.listSkillPacks()).length, 0);
+  } finally {
+    await s.close();
+  }
+});
+
+test("Git registration, preview and version-bound import reuse the downloaded tree while the source is offline", async () => {
+  const fixture = makeFixtureRepo();
+  const s = start();
+  try {
+    const registered = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ url: fixture.dir }),
+      }),
+    );
+    const id = registered.pack.id;
+    rmSync(fixture.dir, { recursive: true, force: true });
+    const preview = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}/catalog`, { headers: ADMIN }));
+    assert.equal(preview.commit, fixture.sha);
+    const imported = await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ selected: "all", expectedCommit: preview.commit }),
+    });
+    assert.equal(imported.status, 200);
+    const before = JSON.stringify(await s.built.skills.list());
+    const refresh = await fetch(`${s.base}/v1/admin/skill-packs/${id}/sync`, {
+      method: "POST",
+      headers: ADMIN,
+      body: "{}",
+    });
+    assert.equal(refresh.status, 500);
+    assert.equal(JSON.stringify(await s.built.skills.list()), before);
+  } finally {
+    await s.close();
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
 
 test("register → browse → import → list → remove a git skill pack (org scope)", async () => {
   const repo = makeFixtureRepo();
@@ -435,8 +582,8 @@ test("an older tracked-pack fetch cannot roll back a newer reconciliation", asyn
       release = resolve;
     });
     let first = true;
-    s.built.skillFetcher.fetch = async (pack) => {
-      const fetched = await originalFetch(pack);
+    s.built.skillFetcher.fetch = async (pack, options) => {
+      const fetched = await originalFetch(pack, options);
       if (first) {
         first = false;
         entered();

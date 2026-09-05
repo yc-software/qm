@@ -12,15 +12,19 @@ export function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-export async function readBody(req: IncomingMessage, maxBytes = Infinity): Promise<string> {
+export async function readBytes(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const c of req) {
+  for await (const c of req.iterator({ destroyOnReturn: false })) {
     size += (c as Buffer).length;
     if (size > maxBytes) throw new PayloadTooLargeError();
     chunks.push(c as Buffer);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+export async function readBody(req: IncomingMessage, maxBytes = Infinity): Promise<string> {
+  return (await readBytes(req, maxBytes)).toString("utf8");
 }
 
 export function cookie(req: IncomingMessage, name: string): string | null {
