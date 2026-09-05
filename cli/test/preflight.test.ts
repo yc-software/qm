@@ -4,6 +4,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import type { QmConfig } from "../src/config.ts";
 import { CliError } from "../src/log.ts";
 import {
+  emailTransportConfigured,
   emailTransportPreflight,
   flySandboxTokenPreflight,
   nodeEngineProblem,
@@ -149,6 +150,7 @@ test("email preflight fails check on rejected SMTP credentials and warns on stra
       emailTransportPreflight(
         config,
         new Map([
+          ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
           ["SMTP_HOST", "127.0.0.1"],
           ["SMTP_USERNAME", "user"],
           ["SMTP_PASSWORD", "right"],
@@ -166,6 +168,7 @@ test("email preflight fails check on rejected SMTP credentials and warns on stra
         emailTransportPreflight(
           config,
           new Map([
+            ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
             ["SMTP_HOST", "127.0.0.1"],
             ["SMTP_USERNAME", "user"],
             ["SMTP_PASSWORD", "wrong"],
@@ -201,4 +204,41 @@ test("email preflight does nothing without the auth service", async () => {
     emailTransportPreflight({ ...CONFIG, services: ["core"] }, new Map([["RESEND_API_KEY", "re_x"]])),
   );
   assert.deepEqual(lines, []);
+});
+
+test("missing email credentials disable email without failing deployment checks", async () => {
+  for (const transport of ["resend", "smtp"]) {
+    const config = { ...CONFIG, env: { auth: { AUTH_EMAIL_TRANSPORT: transport } } };
+    assert.equal(emailTransportConfigured(config, new Map()), false);
+    await assert.doesNotReject(emailTransportPreflight(config, new Map()));
+    for (const values of [
+      new Map([["AUTH_EMAIL_FROM", "noreply@example.com"]]),
+      new Map([[transport === "resend" ? "RESEND_API_KEY" : "SMTP_HOST", "configured"]]),
+    ]) {
+      assert.equal(emailTransportConfigured(config, values), false);
+      const output = await quietAsync(() => emailTransportPreflight(config, values));
+      assert.ok(output.some((line) => line.includes("sign-in email: disabled")));
+    }
+  }
+});
+
+test("email preflight resolves delivered secret aliases and settings supplied directly in config", async () => {
+  const aliased = {
+    ...CONFIG,
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
+    secretEnv: { auth: { AUTH_EMAIL_FROM: "AUTH_SENDER", RESEND_API_KEY: "MAIL_KEY" } },
+  };
+  const secrets = new Map([
+    ["AUTH_SENDER", "noreply@example.com"],
+    ["MAIL_KEY", "re_configured"],
+  ]);
+  assert.equal(emailTransportConfigured(aliased, secrets), true);
+  await assert.doesNotReject(emailTransportPreflight(aliased, secrets));
+  assert.equal(emailTransportConfigured(aliased, new Map([["MAIL_KEY", "re_configured"]])), false);
+  const direct = {
+    ...CONFIG,
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_EMAIL_FROM: "noreply@example.com" } },
+  };
+  assert.equal(emailTransportConfigured(direct, new Map([["RESEND_API_KEY", "re_configured"]])), true);
+  await assert.doesNotReject(emailTransportPreflight(direct, new Map([["RESEND_API_KEY", "re_configured"]])));
 });

@@ -8,6 +8,11 @@ A multiplayer agent harness for work. In Slack and on the web.
 
 Tell your coding agent of choice `Let's deploy https://github.com/yc-software/qm`. From here, it should follow the deployment guide in this repo.
 
+Administrators can try a deployment before configuring email: run `qm admin-login`
+with its configuration and secrets, then open the five-minute, single-use link.
+Configure email delivery later for ordinary email sign-in and invitation emails.
+See the [CLI instructions](cli/README.md#administrator-login-without-email).
+
 ## What is QM?
 
 Most agents are designed like personal assistants. You can make one work for a whole

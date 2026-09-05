@@ -1,6 +1,7 @@
 import { isVirtualService, type DeclaredServiceName } from "./services.ts";
 import type { ModelProvider, QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
+import { deploymentSecretValue } from "./util.ts";
 
 type SecretCondition =
   | { kind: "env-equals"; service: DeclaredServiceName; name: string; value: string }
@@ -19,7 +20,7 @@ export interface SecretSpec {
   name: string;
   service: DeclaredServiceName;
   envName?: string;
-  required: boolean | { when: SecretCondition; optionalOtherwise?: true };
+  required: boolean | { when: SecretCondition; optional?: true; optionalOtherwise?: true };
   description: string;
   generate?: string;
   managedBy?: "operator" | "terraform";
@@ -406,7 +407,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AUTH_EMAIL_FROM",
     service: "auth",
-    required: true,
+    required: false,
     description: 'Verified sender for sign-in links and external-user invitations, e.g. "Acme <no-reply@acme.com>".',
   },
   {
@@ -419,7 +420,10 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "RESEND_API_KEY",
     service: "auth",
-    required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "resend" } },
+    required: {
+      when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "resend" },
+      optional: true,
+    },
     description: "Resend API key used to deliver sign-in links and external-user invitations.",
   },
   {
@@ -432,19 +436,28 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "SMTP_HOST",
     service: "auth",
-    required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" } },
+    required: {
+      when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" },
+      optional: true,
+    },
     description: "SMTP relay hostname used to deliver sign-in links.",
   },
   {
     name: "SMTP_USERNAME",
     service: "auth",
-    required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" } },
+    required: {
+      when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" },
+      optional: true,
+    },
     description: "SMTP username for the sign-in-link relay.",
   },
   {
     name: "SMTP_PASSWORD",
     service: "auth",
-    required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" } },
+    required: {
+      when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" },
+      optional: true,
+    },
     description: "SMTP password for the sign-in-link relay.",
   },
 ];
@@ -478,8 +491,18 @@ function targetEnvDefault(config: QmConfig, service: string, name: string): stri
 
 function requirementFor(config: QmConfig, spec: SecretSpec): boolean | null {
   if (typeof spec.required === "boolean") return spec.required;
-  if (conditionMatches(config, spec.required.when)) return true;
+  if (conditionMatches(config, spec.required.when)) return !spec.required.optional;
   return spec.required.optionalOtherwise ? false : null;
+}
+
+export function emailSecretNames(config: QmConfig): string[] {
+  if (!config.services.includes("auth")) return [];
+  return [
+    "AUTH_EMAIL_FROM",
+    ...(config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp"
+      ? ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]
+      : ["RESEND_API_KEY"]),
+  ];
 }
 
 export function computedSecrets(config: QmConfig): ComputedSecret[] {
@@ -616,6 +639,21 @@ export function secretsForService(
   pluginNames: readonly string[] = [],
 ): ComputedSecret[] {
   return computedSecrets(config).filter((secret) => secretDestinations(secret, pluginNames).has(service));
+}
+
+export function serviceSecretValue(
+  config: QmConfig,
+  service: DeclaredServiceName,
+  name: string,
+  values: ReadonlyMap<string, string>,
+): string | undefined {
+  let value = config.env[service]?.[name];
+  for (const secret of secretsForService(config, service)) {
+    if (!runtimeSecretNames(service, secret).includes(name)) continue;
+    const supplied = deploymentSecretValue(secret.name, values.get(secret.name));
+    if (supplied !== undefined) value = supplied;
+  }
+  return value;
 }
 
 function requiresOtherEmailTransport(config: QmConfig, condition: SecretCondition): boolean {

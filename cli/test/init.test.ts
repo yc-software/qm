@@ -157,20 +157,15 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "resend");
     assert.equal(config.env.portal?.OIDC_PRINCIPAL_CLAIM, undefined, "the broker derives every OIDC_* value");
     const env = readFileSync(join(dir, ".env.example"), "utf8");
-    for (const line of [
-      "ADMIN_GRANTS=",
-      "AUTH_ALLOWED_EMAILS=",
-      "AUTH_EMAIL_FROM=",
-      "RESEND_API_KEY=",
-      "PORTAL_SESSION_SECRET=",
-      "ANTHROPIC_API_KEY=",
-    ]) {
+    for (const line of ["ADMIN_GRANTS=", "AUTH_ALLOWED_EMAILS=", "PORTAL_SESSION_SECRET=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line} for the fly scaffold`);
     }
     for (const line of [
       "# OPENROUTER_API_KEY=  # optional",
       "# SLACK_APP_TOKEN=  # optional",
       "# SLACK_BOT_TOKEN=  # optional",
+      "# AUTH_EMAIL_FROM=  # optional",
+      "# RESEND_API_KEY=  # optional",
     ]) {
       assert.ok(env.split("\n").includes(line), `.env.example should offer ${line}`);
     }
@@ -194,8 +189,8 @@ test("init --email-transport smtp scaffolds smtp keys only and a matching config
     assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "smtp");
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     assert.equal(env, renderEnvExample(config));
-    for (const line of ["SMTP_HOST=", "SMTP_USERNAME=", "SMTP_PASSWORD="]) {
-      assert.ok(env.split("\n").includes(line), `.env.example should require ${line}`);
+    for (const line of ["# SMTP_HOST=  # optional", "# SMTP_USERNAME=  # optional", "# SMTP_PASSWORD=  # optional"]) {
+      assert.ok(env.split("\n").includes(line), `.env.example should offer ${line}`);
     }
     assert.ok(
       env.split("\n").includes("# RESEND_API_KEY=  # optional"),
@@ -265,20 +260,15 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     assert.match(tfvars, /certificate_arn\s*= ""/);
     assert.match(readFileSync(join(dir, "infra", "main.tf"), "utf8"), /desired_count\s*= 0/);
     const env = readFileSync(join(dir, ".env.example"), "utf8").split("\n");
-    for (const name of [
-      "ADMIN_GRANTS=",
-      "PUBLIC_API_URL=",
-      "AUTH_ALLOWED_EMAILS=",
-      "AUTH_EMAIL_FROM=",
-      "RESEND_API_KEY=",
-      "ANTHROPIC_API_KEY=",
-    ]) {
+    for (const name of ["ADMIN_GRANTS=", "PUBLIC_API_URL=", "AUTH_ALLOWED_EMAILS=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.includes(name), `hosted AWS scaffold requires ${name}`);
     }
     for (const name of [
       "# OPENROUTER_API_KEY=  # optional",
       "# SLACK_BOT_TOKEN=  # optional",
       "# SLACK_APP_TOKEN=  # optional",
+      "# AUTH_EMAIL_FROM=  # optional",
+      "# RESEND_API_KEY=  # optional",
     ]) {
       assert.ok(env.includes(name), `hosted AWS scaffold offers deferred ${name}`);
     }

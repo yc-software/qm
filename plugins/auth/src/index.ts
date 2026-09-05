@@ -25,6 +25,7 @@ export function bootChecks(): void {
 export async function startServer(): Promise<void> {
   bootChecks();
   const signingKey = await loadSigningKey(CFG.signingJwk!);
+  const mailer = mailerFor(CFG);
   const branding = createBrandingCache(async () => {
     const path = withSourceAuthNonce("/v1/surface-config", CFG.coreSigningSecret);
     const r = await fetch(`${CFG.coreApiUrl}${path}`, {
@@ -40,7 +41,7 @@ export async function startServer(): Promise<void> {
     signingKey,
     signer: new TokenSigner(CFG.tokenSecret, CFG.issuer),
     claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
-    mailer: mailerFor(CFG),
+    mailer,
     brandName: () => {
       void branding.forRender();
       return branding.current().selfLabel || CFG.brandName;
@@ -55,7 +56,7 @@ export async function startServer(): Promise<void> {
   });
   server.listen(PORT, () => {
     console.log(
-      `[auth] sign-in broker on http://localhost:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${CFG.transport} email)`,
+      `[auth] sign-in broker on http://localhost:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${mailer ? `${CFG.transport} email` : "email not configured"})`,
     );
     if (!CFG.coreSigningSecret)
       console.warn(

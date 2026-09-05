@@ -172,7 +172,7 @@ test("the broker's generated secrets reach both sides under the right names", ()
   assert.ok(!names.has("SMTP_HOST"), "only the configured transport's credentials are collected");
   for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
     const shared = secrets.find((secret) => secret.name === name)!;
-    assert.ok(shared.required);
+    assert.equal(shared.required, false, "email delivery can be deferred while admins use the operator CLI");
     assert.deepEqual(runtimeSecretNames("auth", shared), [name]);
     assert.deepEqual(runtimeSecretNames("core", shared), [name], `core emails external-user invitations with ${name}`);
   }

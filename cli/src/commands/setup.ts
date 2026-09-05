@@ -6,8 +6,15 @@ import { Writable } from "node:stream";
 import { CONFIG_FILENAME, configPathInDir, loadConfigAt, validOrgId, type Target, type QmConfig } from "../config.ts";
 import { bold, die, dim, header, note, ok, warn } from "../log.ts";
 import { HOSTING_PROVIDER_IDS, isTarget } from "../providers.ts";
-import { computedSecrets, MINT_JWK, MINT_LOCALLY, type ComputedSecret } from "../secrets.ts";
-import { isInvalidSecret, readEnvFile } from "../util.ts";
+import {
+  computedSecrets,
+  emailSecretNames,
+  MINT_JWK,
+  MINT_LOCALLY,
+  serviceSecretValue,
+  type ComputedSecret,
+} from "../secrets.ts";
+import { isInvalidSecret, isMissingOrPlaceholder, readEnvFile } from "../util.ts";
 import { runInit } from "./init.ts";
 
 export function adminGrantEmails(adminGrants: string | undefined): string {
@@ -138,8 +145,16 @@ export function playbookFor(name: string, config: QmConfig): string[] {
 export function pendingSecrets(
   config: QmConfig,
   env: Map<string, string>,
+  includeEmail = false,
 ): { todo: ComputedSecret[]; done: ComputedSecret[] } {
-  const operator = computedSecrets(config).filter((secret) => secret.managedBy === "operator" && secret.required);
+  const emailNames = includeEmail
+    ? emailSecretNames(config)
+        .filter((name) => isMissingOrPlaceholder(config.env.auth?.[name]))
+        .map((name) => config.secretEnv?.auth?.[name] ?? name)
+    : [];
+  const operator = computedSecrets(config).filter(
+    (secret) => secret.managedBy === "operator" && (secret.required || emailNames.includes(secret.name)),
+  );
   const todo = operator.filter((secret) => isInvalidSecret(secret.name, env.get(secret.name)));
   const done = operator.filter((secret) => !isInvalidSecret(secret.name, env.get(secret.name)));
   todo.sort((a, b) => Number(b.required) - Number(a.required) || a.name.localeCompare(b.name));
@@ -224,7 +239,12 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
     const config = loadConfigAt(configPath).config;
     const envPath = join(dir, ".env");
     const env = readEnvFile(envPath);
-    const { todo, done } = pendingSecrets(config, env);
+    const emailNames = emailSecretNames(config);
+    const includeEmail =
+      emailNames.length > 0 &&
+      (emailNames.some((name) => serviceSecretValue(config, "auth", name, env)?.trim()) ||
+        /^y/i.test(await ask("Set up sign-in email now? Admins can use qm admin-login without email. [y/N]: ")));
+    const { todo, done } = pendingSecrets(config, env, includeEmail);
 
     header(`Secrets for org ${config.orgId} (target ${config.target})`);
     if (done.length > 0) ok(`${done.length} already set in .env — skipping: ${done.map((s) => s.name).join(", ")}`);
@@ -292,7 +312,7 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
     }
 
     header("Next");
-    const remainingRequired = todo.filter((s) => s.required && !collected.has(s.name)).map((s) => s.name);
+    const remainingRequired = todo.filter((s) => !collected.has(s.name)).map((s) => s.name);
     const stepLine = (n: number, cmd: string, why: string): void =>
       note(`  ${n}. ${cmd.padEnd(24)} ${dim(`# ${why}`)}`);
     let n = 1;

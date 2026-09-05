@@ -50,6 +50,7 @@ test("help lists every deploy + develop command and the deploy-wide options", as
       "plan",
       "check",
       "config get",
+      "admin-login",
       "status",
       "logs",
       "down",

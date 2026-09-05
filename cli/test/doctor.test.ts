@@ -113,6 +113,41 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   );
 });
 
+test("remote doctor keeps missing local email values distinct from disabled email", async () => {
+  const brokerConfig: QmConfig = {
+    ...config,
+    sandbox: undefined,
+    services: ["core", "portal", "auth"],
+    env: {
+      core: { HARNESS: "mock" },
+      auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" },
+    },
+  };
+  const priorKey = process.env.RESEND_API_KEY;
+  const priorSender = process.env.AUTH_EMAIL_FROM;
+  const log = console.log;
+  const warn = console.warn;
+  process.env.RESEND_API_KEY = "";
+  process.env.AUTH_EMAIL_FROM = "";
+  try {
+    for (const secrets of [new Map<string, string>(), new Map([["AUTH_EMAIL_FROM", "noreply@example.com"]])]) {
+      const output: string[] = [];
+      console.log = (...values: unknown[]): void => void output.push(values.join(" "));
+      console.warn = (...values: unknown[]): void => void output.push(values.join(" "));
+      await assert.doesNotReject(doctorCommon(brokerConfig, secrets));
+      assert.match(output.join("\n"), /RESEND_API_KEY is not available locally/);
+      assert.doesNotMatch(output.join("\n"), /sign-in email: disabled/);
+    }
+  } finally {
+    console.log = log;
+    console.warn = warn;
+    if (priorKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = priorKey;
+    if (priorSender === undefined) delete process.env.AUTH_EMAIL_FROM;
+    else process.env.AUTH_EMAIL_FROM = priorSender;
+  }
+});
+
 test("Fly doctor requires the signing secret for source plugins absent from config", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-"));
   const bin = join(dir, "fake-fly.cjs");

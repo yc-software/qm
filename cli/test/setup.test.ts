@@ -154,14 +154,12 @@ test("the broker's operator secrets replace the external-IdP ones", () => {
   assert.ok(!brokerNames.includes("OIDC_CLIENT_SECRET"), "the broker mints the portal's client secret");
   assert.ok(!brokerNames.includes("OIDC_CLIENT_ID"));
   assert.ok(!brokerNames.includes("PORTAL_EXPECTED_TEAM_ID"));
-  for (const name of [
-    "AUTH_ALLOWED_EMAILS",
-    "AUTH_EMAIL_FROM",
-    "AUTH_SIGNING_JWK",
-    "AUTH_TOKEN_SECRET",
-    "AUTH_CLIENT_SECRET",
-  ]) {
+  for (const name of ["AUTH_ALLOWED_EMAILS", "AUTH_SIGNING_JWK", "AUTH_TOKEN_SECRET", "AUTH_CLIENT_SECRET"]) {
     assert.ok(brokerNames.includes(name), `broker mode should collect ${name}`);
+  }
+  for (const name of ["AUTH_EMAIL_FROM", "RESEND_API_KEY"]) {
+    assert.ok(!brokerNames.includes(name), "email setup can be deferred");
+    assert.ok(pendingSecrets(broker, new Map(), true).todo.some((secret) => secret.name === name));
   }
   assert.match(playbookFor("AUTH_EMAIL_FROM", broker).join("\n"), /verified sender/);
   assert.match(playbookFor("OIDC_CLIENT_ID", broker).join("\n"), /external identity provider/);
@@ -176,4 +174,33 @@ test("runSetup refuses to run without a TTY", async () => {
       return true;
     },
   );
+});
+
+test("email setup uses declared secret names and does not reprompt for direct config values", () => {
+  const aliased = configFor(
+    ["core", "web-ui", "admin", "portal", "auth"],
+    `, "secretEnv": { "auth": { "AUTH_EMAIL_FROM": "AUTH_SENDER", "RESEND_API_KEY": "MAIL_KEY" } }`,
+    `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
+  );
+  const waiting = pendingSecrets(aliased, new Map(), true).todo.map((secret) => secret.name);
+  assert.ok(waiting.includes("AUTH_SENDER"));
+  assert.ok(waiting.includes("MAIL_KEY"));
+  assert.ok(!waiting.includes("AUTH_EMAIL_FROM"));
+  assert.ok(!waiting.includes("RESEND_API_KEY"));
+  const supplied = pendingSecrets(
+    aliased,
+    new Map([
+      ["AUTH_SENDER", "noreply@example.com"],
+      ["MAIL_KEY", "re_configured"],
+    ]),
+    true,
+  );
+  assert.ok(supplied.done.some((secret) => secret.name === "AUTH_SENDER"));
+  assert.ok(supplied.done.some((secret) => secret.name === "MAIL_KEY"));
+  const direct = {
+    ...aliased,
+    secretEnv: undefined,
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_EMAIL_FROM: "noreply@example.com" } },
+  };
+  assert.ok(!pendingSecrets(direct, new Map(), true).todo.some((secret) => secret.name === "AUTH_EMAIL_FROM"));
 });

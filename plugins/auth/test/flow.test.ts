@@ -134,6 +134,49 @@ test("the whole authorization-code flow the portal drives succeeds", async (t) =
   assert.equal(userinfo.email_verified, true);
 });
 
+test("without email delivery, sign-in pages explain the configuration instead of claiming to send a link", async (t) => {
+  const h = await startHarness({ env: { RESEND_API_KEY: undefined } });
+  t.after(() => h.close());
+
+  const page = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
+  const submitted = await fetch(`${h.base}/authorize`, form({ email: "admin@example.com" }));
+  for (const response of [page, submitted]) {
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const html = await response.text();
+    assert.match(html, /Email delivery isn&#39;t configured/);
+    assert.doesNotMatch(html, /<form|Check your email|link is on its way/);
+  }
+  await h.settle();
+  assert.deepEqual(h.mailer.sent, []);
+  assert.deepEqual(h.claims.calls, []);
+  assert.equal((await fetch(`${h.base}/healthz`)).status, 200);
+});
+
+test("removing email delivery does not invalidate already issued sign-in links", async (t) => {
+  const configured = await startHarness();
+  t.after(() => configured.close());
+  const { verifier } = await requestLink(configured);
+  const link = linkFrom(configured.mailer);
+  const h = await startHarness({
+    env: { AUTH_EMAIL_FROM: undefined, RESEND_API_KEY: undefined },
+    claims: configured.claims,
+  });
+  t.after(() => h.close());
+
+  const verified = await openLink(h, link);
+  assert.equal(verified.status, 302);
+  const code = new URL(verified.headers.get("location")!).searchParams.get("code")!;
+  const exchanged = await exchange(h, code, verifier);
+  assert.equal(exchanged.status, 200);
+  const tokens = (await exchanged.json()) as { id_token: string; access_token: string };
+  const claims = await verifyIdTokenLikePortal(h, tokens.id_token, "nonce-value");
+  assert.equal(claims.email, "admin@example.com");
+  const info = await fetch(`${h.base}/userinfo`, { headers: { authorization: `Bearer ${tokens.access_token}` } });
+  assert.equal(info.status, 200);
+  assert.equal((await openLink(h, link)).status, 400);
+});
+
 test("a replayed magic link is refused", async (t) => {
   const h = await startHarness();
   t.after(() => h.close());

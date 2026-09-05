@@ -32,9 +32,38 @@ surfaces, and it does **not** import the core.
    synthesizing the surface cookie for compatibility and attaching a short-lived signed portal
    identity. Surfaces pass that identity to core, which verifies it before any user-scoped action.
 
+## Operator admin login without email
+
+Run `qm admin-login` with the deployment's configuration and secrets to generate
+a private admin login URL. Open it and confirm the displayed email. The URL
+expires after five minutes and works once. With multiple email-based
+`ADMIN_GRANTS` administrators, use `qm admin-login --email admin@example.com`.
+The command can also run with `PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`, and
+`ADMIN_GRANTS` in its environment, without a deployment config file.
+
+`GET /auth/admin-login` only renders the confirmation page. Its script moves the
+token out of the URL fragment into the form and clears the fragment. Nothing
+signs in until the user submits that same-origin form. `POST /auth/admin-login`
+verifies the token's purpose, portal origin, signature and lifetime, checks the
+account's current admin status, and consumes its unique ID through core's
+durable Postgres replay store. It then issues the ordinary portal session and
+clears any old impersonation cookie. No account or role is created.
+
+This is an operator capability: keep deployment secrets and generated URLs
+private. It does not prove an email inbox, replace another user's login, or
+depend on a hosting provider. Leave the built-in broker's sender and selected
+email credentials unset to run without email; configure them later and restart
+to enable ordinary email sign-in. Existing external OIDC login is unchanged.
+
+Live integration checks require a running core, Postgres, admin, portal and
+built-in auth broker with email unset. Set `QM_ADMIN_LOGIN_ENV_FILE` to a private
+JSON file containing that deployment's environment and run
+`node --test test/integration/admin-login.test.ts` from the repository root. Use a
+disposable test deployment: the test redeems real links for its configured admin.
+
 ## Security model (the parts that must be right)
 
-- **Identity comes only from the verified OIDC subject.** The browser never asserts it. The
+- **Identity comes from verified OIDC or an operator-issued admin link.** The browser cannot assert an unsigned identity. The
   upstream request is built **from scratch** — an _allowlist_ of safe headers
   (`content-type`/`accept`/`user-agent`/…) plus the one synthesized cookie. The client's
   headers and cookies are **never** forwarded, so a browser can't smuggle a forged

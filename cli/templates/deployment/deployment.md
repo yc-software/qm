@@ -111,7 +111,13 @@ register: the CLI generates the broker's signing key and the portal's client
 credentials and derives every `OIDC_*` value from `publicUrl`. Setting any of
 them by hand is refused.
 
-What the operator supplies is a way to send those emails. Do not ask them to
+Email setup can be deferred: after deployment, `qm admin-login` prints a
+single-use link for the configured administrator, valid for five minutes.
+It needs the deployment's local signing secret and creates no account or role
+grant. Keep the link private. `qm setup` asks whether to configure email now;
+skip that step for an initial administrator-only deployment.
+
+For ordinary user sign-in, the operator supplies a way to send emails. Do not ask them to
 pick a transport by name; ask what they already use for email. An existing
 mail account or relay (Google Workspace, Postmark, SES, Fastmail) means SMTP —
 recommend it, since it needs no DNS work — and only an operator who prefers

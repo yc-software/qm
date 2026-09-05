@@ -28,6 +28,7 @@ import { renderSlackFiles, runOutputs } from "./commands/outputs.ts";
 import { cliVersion } from "./manifest.ts";
 import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
+import { runAdminLogin } from "./commands/admin-login.ts";
 
 interface Parsed {
   positionals: string[];
@@ -131,6 +132,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   config get <dot.path>                    print one config value (raw scalar, JSON otherwise)
   slack render                             render the bot manifest (+ SSO manifest for Slack OIDC)
   outputs [--json]                         print the Web UI, health, and Slack app creation links
+  admin-login [--email <admin-email>]      print a single-use admin login link, valid for five minutes
   proof scope-key <scope-id>               derive the provider snapshot key for an exact scope
   infra render                             re-derive infra/terraform.tfvars from config
   infra build-image                        build the AWS deploy MicroVM image and record its pin
@@ -422,6 +424,17 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectExtraPositionals(positionals, 0);
       const ctx = deployContext(flags);
       runOutputs(ctx.config, ctx.configDir, boolFlag(flags, "json"));
+      return;
+    }
+
+    case "admin-login": {
+      rejectUnknownFlags(flags, ["config", "env-file", "email"]);
+      rejectExtraPositionals(positionals, 0);
+      runAdminLogin({
+        configPath: strFlag(flags, "config"),
+        envFile: strFlag(flags, "env-file"),
+        email: strFlag(flags, "email"),
+      });
       return;
     }
 

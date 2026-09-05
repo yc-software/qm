@@ -358,7 +358,7 @@ test("the invitation-email pair reaches core as optional secrets on every topolo
       env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
     });
     const shared = secretByName(broker, name);
-    assert.equal(shared.required, true);
+    assert.equal(shared.required, false);
     assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["auth", "core"]);
   }
 });

@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
-import { readConfig, type AuthConfig } from "../src/config.ts";
+import { emailConfigured, readConfig, type AuthConfig } from "../src/config.ts";
 import type { ClaimStore } from "../../chassis/src/claims.ts";
 import type { Mailer, OutgoingEmail } from "../src/email.ts";
 import { loadSigningKey } from "../src/keys.ts";
@@ -108,7 +108,7 @@ export async function startHarness(
     signingKey: await loadSigningKey(cfg.signingJwk!),
     signer: new TokenSigner(cfg.tokenSecret, cfg.issuer),
     claims,
-    mailer,
+    mailer: emailConfigured(cfg) ? mailer : null,
     ...(options.brandName ? { brandName: options.brandName } : {}),
     emailAllowed: options.emailAllowed ?? (async () => false),
     now: () => now.ms,

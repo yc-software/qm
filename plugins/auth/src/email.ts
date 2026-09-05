@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { escapeHtml } from "../../chassis/src/http.ts";
-import { senderAddress, type AuthConfig } from "./config.ts";
+import { emailConfigured, senderAddress, type AuthConfig } from "./config.ts";
 import { smtpDeliver } from "./smtp.ts";
 
 export interface OutgoingEmail {
@@ -65,7 +65,8 @@ function smtpMailer(cfg: AuthConfig): Mailer {
   };
 }
 
-export function mailerFor(cfg: AuthConfig): Mailer {
+export function mailerFor(cfg: AuthConfig): Mailer | null {
+  if (!emailConfigured(cfg)) return null;
   return cfg.transport === "smtp" ? smtpMailer(cfg) : resendMailer(cfg);
 }
 

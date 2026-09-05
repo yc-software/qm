@@ -102,6 +102,7 @@ plan
 up [--yes] [--build-from[=repo]] [--image-label label]
 slack render
 outputs [--json]
+admin-login [--email admin@example.com]
 proof scope-key <scope-id>
 secrets push [--from file]
 status
@@ -112,7 +113,29 @@ sandbox build [--from image] [--tag tag] [--dry-run]
 sandbox publish [--from image] [--app registry/repo] [--tag tag] [--dry-run]
 ```
 
-All deploy commands accept `--config`, `--env-file`, and `--sandbox-dir`. `dev` remains
+## Administrator login without email
+
+After deployment, run `qm admin-login` to print a single-use login URL valid for
+five minutes. Open it and confirm the displayed administrator email. The command
+uses the deployment's existing `PORTAL_SESSION_SECRET` and the email in
+`ADMIN_GRANTS`; if several admins are configured, select one with `--email`.
+QM checks that the selected account still has `org_admin` access when the link
+is redeemed. The command creates no account or role grant.
+
+Run it from the deployment directory with its `.env`, or use `--config` and
+`--env-file`. Inside a running deployment without a config file, supply
+`PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`, and `ADMIN_GRANTS` through its
+environment. The CLI prints only the URL, which is a temporary login credential;
+do not publish it or put it in shared logs.
+
+`qm setup` offers email setup separately. Skip it to use administrator login
+without Resend or SMTP. To enable ordinary email login later, rerun `qm setup`
+and configure the selected transport's complete credential set and sender,
+then push secrets and redeploy. Missing email credentials disable email sign-in;
+QM and `qm admin-login` remain available, even if a sender is still configured.
+
+Deployment commands accept `--config`, `--env-file`, and `--sandbox-dir`;
+`admin-login` uses only `--config` and `--env-file`. `dev` remains
 the contributor worktree loop and is separate from the portable deployment contract.
 
 ## Package contract

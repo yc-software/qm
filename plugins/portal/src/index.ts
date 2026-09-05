@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
+import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import {
   deriveKey,
@@ -38,11 +39,11 @@ import {
   FORWARD_WEBHOOK_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { coreClaimStore, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
+import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
-import { json, escapeHtml, serveEmojiFavicon } from "../../chassis/src/http.ts";
+import { json, escapeHtml, serveEmojiFavicon, readBody, PayloadTooLargeError } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -265,10 +266,10 @@ async function isAdmin(sub: string): Promise<boolean> {
 const PAGE_CSP =
   "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
-function sendHtml(res: ServerResponse, status: number, html: string): void {
+function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_CSP): void {
   res.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
-    "content-security-policy": PAGE_CSP,
+    "content-security-policy": csp,
     "x-content-type-options": "nosniff",
     "cache-control": "no-store",
   });
@@ -884,6 +885,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
+  if (pathname === "/auth/admin-login") return adminLogin(req, res);
   if (pathname === "/auth/logout" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
     setSession(res, [
@@ -1136,6 +1138,79 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   });
 }
 
+async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!SESSION_SECRET || SESSION_SECRET.trim().length < 32 || !CORE_SIGNING_SECRET) {
+    return json(res, 503, { error: "not_configured" });
+  }
+  if (req.method === "GET") {
+    return sendHtml(
+      res,
+      200,
+      cardPage({
+        title: "Admin sign-in",
+        heading: "Sign in as an administrator",
+        msg: "Only continue if you generated this link for your own admin account.",
+        icon: LOCK_ICON,
+        extra: '<p id="admin-email"></p><noscript>JavaScript is required to open this login link.</noscript>',
+        actions: `<form method="post" action="/auth/admin-login"><input id="admin-token" name="token" type="hidden"><button id="admin-confirm" class="btn primary" style="width:100%" type="submit" disabled>Sign in</button></form><script>${ADMIN_LOGIN_SCRIPT}</script>`,
+        help: "This link expires after five minutes and can be used once. Generate another with qm admin-login.",
+      }),
+      `${PAGE_CSP}; script-src '${ADMIN_LOGIN_SCRIPT_HASH}'`,
+    );
+  }
+  if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+  if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
+  let token: string;
+  try {
+    token = new URLSearchParams(await readBody(req, 8192)).get("token") ?? "";
+  } catch (error) {
+    if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "payload_too_large" });
+    throw error;
+  }
+  const claims = openAdminLogin(token, SESSION_SECRET, ORIGIN);
+  const fail = () =>
+    sendHtml(
+      res,
+      400,
+      signInErrorHtml("This admin link is invalid, expired, or already used. Generate a new link with qm admin-login."),
+    );
+  if (!claims) return fail();
+  const allowed = await adminProbeAttempt(claims.email);
+  if (allowed === null)
+    return sendHtml(res, 503, signInErrorHtml("Admin access could not be checked. Please try again."));
+  if (!allowed) return sendHtml(res, 403, signInErrorHtml("This account does not have admin access."));
+  try {
+    const claimsStore = coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal");
+    if (!(await claimOnce(claimsStore, `admin-login:${claims.jti}`, claims.expiresAtMs))) return fail();
+  } catch (error) {
+    if (error instanceof ClaimStoreUnavailableError) {
+      return sendHtml(res, 503, signInErrorHtml("Sign-in is temporarily unavailable. Please try again."));
+    }
+    throw error;
+  }
+  setAuthenticatedSession(res, claims.email);
+  res.writeHead(303, { location: "/admin/", "cache-control": "no-store" });
+  res.end();
+}
+
+function setAuthenticatedSession(res: ServerResponse, sub: string, name = ""): void {
+  const now = Math.floor(Date.now() / 1000);
+  const session: SessionClaims = {
+    k: "session",
+    sub,
+    org: ORG,
+    auth: now,
+    iat: now,
+    exp: now + SESSION_TTL_S,
+    ...(name ? { name } : {}),
+  };
+  setSession(res, [
+    ...sessionCookieSet(seal(session, sessionKey)),
+    clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
+    clearCookie("portal_impersonate", "/", SECURE_COOKIES),
+  ]);
+}
+
 function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN);
   const localSession = localDevSession(req, Date.now(), true);
@@ -1197,20 +1272,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     return fail(errMessage(e, "sign-in failed"));
   }
 
-  const now = Math.floor(Date.now() / 1000);
-  const session: SessionClaims = {
-    k: "session",
-    sub,
-    org: ORG,
-    auth: now,
-    iat: now,
-    exp: now + SESSION_TTL_S,
-    ...(name ? { name } : {}),
-  };
-  setSession(res, [
-    ...sessionCookieSet(seal(session, sessionKey)),
-    clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
-  ]);
+  setAuthenticatedSession(res, sub, name);
   res.writeHead(302, {
     location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN),
     "cache-control": "no-store",

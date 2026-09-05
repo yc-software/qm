@@ -11234,7 +11234,7 @@
         const inviteBtn = document.createElement("button");
         inviteBtn.className = "primary";
         inviteBtn.type = "button";
-        inviteBtn.textContent = "Send invite";
+        inviteBtn.textContent = inviteEmail.configured === false ? "Add user" : "Send invite";
         inviteBtn.onclick = async () => {
           const email = emailInput.value.trim();
           if (!email) return setStatus("st-external", "Email required.", "err");
@@ -11265,7 +11265,7 @@
                   ", but no invitation email was sent: " +
                   r.data.emailProblem +
                   "." +
-                  (r.data.signInUrl ? " Share " + r.data.signInUrl + " with them." : "")
+                  (r.data.signInUrl ? " Portal: " + r.data.signInUrl + ". A working sign-in method is required." : "")
                 : "Updated " + member.email + " — " + labelRole(member.role) + expires,
             r.data.emailSent || !r.data.emailProblem ? "ok" : "dirty",
             true,
@@ -11285,9 +11285,9 @@
         inviteNote.textContent =
           inviteEmail.configured === false
             ? (inviteEmail.problem || "Invitation emails are not configured") +
-              ". The user is still added; share the sign-in link yourself." +
+              ". Users can still be added, but need a configured sign-in method before they can log in." +
               signInHint
-            : "Invitation emails go out through Resend — core needs RESEND_API_KEY and AUTH_EMAIL_FROM. Without them the user is still added and you share the sign-in link yourself.";
+            : "Invitation emails go out through Resend — core needs RESEND_API_KEY and AUTH_EMAIL_FROM. Without them users can still be added, but need a configured sign-in method before they can log in.";
         const invite = document.createElement("div");
         invite.className = "hidden";
         invite.style.margin = "0 0 14px";

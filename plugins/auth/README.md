@@ -1,23 +1,22 @@
 # auth — the built-in sign-in broker
 
 An OIDC authorization server that speaks exactly the subset
-[`plugins/portal`](../portal/src/oidc.ts) consumes, so the portal keeps talking
-standard OIDC and never grows a second authentication path. Instead of an
+[`plugins/portal`](../portal/src/oidc.ts) consumes. Instead of an
 external identity provider, people prove who they are by opening a one-time link
 emailed to an allowed address.
 
 ## Endpoints
 
-| Route                                   | Reached by                                  | Notes                                                                          |
-| --------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
-| `GET /authorize`                        | browser, via the portal at `/idp/authorize` | validates the request and renders the email form                               |
-| `POST /authorize`                       | browser, via the portal                     | always answers with the same confirmation page, then emails a link out of band |
-| `GET /verify`                           | browser, via the portal at `/idp/verify`    | consumes the link and redirects to the portal's `/auth/callback` with a code   |
-| `POST /token`                           | portal, over the private network            | HTTP Basic client auth, authorization-code grant, PKCE S256                    |
-| `GET /userinfo`                         | portal, over the private network            | Bearer access token, verified statelessly                                      |
-| `GET /.well-known/jwks.json`            | portal, over the private network            | the ES256 public key                                                           |
-| `GET /.well-known/openid-configuration` | operators                                   | discovery, for debugging                                                       |
-| `GET /healthz`                          | the platform                                | liveness                                                                       |
+| Route                                   | Reached by                                  | Notes                                                                                          |
+| --------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET /authorize`                        | browser, via the portal at `/idp/authorize` | validates the request and renders the email form                                               |
+| `POST /authorize`                       | browser, via the portal                     | with email configured, answers with the same confirmation page, then emails a link out of band |
+| `GET /verify`                           | browser, via the portal at `/idp/verify`    | consumes the link and redirects to the portal's `/auth/callback` with a code                   |
+| `POST /token`                           | portal, over the private network            | HTTP Basic client auth, authorization-code grant, PKCE S256                                    |
+| `GET /userinfo`                         | portal, over the private network            | Bearer access token, verified statelessly                                                      |
+| `GET /.well-known/jwks.json`            | portal, over the private network            | the ES256 public key                                                                           |
+| `GET /.well-known/openid-configuration` | operators                                   | discovery, for debugging                                                                       |
+| `GET /healthz`                          | the platform                                | liveness                                                                                       |
 
 The broker is never published directly. The portal republishes only the three
 browser-facing routes under `AUTH_BROKER_PREFIX` (`/idp` by default), which is
@@ -37,8 +36,10 @@ a claim the broker fails closed and refuses the sign-in.
 
 ## Configuration
 
-Every value below is set by `qm` from the deployment config and the secret
-store; the broker refuses to start if any of it is missing or a placeholder.
+Values below are set by `qm` from the deployment config and the secret store.
+Authentication keys and an email allowlist or domain remain required. Email
+delivery is optional; missing or incomplete email configuration disables delivery.
+Fully supplied email configuration is validated at boot.
 
 | Variable                                                                        | Source                                                                                                                      |
 | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -69,9 +70,17 @@ allowed. One of the two env variables is still required at boot.
 
 ## Email transport
 
-`AUTH_EMAIL_TRANSPORT` selects one of two, and the broker refuses to start
-without that transport's credentials. `AUTH_EMAIL_FROM` is the verified sender
-either way, optionally as `Name <sender@example.com>`.
+`AUTH_EMAIL_TRANSPORT` selects Resend (the default) or SMTP. When
+`AUTH_EMAIL_FROM` or any of the selected transport's credentials are absent, the
+broker starts without email delivery. The sign-in page and submissions return
+503 with “Email delivery isn't configured”; no form is offered and no email is
+claimed to have been sent. Previously issued links and codes keep their normal
+expiration and single-use checks.
+
+To enable email sign-in, configure the selected transport's credentials and
+`AUTH_EMAIL_FROM`, then restart. The sender must be verified and may be written
+as `Name <sender@example.com>`. Supplying only part of the configuration leaves
+email delivery disabled. Fully supplied but invalid configuration is refused at boot.
 
 | Transport | Variables                                                                             | Notes                                                                                                                                                                                                                                                   |
 | --------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

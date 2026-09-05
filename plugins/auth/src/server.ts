@@ -19,7 +19,7 @@ export interface AuthDeps {
   signingKey: SigningKey;
   signer: TokenSigner;
   claims: ClaimStore;
-  mailer: Mailer;
+  mailer: Mailer | null;
   brandName?: () => string;
   emailAllowed?: (email: string) => Promise<boolean>;
   now?: () => number;
@@ -129,6 +129,14 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   const problem = (res: ServerResponse, status: number, heading: string, msg: string, detail?: string): void =>
     sendHtml(res, status, problemPage({ brandName: brandName(), heading, msg, ...(detail ? { detail } : {}) }));
 
+  const emailUnavailable = (res: ServerResponse): void =>
+    problem(
+      res,
+      503,
+      "Email delivery isn't configured",
+      "Your administrator needs to configure email delivery before you can request a sign-in link.",
+    );
+
   const signInUrl = ((): string | undefined => {
     try {
       return new URL("/auth/login", cfg.redirectUri).toString();
@@ -159,6 +167,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         "Start again from the page you were trying to reach.",
         parsed.problem,
       );
+    if (!mailer) return emailUnavailable(res);
     const sealed = await signer.sealRequest(parsed.request, cfg.requestTtlS, now());
     return sendHtml(
       res,
@@ -167,7 +176,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     );
   }
 
-  async function sendLink(request: AuthRequest, email: string, ip: string): Promise<void> {
+  async function sendLink(request: AuthRequest, email: string, ip: string, sender: Mailer): Promise<void> {
     const nowMs = now();
     const within = async (kind: string, value: string, limit: number): Promise<boolean> =>
       withinRateLimit(claims, { secret: cfg.tokenSecret, kind, value, limit, windowS: cfg.sendWindowS, nowMs });
@@ -194,7 +203,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     const sealed = await signer.sealLink({ ...request, email }, cfg.linkTtlS, nowMs);
     const link = `${cfg.issuer}/verify#token=${encodeURIComponent(sealed.token)}`;
     try {
-      const receipt = await mailer.send(
+      const receipt = await sender.send(
         renderSignInEmail({ to: email, brandName: brandName(), link, ttlMinutes: linkTtlMinutes }),
       );
       console.log(`[auth] sign-in link sent to ${email} (${receipt})`);
@@ -204,6 +213,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   }
 
   async function authorizeSubmit(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!mailer) return emailUnavailable(res);
     let raw: string;
     try {
       raw = await readBody(req, MAX_FORM_BYTES);
@@ -238,7 +248,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     }
     const ip = clientIpOf(req);
     sendHtml(res, 200, linkSentPage({ brandName: brandName(), email, ttlMinutes: linkTtlMinutes }));
-    background(() => sendLink(request, email, ip));
+    background(() => sendLink(request, email, ip, mailer));
   }
 
   function confirmVerify(res: ServerResponse): void {
