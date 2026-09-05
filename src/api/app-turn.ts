@@ -454,7 +454,10 @@ export function createTurnMethods(
       }
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
       if (spineRouted) deps.engaged?.engage(conversation.threadRef);
-      if (deduped && run.result && isTerminal(run.status)) return withAdminLink(run.result);
+      if (deduped && run.result && isTerminal(run.status)) {
+        const result = await withAdminLink(run.result);
+        return req.async ? { ...result, runId: run.id } : result;
+      }
       if (req.async) return { status: "queued", runId: run.id };
       return drive(run.id);
     },
