@@ -4973,7 +4973,10 @@
         { views: ["history", "slack", "judgments"] },
         { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
         { label: "System", views: ["metrics"] },
-        { label: "Admin", views: ["onboarding", "governance", "connectors", "users", "keychain", "egress", "audit"] },
+        {
+          label: "Admin",
+          views: ["onboarding", "governance", "connectors", "users", "accounts", "keychain", "egress", "audit"],
+        },
         { label: "Insights", views: ["retention"] },
       ];
 
@@ -4988,6 +4991,7 @@
         governance: "Governance",
         connectors: "Connectors",
         users: "Users",
+        accounts: "Accounts",
         keychain: "Keychain",
         user: "User",
         metrics: "Metrics",
@@ -5018,7 +5022,7 @@
         "crons",
         "deployments",
       ]);
-      const ORG_WIDE = new Set(["retention", "users", "keychain", "connectors", "judgments", "ackemoji"]);
+      const ORG_WIDE = new Set(["retention", "users", "accounts", "keychain", "connectors", "judgments", "ackemoji"]);
       const ENDPOINT = { history: "sessions", files: "files", live: "runs" };
       const HISTORY_PAGE_SIZE = 50;
 
@@ -8536,6 +8540,7 @@
           deployments: renderDeployments,
           retention: renderRetention,
           users: renderUsers,
+          accounts: renderAccounts,
           keychain: renderKeychain,
         })[view](root, data);
       }
@@ -11083,6 +11088,181 @@
         };
         drawLists();
       }
+
+      // Administrator-managed sign-in accounts. Every write here goes to core,
+      // which owns the credential; this page never sees or stores a hash.
+      function renderAccounts(root, d) {
+        const accounts = d.accounts || [];
+        const minLength = d.minPasswordLength || 8;
+        let filterVal = "";
+        defaultShell({
+          stats: [
+            [accounts.length, "Accounts"],
+            [accounts.filter((a) => a.active).length, "Active"],
+          ],
+          search: {
+            placeholder: "email address",
+            onInput: (v) => {
+              filterVal = v;
+              drawAccounts();
+            },
+          },
+        });
+
+        const mkField = (cls, labelText, control) => {
+          const f = document.createElement("div");
+          f.className = "f" + (cls ? " " + cls : "");
+          const l = document.createElement("label");
+          l.textContent = labelText;
+          f.append(l, control);
+          return f;
+        };
+        const mkInput = (type, placeholder) => {
+          const i = document.createElement("input");
+          i.type = type;
+          i.placeholder = placeholder;
+          i.spellcheck = false;
+          i.autocapitalize = "none";
+          if (type === "password") i.autocomplete = "new-password";
+          return i;
+        };
+
+        const form = document.createElement("div");
+        form.className = "grant-form";
+        const idInput = mkInput("text", "person@example.com");
+        const nameInput = mkInput("text", "display name (optional)");
+        const pwInput = mkInput("password", "at least " + minLength + " characters");
+        const createBtn = document.createElement("button");
+        createBtn.className = "primary";
+        createBtn.type = "button";
+        createBtn.textContent = "Create account";
+        createBtn.onclick = async () => {
+          const principalId = idInput.value.trim();
+          const password = pwInput.value;
+          if (!principalId) return setStatus("st-accounts", "An email address is required.", "err");
+          if (password.length < minLength)
+            return setStatus("st-accounts", "The initial password needs at least " + minLength + " characters.", "err");
+          createBtn.disabled = true;
+          const r = await api("POST", "/api/accounts", {
+            principalId,
+            displayName: nameInput.value.trim(),
+            password,
+          });
+          createBtn.disabled = false;
+          if (!r.ok) return setStatus("st-accounts", r.data?.message || "Could not create the account.", "err");
+          idInput.value = nameInput.value = pwInput.value = "";
+          setStatus("st-accounts", "Account created. Give them the password out of band — they must change it.", "ok");
+          dataCache.delete("/api/accounts");
+          renderData();
+        };
+        form.append(
+          mkField("grow", "Email address", idInput),
+          mkField("grow", "Display name", nameInput),
+          mkField("grow", "Initial password", pwInput),
+          createBtn,
+        );
+        const formCard = dataCard(
+          "Create an account",
+          "The person signs in with this address and password, and must choose their own password before reaching anything. Hand the initial password over out of band — it is never mailed.",
+          form,
+        );
+        const st = document.createElement("p");
+        st.className = "status";
+        st.id = "st-accounts";
+        st.style.margin = "10px 0 0";
+        formCard.querySelector(".body").appendChild(st);
+        root.appendChild(formCard);
+
+        const listHost = document.createElement("div");
+        const listCard = dataCard(
+          "Accounts",
+          "Resetting a password requires the holder to choose a new one at their next sign-in. Deactivating stops an open session as well as a new sign-in.",
+          listHost,
+        );
+        root.appendChild(listCard);
+
+        async function act(label, method, path, body, confirmMsg) {
+          if (confirmMsg && !confirm(confirmMsg)) return;
+          const r = await api(method, path, body);
+          if (!r.ok) return setStatus("st-accounts", r.data?.message || label + " failed.", "err");
+          setStatus("st-accounts", label + " done.", "ok");
+          dataCache.delete("/api/accounts");
+          renderData();
+        }
+
+        function drawAccounts() {
+          const needle = filterVal.trim().toLowerCase();
+          const shown = needle
+            ? accounts.filter(
+                (a) =>
+                  a.principalId.toLowerCase().includes(needle) ||
+                  String(a.displayName || "")
+                    .toLowerCase()
+                    .includes(needle),
+              )
+            : accounts;
+          const rows = shown.map((a) => {
+            const actions = document.createElement("div");
+            actions.style.display = "flex";
+            actions.style.gap = "6px";
+            actions.style.flexWrap = "wrap";
+            const reset = document.createElement("button");
+            reset.type = "button";
+            reset.className = "rowbtn";
+            reset.textContent = "Reset password";
+            reset.onclick = () => {
+              const next = prompt("New password for " + a.principalId + " (at least " + minLength + " characters)");
+              if (next === null) return;
+              if (next.length < minLength) return setStatus("st-accounts", "That password is too short.", "err");
+              act("Password reset", "PUT", "/api/accounts/" + encodeURIComponent(a.principalId) + "/password", {
+                password: next,
+              });
+            };
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "rowbtn";
+            toggle.textContent = a.active ? "Deactivate" : "Reactivate";
+            toggle.onclick = () =>
+              act(
+                a.active ? "Deactivation" : "Reactivation",
+                "PUT",
+                "/api/accounts/" + encodeURIComponent(a.principalId) + "/active",
+                { active: !a.active },
+                a.active ? "Deactivate " + a.principalId + "? Their open sessions stop working." : null,
+              );
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "rowbtn danger";
+            remove.textContent = "Delete";
+            remove.onclick = () =>
+              act(
+                "Deletion",
+                "DELETE",
+                "/api/accounts/" + encodeURIComponent(a.principalId),
+                null,
+                "Delete the credential for " + a.principalId + "? Their history is kept; they can no longer sign in.",
+              );
+            actions.append(reset, toggle, remove);
+            return [
+              { text: a.principalId },
+              { text: a.displayName || "" },
+              { text: a.active ? (a.mustChange ? "must change password" : "active") : "deactivated" },
+              { text: a.updatedAt ? new Date(a.updatedAt).toLocaleString() : "" },
+              { node: actions },
+            ];
+          });
+          listHost.textContent = "";
+          listHost.appendChild(
+            table(
+              ["Email address", "Name", "State", "Password set", ""],
+              rows,
+              needle ? "No account matches that." : "No accounts yet.",
+            ),
+          );
+        }
+        drawAccounts();
+      }
+
       function renderUsers(root, d) {
         const users = d.users || [];
         const grants = d.grants || [];

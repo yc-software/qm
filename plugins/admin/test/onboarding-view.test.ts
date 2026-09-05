@@ -121,7 +121,14 @@ test("a stored key keeps its summary even when the harness also carries auth", a
 });
 
 test("onboarding is a navigable view", () => {
-  assert.match(html, /\{ label: "Admin", views: \["onboarding",/);
+  // Matched across the section literal rather than one formatted line: the
+  // Admin section gains views over time and Prettier rewraps it when it does.
+  assert.match(html, /label: "Admin",\s*views: \[\s*"onboarding",/);
+});
+
+test("accounts is a navigable view in the Admin section", () => {
+  assert.match(html, /label: "Admin",[\s\S]{0,300}?"accounts"/);
+  assert.equal(resolveView("/admin/accounts", ""), "accounts");
 });
 
 test("/admin/onboarding resolves to the onboarding view", () => {

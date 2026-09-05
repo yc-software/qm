@@ -25,6 +25,7 @@ import { contextPolicyRoutes } from "./context-policy.ts";
 import { deploymentLayerRoutes } from "./deployment-layer.ts";
 import { egressAuditRoutes } from "./egress-audit.ts";
 import { authBrokerRoutes } from "./auth-broker.ts";
+import { passwordRoutes } from "./password.ts";
 import { searchRoutes } from "./search.ts";
 import { userModelAuthRoutes } from "./user-model-auth.ts";
 
@@ -67,5 +68,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...deploymentRoutes,
   ...egressAuditRoutes,
   ...authBrokerRoutes,
+  ...passwordRoutes,
   ...userModelAuthRoutes,
 ];

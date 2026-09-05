@@ -3,8 +3,19 @@
 An OIDC authorization server that speaks exactly the subset
 [`plugins/portal`](../portal/src/oidc.ts) consumes, so the portal keeps talking
 standard OIDC and never grows a second authentication path. Instead of an
-external identity provider, people prove who they are by opening a one-time link
-emailed to an allowed address.
+external identity provider, people prove who they are one of two ways, chosen
+by `AUTH_CREDENTIAL_TRANSPORT`:
+
+- **`email-link`** (the default, and unchanged): a one-time link emailed to an
+  allowed address.
+- **`password`**: a password an administrator created, verified against core.
+  For a deployment with no usable outbound mail path — an intranet host behind
+  a firewall that does not route to a public SMTP relay — the emailed link
+  cannot arrive at all, and the isolation that makes such a deployment safe is
+  the same isolation that breaks the mail.
+
+The two are a separate axis from `AUTH_EMAIL_TRANSPORT`, which stays the choice
+of _how_ mail is sent when mail is what is sent.
 
 ## Endpoints
 
@@ -12,7 +23,8 @@ emailed to an allowed address.
 | --------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
 | `GET /authorize`                        | browser, via the portal at `/idp/authorize` | validates the request and renders the email form                               |
 | `POST /authorize`                       | browser, via the portal                     | always answers with the same confirmation page, then emails a link out of band |
-| `GET /verify`                           | browser, via the portal at `/idp/verify`    | consumes the link and redirects to the portal's `/auth/callback` with a code   |
+| `GET /verify`                           | browser, via the portal at `/idp/verify`    | `email-link` mode only: consumes the link and redirects to `/auth/callback`    |
+| `POST /password`                        | browser, via the portal                     | `password` mode only: sets a new password when the current one must change     |
 | `POST /token`                           | portal, over the private network            | HTTP Basic client auth, authorization-code grant, PKCE S256                    |
 | `GET /userinfo`                         | portal, over the private network            | Bearer access token, verified statelessly                                      |
 | `GET /.well-known/jwks.json`            | portal, over the private network            | the ES256 public key                                                           |
@@ -47,7 +59,8 @@ store; the broker refuses to start if any of it is missing or a placeholder.
 | `AUTH_ALLOWED_EMAILS`, `AUTH_ALLOWED_EMAIL_DOMAIN`                              | the operator's admin address or domain                                                                                      |
 | `AUTH_EMAIL_FROM`                                                               | the operator's verified sender                                                                                              |
 | `AUTH_BRAND_NAME`                                                               | `botName` in the deployment config; the Admin page's live branding, when set, takes precedence on rendered pages and emails |
-| `AUTH_EMAIL_TRANSPORT` and the chosen transport's variables (below)             | the operator's email provider                                                                                               |
+| `AUTH_CREDENTIAL_TRANSPORT`                                                     | `email-link` (default) or `password`                                                                                        |
+| `AUTH_EMAIL_TRANSPORT` and the chosen transport's variables (below)             | the operator's email provider — `email-link` mode only                                                                      |
 | `AUTH_LINK_TTL_S`, `AUTH_CODE_TTL_S`, `AUTH_ACCESS_TTL_S`, `AUTH_REQUEST_TTL_S` | optional, capped                                                                                                            |
 | `AUTH_SEND_WINDOW_S`, `AUTH_SEND_LIMIT_PER_EMAIL`, `AUTH_SEND_LIMIT_PER_IP`     | optional                                                                                                                    |
 | `CORE_API_URL`, `CORE_ORG_ID`, `CORE_SIGNING_SECRET`                            | the chassis core block                                                                                                      |
@@ -55,6 +68,74 @@ store; the broker refuses to start if any of it is missing or a placeholder.
 The signing key is single, not a set: rotating it means redeploying, and links
 minted by the previous key stop verifying at that moment.
 
+## Password mode
+
+`AUTH_CREDENTIAL_TRANSPORT=password` replaces the email form with a password
+form. `POST /authorize` sends the identifier and password to core over the
+signed source-auth channel and receives a verdict; the broker holds no
+credential store, sees no hash, and stores nothing. `CORE_SIGNING_SECRET` is
+therefore required rather than optional, and no sender or mail-transport
+credential is needed — the broker is built with a mailer that throws, so
+"nothing is mailed" is a property of the build.
+
+Core must be told to store credentials at all: `QM_PASSWORD_SIGN_IN` is off by
+default, and with it off core creates no credential table and the password,
+account-management and break-glass routes answer `404`. A deployment that signs
+people in by emailed link is therefore unchanged down to its route table.
+
+Accounts are created by an administrator on the Admin surface, which writes to
+core. There is no self-service registration and no self-service reset: with no
+mail channel, a forgotten password is an administrator reset. An account
+created or reset that way must choose its own password before it reaches any
+surface — the broker holds the sign-in at the change form until it does.
+
+`AUTH_ALLOWED_EMAILS` / `AUTH_ALLOWED_EMAIL_DOMAIN` become optional in this
+mode, because having an account is what admits a person and a second list would
+be a second place to forget to deactivate them. When one is set it still
+applies, and is checked before the password leaves the broker.
+
+A wrong password, an address with no account, a deactivated principal, and a
+rate-limited attempt all answer with the same page and the same sentence. Core
+verifies an unknown identifier against a decoy hash so a wrong password and an
+unknown address also cost the same time. A rate-limited attempt is faster,
+which reveals only that the caller has exhausted their own bucket: the limiter
+is keyed on the identifier and the client address and behaves identically
+whether or not an account exists.
+
+Deactivation is read from the durable record on this path rather than from the
+replica's identity cache, because `refresh()` is throttled and each replica
+caches separately — an admission decision cannot be up to that interval stale.
+
+The identifier stays an email address. Nothing is sent to it; it is the person
+key the directory, `personKey`, the OIDC subject derivation and `ADMIN_GRANTS`
+already agree on, and a separate username would change all four.
+
+### Recovering a locked-out deployment
+
+Password mode has a failure the emailed link does not: rolling back to a
+revision without it leaves a deployment that cannot sign anyone in, including
+the administrator handling the incident. Two boot-time variables arm a way back:
+
+| Variable                   | Meaning                                             |
+| -------------------------- | --------------------------------------------------- |
+| `QM_BREAK_GLASS_PRINCIPAL` | the one principal that may be recovered             |
+| `QM_BREAK_GLASS_SECRET`    | at least 32 characters; the credential for the call |
+
+Both are core's, not the broker's. The deployment CLI collects
+`QM_BREAK_GLASS_SECRET` as a secret whenever `env.core.QM_BREAK_GLASS_PRINCIPAL`
+names a principal, so a deployment cannot be brought up through the CLI with the
+route half-armed. Core itself still boots without a usable secret: it logs
+`[break-glass] disabled: ...` and omits the route, so a successful boot is not
+proof the path is armed — look for `[break-glass] recovery is armed for ...`.
+
+With both set, `POST /v1/auth/break-glass` on core — source-authenticated like
+every other core route, and additionally gated by that secret — sets that
+principal's password and restores their `org_admin` grant. It mints no session
+and issues no token, and every call, refused or not, is audited under
+`break-glass.recover` / `break-glass.refused`. `scripts/break-glass.ts <principal>` signs the call from the
+host, reading the password from a pipe when stdin is not a terminal and
+prompting without echo when it is. Passing it as an argument works and puts
+it in the shell history and the process table. Unset, the route answers `404`.
 ## Invited external users
 
 An address an org admin has invited as an external user (Admin → Users, or by

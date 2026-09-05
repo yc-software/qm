@@ -2,6 +2,16 @@ import type { SmtpTlsMode } from "./smtp.ts";
 
 type EmailTransportKind = "resend" | "smtp";
 
+/**
+ * How the broker satisfies itself that a person is who they claim to be.
+ *
+ * `email-link` is the default and is unchanged: a one-time link is mailed.
+ * `password` verifies an administrator-created password against core instead,
+ * for a deployment with no usable outbound mail path. It is a separate axis
+ * from `AUTH_EMAIL_TRANSPORT`, which stays the choice of *how* mail is sent.
+ */
+type CredentialTransportKind = "email-link" | "password";
+
 interface SmtpSettings {
   host: string;
   port: number;
@@ -23,6 +33,7 @@ export interface AuthConfig {
   emailFrom: string;
   brandName: string;
   transport: EmailTransportKind;
+  credentialTransport: CredentialTransportKind;
   resendApiKey: string;
   smtp: SmtpSettings;
   linkTtlS: number;
@@ -84,6 +95,8 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
   const issuer = (env.AUTH_ISSUER ?? `http://localhost:${env.PORT ?? 8099}`).replace(/\/$/, "");
   const publicPath = issuerPath(issuer);
   const transport: EmailTransportKind = env.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
+  const credentialTransport: CredentialTransportKind =
+    env.AUTH_CREDENTIAL_TRANSPORT?.trim() === "password" ? "password" : "email-link";
   return {
     issuer,
     publicPath,
@@ -97,6 +110,7 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
     emailFrom: env.AUTH_EMAIL_FROM?.trim() ?? "",
     brandName: env.AUTH_BRAND_NAME?.trim() || "qm",
     transport,
+    credentialTransport,
     resendApiKey: env.RESEND_API_KEY ?? "",
     smtp: {
       host: env.SMTP_HOST?.trim() ?? "",
@@ -169,7 +183,11 @@ export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
     problems.push("AUTH_SIGNING_JWK must be a P-256 private JSON Web Key (kty EC, crv P-256, with d)");
   }
 
-  if (!cfg.allowedEmails.length && !cfg.allowedEmailDomain) {
+  // In email-link mode the allow-list is the only user store, so one is
+  // required. In password mode having an account is what admits a person, and
+  // a second list would be a second place to deactivate them. It stays
+  // optional there, and is still enforced when set.
+  if (cfg.credentialTransport === "email-link" && !cfg.allowedEmails.length && !cfg.allowedEmailDomain) {
     problems.push(
       "AUTH_ALLOWED_EMAILS or AUTH_ALLOWED_EMAIL_DOMAIN is required — without one, anybody with an inbox could sign in",
     );
@@ -184,27 +202,39 @@ export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
     problems.push("AUTH_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set");
   }
 
-  if (isMissingOrPlaceholder(cfg.emailFrom) || !validEmail(senderAddress(cfg.emailFrom))) {
-    problems.push('AUTH_EMAIL_FROM must be a verified sender address, optionally as "Name <sender@example.com>"');
-  }
-  if (cfg.transport === "resend") {
-    if (isMissingOrPlaceholder(cfg.resendApiKey))
-      problems.push("RESEND_API_KEY is required when AUTH_EMAIL_TRANSPORT is resend");
-  } else {
-    if (isMissingOrPlaceholder(cfg.smtp.host)) problems.push("SMTP_HOST is required when AUTH_EMAIL_TRANSPORT is smtp");
-    if (isMissingOrPlaceholder(cfg.smtp.username))
-      problems.push("SMTP_USERNAME is required when AUTH_EMAIL_TRANSPORT is smtp");
-    if (isMissingOrPlaceholder(cfg.smtp.password))
-      problems.push("SMTP_PASSWORD is required when AUTH_EMAIL_TRANSPORT is smtp");
-    if (!Number.isInteger(cfg.smtp.port) || cfg.smtp.port < 1 || cfg.smtp.port > 65535)
-      problems.push("SMTP_PORT must be a TCP port number");
-    if (isProd && cfg.smtp.tls === "none")
+  // In password mode nothing is mailed, so no sender and no mail-transport
+  // credential is required. The signed channel to core is not optional there:
+  // it is where verification happens and where the attempt limiter lives.
+  if (cfg.credentialTransport === "password") {
+    if (isMissingOrPlaceholder(cfg.coreSigningSecret)) {
       problems.push(
-        "SMTP_TLS=none may not be used in production — SMTP credentials would cross the network in cleartext",
+        "CORE_SIGNING_SECRET is required when AUTH_CREDENTIAL_TRANSPORT is password — the broker verifies passwords over the signed channel to core and holds no credential of its own",
       );
+    }
+  } else {
+    if (isMissingOrPlaceholder(cfg.emailFrom) || !validEmail(senderAddress(cfg.emailFrom))) {
+      problems.push('AUTH_EMAIL_FROM must be a verified sender address, optionally as "Name <sender@example.com>"');
+    }
+    if (cfg.transport === "resend") {
+      if (isMissingOrPlaceholder(cfg.resendApiKey))
+        problems.push("RESEND_API_KEY is required when AUTH_EMAIL_TRANSPORT is resend");
+    } else {
+      if (isMissingOrPlaceholder(cfg.smtp.host))
+        problems.push("SMTP_HOST is required when AUTH_EMAIL_TRANSPORT is smtp");
+      if (isMissingOrPlaceholder(cfg.smtp.username))
+        problems.push("SMTP_USERNAME is required when AUTH_EMAIL_TRANSPORT is smtp");
+      if (isMissingOrPlaceholder(cfg.smtp.password))
+        problems.push("SMTP_PASSWORD is required when AUTH_EMAIL_TRANSPORT is smtp");
+      if (!Number.isInteger(cfg.smtp.port) || cfg.smtp.port < 1 || cfg.smtp.port > 65535)
+        problems.push("SMTP_PORT must be a TCP port number");
+      if (isProd && cfg.smtp.tls === "none")
+        problems.push(
+          "SMTP_TLS=none may not be used in production — SMTP credentials would cross the network in cleartext",
+        );
+    }
   }
 
-  if (isProd && isMissingOrPlaceholder(cfg.coreSigningSecret)) {
+  if (isProd && cfg.credentialTransport === "email-link" && isMissingOrPlaceholder(cfg.coreSigningSecret)) {
     problems.push(
       "CORE_SIGNING_SECRET is required — single-use enforcement for links and codes is durable state held by core",
     );

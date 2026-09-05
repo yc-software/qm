@@ -33,6 +33,18 @@ export interface IdentityService extends IdentityProvider {
   removeExternalMember(principalId: string): Promise<void>;
   hydrate(): Promise<void>;
   refresh(force?: boolean): Promise<void>;
+  /**
+   * Classify from the durable record rather than the cache.
+   *
+   * `refresh()` is throttled by `REFRESH_TTL_MS` and each replica caches
+   * separately, so for up to that interval a replica can still classify a
+   * principal another replica just deactivated as internal. That is tolerable
+   * where classification decorates a request, and not tolerable where it is
+   * the decision to admit someone. An admission path calls this instead: one
+   * keyed durable read, no cache, and a store that cannot answer throws rather
+   * than returning a stale answer.
+   */
+  classifyFresh(externalId: string, isExternalGuest?: boolean): Promise<Principal>;
 }
 
 export function createIdentityService(
@@ -110,6 +122,16 @@ export function createIdentityService(
 
   return {
     classify,
+    async classifyFresh(externalId, isExternalGuest) {
+      const key = personKey(externalId);
+      const record = await store.get(key);
+      if (record) deactivated.set(key, record);
+      else deactivated.delete(key);
+      const inactive =
+        record?.source === "manual" || (record?.source === "directory-sync" && !directorySyncProtected.has(key));
+      const type: Principal["type"] = inactive || isExternalGuest ? "guest" : "internal";
+      return { id: externalId, type };
+    },
     deactivate,
     reactivate,
     async recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome> {

@@ -102,6 +102,17 @@ const SYSTEM: Rule[] = [
   pat("POST", "/v1/blobs"),
   pat("POST", "/v1/egress-audit"),
   pat("POST", "/v1/auth/broker/claim"),
+  // The rest of the broker's signed channel. These are the routes a person is
+  // authenticated *by*, so requiring a portal identity on them is circular:
+  // there is no session yet, which is the whole point of calling them. They are
+  // source-authenticated like /claim above, carry their own attempt limiter,
+  // and exist at all only when the deployment turns password sign-in on.
+  pat("POST", "/v1/auth/broker/password/verify"),
+  pat("POST", "/v1/auth/broker/password/change"),
+  // Break-glass is the same shape and more so: it is reached precisely when
+  // nobody can obtain a portal identity. It is additionally gated by a
+  // boot-time secret.
+  pat("POST", "/v1/auth/break-glass"),
   pat("PUT", "/v1/deployment-layer"),
   pat("POST", "/v1/session-cap"),
   pat("POST", "/v1/keychain/drops/:id"),

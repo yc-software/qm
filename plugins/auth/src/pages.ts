@@ -62,9 +62,10 @@ const STYLE = `<style>
   .reason strong{ display:block; color:var(--warn); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-bottom:3px; }
   form{ display:grid; gap:10px; text-align:left; }
   label{ font-size:12.5px; font-weight:600; color:var(--muted); }
-  input[type=email]{ width:100%; min-height:44px; padding:0 14px; font:inherit; color:var(--text);
+  input[type=email],input[type=password]{ width:100%; min-height:44px; padding:0 14px; font:inherit; color:var(--text);
     background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-md); }
-  input[type=email]:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:1px; }
+  input[type=email]:focus-visible,input[type=password]:focus-visible{
+    outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:1px; }
   .btn{ display:flex; align-items:center; justify-content:center; min-height:44px; padding:0 18px; width:100%;
     text-decoration:none; font:inherit; font-weight:600; border-radius:var(--radius-md); cursor:pointer;
     background:var(--text); color:var(--bg); border:1px solid var(--text); }
@@ -133,6 +134,62 @@ export function emailFormPage(o: {
         <button class="btn" type="submit">Email me a sign-in link</button>
       </form>`,
     help: "Only addresses your administrator has allowed can sign in.",
+  });
+}
+
+export function passwordFormPage(o: {
+  brandName: string;
+  action: string;
+  requestToken: string;
+  email?: string;
+  problem?: string;
+}): string {
+  return page({
+    title: "Sign in",
+    brandName: o.brandName,
+    icon: LOCK_ICON,
+    heading: `Sign in to ${o.brandName}`,
+    msg: "Enter the email address and password your administrator gave you.",
+    body: `${o.problem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
+        <input type="hidden" name="request" value="${escapeHtml(o.requestToken)}">
+        <label for="email">Email address</label>
+        <input id="email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus
+          spellcheck="false" maxlength="254" placeholder="you@example.com" value="${escapeHtml(o.email ?? "")}">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
+        <button class="btn" type="submit">Sign in</button>
+      </form>`,
+    help: "Forgotten your password? Your administrator can set a new one — there is no self-service reset.",
+  });
+}
+
+export function changePasswordPage(o: {
+  brandName: string;
+  action: string;
+  changeToken: string;
+  minLength: number;
+  problem?: string;
+}): string {
+  return page({
+    title: "Choose a new password",
+    brandName: o.brandName,
+    icon: LOCK_ICON,
+    heading: "Choose a new password",
+    msg: `This account is still using the password your administrator set. Choose your own before continuing — at least ${o.minLength} characters.`,
+    body: `${o.problem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
+        <input type="hidden" name="change" value="${escapeHtml(o.changeToken)}">
+        <label for="current">Current password</label>
+        <input id="current" name="current" type="password" autocomplete="current-password" required autofocus
+          maxlength="1024">
+        <label for="password">New password</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" required
+          minlength="${o.minLength}" maxlength="1024">
+        <label for="confirm">New password again</label>
+        <input id="confirm" name="confirm" type="password" autocomplete="new-password" required
+          minlength="${o.minLength}" maxlength="1024">
+        <button class="btn" type="submit">Set password and sign in</button>
+      </form>`,
+    help: "Nobody else can read this password, including your administrator.",
   });
 }
 

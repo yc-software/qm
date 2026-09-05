@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 
-export type TokenPurpose = "request" | "link" | "code" | "access";
+export type TokenPurpose = "request" | "link" | "code" | "access" | "change";
 
 export interface AuthRequest {
   clientId: string;
@@ -129,6 +129,23 @@ export class TokenSigner {
     const email = payload?.em;
     if (!payload || !request || typeof email !== "string" || !email) return null;
     return { claims: { ...request, email }, jti: String(payload.jti), expiresAtMs: Number(payload.exp) * 1000 };
+  }
+
+  /**
+   * A password that has just been verified but must be changed. The token
+   * carries the sign-in request and the identifier — never the password, which
+   * the holder re-enters on the change form and core verifies again.
+   */
+  async sealChange(claims: LinkClaims, ttlS: number, nowMs?: number): Promise<SealedToken> {
+    return this.seal("change", { ...requestClaims(claims), em: claims.email }, ttlS, nowMs);
+  }
+
+  async openChange(token: string, nowMs?: number): Promise<LinkClaims | null> {
+    const payload = await this.open("change", token, nowMs);
+    const request = payload ? readRequest(payload) : null;
+    const email = payload?.em;
+    if (!payload || !request || typeof email !== "string" || !email) return null;
+    return { ...request, email };
   }
 
   async sealCode(claims: CodeClaims, ttlS: number, nowMs?: number): Promise<SealedToken> {

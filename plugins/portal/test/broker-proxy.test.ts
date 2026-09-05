@@ -158,6 +158,10 @@ test("brokerRouteFor matches only the exact public routes", () => {
   assert.equal(brokerRouteFor("GET", "/idp/authorize"), "/authorize");
   assert.equal(brokerRouteFor("POST", "/idp/authorize"), "/authorize");
   assert.equal(brokerRouteFor("GET", "/idp/verify"), "/verify");
+  // The change-password form posts here. Password mode requires a change at
+  // first sign-in, so without this nobody can complete a first sign-in at all.
+  assert.equal(brokerRouteFor("POST", "/idp/password"), "/password");
+  assert.equal(brokerRouteFor("GET", "/idp/password"), null, "the change page is only ever a POST response");
   for (const path of ["/idp/authorize/extra", "/idpauthorize", "/idp/", "/idp", "/idp/token", "/authorize"]) {
     assert.equal(brokerRouteFor("GET", path), null, path);
   }

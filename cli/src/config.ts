@@ -131,6 +131,19 @@ export const isModelProvider = (value: unknown): value is ModelProvider =>
 export const EMAIL_TRANSPORTS = ["resend", "smtp"] as const;
 export type EmailTransport = (typeof EMAIL_TRANSPORTS)[number];
 
+// How the broker establishes who the person is. "email-link" mails a one-time
+// link and is the default; "password" verifies a credential an administrator
+// issued. Orthogonal to EMAIL_TRANSPORTS, which is only how a message is sent.
+const CREDENTIAL_TRANSPORTS = ["email-link", "password"] as const;
+type CredentialTransport = (typeof CREDENTIAL_TRANSPORTS)[number];
+
+const isCredentialTransport = (value: unknown): value is CredentialTransport =>
+  typeof value === "string" && (CREDENTIAL_TRANSPORTS as readonly string[]).includes(value);
+
+/** True when the deployment's built-in broker signs people in with a password. */
+export const usesPasswordCredentials = (config: QmConfig): boolean =>
+  config.services.includes("auth") && config.env.auth?.AUTH_CREDENTIAL_TRANSPORT?.trim() === "password";
+
 export const isEmailTransport = (value: unknown): value is EmailTransport =>
   typeof value === "string" && (EMAIL_TRANSPORTS as readonly string[]).includes(value);
 
@@ -844,10 +857,26 @@ function validateBrokerTrust(config: QmConfig, path: string, secrets?: ReadonlyM
       `${path}: env.portal.PORTAL_EXPECTED_TEAM_ID belongs to Slack sign-in and has no meaning with the built-in auth broker`,
     );
   }
-  const transport = authEnv.AUTH_EMAIL_TRANSPORT?.trim();
-  if (!isEmailTransport(transport)) {
+  // AUTH_CREDENTIAL_TRANSPORT is a separate axis from AUTH_EMAIL_TRANSPORT: it
+  // decides how the broker satisfies itself who the person is, not how a
+  // message reaches them. In "password" mode nothing is mailed, so naming a
+  // mail transport — and supplying its credential — would be dead
+  // configuration. plugins/auth/src/config.ts already draws the line this way;
+  // without the same line here the CLI cannot express a deployment with no
+  // outbound mail route at all.
+  const credentialTransport = authEnv.AUTH_CREDENTIAL_TRANSPORT?.trim();
+  if (credentialTransport !== undefined && !isCredentialTransport(credentialTransport)) {
     throw new CliError(
-      `${path}: env.auth.AUTH_EMAIL_TRANSPORT must be ${EMAIL_TRANSPORTS.map((t) => JSON.stringify(t)).join(" or ")}`,
+      `${path}: env.auth.AUTH_CREDENTIAL_TRANSPORT must be ${CREDENTIAL_TRANSPORTS.map((t) => JSON.stringify(t)).join(" or ")}`,
+    );
+  }
+  const passwordMode = credentialTransport === "password";
+  const transport = authEnv.AUTH_EMAIL_TRANSPORT?.trim();
+  if (passwordMode ? transport !== undefined && !isEmailTransport(transport) : !isEmailTransport(transport)) {
+    throw new CliError(
+      passwordMode
+        ? `${path}: env.auth.AUTH_EMAIL_TRANSPORT must be ${EMAIL_TRANSPORTS.map((t) => JSON.stringify(t)).join(" or ")} when set, or unset — nothing is mailed in password mode`
+        : `${path}: env.auth.AUTH_EMAIL_TRANSPORT must be ${EMAIL_TRANSPORTS.map((t) => JSON.stringify(t)).join(" or ")}`,
     );
   }
   const domain = authEnv.AUTH_ALLOWED_EMAIL_DOMAIN?.trim();
@@ -859,7 +888,10 @@ function validateBrokerTrust(config: QmConfig, path: string, secrets?: ReadonlyM
       `${path}: env.auth.AUTH_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set`,
     );
   }
-  if (!secrets || domain) return;
+  // In password mode having an account is what admits a person, so an address
+  // allow-list is optional; a second list would be a second place to forget to
+  // deactivate someone. It is still enforced when set.
+  if (passwordMode || !secrets || domain) return;
   const allowed = (secrets.get("AUTH_ALLOWED_EMAILS") ?? "")
     .split(",")
     .map((email) => email.trim())

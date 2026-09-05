@@ -44,6 +44,13 @@ import { deleteModelProvider, getModelProviders, putModelProvider } from "./admi
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
+import {
+  createAccount,
+  deleteAccount,
+  listAccounts,
+  resetAccountPassword,
+  setAccountActive,
+} from "./admin/accounts.ts";
 
 const timed =
   (handle: (ctx: ApiCtx) => void | Promise<void>) =>
@@ -121,6 +128,11 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "PUT", path: "/v1/admin/memory", auth: "either", handle: putAdminMemory },
   { method: "GET", path: "/v1/admin/sandbox-routes", auth: "either", handle: listSandboxRoutes },
   { method: "POST", path: "/v1/admin/sandbox-routes/:scopeId/migrate", auth: "either", handle: migrateSandboxScope },
+  { method: "GET", path: "/v1/admin/accounts", auth: "either", handle: listAccounts },
+  { method: "POST", path: "/v1/admin/accounts", auth: "either", handle: createAccount },
+  { method: "PUT", path: "/v1/admin/accounts/:principalId/password", auth: "either", handle: resetAccountPassword },
+  { method: "PUT", path: "/v1/admin/accounts/:principalId/active", auth: "either", handle: setAccountActive },
+  { method: "DELETE", path: "/v1/admin/accounts/:principalId", auth: "either", handle: deleteAccount },
   { method: "GET", path: "/v1/admin/users", auth: "either", handle: listUsers },
   { method: "GET", path: "/v1/admin/directory", auth: "either", handle: searchDirectory },
   { method: "GET", path: "/v1/admin/keychain", auth: "either", handle: listKeychainStatus },

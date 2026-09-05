@@ -380,7 +380,14 @@ export function createMessagingMethods(
       if (!(await deps.directory.replace(members, syncedAt))) return;
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
-      const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
+      // A locally created member was never in the upstream roster, so its
+      // absence from this sync says nothing. Without this it lands in
+      // `removed` and is deactivated, which for a password account means the
+      // next Slack sync silently locks that person out.
+      const local = new Set((await deps.directory.listLocal()).map((m) => personKey(m.principalId)));
+      const removed = previous
+        .map((m) => m.principalId)
+        .filter((id) => !presentSet.has(id) && !local.has(personKey(id)));
       const outcome = await deps.identity.recordDirectorySync(removed, present);
       const orgScope = scopeId("org", orgIdOf());
       for (const id of outcome.deactivated) {

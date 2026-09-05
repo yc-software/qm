@@ -10,6 +10,7 @@ type SecretCondition =
   | { kind: "env-present"; service: DeclaredServiceName; name: string }
   | { kind: "service-enabled"; service: DeclaredServiceName }
   | { kind: "service-absent"; service: DeclaredServiceName }
+  | { kind: "not"; condition: SecretCondition }
   | { kind: "all"; conditions: SecretCondition[] }
   | { kind: "any"; conditions: SecretCondition[] }
   | { kind: "target"; target: QmConfig["target"] }
@@ -371,7 +372,15 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AUTH_ALLOWED_EMAILS",
     service: "auth",
-    required: { when: { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" } },
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
+          { kind: "not", condition: { kind: "env-equals", service: "auth", name: "AUTH_CREDENTIAL_TRANSPORT", value: "password" } },
+        ],
+      },
+    },
     description: "Comma-separated email addresses allowed to sign in through the built-in broker.",
   },
   {
@@ -383,6 +392,10 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
         conditions: [
           { kind: "service-enabled", service: "auth" },
           { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
+          // In password mode a locally created account is marked as such in the
+          // directory, so it is not the allow-list that protects it from a
+          // directory-source replace.
+          { kind: "not", condition: { kind: "env-equals", service: "auth", name: "AUTH_CREDENTIAL_TRANSPORT", value: "password" } },
         ],
       },
     },
@@ -398,6 +411,9 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
         conditions: [
           { kind: "service-enabled", service: "auth" },
           { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
+          // In password mode having an account is what admits a person; the
+          // list stays available and is enforced when set, but is not required.
+          { kind: "not", condition: { kind: "env-equals", service: "auth", name: "AUTH_CREDENTIAL_TRANSPORT", value: "password" } },
         ],
       },
     },
@@ -406,7 +422,8 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AUTH_EMAIL_FROM",
     service: "auth",
-    required: true,
+    // Nothing is mailed in password mode, so there is no sender to verify.
+    required: { when: { kind: "not", condition: { kind: "env-equals", service: "auth", name: "AUTH_CREDENTIAL_TRANSPORT", value: "password" } } },
     description: 'Verified sender for sign-in links and external-user invitations, e.g. "Acme <no-reply@acme.com>".',
   },
   {
@@ -442,6 +459,22 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "SMTP username for the sign-in-link relay.",
   },
   {
+    name: "QM_BREAK_GLASS_SECRET",
+    service: "core",
+    // The credential for the boot-time recovery route. Armed only alongside
+    // QM_BREAK_GLASS_PRINCIPAL, and useless without it: core refuses the route
+    // unless both are present. Declared here because an .env key that is not a
+    // computed secret name reaches no container at all, which would leave the
+    // route permanently disarmed on a deployment that asked for it.
+    required: {
+      when: { kind: "env-present", service: "core", name: "QM_BREAK_GLASS_PRINCIPAL" },
+      optionalOtherwise: true,
+    },
+    generate: MINT_LOCALLY,
+    description:
+      "Credential for the break-glass recovery route; required when env.core.QM_BREAK_GLASS_PRINCIPAL names a principal.",
+  },
+  {
     name: "SMTP_PASSWORD",
     service: "auth",
     required: { when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" } },
@@ -452,6 +485,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
 function conditionMatches(config: QmConfig, condition: SecretCondition): boolean {
   if (condition.kind === "service-enabled") return config.services.includes(condition.service);
   if (condition.kind === "service-absent") return !config.services.includes(condition.service);
+  if (condition.kind === "not") return !conditionMatches(config, condition.condition);
   if (condition.kind === "all") return condition.conditions.every((nested) => conditionMatches(config, nested));
   if (condition.kind === "any") return condition.conditions.some((nested) => conditionMatches(config, nested));
   if (condition.kind === "target") return config.target === condition.target;
@@ -634,6 +668,7 @@ function conditionClause(condition: SecretCondition): string {
   if (condition.kind === "service-absent") return `the ${condition.service} service is not enabled`;
   if (condition.kind === "all") return condition.conditions.map(conditionClause).join(" and ");
   if (condition.kind === "any") return condition.conditions.map(conditionClause).join(" or ");
+  if (condition.kind === "not") return `it is not the case that ${conditionClause(condition.condition)}`;
   if (condition.kind === "target") return `the target is ${condition.target}`;
   if (condition.kind === "env-all-absent")
     return `none of env.${condition.service}.{${condition.names.join(", ")}} are set`;

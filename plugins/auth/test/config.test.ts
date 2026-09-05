@@ -159,3 +159,41 @@ test("`node src/index.ts` refuses to boot on a placeholder configuration and ser
   assert.match(child.stdout, /200/);
   assert.match(child.stdout, /sign-in broker on/);
 });
+
+test("password mode needs no mail configuration, but does need the signed channel to core", () => {
+  const password = (over: Record<string, string | undefined> = {}): string[] =>
+    bootProblems(
+      readConfig({
+        ...testEnv({
+          AUTH_CREDENTIAL_TRANSPORT: "password",
+          AUTH_EMAIL_TRANSPORT: undefined,
+          AUTH_EMAIL_FROM: undefined,
+          RESEND_API_KEY: undefined,
+          AUTH_ALLOWED_EMAILS: undefined,
+          CORE_SIGNING_SECRET: "c".repeat(48),
+          ...over,
+        }),
+      }),
+      false,
+    );
+
+  // No sender, no transport credential, and no allow-list: in password mode
+  // the account list is the user store.
+  assert.deepEqual(password(), []);
+
+  assert.match(
+    password({ CORE_SIGNING_SECRET: undefined }).join("\n"),
+    /CORE_SIGNING_SECRET is required when AUTH_CREDENTIAL_TRANSPORT is password/,
+  );
+});
+
+test("the mailed link stays the default, with its requirements unchanged", () => {
+  const cfg = readConfig(testEnv({ AUTH_CREDENTIAL_TRANSPORT: undefined }));
+  assert.equal(cfg.credentialTransport, "email-link");
+  assert.equal(readConfig(testEnv({ AUTH_CREDENTIAL_TRANSPORT: "nonsense" })).credentialTransport, "email-link");
+
+  const missingSender = bootProblems(readConfig(testEnv({ AUTH_EMAIL_FROM: undefined })), false);
+  assert.match(missingSender.join("\n"), /AUTH_EMAIL_FROM/);
+  const noAllowList = bootProblems(readConfig(testEnv({ AUTH_ALLOWED_EMAILS: undefined })), false);
+  assert.match(noAllowList.join("\n"), /AUTH_ALLOWED_EMAILS or AUTH_ALLOWED_EMAIL_DOMAIN is required/);
+});

@@ -39,6 +39,7 @@
     "deploy:porter-runner-image": "docker build --platform linux/amd64 -t \"${PORTER_DEPLOY_RUNNER_IMAGE:?Set PORTER_DEPLOY_RUNNER_IMAGE to the registry tag to publish}\" -f deploy/porter-runner/Dockerfile . && docker push \"$PORTER_DEPLOY_RUNNER_IMAGE\"",
     "test:pg": "node --test --test-concurrency=1 test/postgres-store.test.ts test/postgres-grant-store.test.ts test/postgres-admin-grants.test.ts test/postgres-file-artifact-store.test.ts test/postgres-directory-store.test.ts test/postgres-map.test.ts test/cron-queue.test.ts test/postgres-metrics-sink.test.ts test/postgres-error-log.test.ts test/postgres-audit-log.test.ts test/postgres-budget.test.ts test/postgres-rate-limiter.test.ts test/postgres-credential-usage-sink.test.ts test/postgres-config-store.test.ts test/postgres-delivery-store.test.ts test/postgres-replay-dedupe.test.ts test/postgres-egress-audit-sink.test.ts test/postgres-memory-service.test.ts test/run-signal-store.test.ts test/postgres-run-activity-store.test.ts test/leader-lease.test.ts test/advisory-lock.test.ts test/persistence-init-retry.test.ts test/migrate-principals.test.ts test/postgres-surface-cache.test.ts test/postgres-instance-registry.test.ts",
     "livetest": "node scripts/api-livetest.ts",
+    "break-glass": "node --env-file-if-exists=.env scripts/break-glass.ts",
     "bench:memory": "node --env-file-if-exists=.env scripts/memory-bench.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:contract": "tsc -p tsconfig.contract.json",

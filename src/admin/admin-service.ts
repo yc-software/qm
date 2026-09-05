@@ -36,6 +36,16 @@ export interface AdminService {
   adminStatusOf(principal: Principal): Promise<AdminStatus>;
   listGrants(): Promise<AdminGrant[]>;
   createGrant(actor: Principal, input: { principalId: string; role: AdminRole; scopeId: ScopeId }): Promise<AdminGrant>;
+  /**
+   * Grant org_admin without an acting administrator.
+   *
+   * This exists for exactly one caller: the break-glass recovery path, whose
+   * whole purpose is to restore administrator access when nobody holds it. It
+   * is never reachable from a request that carries an identity — `createGrant`
+   * is, and that one checks the actor. `grantedBy` records the reason so the
+   * grant list says where it came from.
+   */
+  forceGrantOrgAdmin(principalId: string, grantedBy: string): Promise<AdminGrant>;
   revokeGrant(actor: Principal, principalId: string, scope: ScopeId, role: AdminRole): Promise<void>;
 }
 
@@ -112,6 +122,19 @@ export function createAdminService(store?: AdminGrantStore, opts: AdminServiceOp
         throw new AdminError(400, `org_admin scope must be org:${orgId}`);
       }
       const grant: AdminGrant = { principalId, scopeId: input.scopeId, role, grantedBy: actor.id, createdAt: now() };
+      await grants.add(grant);
+      return grant;
+    },
+    async forceGrantOrgAdmin(principalId, grantedBy) {
+      const id = principalId.trim();
+      if (!id) throw new AdminError(400, "principalId required");
+      const grant: AdminGrant = {
+        principalId: id,
+        scopeId: scopeId("org", orgId),
+        role: "org_admin",
+        grantedBy,
+        createdAt: now(),
+      };
       await grants.add(grant);
       return grant;
     },

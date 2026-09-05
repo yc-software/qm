@@ -6,6 +6,7 @@ import type { Mailer, OutgoingEmail } from "../src/email.ts";
 import { loadSigningKey } from "../src/keys.ts";
 import { TokenSigner } from "../src/tokens.ts";
 import { createAuthHandler } from "../src/server.ts";
+import type { PasswordChecker, PasswordVerdict } from "../src/credentials.ts";
 
 export const CLIENT_ID = "qm-portal";
 export const CLIENT_SECRET = "0123456789abcdef0123456789abcdef";
@@ -80,11 +81,50 @@ export function captureMailer(): Mailer & { sent: OutgoingEmail[]; failNext: boo
   return state;
 }
 
+export interface FakePasswords extends PasswordChecker {
+  /** identifier (lowercased) -> password, plus whether a change is required. */
+  accounts: Map<string, { password: string; mustChange: boolean }>;
+  calls: Array<{ route: "verify" | "change"; identifier: string; ip: string }>;
+  unavailable: boolean;
+}
+
+export function fakePasswords(seed: Record<string, { password: string; mustChange?: boolean }> = {}): FakePasswords {
+  const accounts = new Map(
+    Object.entries(seed).map(([id, v]) => [
+      id.toLowerCase(),
+      { password: v.password, mustChange: v.mustChange === true },
+    ]),
+  );
+  const state: FakePasswords = {
+    accounts,
+    calls: [],
+    unavailable: false,
+    async verify({ identifier, password, ip }): Promise<PasswordVerdict> {
+      state.calls.push({ route: "verify", identifier, ip });
+      if (state.unavailable) return { ok: false, unavailable: true };
+      const row = accounts.get(identifier.toLowerCase());
+      if (!row || row.password !== password) return { ok: false };
+      return { ok: true, principalId: identifier.toLowerCase(), mustChange: row.mustChange };
+    },
+    async change({ identifier, password, next, ip }): Promise<PasswordVerdict> {
+      state.calls.push({ route: "change", identifier, ip });
+      if (state.unavailable) return { ok: false, unavailable: true };
+      const key = identifier.toLowerCase();
+      const row = accounts.get(key);
+      if (!row || row.password !== password) return { ok: false };
+      accounts.set(key, { password: next, mustChange: false });
+      return { ok: true, principalId: key, mustChange: false };
+    },
+  };
+  return state;
+}
+
 export interface Harness {
   cfg: AuthConfig;
   base: string;
   claims: ClaimStore & { calls: string[][] };
   mailer: Mailer & { sent: OutgoingEmail[]; failNext: boolean };
+  passwords: FakePasswords;
   settle(): Promise<void>;
   close(): Promise<void>;
   now: { ms: number };
@@ -95,12 +135,14 @@ export async function startHarness(
     env?: Record<string, string | undefined>;
     claims?: ClaimStore & { calls: string[][] };
     brandName?: () => string;
+    passwords?: FakePasswords;
     emailAllowed?: (email: string) => Promise<boolean>;
   } = {},
 ): Promise<Harness> {
   const cfg = readConfig(testEnv(options.env));
   const claims = options.claims ?? memoryClaimStore();
   const mailer = captureMailer();
+  const passwords = options.passwords ?? fakePasswords();
   const now = { ms: Date.now() };
   const pending: Array<Promise<void>> = [];
   const handle = createAuthHandler({
@@ -109,6 +151,7 @@ export async function startHarness(
     signer: new TokenSigner(cfg.tokenSecret, cfg.issuer),
     claims,
     mailer,
+    ...(cfg.credentialTransport === "password" ? { passwords } : {}),
     ...(options.brandName ? { brandName: options.brandName } : {}),
     emailAllowed: options.emailAllowed ?? (async () => false),
     now: () => now.ms,
@@ -127,6 +170,7 @@ export async function startHarness(
     cfg,
     claims,
     mailer,
+    passwords,
     now,
     base: `http://127.0.0.1:${port}`,
     async settle() {
@@ -156,6 +200,12 @@ export function authorizeQuery(over: Record<string, string> = {}): URLSearchPara
     code_challenge_method: "S256",
     ...over,
   });
+}
+
+export function hiddenChangeToken(html: string): string {
+  const match = /name="change" value="([^"]+)"/.exec(html);
+  if (!match) throw new Error("no change token in the rendered form");
+  return match[1]!.replace(/&amp;/g, "&");
 }
 
 export function hiddenRequestToken(html: string): string {

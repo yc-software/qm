@@ -117,3 +117,27 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.equal(res.status, 401);
   });
 });
+
+describe("a directory sync does not offboard an account this deployment created", () => {
+  it("leaves a locally created member active when it is absent from the roster", async () => {
+    const built: BuiltApp = buildApp(
+      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "offboarding-local-")), passwordSignIn: true }),
+    );
+    // A Slack roster arrives, and separately an administrator creates an account.
+    await built.app.upsertDirectory([member("U-alice")], Date.now());
+    await built.directory.upsertMember(member("ops@example.com"));
+
+    // The next sync carries the Slack roster only — it never mentions the
+    // locally created account, because that account was never in Slack.
+    await built.app.upsertDirectory([member("U-alice")], Date.now() + 1);
+
+    assert.equal(built.identity.classify("ops@example.com").type, "internal");
+    assert.equal((await built.identity.classifyFresh("ops@example.com")).type, "internal");
+    assert.ok(await built.directory.get("ops@example.com"), "and it is still in the directory");
+
+    // Someone who really did leave the roster is still offboarded.
+    await built.app.upsertDirectory([], Date.now() + 2);
+    assert.equal(built.identity.classify("U-alice").type, "guest");
+    assert.equal((await built.identity.classifyFresh("ops@example.com")).type, "internal");
+  });
+});

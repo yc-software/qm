@@ -270,3 +270,93 @@ const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.a
   assert.match(calls, new RegExp(`-a ${prefix}-auth AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
   assert.match(calls, new RegExp(`-a ${prefix}-portal OIDC_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
 });
+
+// AUTH_CREDENTIAL_TRANSPORT=password: the broker verifies a credential an
+// administrator issued and mails nothing. The deployment layer has to be able
+// to express that, or a host with no outbound mail route cannot be configured
+// at all — the CLI would still demand a relay and its credential.
+
+test("password mode makes the mail transport and its credentials optional", () => {
+  const config = configWith(configText({ env: `{ "auth": { "AUTH_CREDENTIAL_TRANSPORT": "password" } }` }));
+  const MAIL = ["SMTP_HOST", "SMTP_PORT", "SMTP_TLS", "SMTP_USERNAME", "SMTP_PASSWORD", "RESEND_API_KEY", "AUTH_EMAIL_FROM"];
+  const names = new Set(computedSecrets(config).map((secret) => secret.name));
+  const brokerNames = new Set(secretsForService(config, "auth").map((secret) => secret.name));
+  for (const name of MAIL) {
+    assert.ok(!brokerNames.has(name), `${name} does not reach the broker when nothing is mailed`);
+  }
+  // Some of these names survive as core's optional senders for external-user
+  // invitations, which is a different feature from the sign-in transport. What
+  // password mode guarantees is that the broker gets none of them and that no
+  // mail secret anywhere is required.
+  for (const secret of computedSecrets(config)) {
+    if (!MAIL.includes(secret.name)) continue;
+    assert.deepEqual(
+      secret.services,
+      ["core"],
+      `${secret.name} should only survive as core's invitation sender`,
+    );
+    assert.equal(secret.required, false, `${secret.name} must not be required when nothing is mailed`);
+  }
+  assert.ok(
+    !names.has("AUTH_ALLOWED_EMAILS"),
+    "an account is what admits a person in password mode; a list may still be set as a non-secret env override",
+  );
+  assert.ok(names.has("CORE_SIGNING_SECRET"), "the signed channel to core is where verification happens");
+  assert.ok(
+    secretsForService(config, "auth").some((secret) => secret.name === "CORE_SIGNING_SECRET"),
+    "the broker still needs it",
+  );
+});
+
+test("password mode still refuses a mail transport that is set to a bad value", () => {
+  assert.throws(
+    () =>
+      configWith(
+        configText({ env: `{ "auth": { "AUTH_CREDENTIAL_TRANSPORT": "password", "AUTH_EMAIL_TRANSPORT": "sendmail" } }` }),
+      ),
+    /AUTH_EMAIL_TRANSPORT must be "resend" or "smtp" when set, or unset/,
+  );
+  assert.throws(
+    () => configWith(configText({ env: `{ "auth": { "AUTH_CREDENTIAL_TRANSPORT": "sms" } }` })),
+    /AUTH_CREDENTIAL_TRANSPORT must be "email-link" or "password"/,
+  );
+});
+
+test("password mode does not require an address allowlist once secret values are known", () => {
+  const config = configWith(configText({ env: `{ "auth": { "AUTH_CREDENTIAL_TRANSPORT": "password" } }` }));
+  validatePortalTrust(config, "config", new Map());
+});
+
+test("email-link mode is unchanged when the credential transport is named explicitly", () => {
+  const config = configWith(
+    configText({ env: `{ "auth": { "AUTH_CREDENTIAL_TRANSPORT": "email-link", "AUTH_EMAIL_TRANSPORT": "smtp" } }` }),
+  );
+  const required = new Set(
+    computedSecrets(config)
+      .filter((secret) => secret.required)
+      .map((secret) => secret.name),
+  );
+  for (const name of ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "AUTH_EMAIL_FROM", "AUTH_ALLOWED_EMAILS"]) {
+    assert.ok(required.has(name), name);
+  }
+});
+
+test("the break-glass secret is collected, and required exactly when a principal is named", () => {
+  const off = configWith(configText({ env: `{ "auth": { "AUTH_CREDENTIAL_TRANSPORT": "password" } }` }));
+  const disarmed = computedSecrets(off).find((secret) => secret.name === "QM_BREAK_GLASS_SECRET")!;
+  assert.ok(disarmed, "the name must exist, or an .env value for it reaches no container");
+  assert.equal(disarmed.required, false);
+  assert.deepEqual(disarmed.services, ["core"]);
+
+  const on = configWith(
+    configText({
+      env: `{ "core": { "QM_BREAK_GLASS_PRINCIPAL": "rescue@example.com" }, "auth": { "AUTH_CREDENTIAL_TRANSPORT": "password" } }`,
+    }),
+  );
+  const armed = computedSecrets(on).find((secret) => secret.name === "QM_BREAK_GLASS_SECRET")!;
+  assert.equal(armed.required, true);
+  assert.ok(
+    secretsForService(on, "core").some((secret) => secret.name === "QM_BREAK_GLASS_SECRET"),
+    "the value has to reach the core container, or the route stays disarmed",
+  );
+});

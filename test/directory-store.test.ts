@@ -334,3 +334,35 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     assert.deepEqual(await d.listChannelsFor("U-member"), []);
   });
 });
+
+describe("locally created members", () => {
+  it("survive a roster swap, because a sync has no opinion about them", async () => {
+    const d = createDirectoryStore();
+    await d.replace([{ principalId: "U-alice", displayName: "Alice Example", type: "internal" }]);
+    await d.upsertMember({ principalId: "ops@example.com", displayName: "Ops", type: "internal" });
+    assert.equal((await d.list()).length, 2);
+
+    await d.replace([{ principalId: "U-carol", displayName: "Carol", type: "internal" }]);
+    const ids = (await d.list()).map((m) => m.principalId).sort();
+    assert.deepEqual(ids, ["U-carol", "ops@example.com"], "the swap replaced the synced roster, not the local member");
+    assert.ok(await d.get("OPS@example.com"), "an email principal is still found case-insensitively");
+  });
+
+  it("are replaced rather than duplicated, and can be removed", async () => {
+    const d = createDirectoryStore();
+    await d.upsertMember({ principalId: "ops@example.com", displayName: "Ops", type: "internal" });
+    await d.upsertMember({ principalId: "OPS@Example.com", displayName: "Operations", type: "internal" });
+    const members = await d.list();
+    assert.equal(members.length, 1);
+    assert.equal(members[0]!.displayName, "Operations");
+
+    await d.removeMember("ops@example.com");
+    assert.deepEqual(await d.list(), []);
+  });
+
+  it("are only ever internal principals", async () => {
+    const d = createDirectoryStore();
+    await d.upsertMember({ principalId: "guest@example.com", displayName: "Guest", type: "guest" });
+    assert.deepEqual(await d.list(), []);
+  });
+});

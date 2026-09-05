@@ -31,6 +31,8 @@ import type { EnvironmentStore } from "../environments/environment-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
+import type { PasswordCredentialStore } from "../auth/password-credentials.ts";
+import type { BreakGlassConfig } from "../auth/break-glass.ts";
 import type { DeviceFlowCutoverStore } from "../credentials/device-flow-cutover.ts";
 import type {
   ConnectorTokenStore,
@@ -141,6 +143,8 @@ export interface ServerDeps {
   scheduler?: Scheduler;
   webhookReceiver?: WebhookReceiver;
   identity?: IdentityService;
+  passwordCredentials?: PasswordCredentialStore;
+  breakGlass?: BreakGlassConfig;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;

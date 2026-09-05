@@ -7,6 +7,7 @@ import { coreClaimStore } from "../../chassis/src/claims.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { createBrandingCache } from "../../chassis/src/branding.ts";
 import { mailerFor } from "./email.ts";
+import { corePasswordChecker } from "./credentials.ts";
 import { loadSigningKey } from "./keys.ts";
 import { TokenSigner } from "./tokens.ts";
 import { createAuthHandler } from "./server.ts";
@@ -40,7 +41,19 @@ export async function startServer(): Promise<void> {
     signingKey,
     signer: new TokenSigner(CFG.tokenSecret, CFG.issuer),
     claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
-    mailer: mailerFor(CFG),
+    // In password mode nothing is mailed. A mailer that refuses makes that a
+    // property of the build rather than an accident of which paths are reached.
+    mailer:
+      CFG.credentialTransport === "password"
+        ? {
+            send: () => {
+              throw new Error("password mode does not send mail");
+            },
+          }
+        : mailerFor(CFG),
+    ...(CFG.credentialTransport === "password"
+      ? { passwords: corePasswordChecker(CFG.coreApiUrl, CFG.coreSigningSecret, "auth") }
+      : {}),
     brandName: () => {
       void branding.forRender();
       return branding.current().selfLabel || CFG.brandName;
@@ -55,7 +68,9 @@ export async function startServer(): Promise<void> {
   });
   server.listen(PORT, () => {
     console.log(
-      `[auth] sign-in broker on http://localhost:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${CFG.transport} email)`,
+      `[auth] sign-in broker on http://localhost:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${
+        CFG.credentialTransport === "password" ? "administrator-managed passwords" : `${CFG.transport} email link`
+      })`,
     );
     if (!CFG.coreSigningSecret)
       console.warn(

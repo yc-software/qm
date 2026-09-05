@@ -1,4 +1,5 @@
 import { isStrongSigningSecret } from "../auth/source-auth.ts";
+import { MIN_SECRET_LENGTH as BREAK_GLASS_MIN_SECRET_LENGTH } from "../auth/break-glass.ts";
 
 type SecretGate =
   | "production"
@@ -16,6 +17,7 @@ type SecretGate =
   | "dropbox-oauth"
   | "linear-oauth"
   | "email-auth"
+  | "break-glass"
   | "model-anthropic"
   | "model-openai"
   | "model-openrouter";
@@ -32,6 +34,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "PORTAL_IDENTITY_SECRET", requiredWhen: "production" },
   { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
   { name: "AUTH_ALLOWED_EMAILS", requiredWhen: "email-auth" },
+  { name: "QM_BREAK_GLASS_SECRET", requiredWhen: "break-glass" },
   { name: "OPENAI_API_KEY", requiredWhen: ["codex", "model-openai"] },
   { name: "ANTHROPIC_API_KEY", requiredWhen: "model-anthropic" },
   { name: "OPENROUTER_API_KEY", requiredWhen: "model-openrouter" },
@@ -64,6 +67,9 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "dropbox-oauth": (env) => Boolean(env.DROPBOX_OAUTH_CLIENT_ID),
   "linear-oauth": (env) => Boolean(env.LINEAR_OAUTH_CLIENT_ID),
   "email-auth": (env) => env.AUTH_ALLOWED_EMAILS !== undefined,
+  // Naming a principal is what arms the recovery route; without the credential
+  // it would boot disarmed and the operator would find out during an incident.
+  "break-glass": (env) => Boolean(env.QM_BREAK_GLASS_PRINCIPAL?.trim()),
   "model-anthropic": (env) => env.MODEL_PROVIDER?.trim() === "anthropic",
   "model-openai": (env) =>
     env.MODEL_PROVIDER?.trim() === "openai" &&
@@ -84,6 +90,10 @@ export function validateCoreSecretEnv(env: NodeJS.ProcessEnv): string[] {
 function isInvalidSecret(name: string, value: string | undefined): boolean {
   const candidate = value?.trim();
   if (!candidate || /^(replace-me|placeholder|changeme|todo)$/i.test(candidate)) return true;
+  // The break-glass credential is a bearer token on a route that grants
+  // administrator access, so it carries the same length floor the route itself
+  // enforces rather than the signing-secret rule.
+  if (name === "QM_BREAK_GLASS_SECRET") return candidate.length < BREAK_GLASS_MIN_SECRET_LENGTH;
   return (
     (name === "CONNECTOR_SECRET_KEY" ||
       name === "CORE_SIGNING_SECRET" ||

@@ -8,9 +8,25 @@ import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
 import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type AuthRequest } from "./tokens.ts";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 import { renderSignInEmail, type Mailer } from "./email.ts";
-import { confirmSignInPage, emailFormPage, linkSentPage, problemPage, CONFIRM_PAGE_CSP, PAGE_CSP } from "./pages.ts";
+import type { PasswordChecker } from "./credentials.ts";
+import {
+  changePasswordPage,
+  confirmSignInPage,
+  emailFormPage,
+  linkSentPage,
+  passwordFormPage,
+  problemPage,
+  CONFIRM_PAGE_CSP,
+  PAGE_CSP,
+} from "./pages.ts";
 
 const MAX_FORM_BYTES = 8 * 1024;
+const MIN_PASSWORD_LENGTH = 8;
+/**
+ * One message for a wrong password, an unknown address, a deactivated account
+ * and a rate-limited attempt. The form must not reveal who has an account.
+ */
+const SIGN_IN_REFUSED = "That email address and password did not match an account that can sign in.";
 const ID_TOKEN_TTL_S = 300;
 const MAX_INFLIGHT_SENDS = 32;
 
@@ -20,6 +36,7 @@ export interface AuthDeps {
   signer: TokenSigner;
   claims: ClaimStore;
   mailer: Mailer;
+  passwords?: PasswordChecker;
   brandName?: () => string;
   emailAllowed?: (email: string) => Promise<boolean>;
   now?: () => number;
@@ -100,17 +117,23 @@ function readAuthorizeRequest(
 
 export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { cfg, signer, claims, mailer, signingKey } = deps;
+  const passwords = deps.passwords;
   const brandName = deps.brandName ?? ((): string => cfg.brandName);
   const invited =
     deps.emailAllowed ??
     ((email: string): Promise<boolean> => coreEmailAllowed(cfg.coreApiUrl, cfg.coreSigningSecret, email, "auth"));
   const emailAllowed = async (email: string): Promise<boolean> =>
+    // In password mode the account list is the user store, so an allow-list is
+    // an optional extra filter rather than the only gate. When one is
+    // configured it still applies, in either mode.
+    (cfg.credentialTransport === "password" && !cfg.allowedEmails.length && !cfg.allowedEmailDomain) ||
     cfg.allowedEmails.includes(email) ||
     (Boolean(cfg.allowedEmailDomain) && email.endsWith(`@${cfg.allowedEmailDomain}`)) ||
     invited(email);
   const now = deps.now ?? Date.now;
   const notify = deps.onBackgroundTask ?? ((task: Promise<void>) => void task.catch(() => undefined));
   const formAction = `${cfg.publicPath}/authorize`;
+  const changeAction = `${cfg.publicPath}/password`;
   const linkTtlMinutes = Math.max(1, Math.round(cfg.linkTtlS / 60));
   let inFlightSends = 0;
   const background = (task: () => Promise<void>): void => {
@@ -160,6 +183,13 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         parsed.problem,
       );
     const sealed = await signer.sealRequest(parsed.request, cfg.requestTtlS, now());
+    if (cfg.credentialTransport === "password") {
+      return sendHtml(
+        res,
+        200,
+        passwordFormPage({ brandName: brandName(), action: formAction, requestToken: sealed.token }),
+      );
+    }
     return sendHtml(
       res,
       200,
@@ -203,6 +233,148 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     }
   }
 
+  /** Finish a verified sign-in: mint the authorization code and return. */
+  async function completeSignIn(res: ServerResponse, request: AuthRequest, email: string): Promise<void> {
+    const code = await signer.sealCode(
+      {
+        clientId: request.clientId,
+        redirectUri: request.redirectUri,
+        nonce: request.nonce,
+        codeChallenge: request.codeChallenge,
+        email,
+      },
+      cfg.codeTtlS,
+      now(),
+    );
+    const destination = new URL(request.redirectUri);
+    destination.searchParams.set("code", code.token);
+    destination.searchParams.set("state", request.state);
+    res.writeHead(302, noStore({ location: destination.toString() }));
+    res.end();
+  }
+
+  const retryPassword = async (
+    res: ServerResponse,
+    request: AuthRequest,
+    email: string,
+    reason: string,
+  ): Promise<void> => {
+    const sealed = await signer.sealRequest(request, cfg.requestTtlS, now());
+    return sendHtml(
+      res,
+      400,
+      passwordFormPage({
+        brandName: brandName(),
+        action: formAction,
+        requestToken: sealed.token,
+        email,
+        problem: reason,
+      }),
+    );
+  };
+
+  async function passwordSubmit(
+    req: IncomingMessage,
+    res: ServerResponse,
+    request: AuthRequest,
+    form: URLSearchParams,
+  ): Promise<void> {
+    if (!passwords) {
+      return problem(
+        res,
+        503,
+        "Sign-in is not available",
+        "This deployment is configured for password sign-in but cannot reach the service that verifies it.",
+      );
+    }
+    const email = normalizeEmail(form.get("email") ?? "");
+    const password = form.get("password") ?? "";
+    // A malformed address takes the same path as a wrong one: answering it
+    // differently would say that the well-formed address exists.
+    if (!validEmail(email) || !password || !(await emailAllowed(email)))
+      return retryPassword(res, request, email, SIGN_IN_REFUSED);
+
+    const ip = clientIpOf(req);
+    const verdict = await passwords.verify({ identifier: email, password, ip });
+    if (!verdict.ok && "unavailable" in verdict) {
+      return problem(
+        res,
+        503,
+        "Sign-in is not available",
+        "The service that verifies passwords did not answer. Nobody is signed in; try again shortly.",
+      );
+    }
+    if (!verdict.ok) return retryPassword(res, request, email, SIGN_IN_REFUSED);
+    if (verdict.mustChange) {
+      const sealed = await signer.sealChange({ ...request, email }, cfg.requestTtlS, now());
+      return sendHtml(
+        res,
+        200,
+        changePasswordPage({
+          brandName: brandName(),
+          action: changeAction,
+          changeToken: sealed.token,
+          minLength: MIN_PASSWORD_LENGTH,
+        }),
+      );
+    }
+    return completeSignIn(res, request, email);
+  }
+
+  async function passwordChange(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (cfg.credentialTransport !== "password" || !passwords) return sendJson(res, 404, { error: "not_found" });
+    let raw: string;
+    try {
+      raw = await readBody(req, MAX_FORM_BYTES);
+    } catch {
+      return problem(res, 413, "That didn't work", "The sign-in form sent more data than we accept.");
+    }
+    const form = new URLSearchParams(raw);
+    const opened = await signer.openChange(form.get("change") ?? "", now());
+    if (!opened) {
+      return problem(
+        res,
+        400,
+        "This sign-in page expired",
+        "Sign-in pages are only valid for a short while. Start again from the page you were trying to reach.",
+      );
+    }
+    const { email, ...request } = opened;
+    const current = form.get("current") ?? "";
+    const next = form.get("password") ?? "";
+    const confirm = form.get("confirm") ?? "";
+    const retry = async (reason: string): Promise<void> => {
+      const sealed = await signer.sealChange(opened, cfg.requestTtlS, now());
+      return sendHtml(
+        res,
+        400,
+        changePasswordPage({
+          brandName: brandName(),
+          action: changeAction,
+          changeToken: sealed.token,
+          minLength: MIN_PASSWORD_LENGTH,
+          problem: reason,
+        }),
+      );
+    };
+    if (next !== confirm) return retry("The two new passwords did not match.");
+    if (next.length < MIN_PASSWORD_LENGTH)
+      return retry(`A password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+    if (next === current) return retry("Choose a password different from the one your administrator set.");
+
+    const verdict = await passwords.change({ identifier: email, password: current, next, ip: clientIpOf(req) });
+    if (!verdict.ok && "unavailable" in verdict) {
+      return problem(
+        res,
+        503,
+        "Sign-in is not available",
+        "The service that stores passwords did not answer. Your password was not changed; try again shortly.",
+      );
+    }
+    if (!verdict.ok) return retry(SIGN_IN_REFUSED);
+    return completeSignIn(res, request, email);
+  }
+
   async function authorizeSubmit(req: IncomingMessage, res: ServerResponse): Promise<void> {
     let raw: string;
     try {
@@ -222,6 +394,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         "Sign-in pages are only valid for a short while. Start again from the page you were trying to reach.",
       );
     }
+    if (cfg.credentialTransport === "password") return passwordSubmit(req, res, request, form);
     const email = normalizeEmail(form.get("email") ?? "");
     if (!validEmail(email)) {
       const sealed = await signer.sealRequest(request, cfg.requestTtlS, now());
@@ -422,8 +595,13 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     if (method === "GET" && path === "/.well-known/openid-configuration") return discovery(res);
     if (method === "GET" && path === "/authorize") return authorizeForm(res, url.searchParams);
     if (method === "POST" && path === "/authorize") return authorizeSubmit(req, res);
-    if (method === "GET" && path === "/verify") return confirmVerify(res);
-    if (method === "POST" && path === "/verify") return verify(req, res);
+    if (method === "POST" && path === "/password") return passwordChange(req, res);
+    // The mailed link does not exist in password mode: its endpoints are gone,
+    // not merely unused.
+    if (cfg.credentialTransport !== "password") {
+      if (method === "GET" && path === "/verify") return confirmVerify(res);
+      if (method === "POST" && path === "/verify") return verify(req, res);
+    }
     if (method === "POST" && path === "/token") return token(req, res);
     if ((method === "GET" || method === "POST") && path === "/userinfo") return userinfo(req, res);
     return sendJson(res, 404, { error: "not_found" });

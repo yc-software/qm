@@ -469,3 +469,22 @@ test(
     assert.equal(await store.groupMember("G-idem", "U-alice"), true);
   },
 );
+
+test("pg directory: a locally created member survives a roster swap", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await seed(store);
+  await store.upsertMember({ principalId: "ops@example.com", displayName: "Ops", type: "internal" });
+  assert.ok(await store.get("OPS@Example.com"), "an email principal folds case on read");
+
+  // A different roster arrives. The synced rows are swapped; the local one is not.
+  await store.replace([{ principalId: "U-dana", displayName: "Dana", type: "internal" }]);
+  const ids = (await store.list()).map((m) => m.principalId).sort();
+  assert.deepEqual(ids, ["U-dana", "ops@example.com"]);
+
+  // Re-creating it updates in place rather than raising a primary-key error.
+  await store.upsertMember({ principalId: "ops@example.com", displayName: "Operations", type: "internal" });
+  assert.equal((await store.get("ops@example.com"))!.displayName, "Operations");
+
+  await store.removeMember("OPS@example.com");
+  assert.equal(await store.get("ops@example.com"), null);
+});

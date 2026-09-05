@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { isUnclassifiedWrite } from "../src/api/user-scoped-routes.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
+import { passwordRoutes } from "../src/api/routes/password.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -329,8 +330,13 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 });
 
 describe("service-to-service writes are classified", () => {
+  // This used to read only the auth broker's own route array. The broker's
+  // signed channel then grew a second array in another file, and all three of
+  // its routes shipped unclassified — refused 401 on the first deployment that
+  // had REQUIRE_SIGNED_PORTAL_IDENTITY on, which is every deployment that would
+  // use them. It reads the whole channel now, both arrays.
   it("every auth:source write route is classified, so production gating cannot demand a portal identity from a plugin", () => {
-    const unclassified = authBrokerRoutes
+    const unclassified = [...authBrokerRoutes, ...passwordRoutes]
       .filter((route) => "path" in route && route.auth === "source")
       .map((route) => route as { method: string; path: string })
       .filter((route) => isUnclassifiedWrite(route.method, route.path))

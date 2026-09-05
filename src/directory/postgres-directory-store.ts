@@ -23,6 +23,7 @@ const SCHEMA = [
     slack_id        TEXT,
     PRIMARY KEY (org_id, principal_id)
   )`,
+  `ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS local BOOLEAN NOT NULL DEFAULT FALSE`,
   `CREATE INDEX IF NOT EXISTS directory_members_name
     ON directory_members (org_id, display_name_lc)`,
   `CREATE INDEX IF NOT EXISTS directory_members_lower_pid
@@ -259,11 +260,18 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const hash = hashRoster(internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}`));
 
       return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
-        await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
+        // Locally created members are this deployment's own accounts, not rows
+        // observed upstream. A roster swap must not delete them.
+        await client.query("DELETE FROM directory_members WHERE org_id = $1 AND local = FALSE", [orgId]);
         if (internal.length) {
           await client.query(
             `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[])`,
+             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[])
+             ON CONFLICT (org_id, principal_id) DO UPDATE
+               SET display_name = EXCLUDED.display_name,
+                   display_name_lc = EXCLUDED.display_name_lc,
+                   type = EXCLUDED.type,
+                   slack_id = EXCLUDED.slack_id`,
             [
               orgId,
               internal.map((m) => m.principalId),
@@ -275,6 +283,40 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           );
         }
       });
+    },
+
+    async upsertMember(member) {
+      if (!member.principalId || member.type !== "internal") return;
+      await q(
+        `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, local)
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+         ON CONFLICT (org_id, principal_id) DO UPDATE
+           SET display_name = EXCLUDED.display_name,
+               display_name_lc = EXCLUDED.display_name_lc,
+               type = EXCLUDED.type,
+               slack_id = COALESCE(EXCLUDED.slack_id, directory_members.slack_id),
+               local = TRUE`,
+        [
+          orgId,
+          member.principalId,
+          member.displayName,
+          normDirectoryQuery(member.displayName),
+          member.type,
+          member.slackId ?? null,
+        ],
+      );
+    },
+
+    async listLocal() {
+      const rows = await q(`SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1 AND local = TRUE`, [orgId]);
+      return rows.map(memberRow);
+    },
+
+    async removeMember(principalId) {
+      await q("DELETE FROM directory_members WHERE org_id = $1 AND lower(principal_id) = lower($2)", [
+        orgId,
+        principalId,
+      ]);
     },
 
     async replaceChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations = []) {

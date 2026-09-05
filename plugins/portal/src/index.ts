@@ -149,11 +149,19 @@ const OIDC_JWKS_CONFIGURED = Boolean(process.env.OIDC_JWKS_URI?.trim());
 
 const AUTH_BROKER_UPSTREAM = (process.env.AUTH_BROKER_UPSTREAM ?? "").replace(/\/$/, "");
 const AUTH_BROKER_PREFIX = (process.env.AUTH_BROKER_PREFIX ?? "/idp").replace(/\/$/, "");
+// Every page of the broker a person's browser has to reach. The portal proxies
+// these and nothing else, so a broker page missing from this list is simply
+// unreachable — which is how the change-password step shipped broken: password
+// mode requires a change on first sign-in, and the form posts to /password.
 const BROKER_PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: "GET", path: "/authorize" },
   { method: "POST", path: "/authorize" },
   { method: "GET", path: "/verify" },
   { method: "POST", path: "/verify" },
+  // The change-password form's action. Present whatever the broker's credential
+  // transport is: the broker answers 404 for it unless it is in password mode,
+  // and the portal has no way to know which mode that is.
+  { method: "POST", path: "/password" },
 ];
 
 export function brokerRouteFor(method: string, pathname: string): string | null {

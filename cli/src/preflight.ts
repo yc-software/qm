@@ -3,7 +3,7 @@ import { connect as netConnect, type Socket } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { QmConfig } from "./config.ts";
+import { usesPasswordCredentials, type QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue } from "./util.ts";
 
@@ -265,8 +265,23 @@ export async function smtpVerify(options: SmtpVerifyOptions): Promise<void> {
 
 export async function emailTransportPreflight(config: QmConfig, secrets: ReadonlyMap<string, string>): Promise<void> {
   if (!config.services.includes("auth")) return;
-  const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   const value = (name: string): string | undefined => deploymentSecretValue(name, secrets.get(name))?.trim();
+  // Password mode sends nothing, so there is no relay to reach and no
+  // credential to verify. Say so about any mail secret still lying around
+  // rather than probing a host this deployment may have no route to.
+  if (usesPasswordCredentials(config)) {
+    const stray = ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "RESEND_API_KEY", "AUTH_EMAIL_FROM"].filter((name) =>
+      value(name),
+    );
+    if (stray.length) {
+      warn(
+        `${stray.join(", ")} ${stray.length === 1 ? "is" : "are"} set but env.auth.AUTH_CREDENTIAL_TRANSPORT is ` +
+          `"password" — nothing is mailed, so the value${stray.length === 1 ? " is" : "s are"} unused`,
+      );
+    }
+    return;
+  }
+  const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   if (transport === "resend") {
     const stray = ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"].filter((name) => value(name));
     if (stray.length) {
