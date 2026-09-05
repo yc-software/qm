@@ -10,4 +10,5 @@ test("the admin UI lists named environments and links attachment warnings", () =
   assert.match(html, /id="environment-notice"/);
   assert.match(html, /Uses named environment/);
   assert.match(html, /scope: attachment\.environmentId/);
+  assert.match(html, /\.environment-notice\.hidden\s*\{\s*display:\s*none;/);
 });

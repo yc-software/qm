@@ -345,7 +345,7 @@ export function createChatSurface(
     agent.streamFn = normalStreamFn;
     chatState.normalStreamFn = normalStreamFn;
     chatState.onWork = onWork;
-    void ctx.composer.refreshRuntimeSelection(scopeId, agent);
+    const runtimeReady = ctx.composer.refreshRuntimeSelection(scopeId, agent);
 
     let listedWorking = false;
     let titlePollStarted = false;
@@ -391,11 +391,15 @@ export function createChatSurface(
 
     stickToBottom = true;
     container.replaceChildren(chatState.host);
-    const opening = startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
     drawActiveChat(agent, { forceScroll: true });
     ctx.composer.focusComposerEnd();
     ctx.ensureDeliveryStream();
-    if (!opening) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);
+    void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);
+    void runtimeReady.then((runtimeAvailable) => {
+      if (agent !== chatState.agent) return;
+      if (runtimeAvailable)
+        startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
+    });
     consumeBackgroundPanelRequest();
   }
 

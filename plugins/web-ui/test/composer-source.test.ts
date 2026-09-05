@@ -38,6 +38,27 @@ test("composer-right keeps its control order: make default, use org default, mod
   assert.ok(controlsAt < rendered.indexOf("sendControls(agent)"), "runtime controls render before send controls");
 });
 
+test("full chat and pane chat both render runtime controls for individual model auth", () => {
+  const controls = composer.slice(
+    composer.indexOf("let runtimeControls"),
+    composer.indexOf("return html`", composer.indexOf("let runtimeControls")),
+  );
+  assert.match(controls, /ctx\.pane\s*\? settingsControl/);
+  assert.doesNotMatch(controls, /individualModelAuth/);
+});
+
+test("the composer blocks clearly when no approved runtime matches the connected AI account", () => {
+  assert.match(composer, /if \(!config\.approvedHarnesses\.length\)/);
+  assert.match(composer, /No approved harness has an available model\./);
+  assert.match(composer, /activeRuntimeConfig\.approvedHarnesses\.length > 0/);
+  assert.match(composer, /No compatible runtime available/);
+  assert.match(composer, /const canQueue =[^;]+activeRuntimeConfig\?\.approvedHarnesses\.length/);
+  assert.match(
+    composer,
+    /async function sendPrompt[\s\S]+if \(!activeRuntimeConfig\?\.approvedHarnesses\.length\) return;/,
+  );
+});
+
 test("attaching files is allowed while a turn is streaming", () => {
   // The attach button and drop/paste paths must not gate on isStreaming —
   // only on runtime readiness and pending approvals.

@@ -28,6 +28,11 @@ test("the panel is labelled, focus-keyed, and disabled while saving", () => {
   assert.match(panel, /aria-live="polite"/);
 });
 
+test("the panel reports when the connected AI account has no approved runtime", () => {
+  assert.match(panel, /if \(!config\.approvedHarnesses\.length\)/);
+  assert.match(panel, /No approved harness has an available model\./);
+});
+
 test("every context loads and resets its model setting with the page", () => {
   assert.match(contexts, /loadContextModel\(contextsState\.selected, drawContexts\)/);
   assert.match(contexts, /resetContextModel\(\)/);

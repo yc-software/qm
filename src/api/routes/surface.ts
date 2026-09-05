@@ -17,6 +17,10 @@ import {
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
+import {
+  individualAuthModelServiceable,
+  individualAuthProviderAvailability,
+} from "../../core/individual-auth-routing.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
@@ -1117,7 +1121,7 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
   return null;
 }
 
-async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<string, unknown>> {
+async function runtimeConfigBody(ctx: ApiCtx, actorId: string, scope: ScopeId): Promise<Record<string, unknown>> {
   const config = ctx.deps.config!;
   const fallback = runtimeFallback(ctx);
   const org = orgScope(ctx.deps);
@@ -1129,9 +1133,15 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
       : { harnessId: firstApproved, modelId: defaultModelForHarness(firstApproved, fallback.modelId) };
   const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-  const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
+  const individualConnections =
+    ctx.deps.userModelCredentials && (await config.getIndividualModelAuthDurable())
+      ? await ctx.deps.userModelCredentials.connections(actorId)
+      : null;
+  const providersFor = individualConnections
+    ? (harnessId: string) => individualAuthProviderAvailability(harnessId, individualConnections)
+    : (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
   const catalog =
-    ctx.deps.modelCredentials && managedKeys.openrouter
+    !individualConnections && ctx.deps.modelCredentials && managedKeys.openrouter
       ? await selectableModelCatalog(ctx.deps.modelCredentialFetch)
       : builtInModelCatalog();
   const orgStored = await config.getRuntimeSelectionDurable(org);
@@ -1192,23 +1202,25 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
   ) {
     scopeOverride = { harnessId: fallback.harnessId, modelId: legacyModel, orgRevision: 0 };
   }
-  const effective = scopeOverride ?? orgDefault;
-  const selected = [orgDefault, scopeOverride, effective].filter((choice) => choice !== null);
+  let effective = scopeOverride ?? orgDefault;
   const allowlist = await config.getWebuiModelsDurable(org);
   const modelsByHarness = Object.fromEntries(
     approvedHarnesses.map((harnessId) => {
       const ids = allowlist?.length
         ? allowlist.filter((id) => modelSupportedByHarness(id, harnessId))
         : selectableCatalogForHarness(catalog, harnessId).map((model) => model.id);
-      for (const choice of selected) {
-        if (
-          choice.harnessId === harnessId &&
-          modelSupportedByHarness(choice.modelId, harnessId) &&
-          !ids.includes(choice.modelId)
-        )
-          ids.push(choice.modelId);
-      }
-      return [harnessId, serviceableModelIds(ids, providersFor(harnessId))];
+      if (
+        orgDefault.harnessId === harnessId &&
+        modelSupportedByHarness(orgDefault.modelId, harnessId) &&
+        !ids.includes(orgDefault.modelId)
+      )
+        ids.push(orgDefault.modelId);
+      return [
+        harnessId,
+        individualConnections
+          ? ids.filter((id) => individualAuthModelServiceable(id, harnessId, individualConnections))
+          : serviceableModelIds(ids, providersFor(harnessId)),
+      ];
     }),
   );
   const advertisedModelIds = new Set(Object.values(modelsByHarness).flat());
@@ -1220,9 +1232,21 @@ async function runtimeConfigBody(ctx: ApiCtx, scope: ScopeId): Promise<Record<st
       return resolved ? [[id, { name: resolved.name, provider: resolved.provider }]] : [];
     }),
   );
+  const selectableHarnesses = approvedHarnesses.filter((harnessId) => modelsByHarness[harnessId]?.length);
+  const firstSelectable = selectableHarnesses.flatMap((harnessId) => {
+    const modelId = modelsByHarness[harnessId]?.[0];
+    return modelId ? [{ harnessId, modelId }] : [];
+  })[0];
+  if (individualConnections && firstSelectable) {
+    const selectable = (choice: { harnessId: HarnessId; modelId: string }) =>
+      selectableHarnesses.includes(choice.harnessId) && modelsByHarness[choice.harnessId]?.includes(choice.modelId);
+    if (!selectable(orgDefault)) orgDefault = { ...firstSelectable, revision: orgDefault.revision };
+    if (scopeOverride && !selectable(scopeOverride)) scopeOverride = null;
+    effective = scopeOverride ?? orgDefault;
+  }
   return {
     scopeId: scope,
-    approvedHarnesses,
+    approvedHarnesses: selectableHarnesses,
     modelsByHarness,
     modelCatalog,
     orgDefault,
@@ -1243,7 +1267,7 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config) return sendJson(ctx.res, 404, { error: "not_found" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
-  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
+  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.actorId, target.scope));
 }
 
 async function webuiModelEnabled(ctx: ApiCtx, modelId: string): Promise<boolean> {
@@ -1263,6 +1287,10 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   const config = ctx.deps.config;
+  const individualConnections =
+    ctx.deps.userModelCredentials && (await config.getIndividualModelAuthDurable())
+      ? await ctx.deps.userModelCredentials.connections(target.actorId)
+      : null;
   if (ctx.body.inherit === true) await config.setRuntimeSelectionLatest(target.scope, null);
   else if (ctx.body.keep === true) {
     const runtime = await config.getRuntimeSelectionDurable(target.scope);
@@ -1275,6 +1303,8 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
         legacyModel &&
         approved.includes(fallback.harnessId) &&
         modelSupportedByHarness(legacyModel, fallback.harnessId) &&
+        (!individualConnections ||
+          individualAuthModelServiceable(legacyModel, fallback.harnessId, individualConnections)) &&
         (await webuiModelEnabled(ctx, legacyModel))
       ) {
         await config.setRuntimeSelectionLatest(target.scope, { harnessId: fallback.harnessId, modelId: legacyModel });
@@ -1289,6 +1319,8 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "harness_not_approved" });
     if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
+    if (individualConnections && !individualAuthModelServiceable(modelId, harnessId, individualConnections))
+      return sendJson(ctx.res, 400, { error: "model_not_available" });
     if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
     const effortLevel = ctx.body.effortLevel ?? "auto";
     if (typeof effortLevel !== "string" || !(THINKING_LEVELS as readonly string[]).includes(effortLevel))
@@ -1308,7 +1340,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     resource: "runtime-config",
     scopeLabel: target.scope,
   });
-  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
+  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.actorId, target.scope));
 }
 
 async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
