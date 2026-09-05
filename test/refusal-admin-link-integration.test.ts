@@ -121,4 +121,5 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   assert.match(note, new RegExp(`Full error: ${ADMIN}/admin/history\\?session=${session!.id}`));
   assert.doesNotMatch(note, /ch:C_UUID_FIXTURE/, "the link must not contain the threadRef");
   assert.doesNotMatch(note, /fully-internal/, "a turn failure is not a boundary refusal");
+  assert.doesNotMatch(note, /boom/, "the internal error text is not relayed to the channel");
 });

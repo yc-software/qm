@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { processRun, LEASE_LOST_CONSECUTIVE } from "../src/runs/worker.ts";
-import { NonRetryableTurnError } from "../src/core/turn-error.ts";
+import { NonRetryableTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
@@ -376,6 +376,35 @@ test("the heartbeat stops before complete(), so a late tick cannot spuriously ab
     "no beat fires after the terminal write — the interval was stopped first",
   );
   assert.equal((await runs.get(run!.id))?.status, "done", "the run completed normally, not aborted");
+});
+
+test("a parked run stores the sanitized turn-failure text, not the raw error", async () => {
+  const { runs } = createMemoryRunStore();
+  const internal = new Error("remaining connection slots are reserved for non-replication superuser connections");
+  const orchestrator = fakeOrchestrator(async () => {
+    throw internal;
+  });
+
+  await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 });
+  const run = await runs.claim("w1", 5_000);
+  await assert.rejects(
+    processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!),
+    /connection slots/,
+    "the raw error still reaches the caller and the operator error log",
+  );
+
+  const parked = await runs.get(run!.id);
+  assert.equal(parked?.status, "failed");
+  assert.equal(
+    parked?.result?.reason,
+    turnFailureMessage(internal),
+    "the stored reason is the same text the durable transcript shows",
+  );
+  assert.doesNotMatch(
+    parked?.result?.reason ?? "",
+    /connection slots/,
+    "internal error detail never reaches a client surface",
+  );
 });
 
 test("a NonRetryableTurnError parks the run even with attempts remaining", async () => {

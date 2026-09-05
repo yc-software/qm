@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -74,7 +74,10 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
     return result;
   } catch (err) {
     stopBeat();
-    await deps.runs.fail(run.id, token, errMessage(err), {
+    // The stored reason is the run's user-facing failure text: it reaches the web
+    // thread, Slack, and trigger notices verbatim. Sanitize it exactly as the durable
+    // transcript does; the raw error still propagates to the caller and the error log.
+    await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !(err instanceof NonRetryableTurnError),
     });
     throw err;
