@@ -24,6 +24,7 @@ import {
   ordered,
   brandEnvOf,
   orgEnv,
+  pluginUpstreamsEnv,
   runnableServices,
   serviceDef,
   teardownOrdered,
@@ -360,6 +361,9 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
   if (service === "portal") {
     if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
     if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://admin:8080";
+    // Plugin containers answer on their network alias, which is the plugin name.
+    const pluginUpstreams = pluginUpstreamsEnv(config.plugins, (name) => `http://${name}:8080`);
+    if (pluginUpstreams) out.PORTAL_PLUGIN_UPSTREAMS = pluginUpstreams;
   }
   if (config.services.includes("auth")) {
     Object.assign(
@@ -712,6 +716,10 @@ export async function dockerUp(
       CORE_API_URL: "http://core:8080",
       ...orgEnv(p.name, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
       PORT: "8080",
+      // A surface mounted under the portal is reached at /<portalPath>/…, and the
+      // portal strips that prefix before forwarding. The surface needs it back to
+      // build links and asset URLs the browser can follow.
+      ...(p.portalPath ? { PORTAL_BASE_PATH: `/${p.portalPath}` } : {}),
     };
     const env = {
       ...wiring,

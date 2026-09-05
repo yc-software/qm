@@ -9,6 +9,8 @@ export interface ResolvedPlugin {
   image?: string;
   sourceDir?: string;
   dockerfile?: string;
+  /** Path segment under the portal this surface is mounted at, when it is. */
+  portalPath?: string;
   env: Record<string, string>;
   secrets?: PluginSecret[];
 }
@@ -34,6 +36,7 @@ export function discoverPlugins(configDir: string, config: QmConfig): { plugins:
     const image = entry?.image;
     const env = entry?.env ?? {};
     const secrets = entry?.secrets ?? [];
+    const portalPath = entry?.portalPath ? { portalPath: entry.portalPath } : {};
     const hasDockerfile = sourceDirs.has(name);
     const dir = join(pluginsRoot, name);
 
@@ -47,7 +50,7 @@ export function discoverPlugins(configDir: string, config: QmConfig): { plugins:
       continue;
     }
     if (image) {
-      plugins.push({ name, kind: "image", image, env, secrets });
+      plugins.push({ name, kind: "image", image, ...portalPath, env, secrets });
       continue;
     }
     if (hasDockerfile) {
@@ -56,6 +59,7 @@ export function discoverPlugins(configDir: string, config: QmConfig): { plugins:
         kind: "source",
         sourceDir: dir,
         dockerfile: join(dir, "Dockerfile"),
+        ...portalPath,
         env,
         secrets,
       });

@@ -124,6 +124,99 @@ const UPSTREAMS: Record<string, string> = {
 };
 const COOKIE_FOR: Record<string, string> = { "web-ui": "webuiuser", admin: "admin" };
 
+// First path segments the portal answers itself. A plugin surface mounted on one
+// of these would take the route over — `/admin` would stop being the admin
+// surface — so the name is refused. The CLI refuses it too, in
+// `portalPathError`; this copy is the one that has to hold, because the portal
+// does not trust its own environment.
+const RESERVED_PORTAL_PATHS: ReadonlySet<string> = new Set([
+  "auth",
+  "v1",
+  "healthz",
+  "favicon.ico",
+  "favicon.svg",
+  "web-ui",
+  "admin",
+  "connect",
+  "drop",
+  "d",
+  "deployments",
+]);
+
+/**
+ * An upstream the portal may forward a signed identity to. It must be on the
+ * deployment's own network: `proxyToSurface` mints `x-qm-portal-identity` for
+ * whatever host it is pointed at, so a public URL here would hand a person's
+ * verified identity to a third party. A bare label with no dot — `web-ui`,
+ * `reports` — is how every container already addresses every other one on the
+ * docker target, and is not resolvable on the public internet.
+ */
+export function isInternalUpstreamUrl(raw: string): boolean {
+  if (isPrivateNetworkUrl(raw)) return true;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(url.hostname.toLowerCase());
+}
+
+/**
+ * Parse `PORTAL_PLUGIN_UPSTREAMS`: comma-separated `<path>=<url>` pairs, one per
+ * plugin the deployment mounted under the portal. A bad entry is a startup
+ * problem rather than a skipped entry, because skipping is silent and the
+ * request would then fall through to web-ui instead of 404ing.
+ */
+export function readPluginUpstreams(
+  raw: string,
+  brokerPrefix: string,
+): { upstreams: Record<string, string>; problems: string[] } {
+  const upstreams: Record<string, string> = {};
+  const problems: string[] = [];
+  const reserved = new Set(RESERVED_PORTAL_PATHS);
+  const broker = brokerPrefix.replace(/^\//, "");
+  if (broker) reserved.add(broker);
+  for (const pair of raw.split(",").map((entry) => entry.trim())) {
+    if (!pair) continue;
+    const eq = pair.indexOf("=");
+    if (eq <= 0) {
+      problems.push(`PORTAL_PLUGIN_UPSTREAMS entry ${JSON.stringify(pair)} must be <path>=<url>`);
+      continue;
+    }
+    const path = pair.slice(0, eq).trim();
+    const upstream = pair
+      .slice(eq + 1)
+      .trim()
+      .replace(/\/$/, "");
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(path)) {
+      problems.push(
+        `PORTAL_PLUGIN_UPSTREAMS path ${JSON.stringify(path)} must be a single lowercase DNS label — it is one path segment`,
+      );
+      continue;
+    }
+    if (reserved.has(path)) {
+      problems.push(
+        `PORTAL_PLUGIN_UPSTREAMS path ${JSON.stringify(path)} is a route the portal answers itself and cannot be a plugin surface`,
+      );
+      continue;
+    }
+    if (Object.hasOwn(upstreams, path)) {
+      problems.push(`PORTAL_PLUGIN_UPSTREAMS path ${JSON.stringify(path)} appears more than once`);
+      continue;
+    }
+    if (!isInternalUpstreamUrl(upstream)) {
+      problems.push(
+        `PORTAL_PLUGIN_UPSTREAMS upstream for ${JSON.stringify(path)} must be an http(s) URL on the deployment's own network — the portal signs an identity header for it: ${upstream}`,
+      );
+      continue;
+    }
+    upstreams[path] = upstream;
+  }
+  return { upstreams, problems };
+}
+
 function isSlackIssuer(issuer: string): boolean {
   try {
     const host = new URL(issuer).hostname;
@@ -155,6 +248,14 @@ const BROKER_PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: "GET", path: "/verify" },
   { method: "POST", path: "/verify" },
 ];
+
+const PLUGIN_SURFACES = readPluginUpstreams(process.env.PORTAL_PLUGIN_UPSTREAMS ?? "", AUTH_BROKER_PREFIX);
+for (const [path, upstream] of Object.entries(PLUGIN_SURFACES.upstreams)) {
+  UPSTREAMS[path] = upstream;
+  // Same shape as web-ui and admin: the legacy principal cookie is named after
+  // the surface. The signed identity header is what a surface should read.
+  COOKIE_FOR[path] = path;
+}
 
 export function brokerRouteFor(method: string, pathname: string): string | null {
   if (!AUTH_BROKER_UPSTREAM || !AUTH_BROKER_PREFIX || !pathname.startsWith(`${AUTH_BROKER_PREFIX}/`)) return null;
@@ -1086,6 +1187,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   const key = surfaceKey as string;
+  if (Object.hasOwn(PLUGIN_SURFACES.upstreams, key) && session.anon) {
+    // Same line /connect, /drop and deployed apps draw. A playground visitor is
+    // unauthenticated, and the portal cannot know what a deployment's own
+    // surface does with an identity it is handed.
+    if (wantsHtml(req)) return sendHtml(res, 403, playgroundRestrictedHtml());
+    return json(res, 403, { error: "forbidden", message: "sign in to use this surface" });
+  }
   if (key === "admin") {
     if (session.anon) {
       if (wantsHtml(req)) return sendHtml(res, 403, nonAdminDeniedHtml({ sub: session.sub, org: session.org }));
@@ -1220,6 +1328,9 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
 
 export function bootChecks(): void {
   const problems: string[] = [];
+  // Not gated on production: a plugin surface that silently failed to register
+  // would fall through to web-ui, which is confusing in every environment.
+  problems.push(...PLUGIN_SURFACES.problems);
   if (!AUTH_BROKER_UPSTREAM && originOf(OIDC.authEndpoint) && originOf(OIDC.authEndpoint) === originOf(PUBLIC_URL)) {
     problems.push(
       "OIDC_AUTH_ENDPOINT is on the portal's own origin but AUTH_BROKER_UPSTREAM is unset — every sign-in would redirect from /auth/login back into the portal forever; wire AUTH_BROKER_UPSTREAM to the auth service or point OIDC_AUTH_ENDPOINT at a real identity provider",

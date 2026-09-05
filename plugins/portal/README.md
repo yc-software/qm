@@ -32,6 +32,47 @@ surfaces, and it does **not** import the core.
    synthesizing the surface cookie for compatibility and attaching a short-lived signed portal
    identity. Surfaces pass that identity to core, which verifies it before any user-scoped action.
 
+## Mounting a plugin's own surface
+
+A deployment that runs a plugin with an HTTP surface of its own can put it behind
+the same front door instead of publishing a second address and a second sign-in.
+Give the plugin a `portalPath` in `qm.config.jsonc`:
+
+```jsonc
+"services": ["core", "web-ui", "admin", "portal"],
+"plugins": [{ "name": "reports", "portalPath": "reports" }]
+```
+
+`https://<portal>/reports/...` is then proxied to the `reports` plugin exactly as
+`/admin` is proxied to admin: same session requirement, same prefix stripping,
+same signed `x-portal-identity` header. The surface never sees the sign-in and
+never implements one — it verifies the identity header and passes it to core,
+which is the only thing that decides what that person may read. The deployment
+target derives the plugin's internal address itself and sets
+`PORTAL_PLUGIN_UPSTREAMS` on the portal; an operator never writes a container or
+app URL by hand. The plugin is told the prefix the portal strips, as
+`PORTAL_BASE_PATH=/reports`, so it can build links and asset URLs a browser can
+follow.
+
+Three things are refused rather than documented, because all three fail quietly:
+
+- **A path the portal answers itself** — `admin`, `auth`, `v1`, `web-ui`,
+  `healthz`, `connect`, `drop`, `d`, `deployments`, and the broker prefix. A
+  plugin mounted on one of these would take that route over.
+- **An upstream that is not on the deployment's own network.** The portal signs
+  an identity header for whatever it is pointed at, so a public URL here would
+  hand a person's verified identity to a third party.
+- **A path claimed twice.**
+
+The CLI rejects all three when the config loads; the portal rejects them again at
+boot, refusing to start rather than dropping the entry, because a dropped entry
+falls through to web-ui instead of 404ing. The portal's copy is the one that has
+to hold — it does not trust its own environment.
+
+Anonymous [playground](#playground-mode) sessions are refused a plugin surface,
+on the same reasoning as `/connect` and `/drop`: the portal cannot know what a
+deployment's own surface does with an identity it is handed.
+
 ## Security model (the parts that must be right)
 
 - **Identity comes only from the verified OIDC subject.** The browser never asserts it. The
@@ -129,7 +170,9 @@ garbage-collects an abandoned visitor's scope yet.
 ## Env
 
 Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CORE_API_URL`,
-`CORE_ORG_ID`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`,
+`CORE_ORG_ID`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`, `PORTAL_PLUGIN_UPSTREAMS`
+(`<path>=<internal url>` pairs, set by the deployment target from each plugin's
+`portalPath` — see [Mounting a plugin's own surface](#mounting-a-plugins-own-surface)),
 `OIDC_AUTH_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_USERINFO_ENDPOINT` / `OIDC_ISSUER` /
 `OIDC_JWKS_URI` / `OIDC_SCOPES` / `OIDC_CLIENT_ID`, `PORTAL_EXPECTED_TEAM_ID`,
 `PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of one day and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.

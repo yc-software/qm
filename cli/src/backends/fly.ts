@@ -21,6 +21,7 @@ import {
   type BrandEnv,
   brandEnvOf,
   orgEnv,
+  pluginUpstreamsEnv,
   runnableServices,
   serviceDef,
   virtualServiceEnv,
@@ -44,6 +45,9 @@ import { CONNECTIVITY_CODES, CoreUnreachableError, type DeploymentLayerTransport
 
 const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: string): ServiceCtx => {
   const brand = brandEnvOf(config);
+  // Plugin apps are <appPrefix>-<name> and are not public; the portal reaches
+  // them over 6PN the same way it reaches admin.
+  const pluginUpstreams = pluginUpstreamsEnv(config.plugins, (name) => `http://${appPrefix}-${name}.internal:8080`);
   return {
     appPrefix,
     orgId: config.orgId,
@@ -57,6 +61,7 @@ const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: str
     ...(brand ? { brand } : {}),
     coreUrl: `http://${appPrefix}-core.internal:8080`,
     authUrl: `http://${appPrefix}-auth.flycast`,
+    ...(pluginUpstreams ? { pluginUpstreams } : {}),
   };
 };
 
@@ -892,6 +897,9 @@ function pluginTomlContent(
     CORE_API_URL: `http://${appPrefix}-core.internal:8080`,
     ...orgEnv(plugin.name, orgId, publicUrl, hasPortal, brand),
     PORT: "8080",
+    // See the docker backend: the portal strips /<portalPath> before forwarding,
+    // and the surface needs it back to build links the browser can follow.
+    ...(plugin.portalPath ? { PORTAL_BASE_PATH: `/${plugin.portalPath}` } : {}),
     ...plugin.env,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(flyOrg, orgId, appPrefix),
   };

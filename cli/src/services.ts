@@ -33,6 +33,52 @@ export function pluginNameError(name: string): string | null {
   return null;
 }
 
+// First path segments the portal answers itself. A plugin surface mounted on
+// one of these would take the route over — `/admin` would stop being the admin
+// surface — so the name is refused here and again in the portal, which does not
+// trust its own environment. Keep in step with the routes in
+// plugins/portal/src/index.ts.
+const RESERVED_PORTAL_PATHS: readonly string[] = [
+  "auth",
+  "v1",
+  "healthz",
+  "favicon.ico",
+  "favicon.svg",
+  "web-ui",
+  "admin",
+  "connect",
+  "drop",
+  "d",
+  "deployments",
+  "idp",
+];
+
+export function portalPathError(path: string): string | null {
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(path)) {
+    return "must be a single lowercase DNS label (a-z, 0-9, and hyphens between) — it becomes the first path segment under the portal";
+  }
+  if (RESERVED_PORTAL_PATHS.includes(path)) {
+    return `is a portal route (reserved: ${RESERVED_PORTAL_PATHS.join(", ")}) — choose another path`;
+  }
+  return null;
+}
+
+/**
+ * The `PORTAL_PLUGIN_UPSTREAMS` value for a deployment: one `<path>=<url>` pair
+ * per plugin that declared a `portalPath`, in configuration order. `urlFor`
+ * supplies the target's own internal address for a plugin, so the operator
+ * never writes a container or app URL by hand.
+ */
+export function pluginUpstreamsEnv(
+  plugins: readonly { name: string; portalPath?: string }[],
+  urlFor: (name: string) => string,
+): string {
+  return plugins
+    .filter((p) => p.portalPath)
+    .map((p) => `${p.portalPath}=${urlFor(p.name)}`)
+    .join(",");
+}
+
 export interface LogOpts {
   follow?: boolean;
   tail?: number;
@@ -51,6 +97,8 @@ export interface ServiceCtx {
   coreUrl: string;
   /** Provider-supplied internal base URL of the auth service. */
   authUrl: string;
+  /** `<path>=<url>` pairs for plugin surfaces mounted under the portal. */
+  pluginUpstreams?: string;
 }
 
 interface FlyServiceSpec {
@@ -247,6 +295,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         ...pluginWiring("portal", s),
         WEB_UI_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast`,
         ADMIN_UPSTREAM: `http://${s.appPrefix}-admin.internal:8080`,
+        ...(s.pluginUpstreams ? { PORTAL_PLUGIN_UPSTREAMS: s.pluginUpstreams } : {}),
       }),
       stackKeys: [
         "PORTAL_PUBLIC_URL",
@@ -263,6 +312,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "OIDC_PRINCIPAL_CLAIM",
         "AUTH_BROKER_UPSTREAM",
         "AUTH_BROKER_PREFIX",
+        "PORTAL_PLUGIN_UPSTREAMS",
       ],
       deployFlags: ["--ha=false"],
     },

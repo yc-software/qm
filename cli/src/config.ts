@@ -8,6 +8,7 @@ import {
   isDeclaredService,
   isServiceName,
   pluginNameError,
+  portalPathError,
   runnableServices,
   serviceDef,
   type DeclaredServiceName,
@@ -40,6 +41,13 @@ export interface PluginSecret {
 export interface PluginEntry {
   name: string;
   image?: string;
+  /**
+   * Mount this plugin's own HTTP surface under the portal at `/<portalPath>`.
+   * The portal proxies it exactly as it proxies web-ui and admin: the visitor
+   * signs in once at the portal, and the plugin receives the signed
+   * `x-qm-portal-identity` header instead of implementing a sign-in of its own.
+   */
+  portalPath?: string;
   env?: Record<string, string>;
   secrets?: PluginSecret[];
 }
@@ -681,12 +689,31 @@ function validate(raw: unknown, path: string): QmConfig {
       `${path}: secretEnv.admin.ADMIN_BASE_PATH is managed by the deployment target and cannot be overridden`,
     );
   }
+  const portalPathSeen = new Map<string, string>();
   for (const [i, plugin] of plugins.entries()) {
     if (plugin.env?.PORT !== undefined) {
       throw new CliError(
         `${path}: "plugins[${i}].env.PORT" is managed by the deployment target and cannot be overridden`,
       );
     }
+    if (plugin.env?.PORTAL_BASE_PATH !== undefined) {
+      throw new CliError(
+        `${path}: "plugins[${i}].env.PORTAL_BASE_PATH" is managed by the deployment target and cannot be overridden — set "plugins[${i}].portalPath" instead`,
+      );
+    }
+    if (plugin.portalPath === undefined) continue;
+    if (!services.includes("portal")) {
+      throw new CliError(
+        `${path}: plugins[${i}].portalPath needs "portal" in "services" — without the portal there is no front door to mount ${JSON.stringify(plugin.name)} under`,
+      );
+    }
+    const claimedBy = portalPathSeen.get(plugin.portalPath);
+    if (claimedBy !== undefined) {
+      throw new CliError(
+        `${path}: plugins[${i}].portalPath ${JSON.stringify(plugin.portalPath)} is already used by plugin ${JSON.stringify(claimedBy)} — one path, one surface`,
+      );
+    }
+    portalPathSeen.set(plugin.portalPath, plugin.name);
   }
   const imageOverrides = validateServiceMap(o["imageOverrides"], path, "imageOverrides", (v, k) => {
     if (typeof v !== "string") throw new CliError(`${path}: "imageOverrides.${k}" must be a string`);
@@ -1001,6 +1028,17 @@ function validatePlugins(raw: unknown, path: string): PluginEntry[] {
         throw new CliError(`${path}: plugins[${i}].image must be a non-empty string (a pullable image ref) when set`);
       }
       entry.image = e["image"];
+    }
+    if (e["portalPath"] !== undefined) {
+      if (typeof e["portalPath"] !== "string") {
+        throw new CliError(`${path}: plugins[${i}].portalPath must be a string`);
+      }
+      const portalPath = e["portalPath"].replace(/^\//, "").replace(/\/$/, "");
+      const portalPathProblem = portalPathError(portalPath);
+      if (portalPathProblem) {
+        throw new CliError(`${path}: plugins[${i}].portalPath ${JSON.stringify(portalPath)} ${portalPathProblem}`);
+      }
+      entry.portalPath = portalPath;
     }
     if (e["env"] !== undefined) entry.env = validateStringMap(e["env"], path, `plugins[${i}].env`);
     if (e["secrets"] !== undefined) entry.secrets = validatePluginSecrets(e["secrets"], path, i);
