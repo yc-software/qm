@@ -15,6 +15,8 @@ export interface FakeDocker {
   volumes: Set<string>;
   networks: Set<string>;
   connections: Set<string>;
+  connectionAliases: Map<string, Set<string>>;
+  calls: string[][];
   runCount: number;
   daemonDown: boolean;
   imageMissing: boolean;
@@ -28,11 +30,15 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
   const volumes = new Set<string>();
   const networks = new Set<string>();
   const connections = new Set<string>();
+  const connectionAliases = new Map<string, Set<string>>();
+  const calls: string[][] = [];
   const self: FakeDocker = {
     containers,
     volumes,
     networks,
     connections,
+    connectionAliases,
+    calls,
     runCount: 0,
     daemonDown: false,
     imageMissing: false,
@@ -60,6 +66,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
   }
 
   function exec(args: string[]): { code: number; stdout: string; stderr: string } {
+    calls.push([...args]);
     const [cmd, ...rest] = args;
     if (self.daemonDown) return fail("Cannot connect to the Docker daemon");
     switch (cmd) {
@@ -73,6 +80,12 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
       }
       case "inspect": {
         const name = rest[rest.length - 1]!;
+        const format = rest[rest.indexOf("-f") + 1];
+        if (format?.includes(".NetworkSettings.Networks")) {
+          const network = /Networks\s+"([^"]+)"/.exec(format)?.[1] ?? "";
+          const aliases = connectionAliases.get(`${network}|${name}`);
+          return ok(aliases ? JSON.stringify([...aliases]) : "null");
+        }
         const c = containers.get(name);
         if (!c) return fail(`Error: No such object: ${name}`);
         return ok(`${c.running} ${c.imageId}`);
@@ -87,12 +100,20 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         }
         if (sub === "rm") return networks.delete(name) ? ok(name) : fail(`Error: No such network: ${name}`);
         if (sub === "connect" || sub === "disconnect") {
-          const container = rest[2]!;
-          const key = `${name}|${container}`;
+          const network = rest.at(-2)!;
+          const container = rest.at(-1)!;
+          const key = `${network}|${container}`;
           if (sub === "connect") {
             if (connections.has(key)) return fail("endpoint already exists");
             connections.add(key);
-          } else connections.delete(key);
+            connectionAliases.set(
+              key,
+              new Set(rest.flatMap((value, index) => (value === "--alias" ? [rest[index + 1]!] : []))),
+            );
+          } else {
+            connections.delete(key);
+            connectionAliases.delete(key);
+          }
           return ok(key);
         }
         return fail(`unknown network subcommand ${sub}`);

@@ -289,6 +289,7 @@ test("a replacement core reattaches to an already-running sandbox", async () => 
   const connection = `${localNetworkName(first.id)}|qm-test-core`;
   assert.equal(fake.connections.has(connection), true);
   fake.connections.delete(connection);
+  fake.connectionAliases.delete(connection);
   const second = await sb.provision(layers);
   assert.equal(second.id, first.id);
   assert.equal(fake.connections.has(connection), true);
@@ -296,7 +297,7 @@ test("a replacement core reattaches to an already-running sandbox", async () => 
   await sb.teardown(second, { destroy: true });
 });
 
-test("containerized core joins each sandbox network and reaches the daemon by container name", async () => {
+test("containerized core joins each sandbox network as core and reaches the daemon by container name", async () => {
   const fake = installFakeDocker(daemonPort);
   const seen: string[] = [];
   const fetchImpl: typeof fetch = (input) => {
@@ -308,9 +309,64 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
   const h = await sb.provision(rw(scopeId("personal", "U40")));
   const args = fake.containers.get(h.id)!.args;
+  const network = localNetworkName(h.id);
   assert.equal(args.includes("-p"), false);
-  assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), true);
+  assert.equal(fake.connections.has(`${network}|qm-test-core`), true);
+  assert.deepEqual([...fake.connectionAliases.get(`${network}|qm-test-core`)!], ["core"]);
+  assert.deepEqual(
+    fake.calls.find((call) => call[0] === "network" && call[1] === "connect" && call.at(-2) === network),
+    ["network", "connect", "--alias", "core", network, "qm-test-core"],
+  );
   assert.ok(seen.includes(`http://${h.id}:8080/health`));
   await sb.teardown(h, { destroy: true });
-  assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
+  assert.equal(fake.connections.has(`${network}|qm-test-core`), false);
+});
+
+test("an existing core connection without its callback alias is repaired", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const layers = rw(scopeId("personal", "U41"));
+  const first = await sb.provision(layers);
+  const network = localNetworkName(first.id);
+  const connection = `${network}|qm-test-core`;
+  fake.connectionAliases.set(connection, new Set());
+  fake.calls.length = 0;
+
+  const second = await sb.provision(layers);
+  assert.deepEqual(
+    fake.calls.filter((call) => call[0] === "network" && ["connect", "disconnect"].includes(call[1]!)),
+    [
+      ["network", "disconnect", network, "qm-test-core"],
+      ["network", "connect", "--alias", "core", network, "qm-test-core"],
+    ],
+  );
+  assert.deepEqual([...fake.connectionAliases.get(connection)!], ["core"]);
+  await sb.teardown(first);
+  await sb.teardown(second, { destroy: true });
+});
+
+test("an existing core connection with its callback alias is preserved", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const layers = rw(scopeId("personal", "U42"));
+  const first = await sb.provision(layers);
+  fake.calls.length = 0;
+
+  const second = await sb.provision(layers);
+  assert.equal(
+    fake.calls.some((call) => call[0] === "network" && ["connect", "disconnect"].includes(call[1]!)),
+    false,
+  );
+  await sb.teardown(first);
+  await sb.teardown(second, { destroy: true });
 });

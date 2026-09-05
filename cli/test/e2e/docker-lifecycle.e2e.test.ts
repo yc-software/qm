@@ -95,8 +95,18 @@ test(
         const coreInfo = inspect(core);
         assert.ok(coreInfo.Config.Env.includes("DOCKER_HOST=unix:///var/run/docker.sock"));
         assert.ok(coreInfo.Config.Env.includes(`QM_CORE_CONTAINER=${core}`));
-        assert.ok(coreInfo.Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
+        assert.ok(
+          coreInfo.Mounts.some(
+            (mount) => mount.Source === "/var/run/docker.sock" && mount.Destination === "/var/run/docker.sock",
+          ),
+        );
         assert.ok(!inspect(portal).Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
+        assert.match(
+          execFileSync("docker", ["exec", core, "docker", "version", "-f", "{{.Server.Version}}"], {
+            encoding: "utf8",
+          }).trim(),
+          /^\d+\.\d+/,
+        );
       });
 
       await t.test("services receive their private-network aliases", () => {

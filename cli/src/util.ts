@@ -33,12 +33,13 @@ async function pollUntil(cond: () => boolean, tries: number): Promise<boolean> {
 export function capture(
   cmd: string,
   args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv; allow?: RegExp } = {},
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; allow?: RegExp; timeoutMs?: number } = {},
 ): string {
   try {
     return execFileSync(cmd, args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}),
       ...procOpts(opts),
     });
   } catch (e: unknown) {

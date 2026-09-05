@@ -149,15 +149,15 @@ test("a missing secretEnv value is warned, not invented", async () => {
   }
 });
 
-test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, web-ui+2, admin+3)", async () => {
+test("portal deployments publish only loopback core and portal ports", async () => {
   const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "portal", "web-ui", "admin"] });
   try {
     const out = await plan(dir);
     assert.match(out, /PI_MODEL/);
-    assert.match(out, /host :8080/);
-    assert.match(out, /host :8081/);
-    assert.match(out, /host :8082/);
-    assert.match(out, /host :8083/);
+    assert.match(out, /core: .*publish 127\.0\.0\.1:8080:8080/);
+    assert.match(out, /portal: .*publish 127\.0\.0\.1:8081:8080/);
+    assert.doesNotMatch(out, /web-ui: .*publish/);
+    assert.doesNotMatch(out, /admin: .*publish/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -169,7 +169,7 @@ test("QM_BASE_PORT overrides the host port base for one run", async () => {
   process.env.QM_BASE_PORT = "9000";
   try {
     const out = await plan(dir);
-    assert.match(out, /host :9000/);
+    assert.match(out, /publish 127\.0\.0\.1:9000:8080/);
   } finally {
     if (prev === undefined) delete process.env.QM_BASE_PORT;
     else process.env.QM_BASE_PORT = prev;

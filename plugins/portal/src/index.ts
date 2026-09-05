@@ -330,6 +330,19 @@ function isLocalPortalUrl(raw: string): boolean {
   }
 }
 
+function isLoopbackHttpUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    const hostname = url.hostname.toLowerCase();
+    return (
+      url.protocol === "http:" &&
+      (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function originOf(raw: string): string {
   try {
     return new URL(raw).origin;
@@ -1323,8 +1336,13 @@ export function bootChecks(): void {
     if (SESSION_SECRET && CORE_SIGNING_SECRET && SESSION_SECRET === CORE_SIGNING_SECRET) {
       problems.push("PORTAL_SESSION_SECRET must differ from CORE_SIGNING_SECRET");
     }
-    if (!PUBLIC_URL.startsWith("https://")) problems.push("PORTAL_PUBLIC_URL must be https in production");
-    if (!OIDC.authEndpoint.startsWith("https://")) {
+    if (!PUBLIC_URL.startsWith("https://") && !isLoopbackHttpUrl(PUBLIC_URL)) {
+      problems.push("PORTAL_PUBLIC_URL must be https in production unless it is loopback-only");
+    }
+    if (
+      !OIDC.authEndpoint.startsWith("https://") &&
+      !(isLoopbackHttpUrl(OIDC.authEndpoint) && originOf(OIDC.authEndpoint) === originOf(PUBLIC_URL))
+    ) {
       problems.push(`OIDC_AUTH_ENDPOINT must be https — the browser is sent there: ${OIDC.authEndpoint}`);
     }
     const brokerOrigin =

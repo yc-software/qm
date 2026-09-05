@@ -244,8 +244,39 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
   async function connectCore(net: string): Promise<void> {
     if (!opts.coreContainer) return;
-    const r = await dexec(["network", "connect", net, opts.coreContainer]);
-    if (r.code !== 0 && !/already (?:exists|connected)/i.test(r.stderr)) {
+    const inspectAliases = async (): Promise<string[] | null> => {
+      const result = await dexec([
+        "inspect",
+        "-f",
+        `{{json (index .NetworkSettings.Networks ${JSON.stringify(net)}).Aliases}}`,
+        opts.coreContainer!,
+      ]);
+      if (result.code !== 0) return null;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(result.stdout) as unknown;
+      } catch {
+        throw new Error(`docker inspect ${opts.coreContainer} returned invalid network aliases`);
+      }
+      if (parsed === null) return null;
+      if (!Array.isArray(parsed) || parsed.some((alias) => typeof alias !== "string")) {
+        throw new Error(`docker inspect ${opts.coreContainer} returned invalid network aliases`);
+      }
+      return parsed;
+    };
+    const aliases = await inspectAliases();
+    if (aliases?.includes("core")) return;
+    if (aliases) {
+      const disconnected = await dexec(["network", "disconnect", net, opts.coreContainer]);
+      if (disconnected.code !== 0) {
+        throw new Error(`docker network disconnect ${net} ${opts.coreContainer} failed: ${disconnected.stderr.trim()}`);
+      }
+    }
+    const r = await dexec(["network", "connect", "--alias", "core", net, opts.coreContainer]);
+    if (
+      r.code !== 0 &&
+      !(/already (?:exists|connected)/i.test(r.stderr) && (await inspectAliases())?.includes("core"))
+    ) {
       throw new Error(`docker network connect ${net} ${opts.coreContainer} failed: ${r.stderr.trim()}`);
     }
   }

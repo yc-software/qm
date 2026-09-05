@@ -250,10 +250,10 @@ async function modelProviderCheck(provider: ModelProvider, apiKey: string): Prom
   if (!res.ok) throw new CliError(`the ${provider} API returned HTTP ${res.status}; retry when it recovers`);
 }
 
-async function resendCheck(apiKey: string): Promise<void> {
+export async function resendCheck(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<void> {
   let res: Response;
   try {
-    res = await fetch("https://api.resend.com/domains", {
+    res = await fetchImpl("https://api.resend.com/domains", {
       headers: { authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(10_000),
     });
@@ -261,6 +261,15 @@ async function resendCheck(apiKey: string): Promise<void> {
     throw new CliError(
       `could not reach the Resend API: ${errMessage(e)} — check network access (and any proxy) and retry`,
     );
+  }
+  if (res.status === 401) {
+    const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
+    if (body?.message === "This API key is restricted to only send emails.") {
+      warn(
+        "Resend API key has sending-only access; the domains probe cannot validate it, so actual email delivery still must be verified",
+      );
+      return;
+    }
   }
   if (res.status === 401 || res.status === 403)
     throw new CliError("Resend rejected RESEND_API_KEY — mint a key with send access at https://resend.com/api-keys");

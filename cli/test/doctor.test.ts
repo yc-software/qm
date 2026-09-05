@@ -7,6 +7,7 @@ import {
   doctorCommon,
   localDoctorSecrets,
   requiredSlackScopes,
+  resendCheck,
   slackManifestBotScopes,
 } from "../src/backends/doctor.ts";
 import { flyDoctor, verifyLocalFlyTokens } from "../src/backends/fly.ts";
@@ -24,6 +25,45 @@ const config: QmConfig = {
   imageOverrides: {},
   sandbox: { app: "acme-sandboxes" },
 };
+
+const resendResponse = (status: number, message?: string): Response =>
+  new Response(message === undefined ? undefined : JSON.stringify({ message }), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+
+test("Resend doctor accepts a full-access key", async () => {
+  const fetchImpl = (async () => resendResponse(200)) as typeof fetch;
+  await assert.doesNotReject(resendCheck("re_full", fetchImpl));
+});
+
+test("Resend doctor accepts the explicit sending-only restriction with an unverified-delivery warning", async () => {
+  const fetchImpl = (async () =>
+    resendResponse(401, "This API key is restricted to only send emails.")) as typeof fetch;
+  const priorWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...parts: unknown[]): void => void warnings.push(parts.join(" "));
+  try {
+    await assert.doesNotReject(resendCheck("re_sending", fetchImpl));
+    assert.deepEqual(warnings, [
+      "! Resend API key has sending-only access; the domains probe cannot validate it, so actual email delivery still must be verified",
+    ]);
+  } finally {
+    console.warn = priorWarn;
+  }
+});
+
+test("Resend doctor rejects an invalid key", async () => {
+  const fetchImpl = (async () => resendResponse(403, "API key is invalid.")) as typeof fetch;
+  await assert.rejects(resendCheck("re_invalid", fetchImpl), /Resend rejected RESEND_API_KEY/);
+});
+
+test("Resend doctor rejects other authorization and API errors", async () => {
+  const unauthorized = (async () => resendResponse(401, "Authentication required.")) as typeof fetch;
+  const unavailable = (async () => resendResponse(500, "Unavailable")) as typeof fetch;
+  await assert.rejects(resendCheck("re_other", unauthorized), /Resend rejected RESEND_API_KEY/);
+  await assert.rejects(resendCheck("re_other", unavailable), /Resend API returned HTTP 500/);
+});
 
 test("Docker doctor rejects missing and placeholder required secrets before external probes", async () => {
   const prior = process.env.ANTHROPIC_API_KEY;

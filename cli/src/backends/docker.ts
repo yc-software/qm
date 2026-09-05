@@ -46,6 +46,13 @@ const ORG_LABEL_KEY = "qm.org";
 const orgLabelArgs = (ctx: DockerCtx): string[] => ["--label", `${ORG_LABEL_KEY}=${ctx.config.orgId}`];
 const baseHostPort = (ctx: DockerCtx): number => dockerBasePort(ctx.config);
 
+export function dockerPublishedPort(config: QmConfig, service: ServiceName): string | undefined {
+  const def = serviceDef(service);
+  if (def.docker.hostPortOffset === undefined) return undefined;
+  if (config.services.includes("portal") && service !== "core" && service !== "portal") return undefined;
+  return `127.0.0.1:${dockerBasePort(config) + def.docker.hostPortOffset}:${def.docker.internalPort}`;
+}
+
 interface DockerCtx {
   config: QmConfig;
   configDir: string;
@@ -114,19 +121,64 @@ function ensureLocalSandboxImage(config: QmConfig): string {
   return image;
 }
 
-function hostDockerSocket(): { path: string; gid?: string } {
-  const configured = process.env.DOCKER_HOST?.trim();
+export function dockerSocketCandidates(
+  dockerHost: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const configured = dockerHost?.trim();
   if (configured && !configured.startsWith("unix://")) {
     throw new CliError('sandbox.backend "local" requires a Unix Docker socket');
   }
-  const path = configured?.slice("unix://".length) || "/var/run/docker.sock";
-  let gid: string | undefined;
-  try {
-    gid = capture("stat", ["-c", "%g", path]).trim() || undefined;
-  } catch {
-    throw new CliError(`sandbox.backend "local" cannot read the Docker socket at ${path}`);
+  const path = configured?.slice("unix://".length);
+  if (configured && !path) throw new CliError('sandbox.backend "local" requires a Unix Docker socket path');
+  if (path?.includes(",")) throw new CliError(`Docker socket path cannot contain a comma: ${path}`);
+  if (!path) return ["/var/run/docker.sock"];
+  if (platform === "darwin" || /[/\\]\.docker[/\\]desktop[/\\]docker\.sock$/.test(path)) {
+    return [...new Set(["/var/run/docker.sock", path])];
   }
-  return { path, ...(gid ? { gid } : {}) };
+  return [path];
+}
+
+export function dockerSocketProbeArgs(path: string, image: string): string[] {
+  if (path.includes(",")) throw new CliError(`Docker socket path cannot contain a comma: ${path}`);
+  return [
+    "run",
+    "--rm",
+    "--entrypoint",
+    "/bin/stat",
+    "--mount",
+    `type=bind,source=${path},target=/var/run/docker.sock,readonly`,
+    image,
+    "-c",
+    "%g",
+    "/var/run/docker.sock",
+  ];
+}
+
+export function dockerSocketMountArgs(socket: { path: string; gid: string }): string[] {
+  if (socket.path.includes(",")) throw new CliError(`Docker socket path cannot contain a comma: ${socket.path}`);
+  return ["--mount", `type=bind,source=${socket.path},target=/var/run/docker.sock`, "--group-add", socket.gid];
+}
+
+export function resolveDockerSocket(
+  image: string,
+  dockerHost: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+  probe: (args: string[]) => string = (args) => docker(args, undefined, 5_000),
+): { path: string; gid: string } {
+  for (const path of dockerSocketCandidates(dockerHost, platform)) {
+    try {
+      const gid = probe(dockerSocketProbeArgs(path, image)).trim();
+      if (/^\d+$/.test(gid)) return { path, gid };
+    } catch {
+      continue;
+    }
+  }
+  throw new CliError(`sandbox.backend "local" cannot mount the Docker daemon socket`);
+}
+
+function hostDockerSocket(image: string): { path: string; gid: string } {
+  return resolveDockerSocket(image, process.env.DOCKER_HOST);
 }
 
 function requireDocker(): void {
@@ -138,9 +190,9 @@ function requireDocker(): void {
   }
 }
 
-function docker(args: string[], allow?: RegExp): string {
+function docker(args: string[], allow?: RegExp, timeoutMs?: number): string {
   try {
-    return capture("docker", args, allow ? { allow } : {});
+    return capture("docker", args, { ...(allow ? { allow } : {}), ...(timeoutMs ? { timeoutMs } : {}) });
   } catch (e) {
     throw dockerError(args, errMessage(e));
   }
@@ -466,7 +518,6 @@ function pushEnvArgs(args: string[], env: Record<string, string>, secretKeys: Se
 }
 
 function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: string[]; cleanup: () => void } {
-  const def = serviceDef(service);
   const args = [
     "run",
     "-d",
@@ -488,14 +539,12 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     for (const m of layerMounts(ctx)) args.push("-v", m);
     for (const m of skillMounts(ctx)) args.push("-v", m);
     if (localSandboxActive(ctx.config)) {
-      const socket = hostDockerSocket();
-      args.push("-v", `${socket.path}:/var/run/docker.sock`);
-      if (socket.gid) args.push("--group-add", socket.gid);
+      const socket = hostDockerSocket(image);
+      args.push(...dockerSocketMountArgs(socket));
     }
   }
-  if (def.docker.hostPortOffset !== undefined) {
-    args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
-  }
+  const publishedPort = dockerPublishedPort(ctx.config, service);
+  if (publishedPort) args.push("-p", publishedPort);
   args.push(image);
   return { args, cleanup };
 }
@@ -641,8 +690,8 @@ export async function dockerUp(
     step(`network: ${ctx.network}`);
     if (resolvedLocalImage) step(`sandbox: local image ${resolvedLocalImage}`);
     for (const def of ordered(runnableServices(config.services))) {
-      const ports =
-        def.docker.hostPortOffset !== undefined ? ` (host :${baseHostPort(ctx) + def.docker.hostPortOffset})` : "";
+      const publishedPort = dockerPublishedPort(config, def.name);
+      const ports = publishedPort ? ` (publish ${publishedPort})` : "";
       step(
         `${def.name}: image ${ctx.buildFrom ? `build deploy/${def.name}/Dockerfile` : imageRef(ctx, def.name)}${ports}`,
       );
@@ -742,8 +791,8 @@ function printUrls(ctx: DockerCtx): void {
   if (has("portal")) note(`   portal : ${url("portal")}  (public front door)`);
   if (has("auth"))
     note(`   auth   : ${url("portal")}/idp/authorize  (sign-in broker, published only through the portal)`);
-  if (has("web-ui")) note(`   web-ui : ${url("web-ui")}`);
-  if (has("admin")) note(`   admin  : ${url("admin")}/admin`);
+  if (has("web-ui") && !has("portal")) note(`   web-ui : ${url("web-ui")}`);
+  if (has("admin")) note(`   admin  : ${has("portal") ? `${url("portal")}/admin` : `${url("admin")}/admin`}`);
   note(`   core   : ${url("core")}`);
   note(`   status : qm status   ·   logs: qm logs core   ·   stop: qm down`);
 }
