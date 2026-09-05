@@ -48,6 +48,7 @@ test("declaredVariables reads the scaffolded variables.tf", () => {
     "deploy_microvm_execution_role_arn",
     "services",
     "secret_names",
+    "required_secret_names",
   ]) {
     assert.ok(declared.includes(name), `variables.tf declares ${name}`);
   }
@@ -58,6 +59,16 @@ test("the ECS execution role can read every managed contract secret", () => {
   assert.match(policy, /secretsmanager:GetSecretValue/);
   assert.match(policy, /\[for secret in aws_secretsmanager_secret\.contract : secret\.arn\]/);
   assert.doesNotMatch(policy, /secret:\$\{var\.secrets_prefix\}\*/);
+});
+
+test("the deploy role has no direct plaintext retrieval permission but retains runtime deployment authority", () => {
+  const policy = mainTf.match(/resource "aws_iam_role_policy" "github_deploy" \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const secrets = policy.match(/Sid\s*= "ManageContractSecrets"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
+  assert.match(secrets, /secretsmanager:DescribeSecret/);
+  assert.match(secrets, /secretsmanager:PutSecretValue/);
+  assert.doesNotMatch(policy, /secretsmanager:GetSecretValue/);
+  assert.match(policy, /ecs:RegisterTaskDefinition/);
+  assert.match(policy, /iam:PassRole/);
 });
 
 test("new S3 buckets use AWS's default public-access block without a separate mutation", () => {
@@ -88,6 +99,7 @@ test("the deploy role can run and inspect only stack-scoped deployment canaries"
   const run = policy.match(/Sid\s*= "RunDeploymentCanaries"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
   assert.match(run, /ecs:RunTask/);
   assert.match(run, /task-definition\/\$\{var\.services\["core"\]\.ecs_service\}:\*/);
+  assert.match(run, /task-definition\/\$\{var\.cluster_name\}-secret-validation:\*/);
   assert.match(run, /"ecs:cluster"\s*=\s*aws_ecs_cluster\.this\.arn/);
   assert.doesNotMatch(run, /Resource\s*= "\*"/);
 
@@ -95,6 +107,16 @@ test("the deploy role can run and inspect only stack-scoped deployment canaries"
   assert.match(inspect, /ecs:DescribeTasks/);
   assert.match(inspect, /task\/\$\{var\.cluster_name\}\/\*/);
   assert.doesNotMatch(inspect, /Resource\s*= "\*"/);
+});
+
+test("the deploy role can exchange and clean up only private core request objects", () => {
+  const policy = mainTf.match(/resource "aws_iam_role_policy" "github_deploy" \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const requests = policy.match(/Sid\s*= "ManagePrivateCoreRequests"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
+  for (const action of ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]) {
+    assert.match(requests, new RegExp(action));
+  }
+  assert.match(requests, /deployment\/core-requests\/\*/);
+  assert.doesNotMatch(requests, /Resource\s*= "\*"|DeleteObjectVersion/);
 });
 
 test("AWS deployments retain recovery history and can create scoped predeploy snapshots", () => {
@@ -259,11 +281,22 @@ test("terraform derives the transfer lifecycle prefix from the same core S3 pref
 
 test("terraform owns secret containers but never creates operator-secret placeholder values", () => {
   const rendered = terraformVars(config, "", declared);
-  const all = rendered.match(/secret_names\s*=\s*(\[[\s\S]*?\])\s*$/)?.[1] ?? "";
+  const all = rendered.match(/^secret_names\s*=\s*(\[[\s\S]*?\n\])/m)?.[1] ?? "";
+  const required = rendered.match(/^required_secret_names\s*=\s*(\[[\s\S]*?\n\])/m)?.[1] ?? "";
   assert.match(all, /CORE_SIGNING_SECRET/);
+  assert.match(required, /CORE_SIGNING_SECRET/);
   assert.doesNotMatch(mainTf, /aws_secretsmanager_secret_version" "placeholder/);
   assert.doesNotMatch(mainTf, /secret_string\s*=\s*"replace-me"/);
   assert.match(mainTf, /aws_secretsmanager_secret_version" "database/);
+});
+
+test("secret values are validated only inside an ECS task with the execution role", () => {
+  const validator = mainTf.match(/resource "aws_ecs_task_definition" "secret_validation" \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  assert.match(validator, /family\s*= "\$\{var\.cluster_name\}-secret-validation"/);
+  assert.match(validator, /execution_role_arn\s*= local\.default_execution_role_arn/);
+  assert.match(validator, /task_role_arn\s*= local\.default_task_role_arn/);
+  assert.match(validator, /var\.required_secret_names/);
+  assert.match(validator, /aws_secretsmanager_secret\.contract\[name\]\.arn/);
 });
 
 test("AWS module keeps portal as the sole front door and preserves CLI-owned ECS state", () => {

@@ -5,10 +5,14 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigInDir, type QmConfig } from "../src/config.ts";
-import { currentDeploymentLayerState, deploymentLayerBundle, syncDeploymentLayer } from "../src/deployment-layer.ts";
+import {
+  currentDeploymentLayerState,
+  deploymentLayerBundle,
+  httpDeploymentLayerTransport,
+  syncDeploymentLayer,
+} from "../src/deployment-layer.ts";
 import { dockerDeploymentLayerTransport } from "../src/backends/docker.ts";
 import { flyDeploymentLayerTransport } from "../src/backends/fly.ts";
-import { awsDeploymentLayerTransport } from "../src/backends/aws.ts";
 import { expectedDescriptors, runConformance } from "../src/commands/conformance.ts";
 
 const SECRET = "conformance-test-secret";
@@ -438,7 +442,7 @@ test("a publicUrl with a base path keeps it in the request path and the signed c
     await withEnv({ CORE_SIGNING_SECRET: SECRET }, () =>
       syncDeploymentLayer({
         config: makeConfig(`http://127.0.0.1:${port}/base`),
-        transport: awsDeploymentLayerTransport,
+        transport: httpDeploymentLayerTransport(),
         configDir: dir,
         sandboxDir: join(dir, "sandbox"),
       }),

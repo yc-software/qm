@@ -105,3 +105,10 @@ variable "services" {
   }))
 }
 variable "secret_names" { type = set(string) }
+variable "required_secret_names" {
+  type = set(string)
+  validation {
+    condition     = length(setsubtract(var.required_secret_names, var.secret_names)) == 0
+    error_message = "required_secret_names must be a subset of secret_names"
+  }
+}

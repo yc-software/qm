@@ -23,6 +23,7 @@ const DERIVED_VARS = new Set([
   "deploy_microvm_execution_role_arn",
   "services",
   "secret_names",
+  "required_secret_names",
 ]);
 
 const OPERATOR_DEFAULTS: Record<string, string> = {
@@ -119,6 +120,9 @@ function derivedValues(
     json: {
       services,
       secret_names: secrets.map((secret) => secret.name),
+      ...(declared.includes("required_secret_names")
+        ? { required_secret_names: secrets.filter((secret) => secret.required).map((secret) => secret.name) }
+        : {}),
     },
   };
 }

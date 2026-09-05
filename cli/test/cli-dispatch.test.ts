@@ -186,7 +186,7 @@ test("check --live on aws runs live drift checks in plain and JSON modes", async
     `#!/usr/bin/env node
 const args = process.argv.slice(2).join(" ");
 if (args.includes("sts get-caller-identity")) console.log("123456789012");
-else if (args.includes("get-secret-value")) console.log(JSON.stringify({ ARN: "arn", SecretString: "secret-value".repeat(3) }));
+else if (args.includes("describe-secret")) console.log(JSON.stringify({ ARN: "arn", VersionIdsToStages: { current: ["AWSCURRENT"] } }));
 else if (args.includes("describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "s" }] }));
 else console.log("{}");
 `,
@@ -258,6 +258,9 @@ test("successful check --json --live reports the live-drift clause", async () =>
   writeFileSync(configPath, JSON.stringify(raw));
   const config = loadConfigAt(configPath).config;
   const arns = Object.fromEntries(computedSecrets(config).map((secret) => [secret.name, "arn"]));
+  const requiredSecretNames = computedSecrets(config)
+    .filter((secret) => secret.required)
+    .map((secret) => secret.name);
   const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/repo@${digest}`;
   const task = renderTaskDefinition(config, "core", image, arns);
   const layerBody = JSON.stringify({ contract: 1, tools: [], skills: [] });
@@ -270,6 +273,7 @@ test("successful check --json --live reports the live-drift clause", async () =>
     tasks: { core: "task" },
     layer: { key: `deployment/layers/${layerHash}.json`, sha256: layerHash },
   };
+  const privateResponse = join(dir, "private-response.json");
   writeFileSync(
     aws,
     `#!/usr/bin/env node
@@ -279,15 +283,21 @@ const args = argv.join(" ");
 if (args.includes("sts get-caller-identity")) console.log("123456789012");
 else if (args.includes("lambda-microvms get-microvm-image")) console.log(JSON.stringify({ imageArn: "arn:aws:lambda:us-west-2:123456789012:microvm-image:acme-microvm-app" }));
 else if (args.includes("lambda-microvms list-microvm-image-versions")) console.log(JSON.stringify({ items: [{ imageVersion: "1", state: "SUCCESSFUL", status: "ACTIVE" }] }));
-else if (args.includes("get-secret-value") && args.includes("--query SecretString")) console.log("signing-secret".repeat(3));
-else if (args.includes("get-secret-value")) console.log(JSON.stringify({ ARN: "arn", SecretString: "secret-value".repeat(3) }));
+else if (args.includes("describe-secret")) console.log(JSON.stringify({ ARN: "arn", VersionIdsToStages: { current: ["AWSCURRENT"] } }));
 else if (args.includes("describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "s", status: "ACTIVE", desiredCount: 1, runningCount: 1, taskDefinition: "task", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet"], securityGroups: ["sg"], assignPublicIp: "DISABLED" } }, deployments: [{ status: "PRIMARY", rolloutState: "COMPLETED", taskDefinition: "task" }], loadBalancers: [{ targetGroupArn: "tg" }] }] }));
+else if (args.includes("describe-task-definition") && args.includes("c-secret-validation")) console.log(${JSON.stringify(JSON.stringify({ taskDefinition: { taskDefinitionArn: "secret-validation-task", status: "ACTIVE", containerDefinitions: [{ name: "secret-validation", secrets: requiredSecretNames.map((name) => ({ name })) }] } }))});
 else if (args.includes("describe-task-definition")) console.log(${JSON.stringify(JSON.stringify({ taskDefinition: task }))});
+else if (args.includes("s3api put-object") && args.includes("deployment/core-requests/")) {
+  const request = JSON.parse(fs.readFileSync(argv[argv.indexOf("--body") + 1], "utf8"));
+  const body = JSON.stringify({ bundle: JSON.parse(${JSON.stringify(layerBody)}), contentHash: ${JSON.stringify(layerHash)}, status: "applied", runtimeContentHash: ${JSON.stringify(layerHash)} });
+  fs.writeFileSync(${JSON.stringify(privateResponse)}, JSON.stringify({ version: 1, ok: true, status: 200, body }));
+}
+else if (args.includes("s3api head-object") && args.includes("deployment/core-requests/")) console.log(JSON.stringify({ ContentLength: fs.statSync(${JSON.stringify(privateResponse)}).size }));
 else if (args.includes("run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "canary" }] }));
-else if (args.includes("describe-tasks")) console.log(JSON.stringify({ tasks: [{ containers: [{ name: "core", exitCode: 0 }] }] }));
+else if (args.includes("describe-tasks")) console.log(JSON.stringify({ tasks: [{ containers: [{ name: "core", exitCode: 0 }, { name: "secret-validation", exitCode: 0 }] }] }));
 else if (args.includes("dynamodb get-item") && args.includes("deployment/current")) console.log(JSON.stringify({ Item: { manifestId: { S: "manifest" } } }));
 else if (args.includes("dynamodb get-item") && args.includes("deployment/manifest/manifest")) console.log(JSON.stringify({ Item: { manifest: { S: ${JSON.stringify(JSON.stringify(manifest))} } } }));
-else if (args.includes("s3api get-object")) fs.writeFileSync(argv[argv.indexOf("--key") + 2], ${JSON.stringify(layerBody)});
+else if (args.includes("s3api get-object")) fs.writeFileSync(argv[argv.indexOf("--key") + 2], args.includes("deployment/core-requests/") ? fs.readFileSync(${JSON.stringify(privateResponse)}, "utf8") : ${JSON.stringify(layerBody)});
 else if (args.includes("elbv2 describe-load-balancers")) console.log(JSON.stringify({ LoadBalancers: [{ LoadBalancerArn: "lb", DNSName: "acme.example.com", State: { Code: "active" } }] }));
 else if (args.includes("elbv2 describe-listeners")) console.log(JSON.stringify({ Listeners: [{ ListenerArn: "listener", Protocol: "HTTPS", Port: 443, Certificates: [{ CertificateArn: "certificate" }], DefaultActions: [{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "404" } }] }] }));
 else if (args.includes("elbv2 describe-target-groups")) console.log(JSON.stringify({ TargetGroups: [{ TargetGroupArn: "tg", TargetGroupName: ${JSON.stringify(targetGroupName)} }] }));

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lookup, resolveCname } from "node:dns/promises";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -21,6 +21,15 @@ import {
   type QmConfig,
 } from "../config.ts";
 import { manifestRef } from "../manifest.ts";
+import {
+  AWS_PRIVATE_CORE_OBJECT_MAX_BYTES,
+  AWS_PRIVATE_CORE_OVERRIDES_MAX_BYTES,
+  awsPrivateCoreKeys,
+  awsPrivateCoreRequestBody,
+  awsPrivateCoreTaskScript,
+  awsPrivateSecretValidation,
+  parseAwsPrivateCoreResponse,
+} from "../aws-private-core-request.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService, type ComputedSecret } from "../secrets.ts";
 import {
   brokerWiring,
@@ -52,36 +61,13 @@ import {
 import { doctorCommon } from "./doctor.ts";
 import { awsObjectStoreBucket, declaredVariables, terraformVarsDrift } from "../terraform.ts";
 import {
+  CoreUnreachableError,
   currentDeploymentLayerState,
   deploymentLayerBody,
   syncDeploymentLayerBody,
   type DeploymentLayerSyncResult,
-  httpDeploymentLayerTransport,
   type DeploymentLayerTransport,
 } from "../deployment-layer.ts";
-
-/**
- * Deployment-layer transport for AWS: signed HTTP to the public core URL,
- * with a Secrets Manager fallback for CORE_SIGNING_SECRET and a 60s timeout.
- */
-export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
-  secretFallback: (config) =>
-    config.aws
-      ? capture(process.env.AWS_BIN ?? "aws", [
-          "secretsmanager",
-          "get-secret-value",
-          "--secret-id",
-          `${config.aws.secretsPrefix}CORE_SIGNING_SECRET`,
-          "--query",
-          "SecretString",
-          "--output",
-          "text",
-          "--region",
-          config.aws.region,
-        ]).trim()
-      : undefined,
-  timeoutMs: 60_000,
-});
 export interface AwsUpOpts {
   dryRun?: boolean;
   yes?: boolean;
@@ -586,15 +572,16 @@ function secretArns(config: QmConfig): Record<string, string> {
   const pairs = computedSecrets(config).flatMap((secret) => {
     const id = `${aws.secretsPrefix}${secret.name}`;
     try {
-      const value = awsJson<{ ARN?: string; SecretString?: string }>(aws, [
+      const value = awsJson<{ ARN?: string; VersionIdsToStages?: Record<string, string[]> }>(aws, [
         "secretsmanager",
-        "get-secret-value",
+        "describe-secret",
         "--secret-id",
         id,
       ]);
-      if (!value.ARN || isInvalidSecret(secret.name, value.SecretString)) {
+      const current = Object.values(value.VersionIdsToStages ?? {}).some((stages) => stages.includes("AWSCURRENT"));
+      if (!value.ARN || !current) {
         if (!secret.required) return [];
-        throw new CliError(`required AWS secret ${secret.name} has no usable, non-placeholder AWSCURRENT value`);
+        throw new CliError(`required AWS secret ${secret.name} has no AWSCURRENT value`);
       }
       return [[secret.name, value.ARN] as const];
     } catch (error) {
@@ -603,32 +590,6 @@ function secretArns(config: QmConfig): Record<string, string> {
     }
   });
   return Object.fromEntries(pairs);
-}
-
-function assertAwsPublicApiUrl(config: QmConfig): void {
-  if (!computedSecrets(config).some((secret) => secret.name === "PUBLIC_API_URL")) return;
-  const aws = requireAws(config);
-  const value = awsText(aws, [
-    "secretsmanager",
-    "get-secret-value",
-    "--secret-id",
-    `${aws.secretsPrefix}PUBLIC_API_URL`,
-    "--query",
-    "SecretString",
-  ]);
-  const bound = config.apiUrl ? ("apiUrl" as const) : ("publicUrl" as const);
-  const expected = new URL(config.apiUrl ?? config.publicUrl).toString().replace(/\/$/, "");
-  let normalized: string;
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "https:") throw new Error("not HTTPS");
-    normalized = parsed.toString().replace(/\/$/, "");
-  } catch {
-    throw new CliError(`required AWS secret PUBLIC_API_URL must be a valid HTTPS URL equal to the configured ${bound}`);
-  }
-  if (normalized !== expected) {
-    throw new CliError(`required AWS secret PUBLIC_API_URL must equal the configured HTTPS ${bound} (${expected})`);
-  }
 }
 
 function liveTask(config: QmConfig, service: string): Record<string, unknown> | null {
@@ -785,49 +746,96 @@ interface EcsServiceState {
   tags?: Array<{ key?: string; value?: string }>;
 }
 
-function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
+interface EcsTaskResult {
+  exitCode?: number;
+  stoppedReason?: string;
+  containerReason?: string;
+}
+
+function sanitizedEcsDiagnostic(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const sanitized = value
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/:\/\/[^@\s]+@/g, "://[redacted]@")
+    .replace(/\b(authorization|password|secretstring|token)\s*[=:]\s*\S+/gi, "$1=[redacted]")
+    .replace(/[^\x20-\x7e]/g, "")
+    .trim()
+    .slice(0, 240);
+  return sanitized || undefined;
+}
+
+function ecsTaskDiagnostic(result: EcsTaskResult): string {
+  const details = [
+    result.exitCode === undefined ? undefined : `exit ${result.exitCode}`,
+    result.stoppedReason ? `stopped: ${result.stoppedReason}` : undefined,
+    result.containerReason ? `container: ${result.containerReason}` : undefined,
+  ].filter(Boolean);
+  return details.length ? ` (${details.join("; ")})` : "";
+}
+
+function runEcsTask(
+  config: QmConfig,
+  options: {
+    taskDefinition: string;
+    networkConfiguration: NonNullable<EcsServiceState["networkConfiguration"]>;
+    containerName: string;
+    command: string[];
+    environment?: Array<{ name: string; value: string }>;
+  },
+): EcsTaskResult {
   const aws = requireAws(config);
-  if (!core.taskDefinition) throw new Error("core service has no live task definition");
-  if (!core.networkConfiguration?.awsvpcConfiguration) throw new Error("core service has no VPC network configuration");
-  const started = awsJson<{
-    tasks?: Array<{ taskArn?: string }>;
-    failures?: Array<{ arn?: string; reason?: string; detail?: string }>;
-  }>(aws, [
-    "ecs",
-    "run-task",
-    "--cluster",
-    aws.cluster,
-    "--task-definition",
-    core.taskDefinition,
-    "--launch-type",
-    "FARGATE",
-    "--network-configuration",
-    JSON.stringify(core.networkConfiguration),
-    "--overrides",
-    JSON.stringify({
-      containerOverrides: [
-        {
-          name: "core",
-          command: [
-            "node",
-            "src/deployment/postdeploy-smoke.ts",
-            "session",
-            `http://core.${aws.networking.cloudMapNamespace}:8080`,
-          ],
-        },
-      ],
-    }),
-    "--count",
-    "1",
-  ]);
+  if (!options.networkConfiguration.awsvpcConfiguration)
+    throw new Error("ECS service has no VPC network configuration");
+  const overrides = JSON.stringify({
+    containerOverrides: [
+      {
+        name: options.containerName,
+        command: options.command,
+        environment: options.environment ?? [],
+      },
+    ],
+  });
+  if (Buffer.byteLength(overrides) > AWS_PRIVATE_CORE_OVERRIDES_MAX_BYTES) {
+    throw new Error("ECS task override exceeds the size limit");
+  }
+  let started: { tasks?: Array<{ taskArn?: string }>; failures?: Array<{ reason?: string; detail?: string }> };
+  try {
+    started = awsJson(aws, [
+      "ecs",
+      "run-task",
+      "--cluster",
+      aws.cluster,
+      "--task-definition",
+      options.taskDefinition,
+      "--launch-type",
+      "FARGATE",
+      "--network-configuration",
+      JSON.stringify(options.networkConfiguration),
+      "--overrides",
+      overrides,
+      "--count",
+      "1",
+    ]);
+  } catch (error) {
+    throw new Error(`ECS RunTask failed: ${sanitizedEcsDiagnostic(errMessage(error)) ?? "unknown error"}`, {
+      cause: error,
+    });
+  }
   const taskArn = started.tasks?.[0]?.taskArn;
   if (!taskArn) {
     const failure = started.failures?.[0];
-    throw new Error(
-      `could not start canary task: ${failure?.reason ?? failure?.detail ?? failure?.arn ?? "no task returned"}`,
-    );
+    const detail = [sanitizedEcsDiagnostic(failure?.reason), sanitizedEcsDiagnostic(failure?.detail)]
+      .filter(Boolean)
+      .join(": ");
+    throw new Error(`ECS RunTask returned no task${detail ? `: ${detail}` : ""}`);
   }
-  awsText(aws, ["ecs", "wait", "tasks-stopped", "--cluster", aws.cluster, "--tasks", taskArn]);
+  try {
+    awsText(aws, ["ecs", "wait", "tasks-stopped", "--cluster", aws.cluster, "--tasks", taskArn]);
+  } catch (error) {
+    throw new Error(`ECS task did not stop: ${sanitizedEcsDiagnostic(errMessage(error)) ?? "unknown error"}`, {
+      cause: error,
+    });
+  }
   const stopped = awsJson<{
     tasks?: Array<{
       stoppedReason?: string;
@@ -835,13 +843,194 @@ function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
     }>;
   }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", taskArn]);
   const task = stopped.tasks?.[0];
-  const coreContainer = task?.containers?.find((container) => container.name === "core");
-  if (coreContainer?.exitCode !== 0) {
-    throw new Error(
-      `canary task exited ${coreContainer?.exitCode ?? "without a code"}: ${coreContainer?.reason ?? task?.stoppedReason ?? "unknown reason"}`,
+  if (!task) throw new Error("ECS DescribeTasks returned no stopped task");
+  const container = task.containers?.find((item) => item.name === options.containerName);
+  if (!container) throw new Error(`ECS stopped task omitted the ${options.containerName} container`);
+  return {
+    exitCode: container.exitCode,
+    stoppedReason: sanitizedEcsDiagnostic(task.stoppedReason),
+    containerReason: sanitizedEcsDiagnostic(container.reason),
+  };
+}
+
+function runCoreTask(
+  config: QmConfig,
+  core: EcsServiceState,
+  command: string[],
+  environment: Array<{ name: string; value: string }> = [],
+): EcsTaskResult {
+  if (!core.taskDefinition) throw new Error("core service has no live task definition");
+  if (!core.networkConfiguration) throw new Error("core service has no VPC network configuration");
+  return runEcsTask(config, {
+    taskDefinition: core.taskDefinition,
+    networkConfiguration: core.networkConfiguration,
+    containerName: "core",
+    command,
+    environment,
+  });
+}
+
+function awsSecretValidationTask(config: QmConfig): {
+  taskDefinition: string;
+  validation: ReturnType<typeof awsPrivateSecretValidation>;
+} {
+  const aws = requireAws(config);
+  const required = computedSecrets(config)
+    .filter((secret) => secret.required)
+    .map((secret) => secret.name)
+    .sort();
+  const validation = awsPrivateSecretValidation(required, config.apiUrl ?? config.publicUrl);
+  const described = awsJson<{
+    taskDefinition?: {
+      taskDefinitionArn?: string;
+      status?: string;
+      containerDefinitions?: Array<{ name?: string; secrets?: Array<{ name?: string }> }>;
+    };
+  }>(aws, ["ecs", "describe-task-definition", "--task-definition", `${aws.cluster}-secret-validation`]);
+  const task = described.taskDefinition;
+  const container = task?.containerDefinitions?.find((item) => item.name === "secret-validation");
+  const injected = (container?.secrets ?? []).flatMap((secret) => (secret.name ? [secret.name] : [])).sort();
+  if (
+    !task?.taskDefinitionArn ||
+    task.status !== "ACTIVE" ||
+    !container ||
+    canonicalJson(injected) !== canonicalJson(required)
+  ) {
+    throw new CliError(
+      "AWS secret validator task is missing or stale; rerender and apply the current Terraform scaffold",
     );
   }
+  return { taskDefinition: task.taskDefinitionArn, validation };
 }
+
+function assertAwsSecretValues(config: QmConfig, core: EcsServiceState): void {
+  if (!core.networkConfiguration) throw new CliError("core service has no VPC network configuration");
+  const { taskDefinition, validation } = awsSecretValidationTask(config);
+  const result = runEcsTask(config, {
+    taskDefinition,
+    networkConfiguration: core.networkConfiguration,
+    containerName: "secret-validation",
+    command: validation.command,
+    environment: validation.environment,
+  });
+  const invalid = validation.invalidSecret(result.exitCode);
+  if (invalid) {
+    throw new CliError(`required AWS secret ${invalid} has a missing, placeholder, weak, or mismatched value`);
+  }
+  if (result.exitCode !== 0) {
+    throw new CliError(`AWS private secret validation task failed${ecsTaskDiagnostic(result)}`);
+  }
+}
+
+function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
+  const aws = requireAws(config);
+  const result = runCoreTask(config, core, [
+    "node",
+    "src/deployment/postdeploy-smoke.ts",
+    "session",
+    `http://core.${aws.networking.cloudMapNamespace}:8080`,
+  ]);
+  if (result.exitCode !== 0)
+    throw new Error(`canary task exited ${result.exitCode ?? "without a code"}${ecsTaskDiagnostic(result)}`);
+}
+
+export const awsDeploymentLayerTransport: DeploymentLayerTransport = async (opts) => {
+  const aws = requireAws(opts.config);
+  const requestId = randomUUID();
+  const bucket = awsObjectStoreBucket(opts.config);
+  const keys = awsPrivateCoreKeys(requestId);
+  const dir = mkdtempSync(join(tmpdir(), "qm-private-core-"));
+  const requestFile = join(dir, "request.json");
+  const responseFile = join(dir, "response.json");
+  const removeObjects = (): void => {
+    for (const key of [keys.request, keys.response]) {
+      try {
+        awsText(aws, ["s3api", "delete-object", "--bucket", bucket, "--key", key]);
+      } catch {
+        warn("could not remove a temporary AWS private core object");
+      }
+    }
+  };
+  try {
+    writeFileSync(requestFile, awsPrivateCoreRequestBody(opts.method, opts.body));
+    awsText(aws, [
+      "s3api",
+      "put-object",
+      "--bucket",
+      bucket,
+      "--key",
+      keys.request,
+      "--body",
+      requestFile,
+      "--content-type",
+      "application/json",
+      "--cache-control",
+      "no-store",
+    ]);
+    const core = describedServices(opts.config, ["core"]).get("core");
+    if (!core) throw new CoreUnreachableError("AWS private core request could not resolve the core service");
+    let taskResult: EcsTaskResult;
+    try {
+      taskResult = runCoreTask(
+        opts.config,
+        core,
+        ["node", "-e", awsPrivateCoreTaskScript()],
+        [
+          { name: "QM_AWS_CORE_REQUEST_BUCKET", value: bucket },
+          { name: "QM_AWS_CORE_REQUEST_ID", value: requestId },
+          { name: "QM_AWS_CORE_REQUEST_URL", value: `http://core.${aws.networking.cloudMapNamespace}:8080` },
+        ],
+      );
+    } catch (error) {
+      throw new CoreUnreachableError(`AWS private core request task did not complete: ${errMessage(error)}`);
+    }
+    let metadata: { ContentLength?: number };
+    try {
+      metadata = awsJson(aws, ["s3api", "head-object", "--bucket", bucket, "--key", keys.response]);
+      if (
+        !Number.isInteger(metadata.ContentLength) ||
+        metadata.ContentLength! < 1 ||
+        metadata.ContentLength! > AWS_PRIVATE_CORE_OBJECT_MAX_BYTES
+      ) {
+        throw new Error("invalid response size");
+      }
+      awsText(aws, [
+        "s3api",
+        "get-object",
+        "--bucket",
+        bucket,
+        "--key",
+        keys.response,
+        responseFile,
+        "--range",
+        `bytes=0-${AWS_PRIVATE_CORE_OBJECT_MAX_BYTES - 1}`,
+      ]);
+      if (statSync(responseFile).size !== metadata.ContentLength) throw new Error("response size changed");
+    } catch {
+      throw new CoreUnreachableError(
+        `AWS private core request returned no bounded result${ecsTaskDiagnostic(taskResult)}`,
+      );
+    }
+    let response: ReturnType<typeof parseAwsPrivateCoreResponse>;
+    try {
+      response = parseAwsPrivateCoreResponse(readFileSync(responseFile, "utf8"));
+    } catch {
+      throw new CoreUnreachableError("AWS private core request returned an invalid result");
+    }
+    if (!response.ok) {
+      if (response.code === "core_unavailable") {
+        throw new CoreUnreachableError("AWS private core request could not reach core");
+      }
+      throw new CliError(`AWS private core request failed (${response.code})`);
+    }
+    if (taskResult.exitCode !== 0)
+      throw new CoreUnreachableError(`AWS private core request task failed${ecsTaskDiagnostic(taskResult)}`);
+    return { status: response.status, body: response.body };
+  } finally {
+    removeObjects();
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
 
 type DeploymentImageProvenance =
   | { kind: "configured"; source: string }
@@ -1658,12 +1847,14 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   assertAwsCallerAccount(aws);
   assertAwsPublicFrontDoor(config);
   if (!opts.dryRun) await assertAwsPublicNetwork(config);
-  assertAwsPublicApiUrl(config);
   assertAwsDeployImage(config);
   header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.orgId} (aws)`);
   const allServices = Object.keys(aws.services);
-  assertOwnedServices(config, describedServices(config, allServices), allServices);
+  const liveServices = describedServices(config, allServices);
+  assertOwnedServices(config, liveServices, allServices);
   const arns = secretArns(config);
+  if (opts.dryRun) awsSecretValidationTask(config);
+  else assertAwsSecretValues(config, liveServices.get("core")!);
   if (opts.dryRun) {
     if (usesFlySandboxes(config) && services.includes("core")) {
       const pin = resolveAwsSandboxPin(config, () => currentDeploymentManifest(aws));
@@ -2921,7 +3112,6 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     const database = awsJson<{
       DBInstances?: Array<{
         DBInstanceStatus?: string;
-        Endpoint?: { Address?: string; Port?: number };
         VpcSecurityGroups?: Array<{ VpcSecurityGroupId?: string }>;
       }>;
     }>(aws, ["rds", "describe-db-instances", "--db-instance-identifier", rdsInstanceIdentifier(aws)]).DBInstances?.[0];
@@ -2959,16 +3149,6 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         (permission.UserIdGroupPairs ?? []).some((pair) => pair.GroupId && coreGroups.includes(pair.GroupId)),
     );
     if (!reachable) throw new Error("database security groups do not allow the core ECS service on port 5432");
-    const databaseUrl = awsText(aws, [
-      "secretsmanager",
-      "get-secret-value",
-      "--secret-id",
-      `${aws.secretsPrefix}DATABASE_URL`,
-      "--query",
-      "SecretString",
-    ]);
-    if (!database.Endpoint?.Address || new URL(databaseUrl).hostname !== database.Endpoint.Address)
-      throw new Error("DATABASE_URL does not point at the configured RDS endpoint");
   });
   const ecsServices = new Map<string, AwsEcsRoutingService>();
   for (const service of Object.keys(aws.services)) {
@@ -3038,38 +3218,14 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
   });
   check("ALB routing", () => assertAwsPublicRouting(config, ecsServices));
   await checkAsync("public URL DNS and TLS", () => assertAwsPublicNetwork(config));
-  const probe = probeAwsSecretStore(
-    computedSecrets(config),
-    (name) =>
-      awsText(aws, [
-        "secretsmanager",
-        "get-secret-value",
-        "--secret-id",
-        `${aws.secretsPrefix}${name}`,
-        "--query",
-        "SecretString",
-      ]),
-    () => assertAwsPublicApiUrl(config),
-  );
-  failures.push(...probe.failures);
-  const runtimeSecrets = probe.values;
+  check("AWS secret values", () => {
+    secretArns(config);
+    const core = describedServices(config, ["core"]).get("core");
+    if (!core) throw new Error("core service is missing");
+    assertAwsSecretValues(config, core);
+  });
   if (failures.length) throw new CliError(`doctor failed:\n${failures.map((failure) => `  - ${failure}`).join("\n")}`);
-  const runtimeNames = ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"] as const;
-  const priorRuntime = new Map(runtimeNames.map((name) => [name, process.env[name]]));
-  for (const name of runtimeNames) {
-    const stored = runtimeSecrets.get(name);
-    if (stored !== undefined) process.env[name] = stored;
-    else delete process.env[name];
-  }
-  try {
-    await doctorCommon(config, runtimeSecrets, { configDir, requiredSecretValues: probe.pending.length === 0 });
-  } finally {
-    for (const name of runtimeNames) {
-      const prior = priorRuntime.get(name);
-      if (prior === undefined) delete process.env[name];
-      else process.env[name] = prior;
-    }
-  }
+  await doctorCommon(config, new Map(), { configDir });
   ok("all AWS deployment prerequisites are ready");
 }
 
@@ -3089,6 +3245,11 @@ async function checkLive(
   }
   const arns = secretArns(config);
   const states = describedServices(config, services);
+  try {
+    assertAwsSecretValues(config, states.get("core")!);
+  } catch (error) {
+    failures.push(`secret values: ${errMessage(error)}`);
+  }
   const manifest = currentDeploymentManifest(aws);
   if (!manifest)
     throw new CliError("live drift detected: no current AWS deployment manifest", { clause: "aws.live-drift" });

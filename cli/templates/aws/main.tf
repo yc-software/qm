@@ -349,7 +349,10 @@ resource "aws_iam_role_policy" "github_deploy" {
         Sid      = "RunDeploymentCanaries"
         Effect   = "Allow"
         Action   = ["ecs:RunTask"]
-        Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.services["core"].ecs_service}:*"]
+        Resource = [
+          "arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.services["core"].ecs_service}:*",
+          "arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.cluster_name}-secret-validation:*"
+        ]
         Condition = {
           ArnEquals = { "ecs:cluster" = aws_ecs_cluster.this.arn }
         }
@@ -419,7 +422,6 @@ resource "aws_iam_role_policy" "github_deploy" {
         Effect = "Allow"
         Action = [
           "secretsmanager:DescribeSecret",
-          "secretsmanager:GetSecretValue",
           "secretsmanager:PutSecretValue"
         ]
         Resource = [for secret in aws_secretsmanager_secret.contract : secret.arn]
@@ -450,6 +452,12 @@ resource "aws_iam_role_policy" "github_deploy" {
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:PutObject"]
         Resource = ["${aws_s3_bucket.objects.arn}/deployment/layers/*"]
+      },
+      {
+        Sid      = "ManagePrivateCoreRequests"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Resource = ["${aws_s3_bucket.objects.arn}/deployment/core-requests/*"]
       },
       {
         Sid      = "ManageMicrovmBuildArtifacts"
@@ -805,6 +813,39 @@ resource "aws_ecs_task_definition" "bootstrap" {
   }
   container_definitions = jsonencode([{ name = each.key, image = "public.ecr.aws/docker/library/alpine:3.20", essential = true, command = ["sh", "-c", "while true; do nc -l -p ${each.value.internal_port} -e echo ok; done"], portMappings = [{ containerPort = each.value.internal_port }], logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.service[each.key].name, awslogs-region = var.region, awslogs-stream-prefix = each.key } } }])
   tags                  = local.tags
+}
+
+resource "aws_ecs_task_definition" "secret_validation" {
+  family                   = "${var.cluster_name}-secret-validation"
+  cpu                      = 256
+  memory                   = 512
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  execution_role_arn       = local.default_execution_role_arn
+  task_role_arn            = local.default_task_role_arn
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+  container_definitions = jsonencode([{
+    name      = "secret-validation"
+    image     = "public.ecr.aws/docker/library/alpine:3.20"
+    essential = true
+    command   = ["sh", "-c", "exit 1"]
+    secrets = [for name in sort(tolist(var.required_secret_names)) : {
+      name      = name
+      valueFrom = aws_secretsmanager_secret.contract[name].arn
+    }]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.service["core"].name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "secret-validation"
+      }
+    }
+  }])
+  tags = local.tags
 }
 
 resource "aws_ecs_service" "service" {

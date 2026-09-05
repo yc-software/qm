@@ -48,7 +48,11 @@ function fakeAws(
   dir: string,
   script: string,
   frontService: "core" | "portal" = "portal",
-  ingress: { coreHosts?: string[]; targetGroups?: Partial<Record<"core" | "portal", string>> } = {},
+  ingress: {
+    coreHosts?: string[];
+    targetGroups?: Partial<Record<"core" | "portal", string>>;
+    currentSecret?: boolean;
+  } = {},
 ): { log: string; restore: () => void } {
   const bin = join(dir, "aws-fake");
   const log = join(dir, "aws.log");
@@ -83,6 +87,7 @@ function fakeAws(
     bin,
     `#!/usr/bin/env node
 const fs = require("node:fs");
+const { createHash } = require("node:crypto");
 const a = process.argv.slice(2).join(" ");
 fs.appendFileSync(${JSON.stringify(log)}, a + "\\n");
 if (a.includes("sts get-caller-identity")) console.log(process.env.AWS_FAKE_ACCOUNT || "123456789012");
@@ -113,6 +118,7 @@ else if (a.includes("elbv2 describe-rules")) {
   console.log(JSON.stringify({ Rules: rules }));
 }
 else if (a.includes("elbv2 describe-target-health")) console.log(JSON.stringify({ TargetHealthDescriptions: [{ TargetHealth: { State: process.env.AWS_FAKE_UNHEALTHY_TARGET === "1" ? "unhealthy" : "healthy" } }] }));
+else if (a.includes("secretsmanager describe-secret")) console.log(JSON.stringify({ ARN: "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf", VersionIdsToStages: ${JSON.stringify(ingress.currentSecret === false ? { old: ["AWSPREVIOUS"] } : { current: ["AWSCURRENT"] })} }));
 else {
 ${script}
 }
@@ -181,6 +187,10 @@ function statefulAws(
       return pinned ? [[name, pinned]] : [];
     }),
   );
+  const requiredSecretNames = computedSecrets(configured)
+    .filter((secret) => secret.required)
+    .map((secret) => secret.name)
+    .sort();
   const tgName = (name: "core" | "portal"): string =>
     targetGroups[name] ??
     `acme-qm-${name.replaceAll("-", "").slice(0, 4)}-${createHash("sha1").update(`acme-qm:${name}`).digest("hex").slice(0, 6)}`;
@@ -269,12 +279,41 @@ else if (a.includes("ecs describe-services")) {
     return [{ serviceName: name, status: "ACTIVE", desiredCount: service.desiredCount, runningCount: ${JSON.stringify(opts.drainRollout ?? false)} ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-test"], securityGroups: ["sg-test"], assignPublicIp: "DISABLED" } }, deployments, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)} }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }] }];
   }), failures: names.filter((name) => !s.services[name]).map((name) => ({ arn: name, reason: "MISSING" })) }));
 }
-else if (a.includes("ecs run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/canary" }] }));
+else if (a.includes("ecs run-task")) {
+  const override = JSON.parse(after("--overrides"));
+  const containerOverride = override.containerOverrides?.[0] || {};
+  const environment = Object.fromEntries((containerOverride.environment || []).map((item) => [item.name, item.value]));
+  const requestId = environment.QM_AWS_CORE_REQUEST_ID;
+  if (requestId) {
+    const requestKey = "deployment/core-requests/" + requestId + "/request.json";
+    const responseKey = "deployment/core-requests/" + requestId + "/response.json";
+    const request = JSON.parse(s.objects[requestKey]);
+    s.privateCoreMethods = [...(s.privateCoreMethods || []), request.method];
+    if (request.method === "PUT") s.liveLayerBody = request.body;
+    const body = request.method === "PUT"
+      ? JSON.stringify({ version: 1, contentHash: createHash("sha256").update(request.body).digest("hex"), durable: true, status: "applied" })
+      : (() => {
+          const layer = s.liveLayerBody || ${JSON.stringify(EMPTY_LAYER_BODY)};
+          const hash = createHash("sha256").update(layer).digest("hex");
+          return JSON.stringify({ bundle: JSON.parse(layer), contentHash: hash, runtimeContentHash: hash, status: "applied" });
+        })();
+    s.objects[responseKey] = JSON.stringify({ version: 1, ok: true, status: 200, body });
+    delete s.objects[requestKey];
+  }
+  s.lastTaskContainer = containerOverride.name;
+  s.lastTaskWasPrivate = Boolean(requestId);
+  save();
+  console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/canary" }] }));
+}
 else if (a.includes("ecs wait tasks-stopped")) console.log("");
-else if (a.includes("ecs describe-tasks")) console.log(JSON.stringify({ tasks: [{ stoppedReason: "Essential container exited", containers: [{ name: "core", exitCode: Number(process.env.AWS_FAKE_CANARY_EXIT || "0"), reason: process.env.AWS_FAKE_CANARY_REASON }] }] }));
+else if (a.includes("ecs describe-tasks")) {
+  const secretValidation = s.lastTaskContainer === "secret-validation";
+  console.log(JSON.stringify({ tasks: [{ stoppedReason: process.env.AWS_FAKE_STOPPED_REASON || "Essential container exited", containers: [{ name: s.lastTaskContainer || "core", exitCode: secretValidation ? Number(process.env.AWS_FAKE_SECRET_VALIDATION_EXIT || "0") : (s.lastTaskWasPrivate ? 0 : Number(process.env.AWS_FAKE_CANARY_EXIT || "0")), reason: process.env.AWS_FAKE_CANARY_REASON }] }] }));
+}
 else if (a.includes("ecs describe-task-definition")) {
   const id = after("--task-definition");
-  console.log(JSON.stringify({ taskDefinition: s.definitions[id] }));
+  if (id === ${JSON.stringify(`${configured.aws!.cluster}-secret-validation`)}) console.log(JSON.stringify({ taskDefinition: { taskDefinitionArn: "arn:aws:ecs:us-west-2:123456789012:task-definition/${configured.aws!.cluster}-secret-validation:1", status: "ACTIVE", containerDefinitions: [{ name: "secret-validation", secrets: ${JSON.stringify(requiredSecretNames.map((name) => ({ name })))} }] } }));
+  else console.log(JSON.stringify({ taskDefinition: s.definitions[id] }));
 }
 else if (a.includes("ecs register-task-definition")) {
   const file = after("--cli-input-json").slice("file://".length);
@@ -333,6 +372,16 @@ else if (a.includes("s3api get-object")) {
   if (body === undefined) process.exit(5);
   const output = args[args.indexOf("--key") + 2];
   fs.writeFileSync(output, body);
+  console.log("");
+}
+else if (a.includes("s3api head-object")) {
+  const body = s.objects[after("--key")];
+  if (body === undefined) process.exit(5);
+  console.log(JSON.stringify({ ContentLength: Buffer.byteLength(body) }));
+}
+else if (a.includes("s3api delete-object")) {
+  delete s.objects[after("--key")];
+  save();
   console.log("");
 }
 else if (a.includes("rds describe-db-instances")) console.log(JSON.stringify({ DBInstances: [{ DBInstanceStatus: process.env.AWS_FAKE_DB_STATUS ?? "available", BackupRetentionPeriod: Number(process.env.AWS_FAKE_DB_RETENTION ?? "7") }] }));
@@ -951,12 +1000,7 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
   const bothHosts = { apiUrl: "https://api.agent.acme.example", appsDomain: "apps.agent.acme.example" };
   const run = async (
     configured: QmConfig,
-    env?:
-      | "AWS_FAKE_NO_CORE_RULE"
-      | "AWS_FAKE_EXTRA_RULE"
-      | "AWS_FAKE_WRONG_RULE_TARGET"
-      | "AWS_FAKE_WRONG_RULE_HOST"
-      | "AWS_FAKE_PUBLIC_API_URL",
+    env?: "AWS_FAKE_NO_CORE_RULE" | "AWS_FAKE_EXTRA_RULE" | "AWS_FAKE_WRONG_RULE_TARGET" | "AWS_FAKE_WRONG_RULE_HOST",
     expected?: RegExp,
     envValue = "1",
   ): Promise<void> => {
@@ -966,8 +1010,7 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
     try {
       if (expected) await assert.rejects(() => awsUp(configured, dir, { dryRun: true }), expected);
       else await awsUp(configured, dir, { dryRun: true });
-      if (!expected || (env && env !== "AWS_FAKE_PUBLIC_API_URL"))
-        assert.match(readFileSync(fake.log, "utf8"), /elbv2 describe-rules/);
+      if (!expected) assert.match(readFileSync(fake.log, "utf8"), /elbv2 describe-rules/);
     } finally {
       if (env) {
         if (prior === undefined) delete process.env[env];
@@ -998,12 +1041,6 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
       hostSplitConfig({ appsDomain: "*.apps.agent.acme.example" }),
       undefined,
       /env\.core\.DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN.* does not derive a valid ALB host-header hostname/,
-    );
-    await run(
-      hostSplitConfig(bothHosts),
-      "AWS_FAKE_PUBLIC_API_URL",
-      /PUBLIC_API_URL must equal the configured HTTPS apiUrl/,
-      config.publicUrl,
     );
   } finally {
     process.env.PATH = priorPath;
@@ -1467,22 +1504,60 @@ console.log("");`,
   }
 });
 
-test("AWS deploy requires PUBLIC_API_URL to equal the declared HTTPS public URL", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-public-api-url-"));
-  const fake = statefulAws(dir, oneServiceConfig());
-  const prior = process.env.AWS_FAKE_PUBLIC_API_URL;
-  process.env.AWS_FAKE_PUBLIC_API_URL = "http://agent.acme.example";
+test("AWS plan, up, and live check avoid direct plaintext secret retrieval by the CLI runner", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secret-metadata-"));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, "#!/usr/bin/env node\n");
+  chmodSync(dockerBin, 0o755);
+  const single = oneServiceConfig();
+  const fake = statefulAws(dir, single);
+  const priorPath = process.env.PATH;
+  const priorValidationExit = process.env.AWS_FAKE_SECRET_VALIDATION_EXIT;
+  process.env.PATH = `${dir}:${priorPath}`;
   try {
-    await assert.rejects(
-      () => awsUp(oneServiceConfig(), dir, { yes: true }),
-      /PUBLIC_API_URL must be a valid HTTPS URL equal to the configured publicUrl/,
+    await awsUp(single, dir, { dryRun: true });
+    const planCalls = readFileSync(fake.log, "utf8");
+    assert.match(planCalls, /ecs describe-task-definition .*acme-qm-secret-validation/);
+    assert.doesNotMatch(
+      planCalls,
+      /ecs (?:run-task|register-task-definition|update-service)|s3api put-object|dynamodb put-item|rds create-db-snapshot|ecr put-image/,
     );
+    await awsUp(single, dir, { yes: true });
+    await awsCheckLive(single, { report: false });
     const calls = readFileSync(fake.log, "utf8");
-    assert.match(calls, /get-secret-value .*PUBLIC_API_URL .*--query SecretString/);
-    assert.doesNotMatch(calls, /dynamodb put-item|ecr get-login-password|ecs update-service/);
+    assert.match(calls, /secretsmanager describe-secret/);
+    assert.doesNotMatch(calls, /secretsmanager get-secret-value/);
+    assert.match(calls, /s3api put-object .*deployment\/core-requests\//);
+    assert.match(calls, /s3api head-object .*deployment\/core-requests\//);
+    assert.match(calls, /s3api get-object .*deployment\/core-requests\//);
+    assert.match(calls, /s3api delete-object .*deployment\/core-requests\//);
+    assert.match(calls, /ecs run-task .*QM_AWS_CORE_REQUEST_ID/);
+    const state = JSON.parse(readFileSync(fake.state, "utf8"));
+    assert.deepEqual(
+      Object.keys(state.objects).filter((key) => key.startsWith("deployment/core-requests/")),
+      [],
+    );
+    const required = computedSecrets(single)
+      .filter((secret) => secret.required)
+      .map((secret) => secret.name)
+      .sort();
+    process.env.AWS_FAKE_SECRET_VALIDATION_EXIT = String(10 + required.indexOf("CORE_SIGNING_SECRET"));
+    const beforePlan = readFileSync(fake.log, "utf8").split("\n").length;
+    await assert.doesNotReject(() => awsUp(single, dir, { dryRun: true }));
+    const badValuePlanCalls = readFileSync(fake.log, "utf8").split("\n").slice(beforePlan).join("\n");
+    assert.doesNotMatch(badValuePlanCalls, /ecs run-task/);
+    await assert.rejects(
+      () => awsUp(single, dir, { yes: true }),
+      /required AWS secret CORE_SIGNING_SECRET has a missing, placeholder, weak, or mismatched value/,
+    );
+    await assert.rejects(
+      () => awsCheckLive(single, { report: false }),
+      /secret values: required AWS secret CORE_SIGNING_SECRET has a missing, placeholder, weak, or mismatched value/,
+    );
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_PUBLIC_API_URL;
-    else process.env.AWS_FAKE_PUBLIC_API_URL = prior;
+    if (priorValidationExit === undefined) delete process.env.AWS_FAKE_SECRET_VALIDATION_EXIT;
+    else process.env.AWS_FAKE_SECRET_VALIDATION_EXIT = priorValidationExit;
+    process.env.PATH = priorPath;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1518,38 +1593,30 @@ test("AWS deploy rejects required secret containers without an AWSCURRENT value 
   const fake = fakeAws(
     dir,
     `
-if (a.includes("ecs describe-services")) console.log(JSON.stringify({ services: ${JSON.stringify(Object.entries(config.aws!.services).map(([name, spec]) => ({ serviceName: spec.ecsService, loadBalancers: name === "portal" ? [{ targetGroupArn: targetArn }] : [] })))} }));
-else if (a.includes("secretsmanager get-secret-value")) {
-  console.error("ResourceNotFoundException: Secrets Manager can't find the specified secret value");
-  process.exit(1);
-}
+if (a.includes("ecs describe-services")) console.log(JSON.stringify({ services: ${JSON.stringify(
+      Object.entries(config.aws!.services).map(([name, spec]) => ({
+        serviceName: spec.ecsService,
+        loadBalancers: name === "portal" ? [{ targetGroupArn: targetArn }] : [],
+        tags: [
+          { key: "Deployment", value: config.orgId },
+          { key: "ManagedBy", value: "terraform" },
+        ],
+      })),
+    )} }));
 console.log("");`,
+    "portal",
+    { currentSecret: false },
   );
   try {
-    await assert.rejects(() => awsUp(config, process.cwd(), { yes: true }), /ResourceNotFoundException/);
+    await assert.rejects(
+      () => awsUp(config, process.cwd(), { yes: true }),
+      /required AWS secret .* has no AWSCURRENT value/,
+    );
     const calls = readFileSync(fake.log, "utf8");
-    assert.match(calls, /secretsmanager get-secret-value/);
+    assert.match(calls, /secretsmanager describe-secret/);
+    assert.doesNotMatch(calls, /secretsmanager get-secret-value/);
     assert.doesNotMatch(calls, /dynamodb put-item|ecr get-login-password|ecr describe-images|ecs update-service/);
   } finally {
-    fake.restore();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("AWS deploy rejects weak signing keys before mutation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-weak-secret-"));
-  const fake = statefulAws(dir, oneServiceConfig());
-  const prior = process.env.AWS_FAKE_SECRET_VALUE;
-  process.env.AWS_FAKE_SECRET_VALUE = "short";
-  try {
-    await assert.rejects(
-      () => awsUp(oneServiceConfig(), dir, { yes: true }),
-      /required AWS secret CORE_SIGNING_SECRET has no usable/,
-    );
-    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb put-item|ecr describe-images|ecs update-service/);
-  } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_SECRET_VALUE;
-    else process.env.AWS_FAKE_SECRET_VALUE = prior;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
@@ -2601,34 +2668,14 @@ test("AWS rollback restores the recorded layer without reading the broken curren
   state.objects[oldLayer.key] = oldBody;
   state.objects[currentLayer.key] = currentBody;
   writeFileSync(fake.state, JSON.stringify(state));
-  const priorFetch = globalThis.fetch;
-  const priorSecret = process.env.CORE_SIGNING_SECRET;
-  const bodies: string[] = [];
-  process.env.CORE_SIGNING_SECRET = "test-signing-secret";
-  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-    if (init?.method !== "PUT") {
-      return new Response("current release is broken", { status: 503 });
-    }
-    const body = String(init.body ?? "");
-    bodies.push(body);
-    return new Response(
-      JSON.stringify({
-        version: 3,
-        contentHash: createHash("sha256").update(body).digest("hex"),
-        durable: true,
-        status: "applied",
-      }),
-      { status: 200 },
-    );
-  }) as typeof fetch;
   try {
     await awsRollback(single, undefined, { configDir: dir });
-    assert.deepEqual(bodies, [oldBody]);
-    assert.equal(JSON.parse(readFileSync(fake.state, "utf8")).dynamo["deployment/current"].manifestId.S, "old");
+    const after = JSON.parse(readFileSync(fake.state, "utf8"));
+    assert.equal(after.liveLayerBody, oldBody);
+    assert.deepEqual(after.privateCoreMethods, ["PUT"]);
+    assert.equal(after.dynamo["deployment/current"].manifestId.S, "old");
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /secretsmanager get-secret-value/);
   } finally {
-    globalThis.fetch = priorFetch;
-    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
-    else process.env.CORE_SIGNING_SECRET = priorSecret;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
@@ -2879,7 +2926,7 @@ console.log("");`,
   }
 });
 
-test("AWS live check rejects downed services and classifies probe errors as live drift", async () => {
+test("AWS live check rejects downed services and classifies the failure as live drift", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-live-runtime-"));
   const single = oneServiceConfig();
   const taskArn = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
@@ -2897,21 +2944,6 @@ test("AWS live check rejects downed services and classifies probe errors as live
     );
   } finally {
     fake.restore();
-  }
-  const denied = fakeAws(
-    dir,
-    `if (a.includes("get-secret-value")) { console.error("AccessDeniedException"); process.exit(1); } console.log("");`,
-  );
-  try {
-    await assert.rejects(
-      () => awsCheckLive(single),
-      (error: unknown) =>
-        error instanceof Error &&
-        /AccessDeniedException/.test(error.message) &&
-        (error as { clause?: string }).clause === "aws.live-drift",
-    );
-  } finally {
-    denied.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -3020,7 +3052,6 @@ test("AWS live check uses the package-pinned source image without consulting mut
   );
   const priorImageState = process.env.AWS_FAKE_IMAGE_STATE;
   const priorAlbDns = process.env.AWS_FAKE_ALB_DNS;
-  const priorSecretValue = process.env.AWS_FAKE_SECRET_VALUE;
   const state = JSON.parse(readFileSync(fake.state, "utf8"));
   const secretArn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf";
   const arns = Object.fromEntries(computedSecrets(single).map((secret) => [secret.name, secretArn]));
@@ -3046,10 +3077,7 @@ test("AWS live check uses the package-pinned source image without consulting mut
   process.env.PATH = `${dir}:${priorPath}`;
   try {
     await assert.doesNotReject(() => awsCheckLive(single, { report: false }));
-    process.env.AWS_FAKE_SECRET_VALUE = "short";
-    await assert.rejects(() => awsCheckLive(single, { report: false }), /secret CORE_SIGNING_SECRET/);
-    if (priorSecretValue === undefined) delete process.env.AWS_FAKE_SECRET_VALUE;
-    else process.env.AWS_FAKE_SECRET_VALUE = priorSecretValue;
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /secretsmanager get-secret-value/);
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecr describe-images/);
     assert.doesNotMatch(readFileSync(dockerLog, "utf8"), /buildx imagetools inspect/);
     const overridden: QmConfig = {
@@ -3092,8 +3120,6 @@ test("AWS live check uses the package-pinned source image without consulting mut
       /manifest label release does not match configured release other-release/,
     );
   } finally {
-    if (priorSecretValue === undefined) delete process.env.AWS_FAKE_SECRET_VALUE;
-    else process.env.AWS_FAKE_SECRET_VALUE = priorSecretValue;
     process.env.PATH = priorPath;
     if (priorImageState === undefined) delete process.env.AWS_FAKE_IMAGE_STATE;
     else process.env.AWS_FAKE_IMAGE_STATE = priorImageState;

@@ -76,6 +76,16 @@ so it prints that snapshot as the matching data restore point
 (`aws rds restore-db-instance-from-db-snapshot`). Pre-deploy snapshots are
 pruned to a bounded count; `aws.predeployDbSnapshot: false` opts out.
 
+AWS `plan` performs metadata and static validation only and never starts an ECS
+task. The CLI runner uses Secrets Manager metadata and does not directly retrieve
+plaintext secret values during `plan`, `up`, or `check --live`. For `up` and live
+checks, ECS injects required values into a stack-scoped validation task, which
+returns only a bounded status. This limits accidental exposure through the CLI
+transport; it is not a defense against a malicious or compromised deployment
+principal. A principal that can deploy arbitrary runtime code and pass a role
+authorized to read runtime secrets can exfiltrate those secrets, so workflow
+review and least-privilege control of that principal remain required.
+
 `sandbox build` is a local validation build. `sandbox publish` pushes through the
 configured OCI registry, resolves the image and base digests, records the base pin in
 the config and the image pin in the config (docker/fly) or the durable AWS deployment

@@ -220,6 +220,10 @@ test(
         ),
       );
       const cluster = "acme-aws-qm";
+      const tfvars = readFileSync(join(awsDeployment, "infra", "terraform.tfvars"), "utf8");
+      const requiredSecretNames = JSON.parse(
+        tfvars.match(/^required_secret_names\s*=\s*(\[[\s\S]*?\n\])/m)?.[1] ?? "[]",
+      ) as string[];
       const portalTarget = `arn:aws:elasticloadbalancing:us-west-2:000000000000:targetgroup/${cluster}-port-${createHash("sha1").update(`${cluster}:portal`).digest("hex").slice(0, 6)}/1`;
       const fakeAws = join(dir, "aws");
       writeFileSync(
@@ -242,20 +246,23 @@ else if (command === "ecs describe-services") {
     status: "ACTIVE",
     desiredCount: 0,
     taskDefinition: "arn:task/" + serviceName + ":1",
+    networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet"], securityGroups: ["sg"], assignPublicIp: "DISABLED" } },
     loadBalancers: serviceName.endsWith("-portal") ? [{ targetGroupArn: ${JSON.stringify(portalTarget)} }] : [],
     tags: [{ key: "Deployment", value: "acme-aws" }, { key: "ManagedBy", value: "terraform" }],
   })) });
-} else if (command === "ecs describe-task-definition") json({ taskDefinition: { family: "legacy", containerDefinitions: [] } });
+} else if (command === "ecs describe-task-definition" && option("--task-definition") === ${JSON.stringify(`${cluster}-secret-validation`)}) json({ taskDefinition: { taskDefinitionArn: "arn:task/secret-validation:1", status: "ACTIVE", containerDefinitions: [{ name: "secret-validation", secrets: ${JSON.stringify(requiredSecretNames.map((name) => ({ name })))} }] } });
+else if (command === "ecs describe-task-definition") json({ taskDefinition: { family: "legacy", containerDefinitions: [] } });
+else if (command === "ecs run-task") json({ tasks: [{ taskArn: "arn:task/canary" }] });
+else if (command === "ecs wait") process.stdout.write("");
+else if (command === "ecs describe-tasks") json({ tasks: [{ containers: [{ name: "secret-validation", exitCode: 0 }] }] });
 else if (command === "lambda-microvms get-microvm-image") json({ imageArn: "arn:aws:lambda:us-west-2:000000000000:microvm-image:acme-aws-qm-sandbox" });
 else if (command === "lambda-microvms list-microvm-image-versions") json({ items: [{ imageVersion: "1", state: "SUCCESSFUL", status: "ACTIVE" }] });
-else if (command === "secretsmanager get-secret-value") {
+else if (command === "secretsmanager describe-secret") {
   const name = option("--secret-id").split("/").at(-1);
-  const value = name === "ADMIN_GRANTS" ? "admin@example.com:org_admin"
-    : name === "PUBLIC_API_URL" ? "https://acme-aws.example.com"
-    : name.endsWith("SIGNING_SECRET") || name === "CONNECTOR_SECRET_KEY" ? "a".repeat(64)
-    : "fixture-" + name.toLowerCase();
-  if (args.includes("--query")) process.stdout.write(value + "\\n");
-  else json({ ARN: "arn:secret/" + name, SecretString: value });
+  json({ ARN: "arn:secret/" + name, VersionIdsToStages: { current: ["AWSCURRENT"] } });
+} else if (command === "secretsmanager get-secret-value") {
+  process.stderr.write("CLI runner must not directly retrieve plaintext secret values\\n");
+  process.exit(19);
 } else json({});
 `,
       );
