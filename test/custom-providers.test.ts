@@ -5,6 +5,7 @@ import {
   resolveCustomModel,
   isCustomModelId,
   customModelCatalog,
+  customModelsJson,
   validateCustomProviderSpec,
 } from "../src/model/custom-providers.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
@@ -87,13 +88,47 @@ test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, baseUrl: "https://x?y=1" }), /query/);
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, models: [] }), /at least one model/);
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a" }, { id: "a" }] }), /duplicate/);
+  assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a", modalities: [] }] }), /modalities/);
+  assert.throws(
+    () => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a", modalities: ["image"] }] }),
+    /modalities/,
+  );
+  assert.throws(
+    () => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a", modalities: ["text", "text"] }] }),
+    /modalities/,
+  );
+  assert.throws(
+    () => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a", modalities: ["text", "video" as never] }] }),
+    /modalities/,
+  );
 });
 
-test("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", async () => {
+test("custom models default to text-only; declared modalities reach the runtime model and models.json", () => {
+  setCustomProviders([
+    {
+      ...GATEWAY,
+      models: [{ id: "acme-large" }, { id: "acme-vision", modalities: ["text", "image"] }],
+    },
+  ]);
+  assert.deepEqual(resolveCustomModel("acme-large")?.input, ["text"]);
+  assert.deepEqual(resolveCustomModel("acme-vision")?.input, ["text", "image"]);
+  const fragment = customModelsJson() as {
+    providers: Record<string, { models: Array<{ id: string; input: string[] }> }>;
+  };
+  const entries = fragment.providers["acme-gateway"]!.models;
+  assert.deepEqual(entries.find((m) => m.id === "acme-large")?.input, ["text"]);
+  assert.deepEqual(entries.find((m) => m.id === "acme-vision")?.input, ["text", "image"]);
+});
+
+test("store round-trip preserves model capabilities, encrypts the key, and delete disables", async () => {
   const backing = createMemoryMap<StoredCustomProvider>();
   const store = createCustomProviderStore({ backing, keyMaterial: "test-key-material" });
+  const gateway = {
+    ...GATEWAY,
+    models: [{ ...GATEWAY.models[0]!, modalities: ["text", "image"] as ("text" | "image")[] }],
+  };
 
-  await store.upsert(GATEWAY, "sk-secret-123", "admin@example.com");
+  await store.upsert(gateway, "sk-secret-123", "admin@example.com");
   const statuses = await store.statuses();
   assert.equal(statuses.length, 1);
   assert.equal(statuses[0]!.hasKey, true);
@@ -104,10 +139,10 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
   assert.equal(raw!.apiKeyEnc!.includes("sk-secret-123"), false);
 
   assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
-  assert.deepEqual(await store.enabled(), [GATEWAY]);
+  assert.deepEqual(await store.enabled(), [gateway]);
 
   // Upsert without a key keeps the existing one.
-  await store.upsert({ ...GATEWAY, name: "Renamed" }, undefined, "admin@example.com");
+  await store.upsert({ ...gateway, name: "Renamed" }, undefined, "admin@example.com");
   assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
 
   assert.equal(await store.delete("acme-gateway", "admin@example.com"), true);
@@ -123,6 +158,40 @@ test("store validates specs on upsert", async () => {
     keyMaterial: "k",
   });
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
+});
+
+test("store normalizes legacy and malformed persisted modalities without blocking hydration", async () => {
+  const backing = createMemoryMap<StoredCustomProvider>();
+  await backing.put("legacy-vision", {
+    ...GATEWAY,
+    id: "legacy-vision",
+    models: [{ id: "vision", modalities: { input: ["text", "image"], output: ["text"] } }],
+    updatedAt: 1,
+    updatedBy: "admin@example.com",
+  } as unknown as StoredCustomProvider);
+  await backing.put("legacy-invalid", {
+    ...GATEWAY,
+    id: "legacy-invalid",
+    models: [{ id: "safe-default", modalities: { input: ["image"] } }],
+    updatedAt: 2,
+    updatedBy: "admin@example.com",
+  } as unknown as StoredCustomProvider);
+  const store = createCustomProviderStore({ backing, keyMaterial: "k" });
+
+  const enabled = await store.enabled();
+  assert.deepEqual(enabled.find((provider) => provider.id === "legacy-vision")?.models[0]?.modalities, [
+    "text",
+    "image",
+  ]);
+  assert.deepEqual(enabled.find((provider) => provider.id === "legacy-invalid")?.models[0]?.modalities, ["text"]);
+  assert.deepEqual(
+    (await store.statuses()).find((provider) => provider.id === "legacy-vision")?.models[0]?.modalities,
+    ["text", "image"],
+  );
+
+  setCustomProviders(enabled);
+  assert.deepEqual(resolveCustomModel("vision")?.input, ["text", "image"]);
+  assert.deepEqual(resolveCustomModel("safe-default")?.input, ["text"]);
 });
 
 test("registered models surface in the catalog and vanish on unregister", () => {

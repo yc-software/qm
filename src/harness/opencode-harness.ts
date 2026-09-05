@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import { isCustomModelId } from "../model/custom-providers.ts";
+import { customModelInputModalities, isCustomModelId } from "../model/custom-providers.ts";
 import type { CustomProviderSpec } from "../model/custom-providers.ts";
 import { DEFAULT_AGENT_MODEL_ID, resolveModel } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
@@ -670,6 +670,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
                   m.id,
                   {
                     name: m.name ?? m.id,
+                    modalities: { input: customModelInputModalities(m), output: ["text"] },
                     ...(m.contextWindow || m.maxTokens
                       ? {
                           limit: {

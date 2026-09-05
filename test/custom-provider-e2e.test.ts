@@ -13,7 +13,8 @@ import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { oneShot } from "../src/harness/pi-harness.ts";
+import { createPiHarness, oneShot } from "../src/harness/pi-harness.ts";
+import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { resolveModel, modelSupportedByHarness, modelServiceable } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
@@ -24,7 +25,7 @@ const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alic
 
 test("QA: full custom-provider lifecycle against a live fake upstream", async () => {
   // --- fake OpenAI-compatible upstream ---
-  const seen: Array<{ path: string; auth: string | undefined; model?: string }> = [];
+  const seen: Array<{ path: string; auth: string | undefined; model?: string; body?: unknown }> = [];
   const upstream = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -40,7 +41,8 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
         return res.end(JSON.stringify({ data: [{ id: "qa-chat" }] }));
       }
       if (req.url?.endsWith("/chat/completions")) {
-        record.model = (JSON.parse(body) as { model?: string }).model;
+        record.body = JSON.parse(body);
+        record.model = (record.body as { model?: string }).model;
         seen.push(record);
         res.writeHead(200, { "content-type": "text/event-stream" });
         const chunk = (delta: object, finish: string | null) =>
@@ -127,7 +129,17 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
         protocol: "openai",
         baseUrl: upstreamUrl,
         apiKey: "sk-qa-good",
-        models: [{ id: "qa-chat", name: "QA Chat", contextWindow: 64000, maxTokens: 4096 }],
+        models: [
+          {
+            id: "qa-chat",
+            name: "QA Chat",
+            contextWindow: 64000,
+            maxTokens: 4096,
+            modalities: ["text", "image"],
+            input: 1.5,
+            output: 6,
+          },
+        ],
       }),
     });
     assert.equal(r.status, 200);
@@ -166,6 +178,36 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     assert.equal(call!.model, "qa-chat");
     assert.equal(call!.auth, "Bearer sk-qa-good", "stored key was sent to the custom endpoint");
 
+    const imageHarness = createPiHarness({
+      modelId: "qa-chat",
+      resolveProviderKeys: async () => ({ qa: "sk-qa-good" }),
+      captureRequests: false,
+      turnWallClockMs: 5_000,
+    });
+    const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const imageTurn = {
+      session: { id: "qa-image" } as HarnessTurnInput["session"],
+      input: "describe this image",
+      images: [{ mimeType: "image/png", dataBase64: imageData }],
+      model: "qa-chat",
+      systemPrompt: "be concise",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: "org:test" as HarnessTurnInput["scopeLabel"],
+      orgScopeId: "org:test" as HarnessTurnInput["orgScopeId"],
+      emit: async (entry) =>
+        ({ ...entry, seq: 1, sessionId: "qa-image", createdAt: Date.now() }) as Awaited<
+          ReturnType<HarnessTurnInput["emit"]>
+        >,
+      recordModelCall: () => {},
+    } satisfies HarnessTurnInput;
+    const imageReply = await imageHarness.turns.runTurn(imageTurn);
+    assert.equal(imageReply.reply, "QA UPSTREAM REPLY");
+    const imageCall = seen.filter((item) => item.path.endsWith("/chat/completions")).at(-1);
+    const imagePayload = JSON.stringify(imageCall?.body);
+    assert.ok(imagePayload.includes(`data:image/png;base64,${imageData}`));
+    assert.doesNotMatch(imagePayload, /image omitted: model does not support images/);
+
     // 7. edit WITHOUT key keeps the stored key
     r = await api("/v1/admin/custom-providers/qa", {
       method: "PUT",
@@ -173,7 +215,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
         name: "QA Provider v2",
         protocol: "openai",
         baseUrl: upstreamUrl,
-        models: [{ id: "qa-chat" }],
+        models: [{ id: "qa-chat", modalities: ["text", "image"], input: 1.5, output: 6 }],
       }),
     });
     assert.equal(r.status, 200);

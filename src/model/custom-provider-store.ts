@@ -9,7 +9,7 @@
 
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
+import { customModelInputModalities, validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
 
 export interface StoredCustomProvider extends CustomProviderSpec {
   apiKeyEnc?: string;
@@ -42,7 +42,12 @@ function strip(saved: StoredCustomProvider): CustomProviderSpec {
     name: saved.name,
     protocol: saved.protocol,
     baseUrl: saved.baseUrl,
-    models: saved.models,
+    models: saved.models.map((model) => {
+      const stored = model as typeof model & { modalities?: unknown };
+      return stored.modalities === undefined
+        ? { ...model }
+        : { ...model, modalities: customModelInputModalities(stored) };
+    }),
   };
 }
 

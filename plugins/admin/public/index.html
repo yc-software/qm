@@ -3963,11 +3963,11 @@
                     placeholder="Write-only; blank on edit keeps the stored key"
                 /></label>
                 <label
-                  >Models (one per line: id | name | context | maxTokens)
+                  >Models (one per line: id | name | context | maxTokens | input modalities | input $/M | output $/M)
                   <textarea
                     id="custom-provider-models"
                     rows="3"
-                    placeholder="deepseek-chat | DeepSeek V3.2 | 128000 | 8192"
+                    placeholder="deepseek-chat | DeepSeek V3.2 | 128000 | 8192&#10;vision-model | Vision Model | 128000 | 8192 | text,image | 0 | 0"
                   ></textarea>
                 </label>
                 <label class="inline"
@@ -7435,13 +7435,35 @@
           .map((line) => line.trim())
           .filter(Boolean)
           .map((line) => {
-            const [id, name, contextWindow, maxTokens] = line.split("|").map((part) => part.trim());
+            const [id, name, contextWindow, maxTokens, modalities, input, output] = line
+              .split("|")
+              .map((part) => part.trim());
             const model = { id };
             if (name) model.name = name;
             if (contextWindow) model.contextWindow = Number(contextWindow);
             if (maxTokens) model.maxTokens = Number(maxTokens);
+            if (modalities) model.modalities = modalities.split(",").map((part) => part.trim());
+            if (input) model.input = Number(input);
+            if (output) model.output = Number(output);
             return model;
           });
+      }
+      function formatCustomModels(models) {
+        return models
+          .map((model) => {
+            const parts = [
+              model.id,
+              model.name,
+              model.contextWindow,
+              model.maxTokens,
+              Array.isArray(model.modalities) ? model.modalities.join(",") : "",
+              model.input,
+              model.output,
+            ];
+            while (parts.length > 1 && (parts[parts.length - 1] == null || parts[parts.length - 1] === "")) parts.pop();
+            return parts.map((part) => part ?? "").join(" | ");
+          })
+          .join("\n");
       }
       async function loadCustomProviders() {
         const res = await api("GET", "/api/custom-providers");
@@ -7473,11 +7495,7 @@
             $("custom-provider-protocol").value = provider.protocol;
             $("custom-provider-url").value = provider.baseUrl;
             $("custom-provider-key").value = "";
-            $("custom-provider-models").value = provider.models
-              .map((model) =>
-                [model.id, model.name, model.contextWindow, model.maxTokens].filter((part) => part != null).join(" | "),
-              )
-              .join("\n");
+            $("custom-provider-models").value = formatCustomModels(provider.models);
           };
           const remove = document.createElement("button");
           remove.className = "danger";
