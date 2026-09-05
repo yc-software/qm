@@ -213,7 +213,7 @@ test("the last org admin cannot be revoked (400 lock-out guard)", async () => {
   }
 });
 
-test("without DATABASE_URL grants are in-memory: the seed re-applies each boot; a runtime promotion is NOT durable", async () => {
+test("without DATABASE_URL grants are in-memory: bootstrap reapplies each boot; a runtime promotion is NOT durable", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "admin-grants-mem-"));
   const boot = () => {
     const built = buildApp(testConfig({ dataDir }));
@@ -255,21 +255,21 @@ test("without DATABASE_URL grants are in-memory: the seed re-applies each boot; 
   }
 });
 
-test("boot seed: durable mode never seeds the fictional admin-alice/admin-bob defaults", async () => {
-  const { bootAdminGrantSeed } = await import("../src/admin/admin-service.ts");
-  assert.deepEqual(bootAdminGrantSeed(undefined, "acme", true), [], "durable + no ADMIN_GRANTS → no fictional admins");
+test("boot grants: durable mode never adds the fictional admin-alice/admin-bob defaults", async () => {
+  const { bootAdminGrants } = await import("../src/admin/admin-service.ts");
+  assert.deepEqual(bootAdminGrants(undefined, "acme", true), [], "durable + no ADMIN_GRANTS → no fictional admins");
   assert.deepEqual(
-    bootAdminGrantSeed(undefined, "acme", false).map((g) => g.principalId),
+    bootAdminGrants(undefined, "acme", false).map((g) => g.principalId),
     ["admin-alice", "admin-bob"],
     "memory mode keeps the dev/test convenience defaults",
   );
   assert.deepEqual(
-    bootAdminGrantSeed("alice:org_admin", "acme", true).map((g) => g.principalId),
+    bootAdminGrants("alice:org_admin", "acme", true).map((g) => g.principalId),
     ["alice"],
     "ADMIN_GRANTS names the real admins in either mode",
   );
   assert.deepEqual(
-    bootAdminGrantSeed("slack:U123:org_admin", "acme", true).map((g) => g.principalId),
+    bootAdminGrants("slack:U123:org_admin", "acme", true).map((g) => g.principalId),
     ["slack:U123"],
     "principal ids may contain colons",
   );

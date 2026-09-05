@@ -1,6 +1,12 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
-import type { AdminGrant, AdminGrantPersistence, AdminRole } from "./admin-grant-store.ts";
+import {
+  ADMIN_GRANT_BOOTSTRAP_ACTOR,
+  ADMIN_GRANT_BOOTSTRAP_TIME,
+  type AdminGrant,
+  type AdminGrantPersistence,
+  type AdminRole,
+} from "./admin-grant-store.ts";
 
 function rowToGrant(r: Record<string, unknown>): AdminGrant {
   return {
@@ -46,6 +52,34 @@ export function createPostgresAdminGrantStore(connectionString: string): AdminGr
         scopeId,
         role,
       ]);
+    },
+    async reconcileBootstrap(grants) {
+      const principalIds = grants.map((grant) => grant.principalId);
+      const scopeIds = grants.map((grant) => grant.scopeId);
+      const roles = grants.map((grant) => grant.role);
+      await withPgTransaction(await pg.pool(), async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", ["admin-grants-bootstrap"]);
+        await client.query(
+          `INSERT INTO admin_grants (principal_id, scope_id, role, granted_by, created_at)
+           SELECT principal_id, scope_id, role, $4, $5
+           FROM unnest($1::text[], $2::text[], $3::text[]) AS desired(principal_id, scope_id, role)
+           ON CONFLICT (principal_id, scope_id, role) DO NOTHING`,
+          [principalIds, scopeIds, roles, ADMIN_GRANT_BOOTSTRAP_ACTOR, ADMIN_GRANT_BOOTSTRAP_TIME],
+        );
+        await client.query(
+          `DELETE FROM admin_grants AS stored
+           WHERE stored.granted_by = $4
+             AND stored.created_at = $5
+             AND NOT EXISTS (
+               SELECT 1
+               FROM unnest($1::text[], $2::text[], $3::text[]) AS desired(principal_id, scope_id, role)
+               WHERE desired.principal_id = stored.principal_id
+                 AND desired.scope_id = stored.scope_id
+                 AND desired.role = stored.role
+             )`,
+          [principalIds, scopeIds, roles, ADMIN_GRANT_BOOTSTRAP_ACTOR, ADMIN_GRANT_BOOTSTRAP_TIME],
+        );
+      });
     },
   };
 }

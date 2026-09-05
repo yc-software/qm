@@ -39,9 +39,9 @@ test("parseAdminGrants: parses org_admin grants and skips malformed / removed-ro
   assert.deepEqual(parseAdminGrants("", "default-org"), []);
 });
 
-test("ADMIN_GRANTS-seeded admins resolve and authorize org-wide; non-admins do not", async () => {
+test("ADMIN_GRANTS bootstrap admins resolve and authorize org-wide; non-admins do not", async () => {
   const store = createAdminGrantStore(createMemoryAdminGrantPersistence(), {
-    seed: parseAdminGrants("U1:org_admin", "default-org"),
+    bootstrap: parseAdminGrants("U1:org_admin", "default-org"),
   });
   const svc = createAdminService(store);
   const u1 = svc.resolveActor("U1@default-org");

@@ -342,7 +342,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
 
   phase("durability", "start");
   let databaseUrl = assembled.env.DATABASE_URL || envFileGet(join(worktree, ".env"), "DATABASE_URL");
-  let adminGrantsSeed = assembled.env.ADMIN_GRANTS || envFileGet(join(worktree, ".env"), "ADMIN_GRANTS");
+  let adminGrantsBootstrap = assembled.env.ADMIN_GRANTS || envFileGet(join(worktree, ".env"), "ADMIN_GRANTS");
   let sessionStore = "memory";
   let runStore = "memory";
   let localPg = false;
@@ -370,14 +370,14 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
       throw new Error(`could not connect to DATABASE_URL: ${errMessage(err)}`, { cause: err });
     });
     const grants = await adminGrantCount(worktree, databaseUrl);
-    if (grants === 0 && !adminGrantsSeed) {
+    if (!adminGrantsBootstrap) {
       if (localPg) {
         const principal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || assembled.env.USER || "dev-admin";
-        adminGrantsSeed = `${principal}:org_admin`;
-        log(`admin grants: local Postgres will seed ${principal}:org_admin if the store is empty`);
-      } else {
+        adminGrantsBootstrap = `${principal}:org_admin`;
+        log(`admin grants: local Postgres will reconcile ${principal}:org_admin as the bootstrap grant`);
+      } else if (grants === 0) {
         throw new Error(
-          "Postgres has no existing admin grants and ADMIN_GRANTS is unset. Set ADMIN_GRANTS=<principal>:org_admin for the first boot of this dev DB, or point DATABASE_URL at a DB that already has admin_grants.",
+          "Postgres has no existing admin grants and ADMIN_GRANTS is unset. Set ADMIN_GRANTS=<principal>:org_admin or point DATABASE_URL at a DB with an operator-created admin grant.",
         );
       }
     }
@@ -391,7 +391,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   completeDevSecuritySecrets(assembled.env, databaseUrl || worktree);
   const portalSessionSecret = assembled.env.PORTAL_SESSION_SECRET!;
   let portalDevPrincipal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || "";
-  if (!portalDevPrincipal && adminGrantsSeed) portalDevPrincipal = adminGrantsSeed.split(":")[0] ?? "";
+  if (!portalDevPrincipal && adminGrantsBootstrap) portalDevPrincipal = adminGrantsBootstrap.split(":")[0] ?? "";
   if (!portalDevPrincipal && durableAdminPrincipal) portalDevPrincipal = durableAdminPrincipal;
   if (!portalDevPrincipal) portalDevPrincipal = assembled.env.USER || "dev-admin";
   log(`portal auth: localhost bypass signs in as ${portalDevPrincipal}`);
@@ -408,7 +408,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     sessionStore,
     runStore,
     databaseUrl,
-    adminGrantsSeed,
+    adminGrantsBootstrap,
     coreSigningSecret: assembled.env.CORE_SIGNING_SECRET || "",
     portalSessionSecret,
     portalDevPrincipal,

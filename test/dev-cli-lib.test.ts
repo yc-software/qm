@@ -423,7 +423,7 @@ test("supervised children share the selected dev org", () => {
     sessionStore: "memory",
     runStore: "memory",
     databaseUrl: "",
-    adminGrantsSeed: "",
+    adminGrantsBootstrap: "admin@example.test:org_admin",
     coreSigningSecret: "",
     portalSessionSecret: "secret",
     portalDevPrincipal: "U1",
@@ -432,6 +432,7 @@ test("supervised children share the selected dev org", () => {
   const specs = buildChildSpecs(inputs);
   assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
   assert.equal(specs.find((spec) => spec.name === "core")!.env.CODEX_AUTH_FILE, "/tmp/codex-auth.json");
+  assert.equal(specs.find((spec) => spec.name === "core")!.env.ADMIN_GRANTS, "admin@example.test:org_admin");
   for (const spec of specs.filter((spec) => spec.name !== "core")) {
     assert.equal(spec.env.CODEX_AUTH_FILE, "");
     assert.equal(spec.env.HOME, undefined);
@@ -452,7 +453,7 @@ test("child specs omit Slack env when no Slack tokens are supplied", () => {
     sessionStore: "memory",
     runStore: "memory",
     databaseUrl: "",
-    adminGrantsSeed: "",
+    adminGrantsBootstrap: "",
     coreSigningSecret: "",
     portalSessionSecret: "secret",
     portalDevPrincipal: "U1",

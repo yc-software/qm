@@ -1,8 +1,9 @@
 import type { ScopeId } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
 
 export type AdminRole = "org_admin";
+
+export const ADMIN_GRANT_BOOTSTRAP_ACTOR = "system";
+export const ADMIN_GRANT_BOOTSTRAP_TIME = 0;
 
 export interface AdminGrant {
   principalId: string;
@@ -16,70 +17,99 @@ export function grantKey(principalId: string, scopeId: ScopeId, role: AdminRole)
   return JSON.stringify([principalId, scopeId, role]);
 }
 
+export function isBootstrapAdminGrant(grant: AdminGrant): boolean {
+  return grant.grantedBy === ADMIN_GRANT_BOOTSTRAP_ACTOR && grant.createdAt === ADMIN_GRANT_BOOTSTRAP_TIME;
+}
+
+function bootstrapAdminGrant(grant: AdminGrant): AdminGrant {
+  return {
+    ...grant,
+    grantedBy: ADMIN_GRANT_BOOTSTRAP_ACTOR,
+    createdAt: ADMIN_GRANT_BOOTSTRAP_TIME,
+  };
+}
+
 export interface AdminGrantPersistence {
   all(): Promise<AdminGrant[]>;
   put(g: AdminGrant): Promise<void>;
   remove(principalId: string, scopeId: ScopeId, role: AdminRole): Promise<void>;
+  reconcileBootstrap(grants: readonly AdminGrant[]): Promise<void>;
 }
 
-export function createMapAdminGrantPersistence(
-  map: DurableMap<AdminGrant> = createMemoryMap<AdminGrant>(),
-): AdminGrantPersistence {
+export function createMemoryAdminGrantPersistence(): AdminGrantPersistence {
+  let rows = new Map<string, AdminGrant>();
+  const all = () =>
+    [...rows.entries()]
+      .sort(([a], [b]) => {
+        if (a < b) return -1;
+        if (a > b) return 1;
+        return 0;
+      })
+      .map(([, grant]) => grant);
   return {
     async all() {
-      return map.all();
+      return all();
     },
     async put(g) {
-      await map.put(grantKey(g.principalId, g.scopeId, g.role), g);
+      rows.set(grantKey(g.principalId, g.scopeId, g.role), g);
     },
     async remove(principalId, scopeId, role) {
-      await map.delete(grantKey(principalId, scopeId, role));
+      rows.delete(grantKey(principalId, scopeId, role));
+    },
+    async reconcileBootstrap(grants) {
+      const desired = new Map(
+        grants.map((grant) => [grantKey(grant.principalId, grant.scopeId, grant.role), bootstrapAdminGrant(grant)]),
+      );
+      const next = new Map(rows);
+      for (const [key, grant] of desired) {
+        if (!next.has(key)) next.set(key, grant);
+      }
+      for (const [key, grant] of next) {
+        if (isBootstrapAdminGrant(grant) && !desired.has(key)) next.delete(key);
+      }
+      rows = next;
     },
   };
 }
 
-export const createMemoryAdminGrantPersistence = (): AdminGrantPersistence => createMapAdminGrantPersistence();
-
 export interface AdminGrantStore {
+  ready(): Promise<void>;
   list(): Promise<AdminGrant[]>;
   add(g: AdminGrant): Promise<void>;
   revoke(principalId: string, scopeId: ScopeId, role: AdminRole): Promise<void>;
 }
 
 export interface AdminGrantStoreOptions {
-  seed?: AdminGrant[];
+  bootstrap?: AdminGrant[];
 }
 
 export function createAdminGrantStore(
   persist: AdminGrantPersistence = createMemoryAdminGrantPersistence(),
   opts: AdminGrantStoreOptions = {},
 ): AdminGrantStore {
-  const seeds = opts.seed ?? [];
-  let seededP: Promise<void> | null = null;
-  function ensureSeeded(): Promise<void> {
-    if (!seededP) {
-      seededP = (async () => {
-        if (!seeds.length) return;
-        if ((await persist.all()).length > 0) return;
-        for (const g of seeds) await persist.put({ grantedBy: "system", createdAt: 0, ...g });
-      })().catch((e) => {
-        seededP = null;
+  const bootstrap = opts.bootstrap ?? [];
+  let readyP: Promise<void> | null = null;
+  function ready(): Promise<void> {
+    if (!readyP) {
+      readyP = persist.reconcileBootstrap(bootstrap).catch((e) => {
+        readyP = null;
         throw e;
       });
     }
-    return seededP;
+    return readyP;
   }
   return {
+    ready,
     async list() {
-      await ensureSeeded();
+      await ready();
       return persist.all();
     },
     async add(g) {
-      await ensureSeeded();
+      await ready();
       await persist.put(g);
     },
     async revoke(principalId, scopeId, role) {
-      await ensureSeeded();
+      await ready();
       await persist.remove(principalId, scopeId, role);
     },
   };
