@@ -146,6 +146,21 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     return { running: running === "true", imageId };
   }
 
+  async function networksIntact(name: string): Promise<boolean> {
+    const r = await dexec(["inspect", "-f", "{{json .NetworkSettings.Networks}}", name]);
+    if (r.code !== 0) return false;
+    let endpoints: Record<string, { NetworkID?: string }>;
+    try {
+      endpoints = JSON.parse(r.stdout.trim() || "{}");
+    } catch {
+      return false;
+    }
+    for (const endpoint of Object.values(endpoints ?? {})) {
+      if (endpoint.NetworkID && (await dexec(["network", "inspect", endpoint.NetworkID])).code !== 0) return false;
+    }
+    return true;
+  }
+
   async function resolvePort(name: string): Promise<number> {
     const cached = portByName.get(name);
     if (cached) return cached;
@@ -293,7 +308,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       const name = localContainerName(scope);
       scopeByContainer.set(name, scope);
       const state = await containerState(name);
-      if (state && state.imageId === imageId) {
+      if (state && state.imageId === imageId && (state.running || (await networksIntact(name)))) {
         if (!state.running) await startContainer(name);
         else await connectCore(await ensureNetwork(name));
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
@@ -318,12 +333,13 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       const name = localScratchName(key);
       scratchByKey.set(key, name);
       const state = await containerState(name);
-      if (state) {
+      if (state && (state.running || (await networksIntact(name)))) {
         if (!state.running) await startContainer(name);
         else await connectCore(await ensureNetwork(name));
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
+      if (state) await dexec(["rm", "-f", name]);
       await runContainer(name, undefined, false);
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: true };
