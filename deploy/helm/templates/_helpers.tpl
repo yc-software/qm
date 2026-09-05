@@ -36,3 +36,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 {{- end -}}
+
+{{- define "qm.sandboxNamespace" -}}
+{{- .Values.kubernetesSandbox.namespace | default (printf "%s-sandboxes" (include "qm.fullname" . | trunc 53 | trimSuffix "-")) -}}
+{{- end -}}
+
+{{- define "qm.sandboxManager" -}}
+{{- printf "%s-sandbox-manager" (include "qm.fullname" . | trunc 47 | trimSuffix "-") -}}
+{{- end -}}

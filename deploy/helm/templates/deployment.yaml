@@ -11,6 +11,11 @@ metadata:
     app.kubernetes.io/component: {{ $name }}
 spec:
   replicas: {{ $svc.replicas | default 1 }}
+  {{- if and (eq $name "core") $root.Values.kubernetesSandbox.enabled }}
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  {{- end }}
   selector:
     matchLabels:
       {{- include "qm.selectorLabels" $root | nindent 6 }}
@@ -22,7 +27,13 @@ spec:
       labels:
         {{- include "qm.selectorLabels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ $name }}
+        {{- if and (eq $name "core") $root.Values.kubernetesSandbox.enabled }}
+        qm.dev/sandbox-client: "true"
+        {{- end }}
     spec:
+      {{- if and (eq $name "core") $root.Values.kubernetesSandbox.enabled }}
+      serviceAccountName: {{ include "qm.sandboxManager" $root }}
+      {{- end }}
       {{- with $root.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -39,6 +50,15 @@ spec:
             - name: {{ ternary "http" "proxy" (eq $svc.type "web") }}
               containerPort: {{ $svc.port }}
           {{- $wired := dict }}
+          {{- if and (eq $name "core") $root.Values.kubernetesSandbox.enabled }}
+          {{- $_ := set $wired "SANDBOX_BACKEND" "kubernetes" }}
+          {{- $_ := set $wired "KUBERNETES_SANDBOX_IMAGE" $root.Values.kubernetesSandbox.image }}
+          {{- $_ := set $wired "KUBERNETES_SANDBOX_NAMESPACE" (include "qm.sandboxNamespace" $root) }}
+          {{- $_ := set $wired "KUBERNETES_CORE_NAMESPACE" $root.Release.Namespace }}
+          {{- $_ := set $wired "KUBERNETES_SANDBOX_RUNTIME_CLASS" $root.Values.kubernetesSandbox.runtimeClassName }}
+          {{- $_ := set $wired "KUBERNETES_SANDBOX_STORAGE_CLASS" $root.Values.kubernetesSandbox.storageClassName }}
+          {{- $_ := set $wired "KUBERNETES_SANDBOX_STORAGE_SIZE" $root.Values.kubernetesSandbox.storageSize }}
+          {{- end }}
           {{- $svcHost := printf "%s-%%s.%s.svc.cluster.local" (include "qm.fullname" $root) $root.Release.Namespace }}
           {{- if ne $name "core" }}
           {{- $_ := set $wired "CORE_API_URL" (printf "http://%s:%v" (printf $svcHost "core") (index $root.Values.services "core").port) }}
