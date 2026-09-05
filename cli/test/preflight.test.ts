@@ -24,6 +24,24 @@ const CONFIG: QmConfig = {
   sandbox: { app: "acme-sandboxes" },
 };
 
+test("password mode skips the email transport preflight even when old SMTP credentials remain", async () => {
+  const lines = await quietAsync(() =>
+    emailTransportPreflight(
+      {
+        ...CONFIG,
+        env: { auth: { AUTH_LOGIN_METHOD: "password", AUTH_EMAIL_TRANSPORT: "smtp" } },
+      },
+      new Map([
+        ["SMTP_HOST", "127.0.0.1"],
+        ["SMTP_USERNAME", "old"],
+        ["SMTP_PASSWORD", "old"],
+        ["RESEND_API_KEY", "old"],
+      ]),
+    ),
+  );
+  assert.deepEqual(lines, []);
+});
+
 async function quietAsync(fn: () => Promise<void>): Promise<string[]> {
   const lines: string[] = [];
   const log = console.log,

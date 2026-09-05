@@ -283,6 +283,7 @@ async function smtpReachable(host: string, port: number): Promise<string> {
 }
 
 async function authBrokerCheck(config: QmConfig, secrets: Map<string, string>, haveValues: boolean): Promise<void> {
+  if (config.env.auth?.AUTH_LOGIN_METHOD === "password") return;
   const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   const sender = deploymentSecretValue("AUTH_EMAIL_FROM", secrets.get("AUTH_EMAIL_FROM"));
   if (haveValues) {

@@ -200,6 +200,10 @@ test("the config refuses a broker without a portal, a bad transport, and hand-se
   };
   refuses(configText({ services: '["core", "auth"]' }), /"auth" sign-in broker requires "portal"/);
   refuses(
+    configText({ env: `{ "auth": { "AUTH_LOGIN_METHOD": "unknown", "AUTH_EMAIL_TRANSPORT": "resend" } }` }),
+    /AUTH_LOGIN_METHOD must be "email" or "password"/,
+  );
+  refuses(
     configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "sendmail" } }` }),
     /AUTH_EMAIL_TRANSPORT must be "resend" or "smtp"/,
   );
@@ -226,6 +230,22 @@ test("the config refuses a broker without a portal, a bad transport, and hand-se
     }),
     /PORTAL_EXPECTED_TEAM_ID belongs to Slack sign-in/,
   );
+});
+
+test("password login requires only auth-local hashes and the existing trust boundary, with no email transport", () => {
+  const config = configWith(configText({ env: `{ "auth": { "AUTH_LOGIN_METHOD": "password" } }` }));
+  const secrets = computedSecrets(config);
+  const passwords = secrets.find((secret) => secret.name === "AUTH_PASSWORD_HASHES")!;
+  assert.ok(passwords.required);
+  assert.deepEqual(passwords.services, ["auth"]);
+  assert.deepEqual(runtimeSecretNames("portal", passwords), []);
+  assert.deepEqual(runtimeSecretNames("core", passwords), []);
+  for (const name of ["AUTH_EMAIL_FROM", "RESEND_API_KEY", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) {
+    assert.ok(!secretsForService(config, "auth").some((secret) => secret.name === name));
+    assert.ok(!secrets.some((secret) => secret.name === name && secret.required));
+  }
+  assert.ok(secrets.some((secret) => secret.name === "AUTH_ALLOWED_EMAILS" && secret.required));
+  assert.throws(() => validatePortalTrust(config, "config", new Map()), /AUTH_ALLOWED_EMAILS/);
 });
 
 test("a broker deployment with no allowlist at all is refused once secret values are known", () => {

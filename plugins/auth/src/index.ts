@@ -40,7 +40,7 @@ export async function startServer(): Promise<void> {
     signingKey,
     signer: new TokenSigner(CFG.tokenSecret, CFG.issuer),
     claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
-    mailer: mailerFor(CFG),
+    mailer: CFG.loginMethod === "email" ? mailerFor(CFG) : undefined,
     brandName: () => {
       void branding.forRender();
       return branding.current().selfLabel || CFG.brandName;
@@ -55,7 +55,7 @@ export async function startServer(): Promise<void> {
   });
   server.listen(PORT, () => {
     console.log(
-      `[auth] sign-in broker on http://localhost:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${CFG.transport} email)`,
+      `[auth] sign-in broker on http://localhost:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${CFG.loginMethod === "password" ? "password login" : `${CFG.transport} email`})`,
     );
     if (!CFG.coreSigningSecret)
       console.warn(

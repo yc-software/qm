@@ -25,6 +25,24 @@ const config: QmConfig = {
   sandbox: { app: "acme-sandboxes" },
 };
 
+test("password doctor skips email sender checks and all email provider probes", async () => {
+  const { sandbox: _sandbox, ...rest } = config;
+  void _sandbox;
+  await assert.doesNotReject(
+    doctorCommon(
+      {
+        ...rest,
+        services: ["core", "portal", "auth"],
+        env: { auth: { AUTH_LOGIN_METHOD: "password", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } },
+      },
+      new Map([
+        ["AUTH_EMAIL_FROM", "bad-sender"],
+        ["RESEND_API_KEY", "expired-key"],
+      ]),
+    ),
+  );
+});
+
 test("Docker doctor rejects missing and placeholder required secrets before external probes", async () => {
   const prior = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "";

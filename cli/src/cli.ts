@@ -18,6 +18,7 @@ import { HOSTING_PROVIDER_IDS, hostingProviderChoices, isTarget, type Target } f
 import { type LogOpts } from "./services.ts";
 import { runInit } from "./commands/init.ts";
 import { runSetup } from "./commands/setup.ts";
+import { runPassword } from "./commands/password.ts";
 import { runSandboxBuild } from "./commands/sandbox.ts";
 import { runChecks, runCheckCommand } from "./commands/check.ts";
 import { assertNodeEngine } from "./preflight.ts";
@@ -119,6 +120,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
                                            and only the chosen transport's keys are scaffolded)
   setup [path]                             interactive wizard: scaffold if needed, then walk the
                                            missing secrets with per-provider instructions
+  password <email>                         provision or reset an operator-verified password identity
   up                                       build images and bring the deployment up
      --build-from[=<qm-repo>]              build from local Dockerfiles instead of pulling
      --dry-run                             resolve the config + report the plan, change nothing
@@ -273,6 +275,14 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectUnknownFlags(flags, []);
       rejectExtraPositionals(positionals, 1);
       await runSetup({ dir: positionals[0] !== undefined ? resolve(positionals[0]) : resolve(process.cwd()) });
+      return;
+    }
+
+    case "password": {
+      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir"]);
+      rejectExtraPositionals(positionals, 1);
+      if (!positionals[0]) throw new CliError("usage: qm password <email>", { clause: "cli.invocation" });
+      await runPassword({ ...deployContext(flags), email: positionals[0] });
       return;
     }
 

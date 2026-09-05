@@ -844,8 +844,12 @@ function validateBrokerTrust(config: QmConfig, path: string, secrets?: ReadonlyM
       `${path}: env.portal.PORTAL_EXPECTED_TEAM_ID belongs to Slack sign-in and has no meaning with the built-in auth broker`,
     );
   }
+  const method = authEnv.AUTH_LOGIN_METHOD ?? "email";
+  if (method !== "email" && method !== "password") {
+    throw new CliError(`${path}: env.auth.AUTH_LOGIN_METHOD must be "email" or "password"`);
+  }
   const transport = authEnv.AUTH_EMAIL_TRANSPORT?.trim();
-  if (!isEmailTransport(transport)) {
+  if (method === "email" && !isEmailTransport(transport)) {
     throw new CliError(
       `${path}: env.auth.AUTH_EMAIL_TRANSPORT must be ${EMAIL_TRANSPORTS.map((t) => JSON.stringify(t)).join(" or ")}`,
     );

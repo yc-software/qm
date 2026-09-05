@@ -404,6 +404,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Email addresses allowed to sign in; the portal enforces the same list the broker does.",
   },
   {
+    name: "AUTH_PASSWORD_HASHES",
+    service: "auth",
+    required: { when: { kind: "env-equals", service: "auth", name: "AUTH_LOGIN_METHOD", value: "password" } },
+    description:
+      "Operator-provisioned password hashes for verified email identities; create or reset with qm password <email>.",
+  },
+  {
     name: "AUTH_EMAIL_FROM",
     service: "auth",
     required: true,
@@ -477,6 +484,12 @@ function targetEnvDefault(config: QmConfig, service: string, name: string): stri
 }
 
 function requirementFor(config: QmConfig, spec: SecretSpec): boolean | null {
+  if (
+    config.env.auth?.AUTH_LOGIN_METHOD === "password" &&
+    spec.service === "auth" &&
+    ["AUTH_EMAIL_FROM", "RESEND_API_KEY", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"].includes(spec.name)
+  )
+    return null;
   if (typeof spec.required === "boolean") return spec.required;
   if (conditionMatches(config, spec.required.when)) return true;
   return spec.required.optionalOtherwise ? false : null;
@@ -672,6 +685,11 @@ export function renderEnvExample(config: QmConfig): string {
   const inactive = FIRST_PARTY_SECRET_SPECS.filter(
     (spec, i, all) =>
       !activeNames.has(spec.name) &&
+      !(
+        config.env.auth?.AUTH_LOGIN_METHOD === "password" &&
+        spec.service === "auth" &&
+        ["AUTH_EMAIL_FROM", "RESEND_API_KEY", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"].includes(spec.name)
+      ) &&
       all.findIndex((other) => other.name === spec.name) === i &&
       !(typeof spec.required === "object" && requiresOtherEmailTransport(config, spec.required.when)),
   );

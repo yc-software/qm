@@ -8,6 +8,7 @@ import { bold, die, dim, header, note, ok, warn } from "../log.ts";
 import { HOSTING_PROVIDER_IDS, isTarget } from "../providers.ts";
 import { computedSecrets, MINT_JWK, MINT_LOCALLY, type ComputedSecret } from "../secrets.ts";
 import { isInvalidSecret, readEnvFile } from "../util.ts";
+import { normalizePasswordEmail, promptPasswordHash } from "../passwords.ts";
 import { runInit } from "./init.ts";
 
 export function adminGrantEmails(adminGrants: string | undefined): string {
@@ -61,8 +62,13 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
   ],
   AUTH_ALLOWED_EMAILS: [
     "The email addresses allowed to sign in, comma-separated. Everyone else is",
-    "refused, both when a link is requested and again when one is opened.",
+    "refused by both the sign-in broker and the portal.",
     "Set env.auth.AUTH_ALLOWED_EMAIL_DOMAIN in the config instead to admit a whole domain.",
+  ],
+  AUTH_PASSWORD_HASHES: [
+    "Set a password for each email in ADMIN_GRANTS; verify those identities first.",
+    "Use 15 to 128 characters. Password input is hidden and must be confirmed.",
+    "Only hashes are saved. Use qm password <email> to provision or reset another account.",
   ],
   AUTH_EMAIL_FROM: [
     "The verified sender sign-in links come from, for example",
@@ -167,7 +173,7 @@ export function updateEnvContent(content: string, entries: ReadonlyMap<string, s
 function makePrompter(): {
   rl: Interface;
   ask: (q: string) => Promise<string>;
-  askHidden: (q: string) => Promise<string>;
+  askHidden: (q: string, trim?: boolean) => Promise<string>;
 } {
   let muted = false;
   const output = new Writable({
@@ -178,13 +184,13 @@ function makePrompter(): {
   });
   const rl = createInterface({ input: process.stdin, output, terminal: process.stdin.isTTY === true });
   const ask = async (q: string): Promise<string> => (await rl.question(q)).trim();
-  const askHidden = async (q: string): Promise<string> => {
+  const askHidden = async (q: string, trim = true): Promise<string> => {
     process.stdout.write(q);
     muted = true;
     try {
       const answer = await rl.question("");
       process.stdout.write("\n");
-      return answer.trim();
+      return trim ? answer.trim() : answer;
     } finally {
       muted = false;
     }
@@ -264,6 +270,23 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
         }
       }
 
+      if (secret.name === "AUTH_PASSWORD_HASHES") {
+        const emails = adminGrantEmails(collected.get("ADMIN_GRANTS") ?? env.get("ADMIN_GRANTS"));
+        if (!emails) {
+          skipped.push(secret.name);
+          warn("  set ADMIN_GRANTS to verified administrator emails, then re-run setup\n");
+          continue;
+        }
+        const hashes: Record<string, string> = {};
+        for (const address of emails.split(",")) {
+          const email = normalizePasswordEmail(address);
+          hashes[email] = await promptPasswordHash(email, (question) => askHidden(`  ${question}: `, false));
+        }
+        collected.set(secret.name, JSON.stringify(hashes));
+        ok("  password hashes saved\n");
+        continue;
+      }
+
       let value = "";
       value = await askHidden(`  ${secret.name}: `);
       if (value === "") {
@@ -299,6 +322,9 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
     if (remainingRequired.length > 0) stepLine(n++, "qm setup", `still missing: ${remainingRequired.join(", ")}`);
     stepLine(n++, "qm check", "validate the config and sandbox layer");
     stepLine(n++, "qm doctor", "verify external prerequisites read-only");
+    if (config.env.auth?.AUTH_LOGIN_METHOD === "password" && config.target !== "docker") {
+      stepLine(n++, "qm secrets push", "upload password hashes and other collected secrets");
+    }
     if (config.target === "aws")
       stepLine(n++, "see AGENTS.md", "the AWS bootstrap order (Terraform, TLS, portal) before up");
     else stepLine(n++, "qm up", "bring the deployment up and print the URLs");

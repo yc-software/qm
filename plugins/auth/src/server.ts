@@ -8,18 +8,28 @@ import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
 import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type AuthRequest } from "./tokens.ts";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 import { renderSignInEmail, type Mailer } from "./email.ts";
-import { confirmSignInPage, emailFormPage, linkSentPage, problemPage, CONFIRM_PAGE_CSP, PAGE_CSP } from "./pages.ts";
+import {
+  confirmSignInPage,
+  emailFormPage,
+  passwordFormPage,
+  linkSentPage,
+  problemPage,
+  CONFIRM_PAGE_CSP,
+  PAGE_CSP,
+} from "./pages.ts";
+import { verifyPassword } from "./passwords.ts";
 
 const MAX_FORM_BYTES = 8 * 1024;
 const ID_TOKEN_TTL_S = 300;
 const MAX_INFLIGHT_SENDS = 32;
+const MAX_INFLIGHT_PASSWORDS = 4;
 
 export interface AuthDeps {
   cfg: AuthConfig;
   signingKey: SigningKey;
   signer: TokenSigner;
   claims: ClaimStore;
-  mailer: Mailer;
+  mailer?: Mailer;
   brandName?: () => string;
   emailAllowed?: (email: string) => Promise<boolean>;
   now?: () => number;
@@ -100,6 +110,8 @@ function readAuthorizeRequest(
 
 export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { cfg, signer, claims, mailer, signingKey } = deps;
+  if (cfg.loginMethod === "email" && !mailer) throw new Error("email login requires a mailer");
+  const formPage = cfg.loginMethod === "password" ? passwordFormPage : emailFormPage;
   const brandName = deps.brandName ?? ((): string => cfg.brandName);
   const invited =
     deps.emailAllowed ??
@@ -113,6 +125,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   const formAction = `${cfg.publicPath}/authorize`;
   const linkTtlMinutes = Math.max(1, Math.round(cfg.linkTtlS / 60));
   let inFlightSends = 0;
+  let inFlightPasswords = 0;
   const background = (task: () => Promise<void>): void => {
     if (inFlightSends >= MAX_INFLIGHT_SENDS) {
       console.warn("[auth] sign-in link suppressed: too many deliveries already in flight");
@@ -160,11 +173,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         parsed.problem,
       );
     const sealed = await signer.sealRequest(parsed.request, cfg.requestTtlS, now());
-    return sendHtml(
-      res,
-      200,
-      emailFormPage({ brandName: brandName(), action: formAction, requestToken: sealed.token }),
-    );
+    return sendHtml(res, 200, formPage({ brandName: brandName(), action: formAction, requestToken: sealed.token }));
   }
 
   async function sendLink(request: AuthRequest, email: string, ip: string): Promise<void> {
@@ -194,12 +203,85 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     const sealed = await signer.sealLink({ ...request, email }, cfg.linkTtlS, nowMs);
     const link = `${cfg.issuer}/verify#token=${encodeURIComponent(sealed.token)}`;
     try {
-      const receipt = await mailer.send(
+      const receipt = await mailer!.send(
         renderSignInEmail({ to: email, brandName: brandName(), link, ttlMinutes: linkTtlMinutes }),
       );
       console.log(`[auth] sign-in link sent to ${email} (${receipt})`);
     } catch (e) {
       console.error(`[auth] sign-in link to ${email} could not be delivered: ${errMessage(e)}`);
+    }
+  }
+
+  async function completeAuthorization(res: ServerResponse, request: AuthRequest, email: string): Promise<void> {
+    const code = await signer.sealCode(
+      {
+        clientId: request.clientId,
+        redirectUri: request.redirectUri,
+        nonce: request.nonce,
+        codeChallenge: request.codeChallenge,
+        email,
+      },
+      cfg.codeTtlS,
+      now(),
+    );
+    const destination = new URL(request.redirectUri);
+    destination.searchParams.set("code", code.token);
+    destination.searchParams.set("state", request.state);
+    res.writeHead(302, noStore({ location: destination.toString() }));
+    res.end();
+  }
+
+  async function passwordSubmit(
+    req: IncomingMessage,
+    res: ServerResponse,
+    form: URLSearchParams,
+    request: AuthRequest,
+    email: string,
+  ): Promise<void> {
+    const origin = req.headers.origin;
+    if (origin && origin !== new URL(cfg.issuer).origin) {
+      return problem(res, 403, "That didn't work", "Start again from the sign-in page.");
+    }
+    if (inFlightPasswords >= MAX_INFLIGHT_PASSWORDS) {
+      return problem(res, 429, "Please try again shortly", "The sign-in service is busy.");
+    }
+    inFlightPasswords++;
+    try {
+      const within = async (kind: string, value: string, limit: number): Promise<boolean> =>
+        withinRateLimit(claims, {
+          secret: cfg.tokenSecret,
+          kind,
+          value,
+          limit,
+          windowS: cfg.sendWindowS,
+          nowMs: now(),
+        });
+      const ip = clientIpOf(req);
+      if (
+        !(await within("password-ip", ip, cfg.sendLimitPerIp)) ||
+        !(await within("password-mailbox", JSON.stringify([email, ip]), cfg.sendLimitPerEmail))
+      ) {
+        return problem(res, 429, "Too many sign-in attempts", "Wait a few minutes before trying again.");
+      }
+      const passwordOk = await verifyPassword(form.get("password") ?? "", cfg.passwordHashes?.get(email));
+      if (!passwordOk || !(await emailAllowed(email))) {
+        return sendHtml(
+          res,
+          401,
+          passwordFormPage({
+            brandName: brandName(),
+            action: formAction,
+            requestToken: form.get("request")!,
+            problem: "Email or password is incorrect.",
+          }),
+        );
+      }
+      return completeAuthorization(res, request, email);
+    } catch (error) {
+      if (!(error instanceof ClaimStoreUnavailableError)) throw error;
+      return problem(res, 503, "Sign-in is temporarily unavailable", "Try again in a minute.");
+    } finally {
+      inFlightPasswords--;
     }
   }
 
@@ -214,7 +296,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     }
     const form = new URLSearchParams(raw);
     const request = await signer.openRequest(form.get("request") ?? "", now());
-    if (!request) {
+    if (!request || !safeEqual(request.clientId, cfg.clientId) || !safeEqual(request.redirectUri, cfg.redirectUri)) {
       return problem(
         res,
         400,
@@ -228,7 +310,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       return sendHtml(
         res,
         400,
-        emailFormPage({
+        formPage({
           brandName: brandName(),
           action: formAction,
           requestToken: sealed.token,
@@ -236,6 +318,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         }),
       );
     }
+    if (cfg.loginMethod === "password") return passwordSubmit(req, res, form, request, email);
     const ip = clientIpOf(req);
     sendHtml(res, 200, linkSentPage({ brandName: brandName(), email, ttlMinutes: linkTtlMinutes }));
     background(() => sendLink(request, email, ip));
@@ -284,22 +367,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     if (!(await emailAllowed(link.email))) {
       return problem(res, 403, "This address can't sign in", "Your administrator has not allowed this email address.");
     }
-    const code = await signer.sealCode(
-      {
-        clientId: link.clientId,
-        redirectUri: link.redirectUri,
-        nonce: link.nonce,
-        codeChallenge: link.codeChallenge,
-        email: link.email,
-      },
-      cfg.codeTtlS,
-      now(),
-    );
-    const destination = new URL(link.redirectUri);
-    destination.searchParams.set("code", code.token);
-    destination.searchParams.set("state", link.state);
-    res.writeHead(302, noStore({ location: destination.toString() }));
-    res.end();
+    return completeAuthorization(res, link, link.email);
   }
 
   async function token(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -422,8 +490,8 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     if (method === "GET" && path === "/.well-known/openid-configuration") return discovery(res);
     if (method === "GET" && path === "/authorize") return authorizeForm(res, url.searchParams);
     if (method === "POST" && path === "/authorize") return authorizeSubmit(req, res);
-    if (method === "GET" && path === "/verify") return confirmVerify(res);
-    if (method === "POST" && path === "/verify") return verify(req, res);
+    if (cfg.loginMethod === "email" && method === "GET" && path === "/verify") return confirmVerify(res);
+    if (cfg.loginMethod === "email" && method === "POST" && path === "/verify") return verify(req, res);
     if (method === "POST" && path === "/token") return token(req, res);
     if ((method === "GET" || method === "POST") && path === "/userinfo") return userinfo(req, res);
     return sendJson(res, 404, { error: "not_found" });

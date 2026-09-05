@@ -177,3 +177,18 @@ test("runSetup refuses to run without a TTY", async () => {
     },
   );
 });
+
+test("password setup collects password hashes and administrator trust without email provider secrets", () => {
+  const broker = configFor(
+    ["core", "web-ui", "admin", "portal", "auth"],
+    "",
+    `{ "core": { "HARNESS": "pi" }, "auth": { "AUTH_LOGIN_METHOD": "password" } }`,
+  );
+  const names = pendingSecrets(broker, new Map()).todo.map((secret) => secret.name);
+  assert.ok(names.includes("AUTH_PASSWORD_HASHES"));
+  assert.ok(names.includes("AUTH_ALLOWED_EMAILS"));
+  for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) {
+    assert.ok(!names.includes(name));
+  }
+  assert.match(playbookFor("AUTH_PASSWORD_HASHES", broker).join("\n"), /verify those identities first/);
+});

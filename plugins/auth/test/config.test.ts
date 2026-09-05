@@ -88,6 +88,35 @@ test("the smtp transport demands its own credentials", () => {
   );
 });
 
+const passwordHash = `scrypt$32768$8$3$${Buffer.alloc(16, 1).toString("base64url")}$${Buffer.alloc(64, 2).toString("base64url")}`;
+const passwordEnv = {
+  AUTH_LOGIN_METHOD: "password",
+  AUTH_PASSWORD_HASHES: JSON.stringify({ "admin@example.com": passwordHash }),
+  CORE_SIGNING_SECRET: "a".repeat(48),
+  AUTH_EMAIL_FROM: undefined,
+  RESEND_API_KEY: undefined,
+};
+
+test("password login boots without email sender, Resend, or SMTP credentials", () => {
+  assert.equal(problemsFor(passwordEnv), "");
+  assert.equal(problemsFor({ ...passwordEnv, AUTH_EMAIL_TRANSPORT: "smtp" }), "");
+  assert.match(problemsFor({ ...passwordEnv, AUTH_LOGIN_METHOD: "email" }), /AUTH_EMAIL_FROM/);
+});
+
+test("password login fails closed for missing, malformed, or plaintext credentials", () => {
+  for (const value of [undefined, "", "{}", "[]", "null", "not-json", '{"admin@example.com":"plaintext"}']) {
+    const problem = problemsFor({ ...passwordEnv, AUTH_PASSWORD_HASHES: value });
+    assert.match(problem, /AUTH_PASSWORD_HASHES/);
+    assert.doesNotMatch(problem, /plaintext/);
+  }
+  assert.match(
+    problemsFor({ ...passwordEnv, AUTH_PASSWORD_HASHES: JSON.stringify({ invalid: passwordHash }) }),
+    /AUTH_PASSWORD_HASHES/,
+  );
+  assert.match(problemsFor({ ...passwordEnv, AUTH_LOGIN_METHOD: "passwrod" }), /AUTH_LOGIN_METHOD/);
+  assert.match(problemsFor({ ...passwordEnv, AUTH_ALLOWED_EMAILS: undefined }), /AUTH_ALLOWED_EMAILS/);
+});
+
 test("malformed allowlists and senders are refused", () => {
   assert.match(problemsFor({ AUTH_ALLOWED_EMAILS: "not-an-email" }), /valid, non-placeholder email addresses/);
   assert.match(

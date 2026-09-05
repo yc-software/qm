@@ -264,7 +264,7 @@ export async function smtpVerify(options: SmtpVerifyOptions): Promise<void> {
 }
 
 export async function emailTransportPreflight(config: QmConfig, secrets: ReadonlyMap<string, string>): Promise<void> {
-  if (!config.services.includes("auth")) return;
+  if (!config.services.includes("auth") || config.env.auth?.AUTH_LOGIN_METHOD === "password") return;
   const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   const value = (name: string): string | undefined => deploymentSecretValue(name, secrets.get(name))?.trim();
   if (transport === "resend") {

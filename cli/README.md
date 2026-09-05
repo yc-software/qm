@@ -94,6 +94,8 @@ Auto uses its built-in model classifier unless `qm.config.jsonc` declares one
 
 ```text
 init [dir] [--org id] [--target docker|fly|aws]
+setup [dir]
+password <email>
 check [--json] [--live]
 doctor
 infra render|build-image|delete-image|delete-task-definitions
@@ -114,6 +116,31 @@ sandbox publish [--from image] [--app registry/repo] [--tag tag] [--dry-run]
 
 All deploy commands accept `--config`, `--env-file`, and `--sandbox-dir`. `dev` remains
 the contributor worktree loop and is separate from the portable deployment contract.
+
+## Password sign-in without email delivery
+
+With the built-in `auth` service enabled, set `env.auth.AUTH_LOGIN_METHOD` to
+`"password"` in `qm.config.jsonc`. The default is `"email"`. Password mode needs
+neither Resend nor SMTP; `AUTH_EMAIL_TRANSPORT` can be removed. Existing optional
+email credentials remain available to core for external invitations.
+
+Run `qm setup` to collect and confirm passwords for the first administrators in
+`ADMIN_GRANTS`, or `qm password admin@example.com` to provision or reset an
+account. The operator must verify each identity first: this flow has no public
+signup, email verification, or emailed password reset. Passwords contain 15 to
+128 characters, including spaces and Unicode; hidden input is never trimmed.
+Only salted scrypt hashes are saved as `AUTH_PASSWORD_HASHES` in the private
+`.env`, and that secret is delivered only to `auth`.
+
+`qm password` grants no membership or administrator access. Add permanent members
+explicitly to `AUTH_ALLOWED_EMAILS` or `AUTH_ALLOWED_EMAIL_DOMAIN`, and use the
+normal external invitation flow for temporary users. Keep the administrator seed
+in `ADMIN_GRANTS`. Before resetting a cloud account, load the complete current
+`AUTH_PASSWORD_HASHES` map into `.env` or export it in your shell; the command
+preserves that map and never fetches cloud secrets. Run `qm up` to apply changes on
+Docker. On Fly or AWS, run
+`qm secrets push` first, then `qm up`. Password changes affect new logins;
+existing portal sessions continue until they expire.
 
 ## Package contract
 

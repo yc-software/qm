@@ -2,6 +2,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CliError, errMessage } from "./log.ts";
+import { parsePasswordHashes } from "./passwords.ts";
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -194,6 +195,14 @@ export function isMissingOrPlaceholder(value: string | undefined): boolean {
 export function isInvalidSecret(name: string, value: string | undefined): boolean {
   if (isMissingOrPlaceholder(value)) return true;
   const candidate = value!.trim();
+  if (name === "AUTH_PASSWORD_HASHES") {
+    try {
+      parsePasswordHashes(candidate);
+      return false;
+    } catch {
+      return true;
+    }
+  }
   if (name === "ADMIN_GRANTS") {
     const entries = candidate
       .split(",")
