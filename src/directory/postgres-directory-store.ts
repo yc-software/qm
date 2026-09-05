@@ -179,6 +179,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     labelLcCol: string,
     cols: string,
     map: (r: Record<string, unknown>) => T,
+    matchIds: boolean,
   ): Promise<{ kind: "one"; item: T } | { kind: "ambiguous"; items: T[] } | { kind: "none" }> {
     const qn = normDirectoryQuery(query);
     if (!qn) return { kind: "none" };
@@ -195,15 +196,23 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES).map(map) };
 
     const esc = likeEscape(qn);
-    let pool2 = await q(
-      `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [orgId, `${esc}%`],
-    );
-    if (!pool2.length) {
+    const tiers: Array<readonly [string, string]> = [
+      [labelLcCol, `${esc}%`],
+      [labelLcCol, `%${esc}%`],
+      ...(matchIds
+        ? [
+            [`lower(${idCol})`, `${esc}%`] as const,
+            [`lower(${idCol})`, `%${esc}%`] as const,
+          ]
+        : []),
+    ];
+    let pool2: Record<string, unknown>[] = [];
+    for (const [match, pattern] of tiers) {
       pool2 = await q(
-        `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-        [orgId, `%${esc}%`],
+        `SELECT ${cols} ${from} AND ${match} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
+        [orgId, pattern],
       );
+      if (pool2.length) break;
     }
     if (!pool2.length) return { kind: "none" };
     if (pool2.length === 1) return { kind: "one", item: map(pool2[0]!) };
@@ -627,7 +636,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         [orgId, query.trim()],
       );
       if (bySlackId.length) return { kind: "one", member: memberRow(bySlackId[0]!) };
-      const m = await pick(query, "directory_members", "principal_id", "display_name_lc", MEMBER_COLS, memberRow);
+      const m = await pick(query, "directory_members", "principal_id", "display_name_lc", MEMBER_COLS, memberRow, true);
       if (m.kind === "one") return { kind: "one", member: m.item };
       if (m.kind === "ambiguous") return { kind: "ambiguous", candidates: m.items };
       return { kind: "none" };
@@ -641,6 +650,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         "name_lc",
         "channel_id, name, is_private, is_external",
         channelRow,
+        false,
       );
       if (m.kind === "one") return { kind: "one", channel: m.item };
       if (m.kind === "ambiguous") return { kind: "ambiguous", candidates: m.items };

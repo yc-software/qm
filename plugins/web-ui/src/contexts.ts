@@ -797,6 +797,11 @@ function memberPicker(context: CoreContext): TemplateResult {
           .value=${contextsState.memberQuery}
           ?disabled=${contextsState.memberBusy}
           @input=${(event: InputEvent) => {
+            if (event.isComposing) return;
+            contextsState.memberQuery = (event.currentTarget as HTMLInputElement).value;
+            scheduleMemberSearch(context);
+          }}
+          @compositionend=${(event: CompositionEvent) => {
             contextsState.memberQuery = (event.currentTarget as HTMLInputElement).value;
             scheduleMemberSearch(context);
           }}
