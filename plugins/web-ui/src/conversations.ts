@@ -10,6 +10,28 @@ import type { Conversation, ConvCtx, ConvHost } from "./conv-types";
 const live = new Set<Conversation>();
 let main: Conversation | null = null;
 
+let mentionToastTimer: ReturnType<typeof setTimeout> | undefined;
+
+function notifyAwayThread(threadRef: string): void {
+  const openViewing = [...live].some((conv) => conv.state.threadRef === threadRef);
+  if (openViewing) return;
+  const session = sessionsState.list.find((s) => s.threadRef === threadRef);
+  const title = session?.title || session?.channelName || "New message";
+  let el = document.querySelector<HTMLDivElement>(".mention-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "mention-toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = `💬 New message: ${title}`;
+  el.classList.add("show");
+  if (mentionToastTimer !== undefined) clearTimeout(mentionToastTimer);
+  mentionToastTimer = setTimeout(() => {
+    el?.classList.remove("show");
+    mentionToastTimer = undefined;
+  }, 4500);
+}
+
 export function createConversation(host: ConvHost): Conversation {
   const ctx = { ...host } as ConvCtx;
   ctx.chat = createChatSurface(ctx);
@@ -69,6 +91,7 @@ export function ensureDeliveryStream(): void {
   subscribeDeliveries(
     (threadRef) => {
       void refreshSessions({ silent: true });
+      notifyAwayThread(threadRef);
       for (const conv of live) conv.onDelivery(threadRef);
     },
     (event) => {

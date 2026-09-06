@@ -75,6 +75,7 @@ import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { escapeLoneDollars } from "./markdown-dollars";
 import { splitStreamingMarkdown } from "./streaming-markdown";
+import { splitMentions } from "./mention";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import {
   transcriptModel,
@@ -1299,7 +1300,7 @@ export function createChatSurface(
         <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
           ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
           <div class="message-bubble user-bubble">
-            ${markdown(messageText(message))}
+            ${userTextWithMentions(messageText(message))}
             ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
           </div>
           ${
@@ -1540,6 +1541,21 @@ export function createChatSurface(
 
   function markdown(text: string): TemplateResult {
     return html`<markdown-block .content=${escapeLoneDollars(text)}></markdown-block>`;
+  }
+
+  function scopeMentionNames(): string[] {
+    const context = contextsState.list.find((c) => c.scopeId === chatState.scopeId);
+    return (context?.project?.members ?? []).map((m) => m.displayName).filter(Boolean);
+  }
+
+  function userTextWithMentions(text: string): TemplateResult {
+    const names = scopeMentionNames();
+    const segments =
+      names.length && !text.includes("```") ? splitMentions(text, names) : [{ text, mention: false }];
+    if (!segments.some((s) => s.mention)) return markdown(segments[0]!.text);
+    return html`${segments.map((s) =>
+      s.mention ? html`<span class="mention-chip">${s.text}</span>` : markdown(s.text),
+    )}`;
   }
 
   let escapedSegs: string[] = [];
