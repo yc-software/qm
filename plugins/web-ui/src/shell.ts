@@ -32,7 +32,7 @@ import {
 import { applyRuntimeOptions } from "./model-options";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { brandMark, brandName, icon, initials } from "./ui";
-import { markConnectorConnected } from "./chat";
+import { markConnectorConnected, reduceMotion } from "./chat";
 import { clearSkillsCache, resyncModelSelection, seedRuntimeConfig } from "./composer";
 import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
@@ -110,6 +110,18 @@ if (!appEl) throw new Error("missing #app");
 
 const narrowViewport = window.matchMedia("(max-width: 860px)");
 let sidebarOpen = !narrowViewport.matches;
+
+type ThemeCycler = HTMLElement & { cycleTheme?: () => void };
+
+function crossfadeThemeSwitch(e: MouseEvent): void {
+  if (typeof document.startViewTransition !== "function" || reduceMotion.matches) return;
+  const toggle = e.target instanceof Element ? e.target.closest<ThemeCycler>("theme-toggle") : null;
+  if (!toggle || typeof toggle.cycleTheme !== "function") return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  document.startViewTransition(() => toggle.cycleTheme?.());
+}
+document.addEventListener("click", crossfadeThemeSwitch, true);
 
 const SIDEBAR_MIN_W = 200;
 const SIDEBAR_MAX_W = 520;

@@ -106,7 +106,7 @@ import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playgr
 installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
-const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+export const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 interface SettledRowKey {
   index: number;
   activity: WorkBlock["activity"] | undefined;
