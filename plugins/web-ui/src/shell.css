@@ -1781,29 +1781,30 @@ a.chat-row-open {
 .work-divider {
   height: 1px;
   background: var(--border);
-  margin: 12px 0 18px;
+  margin: 8px 0 10px;
 }
 .work-rows {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 5px;
 }
 
 .tool-row,
 .tool-row .tool-summary {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
-  font-size: 15px;
-  line-height: 1.4;
+  font-size: 13px;
+  line-height: 1.35;
   color: color-mix(in srgb, var(--muted-foreground) 80%, var(--background));
 }
 .tool-row.tool-running {
   color: var(--muted-foreground);
 }
-.tool-row.tool-summary {
+.tool-row .tool-summary {
   cursor: pointer;
+  min-height: 24px;
 }
 .tool-icon {
   display: inline-flex;
