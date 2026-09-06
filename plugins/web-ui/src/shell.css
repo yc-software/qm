@@ -1982,10 +1982,16 @@ a.chat-row-open {
   background: var(--background);
   color: var(--foreground);
   cursor: pointer;
-  transition: opacity 0.12s ease;
+  transition:
+    opacity 120ms ease,
+    transform 160ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .approval-btn:hover:not(:disabled) {
   opacity: 0.85;
+  transform: translateY(-1px);
+}
+.approval-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .approval-btn.primary {
   background: var(--foreground);
@@ -2374,6 +2380,7 @@ a.chat-row-open {
   color: var(--muted-foreground);
 }
 .composer-approval-panel {
+  position: relative;
   display: grid;
   gap: 10px;
   margin: 0 0 10px;
@@ -8519,5 +8526,65 @@ code-block copy-button span {
   }
   .stop-btn {
     animation: none;
+  }
+}
+
+.composer-approval-panel,
+.inline-approval-marker {
+  animation: approval-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes approval-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+.composer-approval-panel::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 12px;
+  border: 2px solid color-mix(in srgb, var(--brand-accent) 55%, transparent);
+  pointer-events: none;
+  opacity: 0;
+  animation: approval-ring 900ms cubic-bezier(0.22, 1, 0.36, 1) 180ms both;
+}
+@keyframes approval-ring {
+  0% {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+}
+.approval-reason-badge {
+  animation: badge-pop 380ms cubic-bezier(0.34, 1.56, 0.64, 1) 260ms both;
+}
+@keyframes badge-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-approval-panel,
+  .inline-approval-marker,
+  .approval-reason-badge {
+    animation: none;
+  }
+  .composer-approval-panel::before {
+    display: none;
+  }
+  .approval-btn {
+    transition: none;
+  }
+  .approval-btn:hover:not(:disabled),
+  .approval-btn:active:not(:disabled) {
+    transform: none;
   }
 }
