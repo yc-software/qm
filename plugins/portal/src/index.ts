@@ -27,6 +27,7 @@ import {
   verifyIdToken,
   type OidcConfig,
   type PrincipalRule,
+  hostedDomainHint,
 } from "./oidc.ts";
 import {
   proxyToSurface,
@@ -145,6 +146,8 @@ const OIDC: OidcConfig = {
   issuer: process.env.OIDC_ISSUER ?? "https://slack.com",
   jwksUri: process.env.OIDC_JWKS_URI ?? "https://slack.com/openid/connect/keys",
   expectedTeamId: process.env.PORTAL_EXPECTED_TEAM_ID || undefined,
+  prompt: process.env.OIDC_PROMPT || undefined,
+  hostedDomain: hostedDomainHint(process.env.OIDC_ISSUER ?? "https://slack.com", process.env.OIDC_ALLOWED_EMAIL_DOMAIN),
 };
 const OIDC_JWKS_CONFIGURED = Boolean(process.env.OIDC_JWKS_URI?.trim());
 

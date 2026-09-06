@@ -261,6 +261,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "OIDC_JWKS_URI",
         "OIDC_SCOPES",
         "OIDC_PRINCIPAL_CLAIM",
+        "OIDC_PROMPT",
         "AUTH_BROKER_UPSTREAM",
         "AUTH_BROKER_PREFIX",
       ],
