@@ -114,7 +114,11 @@ export function createSearchMethods(deps: AppDeps, app: App): Pick<App, "search"
   const slack = slackBackend(deps, app);
   const core = createCoreSearch([conversationBackend(app), ...(slack ? [slack] : []), fileBackend(app)], {
     onBackendError: (backend, error) =>
-      console.error("%s", `[search] backend ${backend} failed:`, error instanceof Error ? error.message : String(error)),
+      console.error(
+        "%s",
+        `[search] backend ${backend} failed:`,
+        error instanceof Error ? error.message : String(error),
+      ),
   });
   return { search: (query, principals, limit) => core.search({ query, principals, limit }) };
 }
