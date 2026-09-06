@@ -295,6 +295,7 @@ a.chat-row-open {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  position: relative;
   scrollbar-gutter: stable;
 }
 .web-only-toggle {
@@ -7433,7 +7434,6 @@ h3.ambient-field-label {
   color: var(--foreground);
 }
 .tidy-menu {
-  position: relative;
   display: inline-flex;
 }
 .chat-search-open.on {
@@ -7441,6 +7441,7 @@ h3.ambient-field-label {
   color: var(--foreground);
 }
 .tidy-popover {
+  right: 11px;
   width: 250px;
   gap: 6px;
   padding: 10px;
