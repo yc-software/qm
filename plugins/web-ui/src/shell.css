@@ -365,12 +365,10 @@ a.chat-row-open {
   min-height: 30px;
   border-radius: var(--radius-sm);
 }
-/* A collapsed group still shows where the active chat lives; expanded groups stay
-   quiet — the indent rail and the highlighted child already say it. */
-.recent-project.active:has(.recent-project-children[hidden]) .recent-project-head {
+.recent-project.active .recent-project-head {
   background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }
-.recent-project-toggle {
+.recent-project-open {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -386,13 +384,13 @@ a.chat-row-open {
   font: inherit;
   text-align: left;
 }
-.recent-project-toggle:hover,
-.recent-project-toggle:focus-visible,
+.recent-project-open:hover,
+.recent-project-open:focus-visible,
 .recent-project-new-chat:hover,
 .recent-project-new-chat:focus-visible {
   background: var(--secondary);
 }
-.recent-project-toggle > svg {
+.recent-project-open > svg {
   flex: 0 0 auto;
   color: var(--muted-foreground);
 }
@@ -469,21 +467,6 @@ a.chat-row-open {
 .recent-project-head.renaming {
   padding: 0;
 }
-.recent-project-children {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  margin-left: 15px;
-  padding-left: 3px;
-  border-left: 1px solid var(--border);
-}
-.recent-project-children[hidden] {
-  display: none;
-}
-.recent-project-children .session {
-  padding-left: 7px;
-}
 .session {
   display: flex;
   align-items: center;
@@ -525,17 +508,6 @@ a.chat-row-open {
   text-overflow: ellipsis;
 }
 
-.session .row-context {
-  flex: 0 1 auto;
-  min-width: 4ch;
-  max-width: 45%;
-  margin-left: 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--muted-foreground);
-}
 .group-dm-title {
   display: inline-flex;
   align-items: center;
@@ -4477,7 +4449,7 @@ a.chat-row-open {
   .new-chat,
   .navrow,
   .nav-section-toggle,
-  .recent-project-toggle,
+  .recent-project-open,
   .session,
   .web-only-toggle,
   .session-menu-option,
@@ -8044,6 +8016,52 @@ h3.ambient-field-label {
   height: 360px;
   border: 0;
   background: white;
+}
+
+.sidebar .list .recents-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--secondary) 42%, var(--background));
+}
+.recents-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+.recents-toggle:hover,
+.recents-toggle:focus-visible {
+  color: var(--foreground);
+}
+.recents-toggle svg {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+.recent-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.recent-projects[hidden] {
+  display: none;
+}
+.session .title .scope-chip {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  max-width: 45%;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10.5px;
 }
 
 .attachment-strip .file-chip {

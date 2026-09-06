@@ -4,16 +4,15 @@ import {
   activityOf,
   applySessionState,
   isAbandonedNewChat,
+  bucketByRecency,
   bumpActivity,
   chatBrowseStatusMatches,
   clearWorking,
-  groupProjectSessions,
   backgroundLabel,
   conversationBackground,
   markWorking,
   recencyGroup,
   rowIndicators,
-  recentProjectSeeds,
   reconcileSessions,
   splitPinned,
   withPendingSession,
@@ -284,62 +283,64 @@ test("reconcile replaces an optimistic working stamp with server truth", () => {
   assert.equal(out[0]!.working, undefined, "server row (no working flag) supersedes the stamp");
 });
 
-test("project metadata groups only its group scope while ordinary chats stay flat", () => {
-  const project = {
-    scopeId: "group:web-project-p1",
-    kind: "group" as const,
-    name: "Launch",
-    sessionCount: 2,
-    lastActivityAt: 30,
-    project: {
-      id: "p1",
-      name: "Launch",
-      ownerId: "alice",
-      memberIds: ["alice"],
-      scopeId: "group:web-project-p1",
-      members: [{ principalId: "alice", displayName: "Alice" }],
-    },
-  };
-  const sessions = [
-    { ...saved("1", "web:alice:p1-a"), type: "group" as const, scopeId: project.scopeId, lastActivityAt: 30 },
-    { ...saved("2", "web:alice:plain"), lastActivityAt: 20 },
-    { ...saved("3", "web:alice:p1-b"), type: "group" as const, scopeId: project.scopeId, lastActivityAt: 10 },
-  ];
-  const items = groupProjectSessions(sessions, recentProjectSeeds([project]));
-  assert.equal(items[0]?.kind, "project");
-  assert.deepEqual(items[0]?.kind === "project" ? items[0].sessions.map((session) => session.id) : [], ["1", "3"]);
-  assert.equal(items[1]?.kind, "session");
+test("bucketByRecency splits sessions at calendar-day boundaries, in bucket order", () => {
+  const now = new Date(2026, 6, 14, 15, 30).getTime();
+  const day = 86_400_000;
+  const midnight = new Date(2026, 6, 14, 0, 0).getTime();
+  const at = (id: string, ms: number) => ({ ...saved(id, `web:u:${id}`), lastActivityAt: ms });
+  const buckets = bucketByRecency(
+    [
+      at("older", midnight - 29 * day - 1),
+      at("today", now - 1),
+      at("month", midnight - 6 * day - 1),
+      at("yesterday", midnight - 1),
+      at("week", midnight - 6 * day),
+      at("today-first", midnight),
+    ],
+    now,
+  );
+  assert.deepEqual(
+    buckets.map((b) => [b.label, b.sessions.map((s) => s.id)]),
+    [
+      ["Today", ["today", "today-first"]],
+      ["Yesterday", ["yesterday"]],
+      ["Previous 7 days", ["week"]],
+      ["Previous 30 days", ["month"]],
+      ["Older", ["older"]],
+    ],
+  );
 });
 
-test("empty projects appear in Recents", () => {
-  const seeds = [{ scopeId: "group:web-project-empty", name: "Empty" }];
-  const items = groupProjectSessions([], seeds);
-  assert.deepEqual(items, [
-    { kind: "project", scopeId: "group:web-project-empty", name: "Empty", groupKind: "project", sessions: [] },
-  ]);
+test("bucketByRecency orders each bucket most recent first regardless of input order", () => {
+  const now = new Date(2026, 6, 14, 15, 30).getTime();
+  const at = (id: string, ms: number) => ({ ...saved(id, `web:u:${id}`), lastActivityAt: ms });
+  const [today] = bucketByRecency([at("a", now - 3000), at("c", now - 1000), at("b", now - 2000)], now);
+  assert.deepEqual(
+    today!.sessions.map((s) => s.id),
+    ["c", "b", "a"],
+  );
 });
 
-test("a pending (not-yet-sent) chat in a project scope nests under its project", () => {
-  const seeds = [{ scopeId: "group:web-project-p1", name: "P1" }];
-  const fresh = { ...pending("web:alice:new"), type: "group" as const, scopeId: seeds[0]!.scopeId };
-  const list = withPendingSession([saved("1", "web:alice:old")], fresh);
-  const items = groupProjectSessions(list, seeds);
-  assert.equal(items[0]?.kind, "project");
-  assert.deepEqual(items[0]?.kind === "project" ? items[0].sessions.map((s) => s.threadRef) : [], ["web:alice:new"]);
+test("bucketByRecency lands a pending unsaved chat in Today", () => {
+  const now = Date.now();
+  const old = { ...saved("1", "web:u:old"), lastActivityAt: now - 40 * 86_400_000 };
+  const buckets = bucketByRecency(withPendingSession([old], pending("web:u:new")), now);
+  assert.equal(buckets[0]!.label, "Today");
+  assert.deepEqual(
+    buckets[0]!.sessions.map((s) => s.threadRef),
+    ["web:u:new"],
+  );
+  assert.equal(buckets[1]!.label, "Older");
 });
 
-test("without project metadata every conversation keeps the existing flat recency order", () => {
-  const olderGroup = {
-    ...saved("1", "web:alice:group"),
-    type: "group" as const,
-    scopeId: "group:slack-mpdm",
-    lastActivityAt: 10,
-  };
-  const newerPersonal = { ...saved("2", "web:alice:personal"), lastActivityAt: 20 };
-  assert.deepEqual(groupProjectSessions([olderGroup, newerPersonal], []), [
-    { kind: "session", session: newerPersonal },
-    { kind: "session", session: olderGroup },
-  ]);
+test("bucketByRecency emits no header for an empty bucket", () => {
+  const now = new Date(2026, 6, 14, 15, 30).getTime();
+  const at = (id: string, ms: number) => ({ ...saved(id, `web:u:${id}`), lastActivityAt: ms });
+  assert.deepEqual(
+    bucketByRecency([at("today", now), at("older", now - 60 * 86_400_000)], now).map((b) => b.label),
+    ["Today", "Older"],
+  );
+  assert.deepEqual(bucketByRecency([], now), []);
 });
 
 test("rowIndicators: server working flag lights the dot", () => {

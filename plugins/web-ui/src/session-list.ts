@@ -1,18 +1,4 @@
-import { sharedContextLabel, type CoreContext, type CoreProject, type CoreSession } from "./core-bridge.ts";
-
-type ProjectAwareContext = CoreContext & { project?: CoreProject };
-
-type RecentGroupKind = "personal" | "project" | "channel" | "group";
-
-export interface RecentProjectSeed {
-  scopeId: string;
-  name: string | null;
-  kind?: RecentGroupKind;
-}
-
-export type RecentItem =
-  | { kind: "session"; session: CoreSession }
-  | { kind: "project"; scopeId: string; name: string | null; groupKind: RecentGroupKind; sessions: CoreSession[] };
+import type { CoreSession } from "./core-bridge.ts";
 
 export function activityOf(s: CoreSession): number {
   return s.lastActivityAt ?? s.createdAt;
@@ -36,53 +22,6 @@ export function chatBrowseStatusMatches(
   return status === "waiting" ? Boolean(session.awaitingInput) : !session.awaitingInput;
 }
 
-export function recentProjectSeeds(contexts: readonly ProjectAwareContext[]): RecentProjectSeed[] {
-  return contexts.map((context): RecentProjectSeed => {
-    if (context.project)
-      return { scopeId: context.scopeId, name: context.project.name.trim() || null, kind: "project" };
-    if (context.kind === "personal") return { scopeId: context.scopeId, name: "Personal", kind: "personal" };
-    if (context.kind === "group")
-      return { scopeId: context.scopeId, name: sharedContextLabel(context.scopeId, context.name), kind: "group" };
-    return { scopeId: context.scopeId, name: sharedContextLabel(context.scopeId, context.name), kind: "channel" };
-  });
-}
-
-export function groupProjectSessions(
-  sessions: readonly CoreSession[],
-  projectSeeds: readonly RecentProjectSeed[],
-): RecentItem[] {
-  const seeds = new Map(projectSeeds.map((seed) => [seed.scopeId, seed]));
-  const projects = new Map<string, Extract<RecentItem, { kind: "project" }>>();
-  const items: RecentItem[] = [];
-  for (const session of [...sessions].sort((a, b) => activityOf(b) - activityOf(a))) {
-    const seed = seeds.get(session.scopeId);
-    if (!seed) {
-      items.push({ kind: "session", session });
-      continue;
-    }
-    let project = projects.get(session.scopeId);
-    if (!project) {
-      project = {
-        kind: "project",
-        scopeId: session.scopeId,
-        name: seed.name,
-        groupKind: seed.kind ?? "project",
-        sessions: [],
-      };
-      projects.set(session.scopeId, project);
-      items.push(project);
-    }
-    project.sessions.push(session);
-  }
-  for (const seed of projectSeeds) {
-    if (projects.has(seed.scopeId)) continue;
-    const kind = seed.kind ?? "project";
-    if (kind === "channel" || kind === "group") continue;
-    items.push({ kind: "project", scopeId: seed.scopeId, name: seed.name, groupKind: kind, sessions: [] });
-  }
-  return items;
-}
-
 export function recencyGroup(ms: number, now = Date.now()): string {
   const d = new Date(now);
   const dayStart = (back: number): number => new Date(d.getFullYear(), d.getMonth(), d.getDate() - back).getTime();
@@ -91,6 +30,20 @@ export function recencyGroup(ms: number, now = Date.now()): string {
   if (ms >= dayStart(6)) return "Previous 7 days";
   if (ms >= dayStart(29)) return "Previous 30 days";
   return "Older";
+}
+
+export function bucketByRecency(
+  sessions: readonly CoreSession[],
+  now = Date.now(),
+): { label: string; sessions: CoreSession[] }[] {
+  const buckets = new Map<string, CoreSession[]>();
+  for (const s of [...sessions].sort((a, b) => activityOf(b) - activityOf(a))) {
+    const label = recencyGroup(activityOf(s), now);
+    const bucket = buckets.get(label);
+    if (bucket) bucket.push(s);
+    else buckets.set(label, [s]);
+  }
+  return [...buckets].map(([label, rows]) => ({ label, sessions: rows }));
 }
 
 export function withPendingSession(list: CoreSession[], pending: CoreSession): CoreSession[] {

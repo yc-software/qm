@@ -13,7 +13,6 @@ import {
   Cog,
   EllipsisVertical,
   Folder,
-  Hash,
   Link,
   Lock,
   Palette,
@@ -23,8 +22,6 @@ import {
   Plus,
   RefreshCw,
   SquareTerminal,
-  User,
-  Users,
   X,
 } from "lucide";
 import {
@@ -48,17 +45,14 @@ import {
 import { deepLinkPath, isPlainLeftClick, sessionLink, UI_BASE } from "./deep-link";
 import {
   activityOf,
+  bucketByRecency,
   chatBrowseStatusMatches,
   bumpActivity,
-  groupProjectSessions,
-  recencyGroup,
-  recentProjectSeeds,
   reconcileSessions,
   rowIndicators,
   splitPinned,
   withPendingSession,
   withoutUnsentPending,
-  type RecentItem,
   type ChatBrowseStatus,
 } from "./session-list";
 import { hideTooltip, showTooltip } from "./tooltip";
@@ -72,6 +66,7 @@ import {
   personalScopeId,
   renameProject,
   scopeChip,
+  scopeTitle,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
@@ -108,7 +103,6 @@ export const sessionsState = {
   renamingId: null as string | null,
   openingKey: null as string | null,
   webOnly: true,
-  collapsedProjectScopes: new Set<string>(),
 };
 
 let selection: SessionSelection = emptySelection();
@@ -147,13 +141,27 @@ function visibleRowOrder(): string[] {
 }
 
 const WEB_ONLY_KEY = "web-ui:web-only";
-sessionsState.webOnly = ((): boolean => {
+const PROJECTS_OPEN_KEY = "web-ui:projects-open";
+
+function storedFlag(key: string, fallback: boolean): boolean {
   try {
-    return localStorage.getItem(WEB_ONLY_KEY) !== "0";
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : raw !== "0";
   } catch {
-    return true;
+    return fallback;
   }
-})();
+}
+
+function storeFlag(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    void 0;
+  }
+}
+
+sessionsState.webOnly = storedFlag(WEB_ONLY_KEY, true);
+let projectsOpen = storedFlag(PROJECTS_OPEN_KEY, true);
 
 let sessionsLoading = false;
 let sessionsNotice = "";
@@ -182,7 +190,6 @@ export function resetSessionsState(): void {
   sessionsState.openMenuId = null;
   sessionsState.renamingId = null;
   sessionsState.openingKey = null;
-  sessionsState.collapsedProjectScopes.clear();
   renameDraft = "";
   refreshingTitleIds.clear();
   showArchived = false;
@@ -192,23 +199,6 @@ export function resetSessionsState(): void {
   chatsPageSurface = "all";
   chatsPageHost = null;
   recentContextsRequest = null;
-}
-
-function projectSeedsForRecents() {
-  return recentProjectSeeds(contextsState.list);
-}
-
-function recentItemActivity(item: RecentItem): number {
-  if (item.kind === "session") return activityOf(item.session);
-  if (item.sessions[0]) return activityOf(item.sessions[0]);
-  const context = contextsState.list.find((candidate) => candidate.scopeId === item.scopeId);
-  return context?.lastActivityAt ?? context?.project?.createdAt ?? context?.project?.updatedAt ?? 0;
-}
-
-function recentItemsFor(sessions: readonly CoreSession[]): RecentItem[] {
-  return groupProjectSessions(sessions, projectSeedsForRecents()).sort(
-    (a, b) => recentItemActivity(b) - recentItemActivity(a),
-  );
 }
 
 function loadRecentContexts(force = false): void {
@@ -317,11 +307,10 @@ export function renderList(): void {
   const active = visible.filter((s) => !s.archived);
   const archived = visible.filter((s) => s.archived);
   const { pinned, rest } = splitPinned(active);
-  const activeItems = recentItemsFor(rest);
-  const archivedItems: RecentItem[] = archived.map((session) => ({ kind: "session", session }));
   armMidnightRefresh();
   render(
     html`
+      ${projectsSection(active)}
       ${
         pinned.length
           ? html`
@@ -334,7 +323,7 @@ export function renderList(): void {
             `
           : nothing
       }
-      ${groupedRows(activeItems)}
+      ${groupedRows(rest)}
       ${
         archived.length
           ? html`
@@ -343,7 +332,7 @@ export function renderList(): void {
                 <span>Archived</span>
                 <span class="archived-count">${archived.length}</span>
               </button>
-              ${showArchived ? groupedRows(archivedItems) : nothing}
+              ${showArchived ? groupedRows(archived) : nothing}
             `
           : nothing
       }
@@ -368,38 +357,50 @@ export function renderList(): void {
   notifySessionsChanged();
 }
 
-function recentItem(item: RecentItem): TemplateResult {
-  if (item.kind === "session") return sessionRow(item.session);
-  const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
-  let glyph = Folder;
-  if (item.groupKind === "personal") glyph = User;
-  else if (item.groupKind === "channel") glyph = Hash;
-  else if (item.groupKind === "group") glyph = Users;
-  let fallbackName = "Project";
-  if (item.groupKind === "channel") fallbackName = "Channel";
-  else if (item.groupKind === "group") fallbackName = "Group DM";
-  const name = item.name ?? fallbackName;
-  const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-  const menuKey = projectMenuKey(item.scopeId);
+function projectsSection(sessions: readonly CoreSession[]): TemplateResult | typeof nothing {
+  const projects = contextsState.list.filter((context) => context.project);
+  if (!projects.length) return nothing;
+  return html`
+    <button
+      class="recents-group recents-toggle"
+      type="button"
+      aria-expanded=${projectsOpen ? "true" : "false"}
+      aria-controls="recent-projects"
+      @click=${toggleProjects}
+    >
+      ${icon(projectsOpen ? ChevronDown : ChevronRight, 11)}<span>Projects</span>
+    </button>
+    <div class="recent-projects" id="recent-projects" ?hidden=${!projectsOpen}>
+      ${repeat(
+        projects,
+        (context) => context.scopeId,
+        (context) => projectHead(context.scopeId, context.project?.name.trim() || "Project", sessions),
+      )}
+    </div>
+  `;
+}
+
+function projectHead(scopeId: string, name: string, sessions: readonly CoreSession[]): TemplateResult {
+  const own = sessions.filter((s) => s.scopeId === scopeId);
+  const menuKey = projectMenuKey(scopeId);
   const menuOpen = sessionsState.openMenuId === menuKey;
   return html`
-    <section class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}" aria-label=${`${name} project`}>
+    <section class="recent-project ${own.some(isActiveRow) ? "active" : ""}" aria-label=${`${name} project`}>
       ${
         sessionsState.renamingId === menuKey
-          ? projectRenameRow(item)
+          ? projectRenameRow(scopeId)
           : html`<div class="recent-project-head">
               <button
-                class="recent-project-toggle"
+                class="recent-project-open"
                 type="button"
-                aria-expanded=${collapsed ? "false" : "true"}
-                aria-controls=${childrenId}
-                @click=${() => toggleRecentProject(item.scopeId)}
+                title=${`Open ${name}`}
+                @click=${() => openProjectDetail(scopeId)}
               >
-                ${icon(collapsed ? ChevronRight : ChevronDown, 13)} ${icon(glyph, 14)}
-                <span class="recent-project-name">${name.replace(/^#/, "")}</span>
+                ${icon(Folder, 14)}
+                <span class="recent-project-name">${name}</span>
               </button>
               <div class="session-menu recent-project-menu ${menuOpen ? "menu-open" : ""}">
-                <span class="recent-project-count">${item.sessions.length}</span>
+                <span class="recent-project-count">${own.length}</span>
                 <button
                   class="session-menu-btn"
                   data-menu-id=${menuKey}
@@ -412,54 +413,41 @@ function recentItem(item: RecentItem): TemplateResult {
                 >
                   ${icon(EllipsisVertical, 17)}
                 </button>
-                ${menuOpen ? projectMenuPopover(item) : nothing}
+                ${menuOpen ? projectMenuPopover(scopeId, name) : nothing}
               </div>
               <button
                 class="recent-project-new-chat"
                 type="button"
                 aria-label=${`New chat in ${name}`}
                 title=${`New chat in ${name}`}
-                @click=${(event: Event) => startProjectChat(event, item.scopeId, item.name)}
+                @click=${(event: Event) => startProjectChat(event, scopeId)}
               >
                 ${icon(Plus, 14)}
               </button>
             </div>`
       }
-      <div class="recent-project-children" id=${childrenId} ?hidden=${collapsed}>
-        ${repeat(
-          item.sessions,
-          (session) => session.threadRef,
-          (session) => sessionRow(session, true),
-        )}
-      </div>
     </section>
   `;
 }
 
-function toggleRecentProject(scopeId: string): void {
-  if (sessionsState.collapsedProjectScopes.has(scopeId)) sessionsState.collapsedProjectScopes.delete(scopeId);
-  else sessionsState.collapsedProjectScopes.add(scopeId);
+function toggleProjects(): void {
+  projectsOpen = !projectsOpen;
+  storeFlag(PROJECTS_OPEN_KEY, projectsOpen);
   renderList();
 }
 
-function startProjectChat(event: Event, scopeId: string, _name: string | null): void {
+function startProjectChat(event: Event, scopeId: string): void {
   event.stopPropagation();
   closeSidebarOnNarrowView();
-  sessionsState.collapsedProjectScopes.delete(scopeId);
   openBlankInFocusedPane(scopeId);
   renderList();
 }
 
-function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
-  const owned = projectOf(item.scopeId)?.ownerId === appState.me?.user;
+function projectMenuPopover(scopeId: string, name: string): TemplateResult {
+  const owned = projectOf(scopeId)?.ownerId === appState.me?.user;
   return html`
     <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
-      <button
-        class="session-menu-option"
-        type="button"
-        role="menuitem"
-        @click=${() => openProjectFromMenu(item.scopeId)}
-      >
+      <button class="session-menu-option" type="button" role="menuitem" @click=${() => openProjectFromMenu(scopeId)}>
         ${icon(Folder, 15)}<span>View project</span>
       </button>
       ${
@@ -468,7 +456,7 @@ function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): Tem
               class="session-menu-option"
               type="button"
               role="menuitem"
-              @click=${() => beginRename(projectMenuKey(item.scopeId), item.name ?? "")}
+              @click=${() => beginRename(projectMenuKey(scopeId), name)}
             >
               ${icon(Pencil, 15)}<span>Rename</span>
             </button>`
@@ -483,20 +471,20 @@ function openProjectFromMenu(scopeId: string): void {
   openProjectDetail(scopeId);
 }
 
-function projectRenameRow(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
-  const menuKey = projectMenuKey(item.scopeId);
+function projectRenameRow(scopeId: string): TemplateResult {
+  const menuKey = projectMenuKey(scopeId);
   return html`<div class="recent-project-head renaming">
-    ${renameInput(menuKey, "Rename project", () => commitProjectRename(item))}
+    ${renameInput(menuKey, "Rename project", () => commitProjectRename(scopeId))}
   </div>`;
 }
 
-async function commitProjectRename(item: Extract<RecentItem, { kind: "project" }>): Promise<void> {
-  if (sessionsState.renamingId !== projectMenuKey(item.scopeId)) return;
+async function commitProjectRename(scopeId: string): Promise<void> {
+  if (sessionsState.renamingId !== projectMenuKey(scopeId)) return;
   const next = renameDraft.trim();
   sessionsState.renamingId = null;
   renameDraft = "";
   renderList();
-  const project = projectOf(item.scopeId);
+  const project = projectOf(scopeId);
   if (!project || !next || next === project.name) return;
   await renameProject(project, next);
   renderList();
@@ -767,19 +755,11 @@ export function bumpSessionActivity(threadRef: string): void {
   renderList();
 }
 
-function groupedRows(list: RecentItem[]): TemplateResult {
-  const now = Date.now();
+function groupedRows(sessions: readonly CoreSession[]): TemplateResult {
   const items: { key: string; tpl: TemplateResult }[] = [];
-  let group: string | null = null;
-  for (const item of list) {
-    const dateless = item.kind === "project" && item.sessions.length === 0;
-    const g = recencyGroup(recentItemActivity(item), now);
-    if (!dateless && g !== group) {
-      group = g;
-      items.push({ key: `group:${g}`, tpl: html`<div class="recents-group">${g}</div>` });
-    }
-    const key = item.kind === "session" ? item.session.threadRef : `project:${item.scopeId}`;
-    items.push({ key, tpl: recentItem(item) });
+  for (const { label, sessions: rows } of bucketByRecency(sessions)) {
+    items.push({ key: `group:${label}`, tpl: html`<div class="recents-group">${label}</div>` });
+    for (const s of rows) items.push({ key: s.threadRef, tpl: sessionRow(s) });
   }
   return html`${repeat(
     items,
@@ -809,29 +789,30 @@ function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
   return nothing;
 }
 
-function rowContext(s: CoreSession): string | null {
-  let label = sharedContextLabel(s.scopeId, s.channelName ?? null);
-  if (surfaceOf(s) === "slack") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
-  return label && label !== sessionTitle(s) ? label : null;
+function rowScopeLabel(s: CoreSession, title: string): string | null {
+  const personal = personalScopeId();
+  if (!s.scopeId || s.scopeId === personal || (!personal && s.scopeId.startsWith("personal:"))) return null;
+  const label = scopeTitle(s.scopeId, s.channelName ?? null);
+  return label === title ? null : label;
 }
 
-function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
+function sessionRow(s: CoreSession): TemplateResult {
   const saved = Boolean(s.id);
   if (saved && sessionsState.renamingId === s.id) return renameRow(s);
   const active = isActiveRow(s);
   const menuOpen = saved && sessionsState.openMenuId === s.id;
   const refreshingTitle = saved && refreshingTitleIds.has(s.id);
-  const untitledProjectChild = projectChild && !s.title?.trim();
+  const untitledProjectChat = !s.title?.trim() && Boolean(projectName(s.scopeId));
   let title = sessionTitle(s);
-  if (untitledProjectChild) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
+  if (untitledProjectChat) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
   const readOnly = !isContinuable(s, appState.me?.user ?? "");
   const surface = surfaceOf(s);
-  const context = projectChild ? null : rowContext(s);
+  const context = rowScopeLabel(s, title);
   const working = sessionWorking(s);
   let titleContent: string | TemplateResult = groupDmTitle(s);
   if (refreshingTitle) {
     titleContent = html`<span class="sheen-label title-sheen thinking-sheen" data-sheen=${title}>${title}</span>`;
-  } else if (untitledProjectChild) {
+  } else if (untitledProjectChat) {
     titleContent = title;
   }
   const ariaLabel = [
@@ -850,7 +831,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   return html`
     <div
       data-session-id=${saved ? s.id : nothing}
-      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${projectChild ? "project-child" : ""} ${s.color ? "colored" : ""}"
+      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${s.color ? "colored" : ""}"
       style=${s.color ? `--session-color:${s.color}` : nothing}
     >
       <a
@@ -903,7 +884,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
           ${statusMarks(s)}${surfaceGlyph(s)}${readOnly ? html`<span class="ro-lock" title="Read-only">${icon(Lock, 12)}</span>` : nothing}<span
             class="tl"
             >${titleContent}</span
-          >${context ? html`<span class="row-context" title=${context}>${context}</span>` : nothing}
+          >${context ? scopeChip(s.scopeId, s.channelName ?? null) : nothing}
         </div>
       </a>
       ${
@@ -1081,11 +1062,7 @@ function toggleShowArchived(): void {
 
 export function toggleWebOnly(): void {
   sessionsState.webOnly = !sessionsState.webOnly;
-  try {
-    localStorage.setItem(WEB_ONLY_KEY, sessionsState.webOnly ? "1" : "0");
-  } catch {
-    void 0;
-  }
+  storeFlag(WEB_ONLY_KEY, sessionsState.webOnly);
   renderSidebarTop();
   renderList();
 }
@@ -1458,7 +1435,6 @@ export async function openSession(s: CoreSession, entriesPrefetch?: Promise<Tran
   mountRestoredCanvas();
   if (splitInterceptsOpen(s)) return;
   closeSidebarOnNarrowView();
-  if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
   return openSessionInto(mainConversation(), s, entriesPrefetch);
 }
 
