@@ -196,6 +196,15 @@ const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
+const TIDY_MAX_CANDIDATES = 40;
+
+const TIDY_JUDGE_PROMPT = [
+  "You tidy a chat sidebar. Each card below is one conversation: its id in brackets, title, days idle, and the tail of its transcript.",
+  "Pick the conversations that are finished: the ask was answered, the task completed, or the thread is a one-off that nobody will return to.",
+  "Keep anything open-ended, awaiting a reply, mid-task, or that reads like a long-running reference thread.",
+  'Reply with ONLY JSON: {"archive": ["<id>", ...]}. Use the ids exactly as given. Empty list if nothing is finished.',
+].join("\n");
+
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const skillMaterializer = createSkillMaterializer(deps.advisoryLock);
   const residentAuthConnectors = (): ResidentAuthConnector[] =>
@@ -396,6 +405,38 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         participantIds?.length ? principalId : undefined,
       );
       return { title: title ?? (participantIds ? null : (session.title ?? null)) };
+    },
+
+    async judgeConcluded(principalId, candidates) {
+      if (!deps.harness.models.judge || candidates.length === 0) return { archived: [], judged: 0 };
+      const now = Date.now();
+      const tails = [];
+      for (const s of candidates.slice(0, TIDY_MAX_CANDIDATES)) {
+        const entries = await deps.sessions.visibleEntries(s.id, principalId);
+        tails.push({
+          s,
+          tail: renderTitleTranscript(entries.slice(-4))
+            .replace(/\n\n---\n\n/g, " ")
+            .slice(0, 1200),
+        });
+      }
+      const judged = tails.filter(({ tail }) => tail);
+      if (judged.length === 0) return { archived: [], judged: 0 };
+      const cards = judged.map(({ s, tail }) => {
+        const idleDays = Math.floor((now - (s.lastActivityAt ?? s.createdAt)) / 86_400_000);
+        return `[${s.id}] ${s.title ?? "(untitled)"} · idle ${idleDays}d\n${tail}`;
+      });
+      const raw = await deps.harness.models.judge(TIDY_JUDGE_PROMPT, cards.join("\n\n---\n\n"));
+      const allowed = new Set(judged.map(({ s }) => s.id));
+      try {
+        const parsed = JSON.parse(/\{[\s\S]*\}/.exec(raw ?? "")?.[0] ?? "{}") as { archive?: unknown };
+        const archived = Array.isArray(parsed.archive)
+          ? parsed.archive.filter((id): id is string => typeof id === "string" && allowed.has(id))
+          : [];
+        return { archived, judged: judged.length };
+      } catch {
+        return { archived: [], judged: judged.length };
+      }
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {

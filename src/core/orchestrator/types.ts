@@ -3,6 +3,7 @@ import type {
   Conversation,
   Principal,
   PendingApprovalRecord,
+  Session,
   SurfaceContextQuery,
   SurfaceContextResult,
   TurnRequest,
@@ -214,4 +215,5 @@ export interface Orchestrator {
     principalId: string,
     participantIds?: readonly string[],
   ): Promise<{ title: string | null } | null>;
+  judgeConcluded(principalId: string, candidates: readonly Session[]): Promise<{ archived: string[]; judged: number }>;
 }

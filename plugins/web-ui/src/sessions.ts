@@ -22,6 +22,7 @@ import {
   PinOff,
   Plus,
   RefreshCw,
+  Sparkles,
   SquareTerminal,
   User,
   Users,
@@ -40,6 +41,7 @@ import {
   slackThreadUrl,
   TAIL_TURNS,
   type TranscriptPage,
+  tidySessions,
   updateSession,
   type PendingApproval,
   type CoreProject,
@@ -87,6 +89,7 @@ import { allConversations, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
   beginSessionDrag,
+  canvasToast,
   endSessionDrag,
   notifySessionsChanged,
   closeSessionSurfaces,
@@ -147,6 +150,41 @@ function visibleRowOrder(): string[] {
 }
 
 const WEB_ONLY_KEY = "web-ui:web-only";
+let tidyRunning = false;
+
+export async function runTidy(): Promise<void> {
+  if (tidyRunning) return;
+  tidyRunning = true;
+  renderSidebarTop();
+  try {
+    const { archived, considered } = await tidySessions();
+    for (const id of archived) closeSessionSurfaces(id);
+    sessionsState.list = sessionsState.list.map((s) => (archived.includes(s.id) ? { ...s, archived: true } : s));
+    renderList();
+    const chats = considered === 1 ? "chat" : "chats";
+    if (archived.length) canvasToast(`Tidied ${archived.length} of ${considered} ${chats}`);
+    else if (considered) canvasToast(`Looked at ${considered} ${chats}, all still open`);
+    else canvasToast("Nothing to tidy");
+  } catch (e) {
+    canvasToast(errMessage(e, "Tidy failed"));
+  } finally {
+    tidyRunning = false;
+    renderSidebarTop();
+  }
+}
+
+export function tidyControl(): TemplateResult {
+  return html`<button
+    class="chat-search-open tidy-open ${tidyRunning ? "on" : ""}"
+    type="button"
+    ?disabled=${tidyRunning}
+    aria-label="Tidy: archive finished chats"
+    title=${tidyRunning ? "Tidying…" : "Tidy: archive finished chats"}
+    @click=${() => void runTidy()}
+  >
+    ${icon(Sparkles, 13)}
+  </button>`;
+}
 sessionsState.webOnly = ((): boolean => {
   try {
     return localStorage.getItem(WEB_ONLY_KEY) !== "0";

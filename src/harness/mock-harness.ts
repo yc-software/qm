@@ -762,7 +762,15 @@ export function createMockHarness(): Harness {
         return Promise.resolve(`mock one-shot reply to: ${prompt.slice(0, 200)}`);
       },
 
-      judge(_systemPrompt: string, prompt: string): Promise<string | undefined> {
+      judge(systemPrompt: string, prompt: string): Promise<string | undefined> {
+        if (systemPrompt.startsWith("You tidy a chat sidebar.")) {
+          const done = prompt
+            .split("\n\n---\n\n")
+            .filter((card) => /!done\b/.test(card))
+            .map((card) => /^\[([^\]]+)\]/.exec(card)?.[1])
+            .filter((id): id is string => Boolean(id));
+          return Promise.resolve(JSON.stringify({ archive: done }));
+        }
         const asked = /!engage-asked\b[:\s]*(.*)/i.exec(prompt);
         if (asked) {
           const id = /^\[([^\]]+)\]/m.exec(prompt)?.[1];
