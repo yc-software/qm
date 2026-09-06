@@ -45,6 +45,10 @@ test("revealing a transcript re-arms auto-follow; read-only mounts start at the 
 test("programmatic transcript scrolls never animate", () => {
   assert.doesNotMatch(css, /scroll-behavior:\s*smooth/);
   assert.doesNotMatch(chat, /scrollBehavior/);
-  const anchors = chat.match(/scrollerNow\.scrollTop = priorTop \+ \(scrollerNow\.scrollHeight - priorHeight\);/g);
-  assert.equal(anchors?.length, 2);
+});
+
+test("both pagination paths keep the viewport anchored through one helper", () => {
+  assert.match(chat, /function holdScrollAnchor\(root: ParentNode \| null \| undefined\): \(\) => void/);
+  assert.equal(chat.match(/const restoreAnchor = holdScrollAnchor\(/g)?.length, 2);
+  assert.equal(chat.match(/restoreAnchor\(\);/g)?.length, 2);
 });

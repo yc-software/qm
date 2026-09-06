@@ -881,9 +881,7 @@ export function createChatSurface(
                                 anchorSeq !== null ? { beforeSeq: anchorSeq, tailTurns: TAIL_TURNS } : undefined,
                               );
                               if (chatState.sessionId !== s.id) return;
-                              const scroller = container?.querySelector<HTMLElement>(".chat-scroll");
-                              const priorHeight = scroller?.scrollHeight ?? 0;
-                              const priorTop = scroller?.scrollTop ?? 0;
+                              const restoreAnchor = holdScrollAnchor(container);
                               const rawRemaining = page.earlierEntries ?? 0;
                               const remaining = currentEarlierCount(s, rawRemaining);
                               const split = inheritedTranscript(s, page.entries ?? []);
@@ -897,11 +895,7 @@ export function createChatSurface(
                                   ...chatState.inheritedMessages,
                                 ],
                               );
-                              requestAnimationFrame(() => {
-                                const scrollerNow = container?.querySelector<HTMLElement>(".chat-scroll");
-                                if (!scrollerNow) return;
-                                scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-                              });
+                              restoreAnchor();
                             } catch {
                               btn.disabled = false;
                               btn.textContent = "Show earlier messages";
@@ -987,20 +981,14 @@ export function createChatSurface(
           ...entriesToMessages(split.inherited, transcriptModel()),
           ...chatState.inheritedMessages,
         ];
-      const scroller = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-      const priorHeight = scroller?.scrollHeight ?? 0;
-      const priorTop = scroller?.scrollTop ?? 0;
+      const restoreAnchor = holdScrollAnchor(chatState.host);
       agent.state.messages = [...earlierMessages, ...agent.state.messages];
       const rawRemaining = page.earlierEntries ?? 0;
       chatState.transcriptAnchorSeq = rawRemaining > 0 ? (page.entries?.[0]?.seq ?? null) : null;
       chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawRemaining);
       chatState.loadingEarlier = false;
       drawActiveChat(agent);
-      requestAnimationFrame(() => {
-        const scrollerNow = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-        if (!scrollerNow) return;
-        scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-      });
+      restoreAnchor();
     } catch {
       void 0;
     } finally {
@@ -2319,6 +2307,17 @@ export function createChatSurface(
   function scrollToBottom(): void {
     stickToBottom = true;
     scrollTranscript(true);
+  }
+
+  function holdScrollAnchor(root: ParentNode | null | undefined): () => void {
+    const scroller = root?.querySelector<HTMLElement>(".chat-scroll");
+    const priorHeight = scroller?.scrollHeight ?? 0;
+    const priorTop = scroller?.scrollTop ?? 0;
+    return () =>
+      requestAnimationFrame(() => {
+        const now = root?.querySelector<HTMLElement>(".chat-scroll");
+        if (now) now.scrollTop = priorTop + (now.scrollHeight - priorHeight);
+      });
   }
 
   function scrollTranscript(force = false): void {
