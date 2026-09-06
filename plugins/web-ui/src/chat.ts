@@ -8,6 +8,7 @@ import "@mariozechner/mini-lit/dist/CodeBlock.js";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
   Activity,
+  ArrowDown,
   Ban,
   Brain,
   Check,
@@ -1053,7 +1054,7 @@ export function createChatSurface(
 
   function paneNowLine(agent: Agent): string | null {
     if (activePendingApprovals().length) return "Needs your approval";
-    if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
+    if (runIsLive(agent)) {
       const work = chatState.liveWork ?? { status: "thinking", activity: [] };
       const summary = liveWorkSummary(work);
       if (!summary) return "Thinking…";
@@ -1107,8 +1108,8 @@ export function createChatSurface(
             </div>
           </section>
           <div class="chat-bottom-dock">
-            ${backgroundActivityStrip()} ${liveWorkDock(agent)} ${ctx.composer.queuedStrip(agent)}
-            ${ctx.composer.composerForm(agent)}
+            ${newBelowPill(agent)} ${backgroundActivityStrip()} ${liveWorkDock(agent)}
+            ${ctx.composer.queuedStrip(agent)} ${ctx.composer.composerForm(agent)}
           </div>
         </div>
       `,
@@ -1876,8 +1877,19 @@ export function createChatSurface(
     `;
   }
 
+  function runIsLive(agent: Agent): boolean {
+    return agent.state.isStreaming || chatState.resolvingApprovals.size > 0;
+  }
+
+  function newBelowPill(agent: Agent): TemplateResult | typeof nothing {
+    if (!runIsLive(agent)) return nothing;
+    return html`<button type="button" class="new-below-pill" ?inert=${stickToBottom} @click=${scrollToBottom}>
+      ${icon(ArrowDown, 14)}<span>New activity below</span>
+    </button>`;
+  }
+
   function liveWorkDock(agent: Agent): TemplateResult | typeof nothing {
-    if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
+    if (!runIsLive(agent)) return nothing;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     const summary = liveWorkSummary(work);
@@ -2339,11 +2351,20 @@ export function createChatSurface(
   function onTranscriptScroll(e: Event): void {
     const s = e.currentTarget as HTMLElement;
     stickToBottom = s.scrollHeight - s.scrollTop - s.clientHeight <= 120;
+    syncScrolledUp();
   }
 
   function scrollToBottom(): void {
     stickToBottom = true;
     scrollTranscript(true);
+    syncScrolledUp();
+  }
+
+  function syncScrolledUp(): void {
+    if (!chatState.host) return;
+    chatState.host.classList.toggle("scrolled-up", !stickToBottom);
+    const pill = chatState.host.querySelector<HTMLElement>(".new-below-pill");
+    if (pill) pill.inert = stickToBottom;
   }
 
   function scrollTranscript(force = false): void {
