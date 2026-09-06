@@ -74,14 +74,11 @@ async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
 
 async function tidySessions(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
-  const b = body as { principalId?: unknown; idleDays?: unknown };
-  if (typeof b.principalId !== "string" || !b.principalId) {
+  const principalId = (body as { principalId?: unknown }).principalId;
+  if (typeof principalId !== "string" || !principalId) {
     return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   }
-  if (typeof b.idleDays !== "number" || !Number.isFinite(b.idleDays) || b.idleDays < 0) {
-    return sendJson(res, 400, { error: "bad_request", message: "idleDays must be a non-negative number" });
-  }
-  return sendJson(res, 200, await app.tidySessions(b.principalId, { idleMs: b.idleDays * 86_400_000 }));
+  return sendJson(res, 200, await app.tidySessions(principalId));
 }
 
 async function forkSession(ctx: ApiCtx): Promise<void> {

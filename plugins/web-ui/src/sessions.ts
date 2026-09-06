@@ -150,138 +150,40 @@ function visibleRowOrder(): string[] {
 }
 
 const WEB_ONLY_KEY = "web-ui:web-only";
-const TIDY_KEY = "web-ui:tidy";
-const TIDY_AUTO_INTERVAL_MS = 24 * 60 * 60_000;
-
-export const tidyState: { open: boolean; running: boolean; auto: boolean; idleDays: number; lastRunAt: number } = {
-  open: false,
-  running: false,
-  auto: false,
-  idleDays: 7,
-  lastRunAt: 0,
-  ...((): Partial<{ auto: boolean; idleDays: number; lastRunAt: number }> => {
-    try {
-      const raw: unknown = JSON.parse(localStorage.getItem(TIDY_KEY) ?? "{}");
-      if (!raw || typeof raw !== "object") return {};
-      const r = raw as Record<string, unknown>;
-      return {
-        ...(typeof r.auto === "boolean" ? { auto: r.auto } : {}),
-        ...(typeof r.idleDays === "number" && r.idleDays >= 0 ? { idleDays: r.idleDays } : {}),
-        ...(typeof r.lastRunAt === "number" ? { lastRunAt: r.lastRunAt } : {}),
-      };
-    } catch {
-      return {};
-    }
-  })(),
-};
-
-function saveTidySettings(): void {
-  try {
-    const { auto, idleDays, lastRunAt } = tidyState;
-    localStorage.setItem(TIDY_KEY, JSON.stringify({ auto, idleDays, lastRunAt }));
-  } catch {
-    void 0;
-  }
-}
-
-export function closeTidyMenu(): void {
-  if (!tidyState.open) return;
-  tidyState.open = false;
-  renderSidebarTop();
-}
+let tidyRunning = false;
 
 export async function runTidy(): Promise<void> {
-  if (tidyState.running) return;
-  tidyState.running = true;
+  if (tidyRunning) return;
+  tidyRunning = true;
   renderSidebarTop();
   try {
-    const { archived, considered } = await tidySessions(tidyState.idleDays);
-    tidyState.lastRunAt = Date.now();
-    saveTidySettings();
+    const { archived, considered } = await tidySessions();
     for (const id of archived) closeSessionSurfaces(id);
     sessionsState.list = sessionsState.list.map((s) => (archived.includes(s.id) ? { ...s, archived: true } : s));
     renderList();
     const chats = considered === 1 ? "chat" : "chats";
-    if (archived.length) canvasToast(`Tidied ${archived.length} of ${considered} idle ${chats}`);
-    else if (considered) canvasToast(`Looked at ${considered} idle ${chats}, all still open`);
-    else canvasToast("Nothing idle to tidy");
+    if (archived.length) canvasToast(`Tidied ${archived.length} of ${considered} ${chats}`);
+    else if (considered) canvasToast(`Looked at ${considered} ${chats}, all still open`);
+    else canvasToast("Nothing to tidy");
   } catch (e) {
     canvasToast(errMessage(e, "Tidy failed"));
   } finally {
-    tidyState.running = false;
+    tidyRunning = false;
     renderSidebarTop();
   }
 }
 
-export function maybeAutoTidy(): void {
-  if (!tidyState.auto || Date.now() - tidyState.lastRunAt < TIDY_AUTO_INTERVAL_MS) return;
-  void runTidy();
-}
-
 export function tidyControl(): TemplateResult {
-  const idleLabel = tidyState.idleDays === 1 ? "day" : "days";
-  return html`<span class="tidy-menu">
-    <button
-      class="chat-search-open tidy-open ${tidyState.open ? "on" : ""}"
-      type="button"
-      aria-haspopup="menu"
-      aria-expanded=${tidyState.open ? "true" : "false"}
-      title="Tidy: archive finished chats"
-      @click=${() => {
-        tidyState.open = !tidyState.open;
-        renderSidebarTop();
-      }}
-    >
-      ${icon(Sparkles, 13)}
-    </button>
-    ${
-      tidyState.open
-        ? html`<div class="session-menu-popover tidy-popover" role="menu" @click=${(e: Event) => e.stopPropagation()}>
-            <label class="tidy-field">
-              <span>Consider chats idle for</span>
-              <input
-                type="number"
-                min="0"
-                step="1"
-                .value=${live(String(tidyState.idleDays))}
-                @change=${(e: Event) => {
-                  const v = Number((e.target as HTMLInputElement).value);
-                  tidyState.idleDays = Number.isFinite(v) && v >= 0 ? Math.floor(v) : tidyState.idleDays;
-                  saveTidySettings();
-                  renderSidebarTop();
-                }}
-              />
-              <span>${idleLabel}</span>
-            </label>
-            <label class="tidy-field">
-              <input
-                type="checkbox"
-                .checked=${live(tidyState.auto)}
-                @change=${(e: Event) => {
-                  tidyState.auto = (e.target as HTMLInputElement).checked;
-                  saveTidySettings();
-                  renderSidebarTop();
-                }}
-              />
-              <span>Auto-tidy daily when I open the app</span>
-            </label>
-            <button
-              class="session-menu-option"
-              type="button"
-              role="menuitem"
-              ?disabled=${tidyState.running}
-              @click=${() => void runTidy()}
-            >
-              ${icon(Sparkles, 15)}<span>${tidyState.running ? "Tidying…" : "Tidy now"}</span>
-            </button>
-            <div class="tidy-hint">
-              A small model reads each idle chat and archives the finished ones. Pinned chats are skipped; unarchive
-              anything from the Archived list.
-            </div>
-          </div>`
-        : nothing
-    }
-  </span>`;
+  return html`<button
+    class="chat-search-open tidy-open ${tidyRunning ? "on" : ""}"
+    type="button"
+    ?disabled=${tidyRunning}
+    aria-label="Tidy: archive finished chats"
+    title=${tidyRunning ? "Tidying…" : "Tidy: archive finished chats"}
+    @click=${() => void runTidy()}
+  >
+    ${icon(Sparkles, 13)}
+  </button>`;
 }
 sessionsState.webOnly = ((): boolean => {
   try {
@@ -1565,10 +1467,8 @@ async function runSessionsRefresh(
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
     if (patchEpoch !== sessionPatchEpoch) return false;
     sessionsState.list = reconcileSessions(r.sessions ?? [], sessionsState.list);
-    const firstLoad = !sessionsState.loaded;
     sessionsState.loaded = true;
     sessionsNotice = "";
-    if (firstLoad) maybeAutoTidy();
     return true;
   } catch (e) {
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);

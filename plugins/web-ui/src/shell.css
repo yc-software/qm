@@ -295,7 +295,6 @@ a.chat-row-open {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  position: relative;
   scrollbar-gutter: stable;
 }
 .web-only-toggle {
@@ -7433,42 +7432,8 @@ h3.ambient-field-label {
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
   color: var(--foreground);
 }
-.tidy-menu {
-  display: inline-flex;
-}
-.chat-search-open.on {
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
-  color: var(--foreground);
-}
-.tidy-popover {
-  right: 11px;
-  width: 250px;
-  gap: 6px;
-  padding: 10px;
-  text-transform: none;
-  letter-spacing: normal;
-  font-size: 13px;
-  font-weight: 400;
-}
-.tidy-field {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--foreground);
-}
-.tidy-field input[type="number"] {
-  width: 48px;
-  padding: 3px 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--background);
-  color: inherit;
-  font: inherit;
-}
-.tidy-hint {
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 1.4;
+.tidy-open:disabled {
+  cursor: progress;
 }
 .chat-search-overlay {
   position: fixed;

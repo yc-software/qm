@@ -17,18 +17,10 @@ test("tidy closes archived panes before the list redraws and reports via toast",
   assert.match(run, /for \(const id of archived\) closeSessionSurfaces\(id\);/);
   assert.match(run, /archived\.includes\(s\.id\) \? \{ \.\.\.s, archived: true \}/);
   assert.match(run, /canvasToast\(/);
-  assert.match(run, /saveTidySettings\(\)/, "lastRunAt must persist so auto-tidy stays daily");
 });
 
-test("auto-tidy runs once per day and only on the first sessions load", () => {
-  const auto = fn(sessions, "maybeAutoTidy");
-  assert.match(auto, /!tidyState\.auto \|\| Date\.now\(\) - tidyState\.lastRunAt < TIDY_AUTO_INTERVAL_MS/);
-  assert.match(sessions, /const firstLoad = !sessionsState\.loaded;[\s\S]*?if \(firstLoad\) maybeAutoTidy\(\);/);
-});
-
-test("the tidy relay validates idleDays and registers before the session patch route", () => {
+test("the tidy relay registers before the session patch route", () => {
   const tidy = server.indexOf('path: "/api/sessions/tidy"');
   const patch = server.indexOf('method: "POST",\n    path: "/api/sessions/:id"');
   assert.ok(tidy > 0 && patch > 0 && tidy < patch);
-  assert.match(server, /idleDays must be a non-negative number/);
 });

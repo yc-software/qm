@@ -315,7 +315,7 @@ export interface App {
     patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null },
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;
-  tidySessions(principalId: string, opts: { idleMs: number }): Promise<{ archived: string[]; considered: number }>;
+  tidySessions(principalId: string): Promise<{ archived: string[]; considered: number }>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
   forkSession(

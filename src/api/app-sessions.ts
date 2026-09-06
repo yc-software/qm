@@ -515,19 +515,11 @@ export function createSessionMethods(
       return deps.orchestrator.regenerateTitle(sessionId, principalId, projectMembers);
     },
 
-    async tidySessions(principalId, { idleMs }) {
-      const cutoff = Date.now() - idleMs;
+    async tidySessions(principalId) {
       const candidates = (await this.listSessions(principalId))
         .filter(
           (s) =>
-            !s.archived &&
-            !s.pinned &&
-            !s.working &&
-            !s.awaitingInput &&
-            !s.crons &&
-            !s.watches &&
-            !s.backgroundJobs &&
-            (s.lastActivityAt ?? s.createdAt) <= cutoff,
+            !s.archived && !s.pinned && !s.working && !s.awaitingInput && !s.crons && !s.watches && !s.backgroundJobs,
         )
         .sort((a, b) => (a.lastActivityAt ?? a.createdAt) - (b.lastActivityAt ?? b.createdAt));
       const { archived, judged } = await deps.orchestrator.judgeConcluded(principalId, candidates);
